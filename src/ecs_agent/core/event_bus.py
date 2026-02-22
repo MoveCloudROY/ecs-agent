@@ -1,18 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import Any, Awaitable, Callable, TypeVar, cast
 
 T = TypeVar("T")
 Handler = Callable[[Any], Awaitable[None]]
 
-logger = logging.getLogger(__name__)
-
 
 class EventBus:
     def __init__(self) -> None:
-        self._handlers: dict[type[Any], list[Handler]] = {}
+        self._handlers: dict[type, list[Handler]] = {}
 
     def subscribe(
         self, event_type: type[T], handler: Callable[[T], Awaitable[None]]
@@ -40,17 +37,9 @@ class EventBus:
         if not handlers:
             return
 
-        results = await asyncio.gather(
+        await asyncio.gather(
             *(handler(event) for handler in handlers), return_exceptions=True
         )
-
-        for result in results:
-            if isinstance(result, BaseException):
-                logger.error(
-                    "Event handler failed for %s",
-                    type(event).__name__,
-                    exc_info=(type(result), result, result.__traceback__),
-                )
 
     def clear(self) -> None:
         self._handlers.clear()
