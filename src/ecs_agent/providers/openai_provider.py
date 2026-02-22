@@ -53,6 +53,20 @@ class OpenAIProvider:
                 "role": msg.role,
                 "content": msg.content,
             }
+            if msg.tool_calls:
+                openai_msg["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                        },
+                    }
+                    for tc in msg.tool_calls
+                ]
+            if msg.tool_call_id:
+                openai_msg["tool_call_id"] = msg.tool_call_id
             openai_messages.append(openai_msg)
         return openai_messages
 

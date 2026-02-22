@@ -4,10 +4,12 @@ import pytest
 
 from ecs_agent.components import (
     ConversationComponent,
+    ErrorComponent,
     LLMComponent,
     PendingToolCallsComponent,
     PlanComponent,
     SystemPromptComponent,
+    TerminalComponent,
 )
 from ecs_agent.core import World
 from ecs_agent.providers import FakeProvider
@@ -200,3 +202,56 @@ async def test_marks_plan_completed_after_final_step() -> None:
     assert plan is not None
     assert plan.current_step == 1
     assert plan.completed is True
+
+
+
+@pytest.mark.asyncio
+async def test_provider_exhaustion_adds_terminal_component() -> None:
+    world = World()
+    provider = FakeProvider(responses=[])
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="start")]),
+    )
+    world.add_component(entity_id, PlanComponent(steps=["step one"], current_step=0))
+
+    await PlanningSystem().process(world)
+
+    error = world.get_component(entity_id, ErrorComponent)
+    terminal = world.get_component(entity_id, TerminalComponent)
+    # FakeProvider raises IndexError when empty -> caught as provider_exhausted
+    assert terminal is not None
+    assert terminal.reason == "provider_exhausted"
+    assert error is None
+
+
+@pytest.mark.asyncio
+async def test_generic_exception_adds_error_component() -> None:
+    class ExplodingProvider:
+        async def complete(
+            self,
+            messages: list[Message],
+            tools: list[object] | None = None,
+        ) -> CompletionResult:
+            raise RuntimeError("connection failed")
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=ExplodingProvider(), model="fake"))  # type: ignore[arg-type]
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="start")]),
+    )
+    world.add_component(entity_id, PlanComponent(steps=["step one"], current_step=0))
+
+    await PlanningSystem().process(world)
+
+    error = world.get_component(entity_id, ErrorComponent)
+    assert error is not None
+    assert "connection failed" in error.error
+    assert error.system_name == "PlanningSystem"
+    terminal = world.get_component(entity_id, TerminalComponent)
+    assert terminal is not None
+    assert terminal.reason == "planning_error"

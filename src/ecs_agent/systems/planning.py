@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import time
+
 from ecs_agent.components import (
     ConversationComponent,
+    ErrorComponent,
     LLMComponent,
     PendingToolCallsComponent,
     PlanComponent,
     SystemPromptComponent,
+    TerminalComponent,
+    ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.types import Message, PlanStepCompletedEvent
@@ -46,27 +51,49 @@ class PlanningSystem:
             messages.append(plan_context)
             messages.extend(conversation.messages)
 
-            result = await llm_component.provider.complete(messages, tools=None)
-            conversation.messages.append(result.message)
+            tool_registry = world.get_component(entity_id, ToolRegistryComponent)
+            tools = list(tool_registry.tools.values()) if tool_registry else None
 
-            if result.message.tool_calls:
+            try:
+                result = await llm_component.provider.complete(messages, tools=tools)
+                conversation.messages.append(result.message)
+
+                if result.message.tool_calls:
+                    world.add_component(
+                        entity_id,
+                        PendingToolCallsComponent(tool_calls=result.message.tool_calls),
+                    )
+
+                plan.current_step += 1
+                completed_step_index = plan.current_step - 1
+                await world.event_bus.publish(
+                    PlanStepCompletedEvent(
+                        entity_id=entity_id,
+                        step_index=completed_step_index,
+                        step_description=plan.steps[completed_step_index],
+                    )
+                )
+
+                if plan.current_step >= len(plan.steps):
+                    plan.completed = True
+            except (IndexError, StopIteration):
                 world.add_component(
                     entity_id,
-                    PendingToolCallsComponent(tool_calls=result.message.tool_calls),
+                    TerminalComponent(reason="provider_exhausted"),
                 )
-
-            plan.current_step += 1
-            completed_step_index = plan.current_step - 1
-            await world.event_bus.publish(
-                PlanStepCompletedEvent(
-                    entity_id=entity_id,
-                    step_index=completed_step_index,
-                    step_description=plan.steps[completed_step_index],
+            except Exception as exc:
+                world.add_component(
+                    entity_id,
+                    ErrorComponent(
+                        error=str(exc),
+                        system_name="PlanningSystem",
+                        timestamp=time.time(),
+                    ),
                 )
-            )
-
-            if plan.current_step >= len(plan.steps):
-                plan.completed = True
+                world.add_component(
+                    entity_id,
+                    TerminalComponent(reason="planning_error"),
+                )
 
 
 __all__ = ["PlanningSystem"]
