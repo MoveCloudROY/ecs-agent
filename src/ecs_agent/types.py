@@ -49,3 +49,20 @@ class CompletionResult:
 
     message: Message
     usage: Usage | None = None
+
+
+@dataclass(slots=True)
+class ConversationTruncatedEvent:
+    entity_id: EntityId
+    removed_count: int
+
+
+__all__ = [
+    "EntityId",
+    "ToolCall",
+    "Message",
+    "ToolSchema",
+    "Usage",
+    "CompletionResult",
+    "ConversationTruncatedEvent",
+]
