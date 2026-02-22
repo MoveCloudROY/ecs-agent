@@ -57,6 +57,27 @@ class ConversationTruncatedEvent:
     removed_count: int
 
 
+@dataclass(slots=True)
+class ErrorOccurredEvent:
+    entity_id: EntityId
+    error: str
+    system_name: str
+
+
+@dataclass(slots=True)
+class MessageDeliveredEvent:
+    from_entity: EntityId
+    to_entity: EntityId
+    message: Message
+
+
+@dataclass(slots=True)
+class PlanStepCompletedEvent:
+    entity_id: EntityId
+    step_index: int
+    step_description: str
+
+
 __all__ = [
     "EntityId",
     "ToolCall",
@@ -64,5 +85,8 @@ __all__ = [
     "ToolSchema",
     "Usage",
     "CompletionResult",
+    "ErrorOccurredEvent",
     "ConversationTruncatedEvent",
+    "PlanStepCompletedEvent",
+    "MessageDeliveredEvent",
 ]
