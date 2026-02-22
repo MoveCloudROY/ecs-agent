@@ -1,3 +1,4 @@
+from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.collaboration import CollaborationSystem
 from ecs_agent.systems.planning import PlanningSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -8,4 +9,5 @@ __all__ = [
     "PlanningSystem",
     "ToolExecutionSystem",
     "CollaborationSystem",
+    "ErrorHandlingSystem",
 ]
