@@ -14,6 +14,9 @@ from ecs_agent.components import (
 )
 from ecs_agent.core.world import World
 from ecs_agent.types import Message, PlanStepCompletedEvent
+from ecs_agent.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class PlanningSystem:
@@ -55,17 +58,10 @@ class PlanningSystem:
             tools = list(tool_registry.tools.values()) if tool_registry else None
 
             try:
-                print("PlanningSystem: Requesting completion for current plan step...")
-                print(f"Messages sent to provider:")
-                for msg in messages:
-                    print(f"  {msg.role}: {msg.content}")
-                
+                logger.debug("planning_request", message_count=len(messages))
                 result = await llm_component.provider.complete(messages, tools=tools)
-                # print(f"PlanningSystem: Received completion result: {result}"   )# Add the step description to the conversation history
+                # Add the step description to the conversation history
                 conversation.messages.append(result.message)
-                # print("-> conversation.messages: ")
-                # print(conversation.messages)
-                # print()
 
                 if result.message.tool_calls:
                     world.add_component(

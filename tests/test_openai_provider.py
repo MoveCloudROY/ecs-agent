@@ -193,8 +193,8 @@ async def test_http_error_prints_response_body(capsys: pytest.CaptureFixture[str
         await provider.complete(messages)
 
     captured = capsys.readouterr()
-    assert "400" in captured.err
-    assert "Invalid model" in captured.err
+    assert "400" in captured.out
+    assert "Invalid model" in captured.out
 
 
 @pytest.mark.asyncio
@@ -212,7 +212,7 @@ async def test_network_error_prints_full_message(capsys: pytest.CaptureFixture[s
         await provider.complete(messages)
 
     captured = capsys.readouterr()
-    assert "Connection refused" in captured.err
+    assert "Connection refused" in captured.out
 
 
 @pytest.mark.asyncio

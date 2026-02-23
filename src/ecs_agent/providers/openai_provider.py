@@ -1,11 +1,11 @@
 """OpenAI-compatible HTTP provider using httpx."""
 
 import json
-import sys
 
 from typing import Any
 from collections.abc import AsyncIterator
 import httpx
+from ecs_agent.logging import get_logger
 from ecs_agent.types import (
     Message,
     CompletionResult,
@@ -14,6 +14,8 @@ from ecs_agent.types import (
     ToolCall,
     Usage,
 )
+
+logger = get_logger(__name__)
 
 
 class OpenAIProvider:
@@ -48,10 +50,11 @@ class OpenAIProvider:
             "messages": self._convert_messages_to_openai(messages),
         }
 
-        # print(json.dumps(request_body, indent=2))
-
         if tools is not None:
             request_body["tools"] = self._convert_tools_to_openai(tools)
+
+        if response_format is not None:
+            request_body["response_format"] = response_format
 
         if stream:
             return self._stream_complete(url, headers, request_body)
@@ -60,17 +63,18 @@ class OpenAIProvider:
             response = await self._client.post(url, json=request_body, headers=headers)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            print(
-                f"[LLM HTTP Error] Status {exc.response.status_code}\n"
-                f"Response body: {exc.response.text}\n"
-                f"Exception: {exc}",
-                file=sys.stderr,
+            logger.error(
+                "llm_http_error",
+                status_code=exc.response.status_code,
+                response_body=exc.response.text,
+                exception=str(exc),
             )
             raise
         except httpx.RequestError as exc:
-            print(
-                f"[LLM Network Error] {type(exc).__name__}: {exc}",
-                file=sys.stderr,
+            logger.error(
+                "llm_network_error",
+                exception_type=type(exc).__name__,
+                exception=str(exc),
             )
             raise
         response_data = response.json()
@@ -181,17 +185,18 @@ class OpenAIProvider:
                         usage=usage,
                     )
         except httpx.HTTPStatusError as exc:
-            print(
-                f"[LLM HTTP Error] Status {exc.response.status_code}\n"
-                f"Response body: {exc.response.text}\n"
-                f"Exception: {exc}",
-                file=sys.stderr,
+            logger.error(
+                "llm_http_error",
+                status_code=exc.response.status_code,
+                response_body=exc.response.text,
+                exception=str(exc),
             )
             raise
         except httpx.RequestError as exc:
-            print(
-                f"[LLM Network Error] {type(exc).__name__}: {exc}",
-                file=sys.stderr,
+            logger.error(
+                "llm_network_error",
+                exception_type=type(exc).__name__,
+                exception=str(exc),
             )
             raise
 
@@ -266,3 +271,45 @@ class OpenAIProvider:
             )
 
         return CompletionResult(message=message, usage=usage)
+
+
+
+def pydantic_to_response_format(model: type) -> dict[str, Any]:
+    """Convert a Pydantic model to OpenAI response_format dict.
+    
+    Args:
+        model: A Pydantic BaseModel class (not instance)
+        
+    Returns:
+        Dictionary with type='json_schema' and json_schema containing:
+        - name: model class name
+        - schema: model_json_schema() output
+        - strict: True
+        
+    Example:
+        >>> from pydantic import BaseModel
+        >>> class User(BaseModel):
+        ...     name: str
+        ...     age: int
+        >>> response_format = pydantic_to_response_format(User)
+        >>> response_format['type']
+        'json_schema'
+    """
+    try:
+        # Import here to avoid hard dependency on pydantic
+        from pydantic import BaseModel
+        
+        if not isinstance(model, type) or not issubclass(model, BaseModel):
+            raise TypeError(f"model must be a Pydantic BaseModel class, got {type(model)}")
+        
+        schema = model.model_json_schema()
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": model.__name__,
+                "schema": schema,
+                "strict": True,
+            },
+        }
+    except ImportError:
+        raise ImportError("pydantic must be installed to use pydantic_to_response_format")

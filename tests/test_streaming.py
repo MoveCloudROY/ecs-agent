@@ -244,3 +244,83 @@ async def test_streaming_timeout_configuration() -> None:
     assert timeout.read is None
     assert timeout.write == 5.0
     assert timeout.pool == 5.0
+
+
+# FakeProvider Streaming Tests
+
+
+@pytest.mark.asyncio
+async def test_fake_provider_streams_response_as_character_deltas() -> None:
+    """FakeProvider should stream response character-by-character when stream=True."""
+    from ecs_agent.providers import FakeProvider
+    from ecs_agent.types import Usage
+
+    msg = Message(role="assistant", content="Hi!")
+    usage = Usage(prompt_tokens=1, completion_tokens=2, total_tokens=3)
+    result = CompletionResult(message=msg, usage=usage)
+
+    provider = FakeProvider(responses=[result])
+    stream_iter = await provider.complete(
+        [Message(role="user", content="hello")], stream=True
+    )
+    
+    deltas = [delta async for delta in stream_iter]
+
+    # Should have one delta per character plus final delta with finish_reason
+    assert len(deltas) == 4  # 'H', 'i', '!' (3 chars) + final chunk with finish_reason
+    assert [d.content for d in deltas[:3]] == ["H", "i", "!"]
+    assert deltas[3].content is None
+    assert deltas[3].finish_reason == "stop"
+    assert deltas[3].usage is not None
+    assert deltas[3].usage.total_tokens == 3
+
+
+@pytest.mark.asyncio
+async def test_fake_provider_streaming_with_tool_calls() -> None:
+    """FakeProvider streaming should preserve tool calls in final message."""
+    from ecs_agent.providers import FakeProvider
+    from ecs_agent.types import ToolCall, Usage
+
+    tool_call = ToolCall(id="tc1", name="search", arguments={"q": "test"})
+    msg = Message(role="assistant", content="Found", tool_calls=[tool_call])
+    usage = Usage(prompt_tokens=5, completion_tokens=3, total_tokens=8)
+    result = CompletionResult(message=msg, usage=usage)
+
+    provider = FakeProvider(responses=[result])
+    stream_iter = await provider.complete(
+        [Message(role="user", content="search")], stream=True
+    )
+    
+    deltas = [delta async for delta in stream_iter]
+
+    # First 5 deltas are characters 'F', 'o', 'u', 'n', 'd'
+    assert len(deltas) == 6
+    char_deltas = deltas[:5]
+    final_delta = deltas[5]
+
+    assert [d.content for d in char_deltas] == ["F", "o", "u", "n", "d"]
+    assert final_delta.finish_reason == "stop"
+    assert final_delta.usage == usage
+
+
+@pytest.mark.asyncio
+async def test_fake_provider_streaming_empty_content() -> None:
+    """FakeProvider should handle empty content gracefully."""
+    from ecs_agent.providers import FakeProvider
+    from ecs_agent.types import Usage
+
+    msg = Message(role="assistant", content="")
+    usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+    result = CompletionResult(message=msg, usage=usage)
+
+    provider = FakeProvider(responses=[result])
+    stream_iter = await provider.complete(
+        [Message(role="user", content="hi")], stream=True
+    )
+    
+    deltas = [delta async for delta in stream_iter]
+
+    # Empty content should still yield final chunk with usage
+    assert len(deltas) == 1
+    assert deltas[0].finish_reason == "stop"
+    assert deltas[0].usage == usage

@@ -168,7 +168,7 @@ class TestErrorHandlingSystem:
         await system.process(world)
 
         captured = capsys.readouterr()
-        assert "[ERROR]" in captured.out
-        assert f"Entity {entity_id}" in captured.out
-        assert "CriticalSystem" in captured.out
+        assert "entity_error" in captured.out
+        assert f"entity_id={entity_id}" in captured.out
+        assert "system_name=CriticalSystem" in captured.out
         assert "Critical failure" in captured.out

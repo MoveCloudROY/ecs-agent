@@ -3,6 +3,9 @@
 from ecs_agent.components.definitions import ErrorComponent
 from ecs_agent.core.world import World
 from ecs_agent.types import ErrorOccurredEvent
+from ecs_agent.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class ErrorHandlingSystem:
@@ -26,8 +29,11 @@ class ErrorHandlingSystem:
             world: World instance to query and modify
         """
         for entity_id, (error_comp,) in world.query(ErrorComponent):
-            print(
-                f"[ERROR] Entity {entity_id} | System: {error_comp.system_name} | Error: {error_comp.error}"
+            logger.error(
+                "entity_error",
+                entity_id=entity_id,
+                system_name=error_comp.system_name,
+                error=error_comp.error,
             )
 
             await world.event_bus.publish(
