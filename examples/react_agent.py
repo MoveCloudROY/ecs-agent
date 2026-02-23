@@ -20,7 +20,6 @@ Environment variables:
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import sys
 
@@ -100,7 +99,7 @@ async def main() -> None:
     base_url = os.environ.get(
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
-    model = os.environ.get("LLM_MODEL", "qwen-plus")
+    model = os.environ.get("LLM_MODEL", "qwen3.5-plus")
 
     print(f"Using model: {model}")
     print(f"Base URL: {base_url}")
@@ -154,14 +153,15 @@ async def main() -> None:
     world = World()
 
     # Create the agent entity
-    agent_id = world.create_entity()
+    main_agent = world.create_entity()
+    # sub_agent = world.create_entity()
 
     # Attach components
     world.add_component(
-        agent_id, LLMComponent(provider=provider, model=model)
+        main_agent, LLMComponent(provider=provider, model=model)
     )
     world.add_component(
-        agent_id,
+        main_agent,
         ConversationComponent(
             messages=[
                 Message(
@@ -172,9 +172,9 @@ async def main() -> None:
             max_messages=50,
         ),
     )
-    world.add_component(agent_id, PlanComponent(steps=plan_steps))
+    world.add_component(main_agent, PlanComponent(steps=plan_steps))
     world.add_component(
-        agent_id,
+        main_agent,
         SystemPromptComponent(
             content=(
                 "You are a helpful research assistant using the ReAct pattern. "
@@ -186,7 +186,7 @@ async def main() -> None:
         ),
     )
     world.add_component(
-        agent_id,
+        main_agent,
         ToolRegistryComponent(
             tools=tools,
             handlers={
@@ -218,7 +218,7 @@ async def main() -> None:
     print("CONVERSATION HISTORY")
     print("=" * 60)
 
-    conv = world.get_component(agent_id, ConversationComponent)
+    conv = world.get_component(main_agent, ConversationComponent)
     if conv is not None:
         for i, msg in enumerate(conv.messages):
             if msg.role == "user":
@@ -226,7 +226,7 @@ async def main() -> None:
             elif msg.role == "assistant":
                 if msg.tool_calls:
                     for tc in msg.tool_calls:
-                        args = json.loads(tc.arguments)
+                        args = tc.arguments
                         print(f"\n[Action] {tc.name}({args})")
                 else:
                     print(f"\n[Thought] {msg.content}")
@@ -235,7 +235,7 @@ async def main() -> None:
             elif msg.role == "system":
                 pass  # Skip system messages in output
 
-    plan = world.get_component(agent_id, PlanComponent)
+    plan = world.get_component(main_agent, PlanComponent)
     if plan is not None:
         print()
         print("=" * 60)

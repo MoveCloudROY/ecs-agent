@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Awaitable, Callable
 
 from ecs_agent.components import (
@@ -50,9 +49,7 @@ class ToolExecutionSystem:
             return f"Error: unknown tool '{tool_call.name}'"
 
         try:
-            arguments = json.loads(tool_call.arguments)
-            if not isinstance(arguments, dict):
-                raise TypeError("tool arguments must decode to an object")
+            arguments = tool_call.arguments
             result = await handler(**arguments)
             return str(result)
         except Exception as exc:

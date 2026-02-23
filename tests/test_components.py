@@ -134,7 +134,7 @@ class TestPendingToolCallsComponent:
 
     def test_instantiation(self):
         """Test PendingToolCallsComponent can be instantiated."""
-        calls = [ToolCall(id="1", name="tool", arguments="{}")]
+        calls = [ToolCall(id="1", name="tool", arguments={})]
         comp = PendingToolCallsComponent(tool_calls=calls)
         assert comp.tool_calls == calls
 

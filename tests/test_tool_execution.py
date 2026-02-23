@@ -51,8 +51,8 @@ async def test_process_executes_pending_tool_calls_and_appends_tool_messages() -
         entity_id,
         PendingToolCallsComponent(
             tool_calls=[
-                ToolCall(id="call-1", name="get_weather", arguments='{"city":"Paris"}'),
-                ToolCall(id="call-2", name="get_time", arguments='{"zone":"UTC"}'),
+                ToolCall(id="call-1", name="get_weather", arguments={"city": "Paris"}),
+                ToolCall(id="call-2", name="get_time", arguments={"zone": "UTC"}),
             ]
         ),
     )
@@ -93,7 +93,7 @@ async def test_unknown_tool_is_converted_to_error_result_string() -> None:
         entity_id,
         PendingToolCallsComponent(
             tool_calls=[
-                ToolCall(id="missing-1", name="does_not_exist", arguments="{}"),
+                ToolCall(id="missing-1", name="does_not_exist", arguments={}),
             ]
         ),
     )
@@ -142,7 +142,7 @@ async def test_handler_exception_is_converted_to_error_result_string() -> None:
         entity_id,
         PendingToolCallsComponent(
             tool_calls=[
-                ToolCall(id="boom-1", name="get_weather", arguments='{"city":"Paris"}'),
+                ToolCall(id="boom-1", name="get_weather", arguments={"city": "Paris"}),
             ]
         ),
     )
@@ -209,7 +209,7 @@ async def test_entities_missing_required_components_are_skipped() -> None:
     world.add_component(
         valid,
         PendingToolCallsComponent(
-            tool_calls=[ToolCall(id="ok-1", name="ping", arguments="{}")]
+            tool_calls=[ToolCall(id="ok-1", name="ping", arguments={})]
         ),
     )
 

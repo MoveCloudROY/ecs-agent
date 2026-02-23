@@ -66,7 +66,7 @@ async def test_basic_conversation_appends_assistant_response() -> None:
 @pytest.mark.asyncio
 async def test_tool_calls_attach_pending_tool_calls_component() -> None:
     world = World()
-    tool_call = ToolCall(id="call-1", name="get_weather", arguments='{"city":"Paris"}')
+    tool_call = ToolCall(id="call-1", name="get_weather", arguments={"city": "Paris"})
     provider = FakeProvider(
         responses=[
             CompletionResult(

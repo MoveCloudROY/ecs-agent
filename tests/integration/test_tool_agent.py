@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 
 import pytest
 
@@ -36,7 +35,7 @@ async def test_tool_call_execution_end_to_end() -> None:
                 ToolCall(
                     id="tc1",
                     name="add",
-                    arguments=json.dumps({"a": "2", "b": "3"}),
+                    arguments={"a": "2", "b": "3"},
                 )
             ],
         )
@@ -103,7 +102,7 @@ async def test_unknown_tool_graceful_handling() -> None:
                         ToolCall(
                             id="tc2",
                             name="nonexistent_tool",
-                            arguments="{}",
+                            arguments={},
                         )
                     ],
                 )

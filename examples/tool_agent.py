@@ -9,7 +9,6 @@ This example demonstrates:
 """
 
 import asyncio
-import json
 
 from ecs_agent.components import (
     ConversationComponent,
@@ -43,7 +42,7 @@ async def main() -> None:
                     role="assistant",
                     content="",
                     tool_calls=[
-                        ToolCall(id="call-1", name="add", arguments='{"a":"2","b":"3"}')
+                        ToolCall(id="call-1", name="add", arguments={"a": "2", "b": "3"})
                     ],
                 )
             ),

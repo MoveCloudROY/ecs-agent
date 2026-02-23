@@ -152,7 +152,7 @@ async def test_plan_context_is_injected_before_llm_call() -> None:
 @pytest.mark.asyncio
 async def test_tool_calls_attach_pending_tool_calls_component() -> None:
     world = World()
-    tool_call = ToolCall(id="call-1", name="lookup", arguments='{"q":"x"}')
+    tool_call = ToolCall(id="call-1", name="lookup", arguments={"q": "x"})
     provider = FakeProvider(
         responses=[
             CompletionResult(

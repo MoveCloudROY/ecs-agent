@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 
 import pytest
 
@@ -41,7 +40,7 @@ def _tool_call_reply(tool_name: str, call_id: str, arguments: dict[str, str]) ->
             role="assistant",
             content="",
             tool_calls=[
-                ToolCall(id=call_id, name=tool_name, arguments=json.dumps(arguments))
+                ToolCall(id=call_id, name=tool_name, arguments=arguments)
             ],
         )
     )

@@ -46,7 +46,7 @@ async def test_fake_provider_with_empty_list() -> None:
 @pytest.mark.asyncio
 async def test_fake_provider_preserves_tool_calls() -> None:
     """FakeProvider should preserve tool_calls in responses."""
-    tool_call = ToolCall(id="tc1", name="search", arguments='{"q":"test"}')
+    tool_call = ToolCall(id="tc1", name="search", arguments={"q": "test"})
     msg = Message(role="assistant", content="Calling tool", tool_calls=[tool_call])
     resp = CompletionResult(message=msg)
 

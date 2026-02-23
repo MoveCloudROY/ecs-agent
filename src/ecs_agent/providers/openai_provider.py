@@ -1,11 +1,19 @@
 """OpenAI-compatible HTTP provider using httpx."""
+
 import json
 import sys
 
 from typing import Any
 from collections.abc import AsyncIterator
 import httpx
-from ecs_agent.types import Message, CompletionResult, ToolSchema, ToolCall, Usage
+from ecs_agent.types import (
+    Message,
+    CompletionResult,
+    StreamDelta,
+    ToolSchema,
+    ToolCall,
+    Usage,
+)
 
 
 class OpenAIProvider:
@@ -28,7 +36,7 @@ class OpenAIProvider:
         tools: list[ToolSchema] | None = None,
         stream: bool = False,
         response_format: dict[str, Any] | None = None,
-    ) -> CompletionResult:
+    ) -> CompletionResult | AsyncIterator[StreamDelta]:
         url = f"{self._base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -44,6 +52,9 @@ class OpenAIProvider:
 
         if tools is not None:
             request_body["tools"] = self._convert_tools_to_openai(tools)
+
+        if stream:
+            return self._stream_complete(url, headers, request_body)
 
         try:
             response = await self._client.post(url, json=request_body, headers=headers)
@@ -64,6 +75,125 @@ class OpenAIProvider:
             raise
         response_data = response.json()
         return self._parse_response(response_data)
+
+    async def _stream_complete(
+        self,
+        url: str,
+        headers: dict[str, str],
+        request_body: dict[str, Any],
+    ) -> AsyncIterator[StreamDelta]:
+        stream_body = dict(request_body)
+        stream_body["stream"] = True
+        timeout = httpx.Timeout(connect=5.0, read=None, write=5.0, pool=5.0)
+        accumulated_tool_calls: dict[int, dict[str, str]] = {}
+
+        try:
+            async with self._client.stream(
+                "POST",
+                url,
+                json=stream_body,
+                headers=headers,
+                timeout=timeout,
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+
+                    payload = line.strip()
+                    if payload.startswith("data:"):
+                        payload = payload[5:].strip()
+
+                    if not payload:
+                        continue
+
+                    if payload == "[DONE]":
+                        break
+
+                    response_json = json.loads(payload)
+                    choice = response_json["choices"][0]
+                    delta = choice.get("delta", {})
+
+                    content = delta.get("content")
+                    finish_reason = choice.get("finish_reason")
+                    usage_data = response_json.get("usage")
+                    usage: Usage | None = None
+                    if usage_data:
+                        usage = Usage(
+                            prompt_tokens=usage_data["prompt_tokens"],
+                            completion_tokens=usage_data["completion_tokens"],
+                            total_tokens=usage_data["total_tokens"],
+                        )
+
+                    tool_calls_delta = delta.get("tool_calls")
+                    stream_tool_calls: list[ToolCall] | None = None
+                    if tool_calls_delta:
+                        for tool_call_delta in tool_calls_delta:
+                            index = tool_call_delta.get("index", 0)
+                            accumulated = accumulated_tool_calls.setdefault(
+                                index,
+                                {"id": "", "name": "", "arguments": ""},
+                            )
+
+                            if "id" in tool_call_delta and tool_call_delta["id"]:
+                                accumulated["id"] = tool_call_delta["id"]
+
+                            function_delta = tool_call_delta.get("function", {})
+                            if "name" in function_delta and function_delta["name"]:
+                                accumulated["name"] = function_delta["name"]
+                            if (
+                                "arguments" in function_delta
+                                and function_delta["arguments"] is not None
+                            ):
+                                accumulated["arguments"] += function_delta["arguments"]
+
+                        stream_tool_calls = []
+                        for index in sorted(accumulated_tool_calls):
+                            accumulated = accumulated_tool_calls[index]
+                            parsed_arguments: dict[str, Any]
+                            try:
+                                parsed_arguments = json.loads(accumulated["arguments"])
+                            except json.JSONDecodeError:
+                                parsed_arguments = {
+                                    "_partial": accumulated["arguments"]
+                                }
+
+                            stream_tool_calls.append(
+                                ToolCall(
+                                    id=accumulated["id"] or f"index_{index}",
+                                    name=accumulated["name"] or "",
+                                    arguments=parsed_arguments,
+                                )
+                            )
+
+                    if (
+                        content is None
+                        and stream_tool_calls is None
+                        and finish_reason is None
+                        and usage is None
+                    ):
+                        continue
+
+                    yield StreamDelta(
+                        content=content,
+                        tool_calls=stream_tool_calls,
+                        finish_reason=finish_reason,
+                        usage=usage,
+                    )
+        except httpx.HTTPStatusError as exc:
+            print(
+                f"[LLM HTTP Error] Status {exc.response.status_code}\n"
+                f"Response body: {exc.response.text}\n"
+                f"Exception: {exc}",
+                file=sys.stderr,
+            )
+            raise
+        except httpx.RequestError as exc:
+            print(
+                f"[LLM Network Error] {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            raise
 
     def _convert_messages_to_openai(
         self, messages: list[Message]
