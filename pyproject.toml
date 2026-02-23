@@ -9,6 +9,9 @@ description = "ECS-based LLM Agent framework"
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.24.0",
+    "tenacity>=8.2.0",
+    "structlog>=23.1.0",
+    "pydantic>=2.0.0",
 ]
 
 [project.optional-dependencies]
