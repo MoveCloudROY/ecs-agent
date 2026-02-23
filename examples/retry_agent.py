@@ -74,7 +74,7 @@ async def main() -> None:
                 total_tokens=60,
             ),
         )
-        base_provider = FakeProvider(result=fake_result)
+        base_provider = FakeProvider(responses=[fake_result])
 
     # --- Create custom retry configuration ---
     # This demonstrates custom retry parameters beyond the defaults
