@@ -12,7 +12,7 @@ class ToolCall:
 
     id: str
     name: str
-    arguments: str
+    arguments: dict[str, Any]
 
 
 @dataclass(slots=True)
@@ -78,6 +78,35 @@ class PlanStepCompletedEvent:
     step_description: str
 
 
+@dataclass(slots=True)
+class PlanRevisedEvent:
+    """Event emitted when the plan is dynamically revised during execution."""
+
+    entity_id: EntityId
+    old_steps: list[str]
+    new_steps: list[str]
+
+
+@dataclass(slots=True)
+class StreamDelta:
+    """Represents a chunk of streamed response data."""
+
+    content: str | None = None
+    tool_calls: list[ToolCall] | None = None
+    finish_reason: str | None = None
+    usage: Usage | None = None
+
+
+@dataclass(slots=True)
+class RetryConfig:
+    """Configuration for retry behavior."""
+
+    max_attempts: int = 3
+    multiplier: float = 1.0
+    min_wait: float = 4.0
+    max_wait: float = 60.0
+    retry_status_codes: tuple[int, ...] = (429, 500, 502, 503, 504)
+
 __all__ = [
     "EntityId",
     "ToolCall",
@@ -85,8 +114,11 @@ __all__ = [
     "ToolSchema",
     "Usage",
     "CompletionResult",
+    "StreamDelta",
+    "RetryConfig",
     "ErrorOccurredEvent",
     "ConversationTruncatedEvent",
     "PlanStepCompletedEvent",
     "MessageDeliveredEvent",
+    "PlanRevisedEvent",
 ]

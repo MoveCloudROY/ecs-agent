@@ -1,6 +1,9 @@
 """OpenAI-compatible HTTP provider using httpx."""
+import json
+import sys
 
 from typing import Any
+from collections.abc import AsyncIterator
 import httpx
 from ecs_agent.types import Message, CompletionResult, ToolSchema, ToolCall, Usage
 
@@ -23,6 +26,8 @@ class OpenAIProvider:
         self,
         messages: list[Message],
         tools: list[ToolSchema] | None = None,
+        stream: bool = False,
+        response_format: dict[str, Any] | None = None,
     ) -> CompletionResult:
         url = f"{self._base_url}/chat/completions"
         headers = {
@@ -35,12 +40,28 @@ class OpenAIProvider:
             "messages": self._convert_messages_to_openai(messages),
         }
 
+        # print(json.dumps(request_body, indent=2))
+
         if tools is not None:
             request_body["tools"] = self._convert_tools_to_openai(tools)
 
-        response = await self._client.post(url, json=request_body, headers=headers)
-        response.raise_for_status()
-
+        try:
+            response = await self._client.post(url, json=request_body, headers=headers)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            print(
+                f"[LLM HTTP Error] Status {exc.response.status_code}\n"
+                f"Response body: {exc.response.text}\n"
+                f"Exception: {exc}",
+                file=sys.stderr,
+            )
+            raise
+        except httpx.RequestError as exc:
+            print(
+                f"[LLM Network Error] {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            raise
         response_data = response.json()
         return self._parse_response(response_data)
 
@@ -53,6 +74,8 @@ class OpenAIProvider:
                 "role": msg.role,
                 "content": msg.content,
             }
+            if msg.tool_calls and not msg.content:
+                openai_msg["content"] = None
             if msg.tool_calls:
                 openai_msg["tool_calls"] = [
                     {
@@ -97,7 +120,7 @@ class OpenAIProvider:
                 tool_call = ToolCall(
                     id=tc["id"],
                     name=tc["function"]["name"],
-                    arguments=tc["function"]["arguments"],
+                    arguments=json.loads(tc["function"]["arguments"]),
                 )
                 tool_calls.append(tool_call)
 

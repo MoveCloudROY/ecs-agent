@@ -1,6 +1,7 @@
 """Fake LLM provider for testing."""
 
 from ecs_agent.providers.protocol import LLMProvider
+from typing import Any
 from ecs_agent.types import Message, CompletionResult, ToolSchema
 
 
@@ -20,6 +21,8 @@ class FakeProvider:
         self,
         messages: list[Message],
         tools: list[ToolSchema] | None = None,
+        stream: bool = False,
+        response_format: dict[str, Any] | None = None,
     ) -> CompletionResult:
         """Return next response from the list.
 

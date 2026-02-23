@@ -8,6 +8,8 @@ from ecs_agent.types import (
     ToolSchema,
     CompletionResult,
     Usage,
+    StreamDelta,
+    RetryConfig,
 )
 
 
@@ -28,7 +30,7 @@ class TestMessage:
 
     def test_message_with_tool_calls(self) -> None:
         """Test Message with tool_calls."""
-        tc = ToolCall(id="1", name="search", arguments="{}")
+        tc = ToolCall(id="1", name="search", arguments={})
         msg = Message(role="assistant", content="searching", tool_calls=[tc])
         assert msg.tool_calls == [tc]
         assert len(msg.tool_calls) == 1
@@ -50,14 +52,14 @@ class TestToolCall:
 
     def test_toolcall_basic_fields(self) -> None:
         """Test ToolCall with required fields."""
-        tc = ToolCall(id="call_1", name="search", arguments='{"q": "test"}')
+        tc = ToolCall(id="call_1", name="search", arguments={"q": "test"})
         assert tc.id == "call_1"
         assert tc.name == "search"
-        assert tc.arguments == '{"q": "test"}'
+        assert tc.arguments == {"q": "test"}
 
     def test_toolcall_slots_prevent_extra_attributes(self) -> None:
         """Test that slots=True prevents adding arbitrary attributes."""
-        tc = ToolCall(id="1", name="test", arguments="{}")
+        tc = ToolCall(id="1", name="test", arguments={})
         with pytest.raises(AttributeError):
             tc.extra = "bad"  # type: ignore
 
@@ -179,3 +181,60 @@ class TestDataclassFeatures:
         assert msg.content == "test"
         assert msg.tool_calls is None
         assert msg.tool_call_id is None
+
+
+class TestStreamDelta:
+    """Test StreamDelta dataclass."""
+
+    def test_stream_delta_default(self) -> None:
+        """Test StreamDelta with default None values."""
+        delta = StreamDelta()
+        assert delta.content is None
+        assert delta.tool_calls is None
+        assert delta.finish_reason is None
+        assert delta.usage is None
+
+    def test_stream_delta_with_content(self) -> None:
+        """Test StreamDelta with content."""
+        delta = StreamDelta(content="Hello ")
+        assert delta.content == "Hello "
+        assert delta.tool_calls is None
+        assert delta.finish_reason is None
+        assert delta.usage is None
+
+    def test_stream_delta_with_tool_calls(self) -> None:
+        """Test StreamDelta with tool_calls."""
+        tc = ToolCall(id="call_1", name="search", arguments={"q": "test"})
+        delta = StreamDelta(tool_calls=[tc], finish_reason="stop")
+        assert delta.content is None
+        assert delta.tool_calls == [tc]
+        assert delta.finish_reason == "stop"
+        assert delta.usage is None
+
+
+class TestRetryConfig:
+    """Test RetryConfig dataclass."""
+
+    def test_retry_config_defaults(self) -> None:
+        """Test RetryConfig with default values."""
+        config = RetryConfig()
+        assert config.max_attempts == 3
+        assert config.multiplier == 1.0
+        assert config.min_wait == 4.0
+        assert config.max_wait == 60.0
+        assert config.retry_status_codes == (429, 500, 502, 503, 504)
+
+    def test_retry_config_custom(self) -> None:
+        """Test RetryConfig with custom values."""
+        config = RetryConfig(
+            max_attempts=5,
+            multiplier=2.0,
+            min_wait=1.0,
+            max_wait=30.0,
+            retry_status_codes=(408, 429, 500),
+        )
+        assert config.max_attempts == 5
+        assert config.multiplier == 2.0
+        assert config.min_wait == 1.0
+        assert config.max_wait == 30.0
+        assert config.retry_status_codes == (408, 429, 500)
