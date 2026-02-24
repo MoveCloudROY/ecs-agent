@@ -240,10 +240,42 @@ async def test_streaming_timeout_configuration() -> None:
 
     timeout = stream_call[1]["timeout"]
     assert isinstance(timeout, httpx.Timeout)
-    assert timeout.connect == 5.0
+    assert timeout.connect == 10.0
     assert timeout.read is None
-    assert timeout.write == 5.0
-    assert timeout.pool == 5.0
+    assert timeout.write == 10.0
+    assert timeout.pool == 10.0
+
+
+@pytest.mark.asyncio
+async def test_streaming_timeout_uses_provider_custom_timeout() -> None:
+    stream_lines = [
+        _sse_data({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        "data: [DONE]",
+    ]
+    stream_response = _MockStreamResponse(stream_lines)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
+
+    provider = OpenAIProvider(
+        api_key="test-key",
+        connect_timeout=4.0,
+        read_timeout=90.0,
+        write_timeout=7.0,
+        pool_timeout=3.0,
+    )
+    provider._client = mock_client
+
+    stream_iter = await provider.complete(
+        [Message(role="user", content="x")], stream=True
+    )
+    _ = [delta async for delta in stream_iter]
+
+    timeout = mock_client.stream.call_args[1]["timeout"]
+    assert timeout.connect == 4.0
+    assert timeout.read is None
+    assert timeout.write == 7.0
+    assert timeout.pool == 3.0
 
 
 # FakeProvider Streaming Tests
@@ -263,7 +295,7 @@ async def test_fake_provider_streams_response_as_character_deltas() -> None:
     stream_iter = await provider.complete(
         [Message(role="user", content="hello")], stream=True
     )
-    
+
     deltas = [delta async for delta in stream_iter]
 
     # Should have one delta per character plus final delta with finish_reason
@@ -290,7 +322,7 @@ async def test_fake_provider_streaming_with_tool_calls() -> None:
     stream_iter = await provider.complete(
         [Message(role="user", content="search")], stream=True
     )
-    
+
     deltas = [delta async for delta in stream_iter]
 
     # First 5 deltas are characters 'F', 'o', 'u', 'n', 'd'
@@ -317,7 +349,7 @@ async def test_fake_provider_streaming_empty_content() -> None:
     stream_iter = await provider.complete(
         [Message(role="user", content="hi")], stream=True
     )
-    
+
     deltas = [delta async for delta in stream_iter]
 
     # Empty content should still yield final chunk with usage

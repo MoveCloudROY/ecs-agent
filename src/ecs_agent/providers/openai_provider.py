@@ -26,11 +26,21 @@ class OpenAIProvider:
         api_key: str,
         base_url: str = "https://api.openai.com/v1",
         model: str = "gpt-4o-mini",
+        connect_timeout: float = 10.0,
+        read_timeout: float = 120.0,
+        write_timeout: float = 10.0,
+        pool_timeout: float = 10.0,
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url
         self._model = model
-        self._client = httpx.AsyncClient(trust_env=False)
+        self._timeout = httpx.Timeout(
+            connect=connect_timeout,
+            read=read_timeout,
+            write=write_timeout,
+            pool=pool_timeout,
+        )
+        self._client = httpx.AsyncClient(trust_env=False, timeout=self._timeout)
 
     async def complete(
         self,
@@ -71,10 +81,19 @@ class OpenAIProvider:
             )
             raise
         except httpx.RequestError as exc:
+            request_method: str | None = None
+            request_url: str | None = None
+            try:
+                request_method = exc.request.method
+                request_url = str(exc.request.url)
+            except RuntimeError:
+                pass
             logger.error(
                 "llm_network_error",
                 exception_type=type(exc).__name__,
                 exception=str(exc),
+                request_method=request_method,
+                request_url=request_url,
             )
             raise
         response_data = response.json()
@@ -88,7 +107,12 @@ class OpenAIProvider:
     ) -> AsyncIterator[StreamDelta]:
         stream_body = dict(request_body)
         stream_body["stream"] = True
-        timeout = httpx.Timeout(connect=5.0, read=None, write=5.0, pool=5.0)
+        timeout = httpx.Timeout(
+            connect=self._timeout.connect,
+            read=None,
+            write=self._timeout.write,
+            pool=self._timeout.pool,
+        )
         accumulated_tool_calls: dict[int, dict[str, str]] = {}
 
         try:
@@ -193,10 +217,19 @@ class OpenAIProvider:
             )
             raise
         except httpx.RequestError as exc:
+            request_method: str | None = None
+            request_url: str | None = None
+            try:
+                request_method = exc.request.method
+                request_url = str(exc.request.url)
+            except RuntimeError:
+                pass
             logger.error(
                 "llm_network_error",
                 exception_type=type(exc).__name__,
                 exception=str(exc),
+                request_method=request_method,
+                request_url=request_url,
             )
             raise
 
@@ -273,19 +306,18 @@ class OpenAIProvider:
         return CompletionResult(message=message, usage=usage)
 
 
-
 def pydantic_to_response_format(model: type) -> dict[str, Any]:
     """Convert a Pydantic model to OpenAI response_format dict.
-    
+
     Args:
         model: A Pydantic BaseModel class (not instance)
-        
+
     Returns:
         Dictionary with type='json_schema' and json_schema containing:
         - name: model class name
         - schema: model_json_schema() output
         - strict: True
-        
+
     Example:
         >>> from pydantic import BaseModel
         >>> class User(BaseModel):
@@ -298,10 +330,12 @@ def pydantic_to_response_format(model: type) -> dict[str, Any]:
     try:
         # Import here to avoid hard dependency on pydantic
         from pydantic import BaseModel
-        
+
         if not isinstance(model, type) or not issubclass(model, BaseModel):
-            raise TypeError(f"model must be a Pydantic BaseModel class, got {type(model)}")
-        
+            raise TypeError(
+                f"model must be a Pydantic BaseModel class, got {type(model)}"
+            )
+
         schema = model.model_json_schema()
         return {
             "type": "json_schema",
@@ -312,4 +346,6 @@ def pydantic_to_response_format(model: type) -> dict[str, Any]:
             },
         }
     except ImportError:
-        raise ImportError("pydantic must be installed to use pydantic_to_response_format")
+        raise ImportError(
+            "pydantic must be installed to use pydantic_to_response_format"
+        )
