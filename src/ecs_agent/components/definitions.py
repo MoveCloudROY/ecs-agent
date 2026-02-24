@@ -1,9 +1,9 @@
 """Component dataclass definitions for ECS-based LLM Agent."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from ecs_agent.types import EntityId, Message, ToolCall, ToolSchema
+from ecs_agent.types import ApprovalPolicy, EntityId, Message, ToolCall, ToolSchema
 
 try:
     from ecs_agent.providers.protocol import LLMProvider
@@ -103,3 +103,56 @@ class SystemPromptComponent:
     """LLM system prompt."""
 
     content: str
+
+
+@dataclass(slots=True)
+class ToolApprovalComponent:
+    """Tool approval policy configuration."""
+
+    policy: ApprovalPolicy
+    timeout: float = 30.0
+    approved_calls: list[str] = field(default_factory=list)
+    denied_calls: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class SandboxConfigComponent:
+    """Sandbox execution limits."""
+
+    timeout: float = 30.0
+    max_output_size: int = 10_000
+
+
+@dataclass(slots=True)
+class PlanSearchComponent:
+    """MCTS tree search configuration."""
+
+    max_depth: int = 5
+    max_branching: int = 3
+    exploration_weight: float = 1.414
+    best_plan: list[str] = field(default_factory=list)
+    search_active: bool = False
+
+
+@dataclass(slots=True)
+class RAGTriggerComponent:
+    """RAG retrieval trigger and results."""
+
+    query: str = ""
+    top_k: int = 5
+    retrieved_docs: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class EmbeddingComponent:
+    """Embedding provider reference."""
+
+    provider: Any
+    dimension: int = 0
+
+
+@dataclass(slots=True)
+class VectorStoreComponent:
+    """Vector store reference."""
+
+    store: Any

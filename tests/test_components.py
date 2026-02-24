@@ -275,7 +275,7 @@ class TestComponentCount:
     """Test component count limit."""
 
     def test_component_count_limit(self):
-        """Test that component count does not exceed 12."""
+        """Test that component count does not exceed 18."""
         import ecs_agent.components.definitions as d
         count = sum(
             1
@@ -284,14 +284,14 @@ class TestComponentCount:
             and dataclasses.is_dataclass(getattr(d, name, None))
             and getattr(d, name).__module__ == "ecs_agent.components.definitions"
         )
-        assert count <= 12, f"Component count {count} exceeds limit of 12"
+        assert count <= 18, f"Component count {count} exceeds limit of 18"
 
 
 class TestComponentsExportedInInit:
     """Test that all components are exported from __init__.py."""
 
     def test_all_components_exported(self):
-        """Test all 12 components can be imported from ecs_agent.components."""
+        """Test all 18 components can be imported from ecs_agent.components."""
         from ecs_agent import components
 
         component_names = [
@@ -307,6 +307,12 @@ class TestComponentsExportedInInit:
             "ErrorComponent",
             "TerminalComponent",
             "SystemPromptComponent",
+            "ToolApprovalComponent",
+            "SandboxConfigComponent",
+            "PlanSearchComponent",
+            "RAGTriggerComponent",
+            "EmbeddingComponent",
+            "VectorStoreComponent",
         ]
 
         for name in component_names:

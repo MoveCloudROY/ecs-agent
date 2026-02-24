@@ -1,6 +1,8 @@
 """Core type definitions for ECS-based LLM Agent."""
 
+import asyncio
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, NewType
 
 EntityId = NewType("EntityId", int)
@@ -107,18 +109,83 @@ class RetryConfig:
     max_wait: float = 60.0
     retry_status_codes: tuple[int, ...] = (429, 500, 502, 503, 504)
 
+
+class ToolTimeoutError(Exception):
+    """Raised when a sandboxed tool exceeds its timeout."""
+
+    pass
+
+
+class ApprovalPolicy(Enum):
+    """Policy for tool approval decisions."""
+
+    ALWAYS_APPROVE = "always_approve"
+    ALWAYS_DENY = "always_deny"
+    REQUIRE_APPROVAL = "require_approval"
+
+
+@dataclass(slots=True)
+class ToolApprovalRequestedEvent:
+    """Event emitted when a tool call requires approval."""
+
+    entity_id: EntityId
+    tool_call: ToolCall
+    approval_future: asyncio.Future[bool]
+
+
+@dataclass(slots=True)
+class ToolApprovedEvent:
+    """Event emitted when a tool call is approved."""
+
+    entity_id: EntityId
+    tool_call_id: str
+
+
+@dataclass(slots=True)
+class ToolDeniedEvent:
+    """Event emitted when a tool call is denied."""
+
+    entity_id: EntityId
+    tool_call_id: str
+    reason: str
+
+
+@dataclass(slots=True)
+class MCTSNodeScoredEvent:
+    """Event emitted when an MCTS node is scored."""
+
+    entity_id: EntityId
+    node_id: int
+    score: float
+
+
+@dataclass(slots=True)
+class RAGRetrievalCompletedEvent:
+    """Event emitted when RAG retrieval completes."""
+
+    entity_id: EntityId
+    query: str
+    num_results: int
+
 __all__ = [
-    "EntityId",
-    "ToolCall",
-    "Message",
-    "ToolSchema",
-    "Usage",
+    "ApprovalPolicy",
     "CompletionResult",
-    "StreamDelta",
-    "RetryConfig",
-    "ErrorOccurredEvent",
     "ConversationTruncatedEvent",
-    "PlanStepCompletedEvent",
+    "EntityId",
+    "ErrorOccurredEvent",
+    "MCTSNodeScoredEvent",
+    "Message",
     "MessageDeliveredEvent",
     "PlanRevisedEvent",
+    "PlanStepCompletedEvent",
+    "RAGRetrievalCompletedEvent",
+    "RetryConfig",
+    "StreamDelta",
+    "ToolApprovedEvent",
+    "ToolApprovalRequestedEvent",
+    "ToolCall",
+    "ToolDeniedEvent",
+    "ToolSchema",
+    "ToolTimeoutError",
+    "Usage",
 ]
