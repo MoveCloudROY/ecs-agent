@@ -1,6 +1,13 @@
-# ecs-agent
+<div align="center">
+  <h1>ecs-agent</code></h1>
 
-**Entity-Component-System architecture for composable AI agents.**
+  <p>
+    <strong>Entity-Component-System architecture for composable AI agents.</strong>
+  </p>
+</div>
+
+
+****
 
 Build modular, testable LLM agents by composing behavior from dataclass components, async systems, and pluggable providers — no inheritance hierarchies, just clean composition.
 
