@@ -23,6 +23,9 @@ Build modular, testable LLM agents by composing behavior from dataclass componen
 - **Structured Output** — JSON mode with Pydantic schema support for type-safe LLM responses.
 - **Serialization** — Save and restore full `World` state (entities, components, conversation history) via `WorldSerializer`.
 - **Type-Safe** — Full type annotations, `dataclass(slots=True)` components, mypy strict mode. Errors surface at write-time, not runtime.
+- **Tool Auto-Discovery & Approval** — Secure your agent with manual approval policies for sensitive tool calls.
+- **MCTS Plan Optimization** — Find optimal execution paths using Monte Carlo Tree Search (MCTS) for complex goals.
+- **RAG (Vector Search)** — Retrieval-Augmented Generation with pluggable embedding providers and vector stores.
 
 ## Installation
 
@@ -31,6 +34,8 @@ Build modular, testable LLM agents by composing behavior from dataclass componen
 git clone https://github.com/your-org/ecs-agent.git
 cd ecs-agent
 uv sync --group dev
+# Install with embeddings support (optional)
+uv pip install -e ".[embeddings]"
 ```
 
 > **Requires Python ≥ 3.11**
@@ -141,7 +146,7 @@ src/ecs_agent/
 │   ├── openai_provider.py    # OpenAI-compatible HTTP provider (httpx)
 │   ├── fake_provider.py      # Deterministic test provider
 │   └── retry_provider.py     # Retry wrapper (tenacity)
-├── systems/                  # 7 built-in systems
+├── systems/                  # 10 built-in systems
 │   ├── reasoning.py          # LLM inference
 │   ├── planning.py           # Multi-step plan execution
 │   ├── replanning.py         # Dynamic plan adjustment
@@ -149,6 +154,9 @@ src/ecs_agent/
 │   ├── memory.py             # Conversation memory management
 │   ├── collaboration.py      # Multi-agent messaging
 │   └── error_handling.py     # Error capture and recovery
+│   ├── tree_search.py        # MCTS plan optimization
+│   ├── tool_approval.py      # Human-in-the-loop approval
+│   └── rag.py                # Retrieval-Augmented Generation
 ├── types.py                  # Core types (EntityId, Message, ToolCall, etc.)
 ├── serialization.py          # WorldSerializer for save/load
 └── logging.py                # structlog configuration
@@ -189,6 +197,12 @@ World
 | `KVStoreComponent` | Generic key-value scratch space |
 | `ErrorComponent` | Error details for failed operations |
 | `TerminalComponent` | Signals agent completion |
+| `ToolApprovalComponent` | Policy-based tool call filtering |
+| `SandboxConfigComponent` | Execution limits for tools |
+| `PlanSearchComponent` | MCTS search configuration |
+| `RAGTriggerComponent` | Vector search retrieval state |
+| `EmbeddingComponent` | Embedding provider reference |
+| `VectorStoreComponent` | Vector store reference |
 
 ## Examples
 
@@ -205,6 +219,9 @@ The `examples/` directory contains 9 runnable demos:
 | [`multi_agent.py`](examples/multi_agent.py) | Two agents collaborating through inbox messaging |
 | [`structured_output_agent.py`](examples/structured_output_agent.py) | Pydantic schema → JSON mode for type-safe responses |
 | [`serialization_demo.py`](examples/serialization_demo.py) | Save and restore World state to/from JSON |
+| [`tool_approval_agent.py`](examples/tool_approval_agent.py) | Manual approval flow for sensitive tools |
+| [`tree_search_agent.py`](examples/tree_search_agent.py) | MCTS-based planning for complex goals |
+| [`rag_agent.py`](examples/rag_agent.py) | Retrieval-Augmented Generation demo |
 
 Run any example:
 

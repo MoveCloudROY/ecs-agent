@@ -123,6 +123,80 @@ provider = RetryProvider(provider=base_provider, retry_config=retry_config)
 - **Streaming**: Calls are passed through directly to the underlying provider. **Streaming calls are not retried.**
 - **Default Config**: If `retry_config` is not provided, it uses standard defaults (3 attempts, exponential backoff starting at 4 seconds).
 
+---
+
+## EmbeddingProvider Protocol
+
+The `EmbeddingProvider` protocol defines the interface for converting text into numerical vectors. It is located in `ecs_agent.providers.embedding_protocol`.
+
+```python
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class EmbeddingProvider(Protocol):
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        ...
+```
+
+## OpenAIEmbeddingProvider
+
+`OpenAIEmbeddingProvider` is an OpenAI-compatible provider for generating text embeddings.
+
+### Configuration
+
+```python
+from ecs_agent.providers.embedding_provider import OpenAIEmbeddingProvider
+
+provider = OpenAIEmbeddingProvider(
+    api_key="your-api-key",
+    model="text-embedding-3-small"
+)
+```
+
+### Behavior
+- **Batching**: Sends a POST request to `/embeddings` with a list of input texts.
+- **Error Handling**: Retries are not built-in; use a wrapper if needed. `httpx` errors are logged and re-raised.
+
+## FakeEmbeddingProvider
+
+`FakeEmbeddingProvider` returns deterministic vectors based on the hash of the input text. Ideal for testing and development without API costs.
+
+### Usage
+
+```python
+from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider
+
+provider = FakeEmbeddingProvider(dimension=384)
+vectors = await provider.embed(["hello", "world"])
+```
+
+## VectorStore Protocol
+
+The `VectorStore` protocol defines the interface for storing and searching vectors. Located in `ecs_agent.providers.vector_store`.
+
+```python
+from typing import Any, Protocol, runtime_checkable
+
+@runtime_checkable
+class VectorStore(Protocol):
+    async def add(self, id: str, vector: list[float], metadata: dict[str, Any] | None = None) -> None: ...
+    async def search(self, query_vector: list[float], top_k: int = 5) -> list[tuple[str, float]]: ...
+    async def delete(self, id: str) -> None: ...
+```
+
+## InMemoryVectorStore
+
+`InMemoryVectorStore` provides a simple, dictionary-backed vector store with cosine similarity search. It optionally uses `numpy` for faster computations if available.
+,
+### Usage
+
+```python
+from ecs_agent.providers.vector_store import InMemoryVectorStore
+
+store = InMemoryVectorStore(dimension=384)
+await store.add("doc1", [0.1, 0.2, ...], metadata={"text": "content"})
+results = await store.search([0.1, 0.2, ...], top_k=5)
+```
 ## Choosing a Provider
 
 - **Production**: Use `OpenAIProvider` for real API interaction. Wrap it in a `RetryProvider` to handle transient network issues or rate limits.
