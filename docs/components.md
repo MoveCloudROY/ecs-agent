@@ -211,3 +211,110 @@ Provides a generic key-value store for custom system memory.
 from ecs_agent.components import KVStoreComponent
 world.add_component(agent, KVStoreComponent(store={"count": 5}))
 ```
+
+## Advanced & Feature-Specific Components
+
+### ToolApprovalComponent
+Configures how tool calls are approved or denied before execution.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `policy` | `ApprovalPolicy` | (none) | `ALWAYS_APPROVE`, `ALWAYS_DENY`, or `REQUIRE_APPROVAL` |
+| `timeout` | `float` | `30.0` | Seconds to wait for human approval in `REQUIRE_APPROVAL` mode |
+| `approved_calls` | `list[str]` | `[]` | History of approved tool call IDs |
+| `denied_calls` | `list[str]` | `[]` | History of denied tool call IDs |
+,
+**Used by:** `ToolApprovalSystem`
+
+**Usage:**
+```python
+from ecs_agent.components import ToolApprovalComponent
+from ecs_agent.types import ApprovalPolicy
+
+world.add_component(agent, ToolApprovalComponent(policy=ApprovalPolicy.REQUIRE_APPROVAL, timeout=60.0))
+```
+
+### SandboxConfigComponent
+Defines execution limits for code-running tools or sandboxed environments.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `timeout` | `float` | `30.0` | Maximum execution time in seconds |
+| `max_output_size` | `int` | `10000` | Maximum allowed size of execution output in bytes |
+**Used by:** Tools using `Sandbox` logic.
+
+**Usage:**
+```python
+from ecs_agent.components import SandboxConfigComponent
+world.add_component(agent, SandboxConfigComponent(timeout=10.0, max_output_size=5000))
+```
+
+### PlanSearchComponent
+Configures Monte Carlo Tree Search (MCTS) for finding the optimal plan path.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `max_depth` | `int` | `5` | Maximum search depth in the MCTS tree |
+| `max_branching` | `int` | `3` | Maximum number of child nodes to expand per parent |
+| `exploration_weight` | `float` | `1.414` | UCB1 exploration constant |
+| `best_plan` | `list[str]` | `[]` | The best plan path found after search completes |
+| `search_active` | `bool` | `False` | Internal flag indicating search is in progress |
+**Used by:** `TreeSearchSystem` (mutually exclusive with `PlanComponent`)
+
+**Usage:**
+```python
+from ecs_agent.components import PlanSearchComponent
+world.add_component(agent, PlanSearchComponent(max_depth=10, max_branching=5))
+```
+
+### RAGTriggerComponent
+Triggers a vector search and stores the retrieved document snippets.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `query` | `str` | `""` | The search query string; cleared after retrieval |
+| `top_k` | `int` | `5` | Number of documents to retrieve |
+| `retrieved_docs` | `list[str]` | `[]` | Snippets of retrieved text |
+,
+**Used by:** `RAGSystem`
+
+**Usage:**
+```python
+from ecs_agent.components import RAGTriggerComponent
+world.add_component(agent, RAGTriggerComponent(query="How to use ECS?", top_k=3))
+```
+
+### EmbeddingComponent
+Provides an entity with access to an embedding provider.
+,
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `provider` | `EmbeddingProvider` | (none) | The embedding provider instance |
+| `dimension` | `int` | `0` | Expected vector dimension |
+,
+**Used by:** `RAGSystem`
+
+**Usage:**
+```python
+from ecs_agent.components import EmbeddingComponent
+from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider
+
+world.add_component(agent, EmbeddingComponent(provider=FakeEmbeddingProvider(), dimension=384))
+```
+
+### VectorStoreComponent
+Links an entity to a vector store for storage and retrieval.
+,
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `store` | `VectorStore` | (none) | The vector store instance |
+,
+**Used by:** `RAGSystem`
+,
+**Usage:**
+```python
+from ecs_agent.components import VectorStoreComponent
+from ecs_agent.providers.vector_store import InMemoryVectorStore
+
+world.add_component(agent, VectorStoreComponent(store=InMemoryVectorStore(dimension=384)))
+```

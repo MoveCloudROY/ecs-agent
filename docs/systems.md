@@ -8,8 +8,11 @@ The table below summarizes the recommended priorities for each system. Priority 
 
 | System | Recommended Priority | Purpose |
 | :--- | :--- | :--- |
+| RAGSystem | -10 | Retrieves context via vector search before reasoning. |
+| ToolApprovalSystem | -5 | Filters pending tool calls before execution. |
 | ReasoningSystem | 0 | Generates responses using an LLM. |
 | PlanningSystem | 0 | Manages step-by-step execution of a plan. |
+| TreeSearchSystem | 0 | Uses MCTS to find the best plan path. |
 | CollaborationSystem | 5 | Ingests messages from other entities. |
 | ToolExecutionSystem | 5 | Executes pending tool calls and returns results. |
 | ReplanningSystem | 7 | Periodically revises the current plan based on progress. |

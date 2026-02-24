@@ -5,20 +5,26 @@ from typing import Any
 from ecs_agent.components import (
     CollaborationComponent,
     ConversationComponent,
+    EmbeddingComponent,
     ErrorComponent,
     KVStoreComponent,
     LLMComponent,
     OwnerComponent,
     PendingToolCallsComponent,
     PlanComponent,
+    PlanSearchComponent,
+    RAGTriggerComponent,
+    SandboxConfigComponent,
     SystemPromptComponent,
     TerminalComponent,
+    ToolApprovalComponent,
     ToolRegistryComponent,
     ToolResultsComponent,
+    VectorStoreComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.serialization import NON_SERIALIZABLE_PLACEHOLDER, WorldSerializer
-from ecs_agent.types import EntityId, Message, ToolCall, ToolSchema
+from ecs_agent.types import ApprovalPolicy, EntityId, Message, ToolCall, ToolSchema
 
 
 class DummyProvider:
@@ -277,3 +283,183 @@ def test_serialization_with_all_component_types() -> None:
     assert restored.has_component(EntityId(1), ErrorComponent)
     assert restored.has_component(EntityId(1), TerminalComponent)
     assert restored.has_component(EntityId(1), SystemPromptComponent)
+
+
+def test_serialization_roundtrip_with_tool_approval_component() -> None:
+    """Test that ToolApprovalComponent with ApprovalPolicy enum roundtrips correctly."""
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        ToolApprovalComponent(
+            policy=ApprovalPolicy.REQUIRE_APPROVAL,
+            timeout=45.0,
+            approved_calls=["call1"],
+            denied_calls=["call2"],
+        ),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(
+        serialized, providers={}, tool_handlers={}
+    )
+
+    restored_comp = restored.get_component(entity, ToolApprovalComponent)
+    assert restored_comp is not None
+    assert restored_comp.policy == ApprovalPolicy.REQUIRE_APPROVAL
+    assert restored_comp.timeout == 45.0
+    assert restored_comp.approved_calls == ["call1"]
+    assert restored_comp.denied_calls == ["call2"]
+
+
+def test_serialization_roundtrip_with_sandbox_config() -> None:
+    """Test that SandboxConfigComponent roundtrips correctly."""
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        SandboxConfigComponent(timeout=60.0, max_output_size=50_000),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(
+        serialized, providers={}, tool_handlers={}
+    )
+
+    restored_comp = restored.get_component(entity, SandboxConfigComponent)
+    assert restored_comp is not None
+    assert restored_comp.timeout == 60.0
+    assert restored_comp.max_output_size == 50_000
+
+
+def test_serialization_roundtrip_with_plan_search() -> None:
+    """Test that PlanSearchComponent roundtrips correctly."""
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        PlanSearchComponent(
+            max_depth=10,
+            max_branching=5,
+            exploration_weight=2.0,
+            best_plan=["a", "b", "c"],
+            search_active=True,
+        ),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(
+        serialized, providers={}, tool_handlers={}
+    )
+
+    restored_comp = restored.get_component(entity, PlanSearchComponent)
+    assert restored_comp is not None
+    assert restored_comp.max_depth == 10
+    assert restored_comp.max_branching == 5
+    assert restored_comp.exploration_weight == 2.0
+    assert restored_comp.best_plan == ["a", "b", "c"]
+    assert restored_comp.search_active is True
+
+
+def test_serialization_roundtrip_with_rag_trigger() -> None:
+    """Test that RAGTriggerComponent roundtrips correctly."""
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        RAGTriggerComponent(
+            query="search query",
+            top_k=10,
+            retrieved_docs=["doc1", "doc2"],
+        ),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(
+        serialized, providers={}, tool_handlers={}
+    )
+
+    restored_comp = restored.get_component(entity, RAGTriggerComponent)
+    assert restored_comp is not None
+    assert restored_comp.query == "search query"
+    assert restored_comp.top_k == 10
+    assert restored_comp.retrieved_docs == ["doc1", "doc2"]
+
+
+def test_serialization_embedding_component_uses_placeholder() -> None:
+    """Test that EmbeddingComponent.provider is serialized as placeholder."""
+    from unittest.mock import Mock
+
+    provider = Mock()
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        EmbeddingComponent(provider=provider, dimension=768),
+    )
+
+    data = WorldSerializer.to_dict(world)
+    assert (
+        data["entities"]["1"]["EmbeddingComponent"]["provider"]
+        == NON_SERIALIZABLE_PLACEHOLDER
+    )
+    assert data["entities"]["1"]["EmbeddingComponent"]["dimension"] == 768
+
+
+def test_serialization_vector_store_component_uses_placeholder() -> None:
+    """Test that VectorStoreComponent.store is serialized as placeholder."""
+    from unittest.mock import Mock
+
+    store = Mock()
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        VectorStoreComponent(store=store),
+    )
+
+    data = WorldSerializer.to_dict(world)
+    assert (
+        data["entities"]["1"]["VectorStoreComponent"]["store"]
+        == NON_SERIALIZABLE_PLACEHOLDER
+    )
+
+
+def test_serialization_roundtrip_mixed_new_components() -> None:
+    """Test roundtrip with multiple new components together."""
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        ToolApprovalComponent(policy=ApprovalPolicy.ALWAYS_APPROVE),
+    )
+    world.add_component(
+        entity,
+        SandboxConfigComponent(timeout=30.0),
+    )
+    world.add_component(
+        entity,
+        PlanSearchComponent(max_depth=3),
+    )
+    world.add_component(
+        entity,
+        RAGTriggerComponent(query="test", top_k=5),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    component_names = set(serialized["entities"]["1"].keys())
+    expected = {
+        "ToolApprovalComponent",
+        "SandboxConfigComponent",
+        "PlanSearchComponent",
+        "RAGTriggerComponent",
+    }
+    assert component_names == expected
+
+    restored = WorldSerializer.from_dict(
+        serialized, providers={}, tool_handlers={}
+    )
+    assert restored.has_component(entity, ToolApprovalComponent)
+    assert restored.has_component(entity, SandboxConfigComponent)
+    assert restored.has_component(entity, PlanSearchComponent)
+    assert restored.has_component(entity, RAGTriggerComponent)

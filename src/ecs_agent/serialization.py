@@ -8,19 +8,25 @@ from typing import Any
 from ecs_agent.components import (
     CollaborationComponent,
     ConversationComponent,
+    EmbeddingComponent,
     ErrorComponent,
     KVStoreComponent,
     LLMComponent,
     OwnerComponent,
     PendingToolCallsComponent,
     PlanComponent,
+    PlanSearchComponent,
+    RAGTriggerComponent,
+    SandboxConfigComponent,
     SystemPromptComponent,
     TerminalComponent,
+    ToolApprovalComponent,
     ToolRegistryComponent,
     ToolResultsComponent,
+    VectorStoreComponent,
 )
 from ecs_agent.core.world import World
-from ecs_agent.types import EntityId, Message, ToolCall, ToolSchema
+from ecs_agent.types import ApprovalPolicy, EntityId, Message, ToolCall, ToolSchema
 
 NON_SERIALIZABLE_PLACEHOLDER = "<non-serializable>"
 
@@ -37,6 +43,12 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     ErrorComponent.__name__: ErrorComponent,
     TerminalComponent.__name__: TerminalComponent,
     SystemPromptComponent.__name__: SystemPromptComponent,
+    ToolApprovalComponent.__name__: ToolApprovalComponent,
+    SandboxConfigComponent.__name__: SandboxConfigComponent,
+    PlanSearchComponent.__name__: PlanSearchComponent,
+    RAGTriggerComponent.__name__: RAGTriggerComponent,
+    EmbeddingComponent.__name__: EmbeddingComponent,
+    VectorStoreComponent.__name__: VectorStoreComponent,
 }
 
 
@@ -122,6 +134,12 @@ class WorldSerializer:
         if isinstance(component, ToolRegistryComponent):
             serialized["handlers"] = NON_SERIALIZABLE_PLACEHOLDER
 
+        if isinstance(component, EmbeddingComponent):
+            serialized["provider"] = NON_SERIALIZABLE_PLACEHOLDER
+
+        if isinstance(component, VectorStoreComponent):
+            serialized["store"] = NON_SERIALIZABLE_PLACEHOLDER
+
         return serialized
 
     @staticmethod
@@ -166,11 +184,18 @@ class WorldSerializer:
         if component_name == OwnerComponent.__name__:
             normalized_data["owner_id"] = EntityId(int(normalized_data["owner_id"]))
 
+        if component_name == ToolApprovalComponent.__name__:
+            policy_value = normalized_data.get("policy")
+            if isinstance(policy_value, str):
+                normalized_data["policy"] = ApprovalPolicy(policy_value)
+
         if component_name == LLMComponent.__name__:
             provider_value = normalized_data.get("provider")
             if provider_value == NON_SERIALIZABLE_PLACEHOLDER:
                 model = normalized_data.get("model")
-                provider = providers.get(model, providers.get("default"))
+                # Ensure model is a string for dict lookup
+                model_str: str = model if isinstance(model, str) else "default"
+                provider = providers.get(model_str, providers.get("default"))
                 if provider is None:
                     raise ValueError(
                         f"No provider configured for model '{model}' and no default provider found"
