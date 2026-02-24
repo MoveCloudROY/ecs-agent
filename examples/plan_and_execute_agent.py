@@ -16,6 +16,11 @@ Environment variables:
   LLM_API_KEY   — API key for the LLM provider (required)
   LLM_BASE_URL  — Base URL for the API (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
   LLM_MODEL     — Model name (default: qwen3.5-plus)
+  LLM_CONNECT_TIMEOUT — Connection timeout in seconds (default: 10)
+  LLM_READ_TIMEOUT    — Read timeout in seconds (default: 120)
+  LLM_WRITE_TIMEOUT   — Write timeout in seconds (default: 10)
+  LLM_POOL_TIMEOUT    — Connection pool timeout in seconds (default: 10)
+  LLM_MAX_RETRIES     — Retries for transient network/HTTP errors (default: 3)
 """
 
 from __future__ import annotations
@@ -33,12 +38,19 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers.retry_provider import RetryProvider
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.planning import PlanningSystem
 from ecs_agent.systems.replanning import ReplanningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
-from ecs_agent.types import Message, PlanRevisedEvent, PlanStepCompletedEvent, ToolSchema
+from ecs_agent.types import (
+    Message,
+    PlanRevisedEvent,
+    PlanStepCompletedEvent,
+    RetryConfig,
+    ToolSchema,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -147,13 +159,41 @@ async def main() -> None:
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
     model = os.environ.get("LLM_MODEL", "qwen3.5-plus")
+    connect_timeout = float(os.environ.get("LLM_CONNECT_TIMEOUT", "10"))
+    read_timeout = float(os.environ.get("LLM_READ_TIMEOUT", "120"))
+    write_timeout = float(os.environ.get("LLM_WRITE_TIMEOUT", "10"))
+    pool_timeout = float(os.environ.get("LLM_POOL_TIMEOUT", "10"))
+    max_retries = int(os.environ.get("LLM_MAX_RETRIES", "3"))
 
     print(f"Using model: {model}")
     print(f"Base URL: {base_url}")
+    print(
+        "Timeouts: "
+        f"connect={connect_timeout}s read={read_timeout}s "
+        f"write={write_timeout}s pool={pool_timeout}s"
+    )
+    print(f"LLM retries: {max_retries}")
     print()
 
     # --- Create LLM provider ---
-    provider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+    base_provider = OpenAIProvider(
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        connect_timeout=connect_timeout,
+        read_timeout=read_timeout,
+        write_timeout=write_timeout,
+        pool_timeout=pool_timeout,
+    )
+    provider = RetryProvider(
+        base_provider,
+        retry_config=RetryConfig(
+            max_attempts=max_retries,
+            multiplier=1.0,
+            min_wait=1.0,
+            max_wait=8.0,
+        ),
+    )
 
     # --- Define the initial plan ---
     plan_steps = [
@@ -238,9 +278,7 @@ async def main() -> None:
     main_agent = world.create_entity()
 
     # Attach components
-    world.add_component(
-        main_agent, LLMComponent(provider=provider, model=model)
-    )
+    world.add_component(main_agent, LLMComponent(provider=provider, model=model))
     world.add_component(
         main_agent,
         ConversationComponent(

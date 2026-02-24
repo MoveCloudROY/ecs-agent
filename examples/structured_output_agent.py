@@ -16,7 +16,7 @@ Usage:
 Environment variables:
    LLM_API_KEY   — API key for the LLM provider (required)
    LLM_BASE_URL  — Base URL for the API (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
-   LLM_MODEL     — Model name (default: qwen-plus)
+   LLM_MODEL     — Model name (default: qwen3.5-plus)
 
 Note: Structured output (JSON mode) requires the full response to be available at once,
 so streaming is NOT supported with response_format. This example uses FakeProvider as a
@@ -30,7 +30,7 @@ import os
 import sys
 
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from ecs_agent.logging import configure_logging, get_logger
 from ecs_agent.providers import OpenAIProvider, FakeProvider
@@ -48,9 +48,19 @@ logger = get_logger(__name__)
 class CityInfo(BaseModel):
     """Information about a city returned in structured JSON format."""
 
-    name: str = Field(..., description="The name of the city")
+    model_config = ConfigDict(validate_by_name=True, validate_by_alias=True)
+
+    name: str = Field(
+        ...,
+        description="The name of the city",
+        validation_alias=AliasChoices("name", "city_name", "city"),
+    )
     country: str = Field(..., description="The country where the city is located")
-    population: int = Field(..., description="Approximate population in millions")
+    population: float = Field(
+        ...,
+        description="Approximate population in millions",
+        validation_alias=AliasChoices("population", "population_millions"),
+    )
     climate: str = Field(
         ..., description="Primary climate type (e.g., 'Temperate', 'Tropical')"
     )
@@ -74,7 +84,7 @@ async def main() -> None:
     base_url = os.environ.get(
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
-    model = os.environ.get("LLM_MODEL", "qwen-plus")
+    model = os.environ.get("LLM_MODEL", "qwen3.5-plus")
 
     # --- Create LLM provider ---
     if api_key:
@@ -87,7 +97,7 @@ async def main() -> None:
         fake_response = CompletionResult(
             message=Message(
                 role="assistant",
-                content='{"name": "Tokyo", "country": "Japan", "population": 14, "climate": "Temperate", "landmarks": ["Senso-ji Temple", "Tokyo Tower", "Shibuya Crossing", "Meiji Shrine"]}',
+                content='{"name": "Tokyo", "country": "Japan", "population": 14.0, "climate": "Temperate", "landmarks": ["Senso-ji Temple", "Tokyo Tower", "Shibuya Crossing", "Meiji Shrine"]}',
             ),
             usage=Usage(prompt_tokens=50, completion_tokens=100, total_tokens=150),
         )
@@ -99,7 +109,11 @@ async def main() -> None:
     messages = [
         Message(
             role="user",
-            content="Extract information about Tokyo in JSON format. Include the city name, country, population (in millions), climate, and a list of landmarks.",
+            content=(
+                "Extract information about Tokyo in JSON format. Include city name, "
+                "country, population (in millions), climate, and a list of landmarks. "
+                "Prefer keys: name, country, population, climate, landmarks."
+            ),
         )
     ]
 
@@ -133,7 +147,7 @@ async def main() -> None:
         # Display the structured result
         print(f"\nCity Name:    {city_info.name}")
         print(f"Country:      {city_info.country}")
-        print(f"Population:   {city_info.population} million")
+        print(f"Population:   {city_info.population:.1f} million")
         print(f"Climate:      {city_info.climate}")
         print("Landmarks:")
         for landmark in city_info.landmarks:

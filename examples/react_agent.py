@@ -14,7 +14,7 @@ Usage:
 Environment variables:
   LLM_API_KEY   — API key for the LLM provider (required)
   LLM_BASE_URL  — Base URL for the API (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
-  LLM_MODEL     — Model name (default: qwen-plus)
+  LLM_MODEL     — Model name (default: qwen3.5-plus)
 """
 
 from __future__ import annotations

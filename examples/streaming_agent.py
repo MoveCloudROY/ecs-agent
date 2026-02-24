@@ -13,7 +13,7 @@ Usage:
 Environment variables:
   LLM_API_KEY   — API key for the LLM provider (required, can be fake for testing)
   LLM_BASE_URL  — Base URL for the API (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
-  LLM_MODEL     — Model name (default: qwen-plus)
+  LLM_MODEL     — Model name (default: qwen3.5-plus)
 
 Output:
   The agent streams the response word-by-word in real-time, showing each chunk
@@ -41,7 +41,7 @@ async def main() -> None:
     base_url = os.environ.get(
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
-    model = os.environ.get("LLM_MODEL", "qwen-plus")
+    model = os.environ.get("LLM_MODEL", "qwen3.5-plus")
 
     # --- Create LLM provider ---
     if api_key:
