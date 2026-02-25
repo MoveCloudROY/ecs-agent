@@ -1,18 +1,29 @@
-"""Tool Approval Agent Example
+"""Tool Approval Agent Example with real LLM.
 
 Demonstrates the @tool decorator, scan_module tool discovery, approval workflow,
-and sandboxed tool execution. Uses FakeProvider with pre-configured responses
-including tool calls that must pass through the approval system.
+and sandboxed tool execution using a real LLM provider.
 
 The example shows:
   - Defining @tool-decorated functions (get_weather, send_email)
   - Using scan_module() to auto-discover and register tools
   - Setting up ToolApprovalComponent with ALWAYS_APPROVE policy
   - Running ToolApprovalSystem (priority=-5) before ToolExecutionSystem (priority=5)
-  - Automatic approval and execution of tools within the sandbox
+  - The LLM autonomously decides which tools to call; approval system gates execution
+
+Usage:
+  1. Copy .env.example to .env and fill in your API credentials
+  2. Run: uv run python examples/tool_approval_agent.py
+
+Environment variables:
+  LLM_API_KEY   — API key for the LLM provider (required)
+  LLM_BASE_URL  — Base URL for the API (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
+  LLM_MODEL     — Model name (default: qwen3.5-plus)
 """
 
+from __future__ import annotations
+
 import asyncio
+import os
 import sys
 
 from ecs_agent.components import (
@@ -22,14 +33,15 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers.retry_provider import RetryProvider
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_approval import ToolApprovalSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.tools.discovery import scan_module, tool
-from ecs_agent.types import ApprovalPolicy, CompletionResult, Message, ToolCall
+from ecs_agent.types import ApprovalPolicy, Message, RetryConfig
 
 
 @tool()
@@ -45,43 +57,50 @@ async def send_email(recipient: str, subject: str, body: str) -> str:
 
 
 async def main() -> None:
-    """Run a tool approval agent example."""
-    # Create World
-    world = World()
+    """Run a tool approval agent example with a real LLM."""
+    # --- Load config from environment ---
+    api_key = os.environ.get("LLM_API_KEY", "")
+    if not api_key:
+        print("Error: LLM_API_KEY environment variable is required.")
+        print("Copy .env.example to .env and fill in your API key.")
+        sys.exit(1)
 
-    # Create FakeProvider with tool calls that will be approved
-    provider = FakeProvider(
-        responses=[
-            CompletionResult(
-                message=Message(
-                    role="assistant",
-                    content="",
-                    tool_calls=[
-                        ToolCall(
-                            id="call-1",
-                            name="get_weather",
-                            arguments={"location": "San Francisco"},
-                        ),
-                        ToolCall(
-                            id="call-2",
-                            name="send_email",
-                            arguments={
-                                "recipient": "user@example.com",
-                                "subject": "Weather Report",
-                                "body": "Check the weather for San Francisco",
-                            },
-                        ),
-                    ],
-                )
-            ),
-            CompletionResult(
-                message=Message(
-                    role="assistant",
-                    content="I've checked the weather and sent you an email report.",
-                )
-            ),
-        ]
+    base_url = os.environ.get(
+        "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
+    model = os.environ.get("LLM_MODEL", "qwen3.5-plus")
+    connect_timeout = float(os.environ.get("LLM_CONNECT_TIMEOUT", "10"))
+    read_timeout = float(os.environ.get("LLM_READ_TIMEOUT", "120"))
+    write_timeout = float(os.environ.get("LLM_WRITE_TIMEOUT", "10"))
+    pool_timeout = float(os.environ.get("LLM_POOL_TIMEOUT", "10"))
+    max_retries = int(os.environ.get("LLM_MAX_RETRIES", "3"))
+
+    print(f"Using model: {model}")
+    print(f"Base URL: {base_url}")
+    print()
+
+    # --- Create LLM provider ---
+    base_provider = OpenAIProvider(
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        connect_timeout=connect_timeout,
+        read_timeout=read_timeout,
+        write_timeout=write_timeout,
+        pool_timeout=pool_timeout,
+    )
+    provider = RetryProvider(
+        base_provider,
+        retry_config=RetryConfig(
+            max_attempts=max_retries,
+            multiplier=1.0,
+            min_wait=1.0,
+            max_wait=8.0,
+        ),
+    )
+
+    # --- Create World ---
+    world = World()
 
     # Create Agent Entity
     agent_id = world.create_entity()
@@ -89,8 +108,11 @@ async def main() -> None:
         agent_id,
         LLMComponent(
             provider=provider,
-            model="fake",
-            system_prompt="You are a helpful assistant that can check weather and send emails.",
+            model=model,
+            system_prompt=(
+                "You are a helpful assistant that can check weather and send emails. "
+                "Use the provided tools to fulfill the user's request."
+            ),
         ),
     )
     world.add_component(
@@ -99,7 +121,7 @@ async def main() -> None:
             messages=[
                 Message(
                     role="user",
-                    content="What's the weather in San Francisco? Send me an email with the report.",
+                    content="What's the weather in San Francisco? Send me an email with the report to user@example.com.",
                 )
             ]
         ),
@@ -138,21 +160,24 @@ async def main() -> None:
 
     # Run
     runner = Runner()
-    await runner.run(world, max_ticks=3)
+    await runner.run(world, max_ticks=5)
 
     # Print results
     conv = world.get_component(agent_id, ConversationComponent)
     if conv is not None:
-        print("Conversation:")
+        print("=" * 60)
+        print("CONVERSATION HISTORY")
+        print("=" * 60)
         for msg in conv.messages:
             if msg.tool_calls:
-                print(
-                    f"  {msg.role}: [tool_calls: {', '.join(tc.name for tc in msg.tool_calls)}]"
-                )
+                for tc in msg.tool_calls:
+                    print(f"\n[Action] {tc.name}({tc.arguments})")
             elif msg.tool_call_id:
-                print(f"  {msg.role} (tool result): {msg.content}")
-            else:
-                print(f"  {msg.role}: {msg.content}")
+                print(f"[Result] {msg.content}")
+            elif msg.role == "user":
+                print(f"\n[User] {msg.content}")
+            elif msg.role == "assistant":
+                print(f"\n[Assistant] {msg.content}")
     else:
         print("No conversation found")
 
