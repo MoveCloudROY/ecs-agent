@@ -1,6 +1,6 @@
 # Component Reference
 
-This page documents all 12 core component dataclasses used in the ECS agent architecture. All components use `@dataclass(slots=True)` for memory efficiency and can be imported from `ecs_agent.components`.
+This page documents all 24 core component dataclasses used in the ECS agent architecture. All components use `@dataclass(slots=True)` for memory efficiency and can be imported from `ecs_agent.components`.
 
 ## Core Agent Components
 
@@ -220,7 +220,7 @@ Configures how tool calls are approved or denied before execution.
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `policy` | `ApprovalPolicy` | (none) | `ALWAYS_APPROVE`, `ALWAYS_DENY`, or `REQUIRE_APPROVAL` |
-| `timeout` | `float` | `30.0` | Seconds to wait for human approval in `REQUIRE_APPROVAL` mode |
+| `timeout` | `float | None` | `30.0` | Seconds to wait for human approval in `REQUIRE_APPROVAL` mode |
 | `approved_calls` | `list[str]` | `[]` | History of approved tool call IDs |
 | `denied_calls` | `list[str]` | `[]` | History of denied tool call IDs |
 ,
@@ -317,4 +317,102 @@ from ecs_agent.components import VectorStoreComponent
 from ecs_agent.providers.vector_store import InMemoryVectorStore
 
 world.add_component(agent, VectorStoreComponent(store=InMemoryVectorStore(dimension=384)))
+```
+
+### StreamingComponent
+Enables system-level streaming output for an entity's LLM responses.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `enabled` | `bool` | `False` | Whether streaming is active for this entity |
+
+**Used by:** `ReasoningSystem` (checks this to decide streaming vs batch mode)
+
+**Usage:**
+```python
+from ecs_agent.components import StreamingComponent
+world.add_component(agent, StreamingComponent(enabled=True))
+```
+
+### CheckpointComponent
+Stores snapshots of world state for undo/restore operations.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `snapshots` | `list[dict[str, Any]]` | `[]` | Stack of serialized world state snapshots |
+| `max_snapshots` | `int` | `10` | Maximum number of snapshots to retain |
+
+**Used by:** `CheckpointSystem`
+
+**Usage:**
+```python
+from ecs_agent.components import CheckpointComponent
+world.add_component(agent, CheckpointComponent(max_snapshots=5))
+```
+
+### CompactionConfigComponent
+Configures when and how conversation compaction occurs.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `threshold_tokens` | `int` | (none) | Token count threshold triggering compaction |
+| `summary_model` | `str` | (none) | Model to use for generating summaries |
+
+**Used by:** `CompactionSystem`
+
+**Usage:**
+```python
+from ecs_agent.components import CompactionConfigComponent
+world.add_component(agent, CompactionConfigComponent(threshold_tokens=4000, summary_model="qwen-plus"))
+```
+
+### ConversationArchiveComponent
+Stores archived conversation summaries created by compaction.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `archived_summaries` | `list[str]` | `[]` | List of past conversation summaries |
+
+**Used by:** `CompactionSystem`
+
+**Usage:**
+```python
+from ecs_agent.components import ConversationArchiveComponent
+world.add_component(agent, ConversationArchiveComponent())
+```
+
+### RunnerStateComponent
+Tracks the current state of the runner execution on an entity.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `current_tick` | `int` | (none) | Current tick number in the runner loop |
+| `is_paused` | `bool` | `False` | Whether the runner is paused |
+| `checkpoint_path` | `str | None` | `None` | Path to the last saved checkpoint file |
+
+**Used by:** `Runner.save_checkpoint()`, `Runner.load_checkpoint()`
+
+**Usage:**
+```python
+from ecs_agent.components import RunnerStateComponent
+# Usually added automatically by Runner, but can be pre-configured
+world.add_component(agent, RunnerStateComponent(current_tick=0))
+```
+
+### UserInputComponent
+Enables an entity to request and receive async user input.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `prompt` | `str` | `""` | The prompt to display to the user |
+| `future` | `asyncio.Future[str] | None` | `None` | Future that resolves with user input |
+| `timeout` | `float | None` | `None` | Seconds to wait; `None` for infinite wait |
+| `result` | `str | None` | `None` | The received user input |
+
+**Used by:** `UserInputSystem`
+
+**Usage:**
+```python
+from ecs_agent.components import UserInputComponent
+world.add_component(agent, UserInputComponent(prompt="Enter your name: ", timeout=None))
 ```

@@ -84,6 +84,8 @@ async def main():
     # The Runner advances the world through discrete ticks.
     runner = Runner()
     await runner.run(world, max_ticks=3)
+    # The Runner also supports infinite execution with max_ticks=None,
+    # running until a TerminalComponent signals completion.
 
     # 6. Read the conversation result
     conv = world.get_component(agent, ConversationComponent)

@@ -9,13 +9,18 @@ The Entity-Component-System (ECS) pattern makes LLM agents composable and testab
 ## Key Features
 
 *   ECS core for modular agent design.
-*   7 specialized systems for reasoning, planning, memory, and execution.
-*   3 provider types for LLM integration and testing.
+*   13 specialized systems for reasoning, planning, memory, and execution.
+*   5 LLM providers (OpenAI, Claude, LiteLLM, Fake, Retry) plus embedding providers and vector stores.
 *   Async streaming support for real-time responses.
 *   Tenacity-based retry logic for reliable API calls.
 *   Full World serialization for state persistence.
 *   Pydantic-powered structured output and tool schemas.
 *   Structured logging for observability.
+*   Context management with checkpoint undo and conversation compaction.
+*   Claude and LiteLLM provider support for 100+ models.
+*   Tool auto-discovery, sandboxed execution, and approval workflows.
+*   User input system with infinite wait support.
+*   System-level streaming with event-based notifications.
 
 ## Documentation
 
@@ -31,6 +36,9 @@ The Entity-Component-System (ECS) pattern makes LLM agents composable and testab
     *   [Serialization](features/serialization.md)
     *   [Structured Logging](features/logging.md)
     *   [Structured Output](features/structured-output.md)
+*   [Context Management](features/context-management.md)
+*   [Tool Discovery & Approval](features/tool-discovery.md)
+*   [User Input](features/user-input.md)
 *   [Examples](examples.md)
 *   [API Reference](api-reference.md)
 

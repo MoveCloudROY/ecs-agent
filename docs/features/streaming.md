@@ -65,3 +65,51 @@ The `FakeProvider` simulates streaming by emitting the full response character-b
 - **Structured Output**: Streaming is NOT compatible with `response_format` (JSON mode). If you need structured output, you must use non-streaming calls.
 - **RetryProvider**: The `RetryProvider` does NOT retry streaming calls. If a streaming connection fails halfway, the error is passed through to the consumer.
 - **Tool Calls**: While tool calls are streamed, they are usually only useful once the full arguments have been accumulated.
+See [`examples/streaming_system_agent.py`](../../examples/streaming_system_agent.py) for a complete demo.
+
+## System-Level Streaming
+
+In addition to direct provider-level streaming, the framework supports system-level streaming through the `ReasoningSystem` and `StreamingComponent`.
+
+### Setup
+
+```python
+from ecs_agent.components import StreamingComponent
+
+world.add_component(agent, StreamingComponent(enabled=True))
+```
+
+### How It Works
+
+When an entity has `StreamingComponent(enabled=True)`, the `ReasoningSystem` automatically:
+
+1. Calls `provider.complete(stream=True)` instead of the standard call.
+2. Publishes `StreamStartEvent(entity_id)`.
+3. For each content chunk, publishes `StreamDeltaEvent(entity_id, delta)`.
+4. On completion, publishes `StreamEndEvent(entity_id, result)`.
+5. Accumulates all chunks into a final `CompletionResult` as normal.
+
+### Subscribing to Stream Events
+
+```python
+from ecs_agent.types import StreamStartEvent, StreamDeltaEvent, StreamEndEvent
+
+async def on_start(event: StreamStartEvent):
+    print("Streaming started...")
+
+async def on_delta(event: StreamDeltaEvent):
+    if event.delta.content:
+        print(event.delta.content, end="", flush=True)
+
+async def on_end(event: StreamEndEvent):
+    print("\nStreaming complete.")
+
+world.event_bus.subscribe(StreamStartEvent, on_start)
+world.event_bus.subscribe(StreamDeltaEvent, on_delta)
+world.event_bus.subscribe(StreamEndEvent, on_end)
+```
+
+This approach decouples streaming consumers from the provider, allowing multiple subscribers to react to streaming events independently.
+
+### Example
+,

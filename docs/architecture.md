@@ -75,11 +75,15 @@ Typical tick cycle steps:
 
 Systems run based on their priority. Lower numbers execute first. We recommend the following priority ordering for agent workflows:
 
+- **Priority -10**: `RAGSystem`, `UserInputSystem`. Pre-processing: vector search retrieval and user input before reasoning.
+- **Priority -5**: `ToolApprovalSystem`. Filters tool calls before execution.
 - **Priority 0**: `ReasoningSystem` or `PlanningSystem`. These systems usually handle LLM calls to decide the next action.
 - **Priority 5**: `ToolExecutionSystem` or `CollaborationSystem`. These handle the actual work or interactions with other agents.
 - **Priority 7**: `ReplanningSystem`. This checks results and updates the plan if needed.
 - **Priority 10**: `MemorySystem`. This persists important information to long-term storage.
 - **Priority 99**: `ErrorHandlingSystem`. This runs last to catch and process any issues that occurred during the tick.
+- **Priority 15+**: `CheckpointSystem`. Creates state snapshots.
+- **Priority 20+**: `CompactionSystem`. Compresses conversation when needed.
 
 ## Event System
 
@@ -91,6 +95,13 @@ Common event types include:
 - `MessageDeliveredEvent`: Sent when a message reaches its destination.
 - `PlanStepCompletedEvent`: Published after a plan step finishes successfully.
 - `PlanRevisedEvent`: Triggered when an agent changes its strategy.
+- `ToolApprovalRequestedEvent`, `ToolApprovedEvent`, `ToolDeniedEvent`: Tool approval workflow.
+- `MCTSNodeScoredEvent`: Tree search scoring.
+- `StreamStartEvent`, `StreamDeltaEvent`, `StreamEndEvent`: System-level streaming.
+- `CheckpointCreatedEvent`, `CheckpointRestoredEvent`: Checkpoint lifecycle.
+- `CompactionCompleteEvent`: Conversation compaction.
+- `RAGRetrievalCompletedEvent`: RAG retrieval.
+- `UserInputRequestedEvent`: User input requests.
 
 ## Design Decisions
 

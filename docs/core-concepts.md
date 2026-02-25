@@ -112,7 +112,9 @@ await bus.publish(DeathEvent(entity_id=123))
 
 The `Runner` automates the execution of the `World`'s processing cycle.
 
-- `async run(self, world: World, max_ticks: int = 100) -> None`: Runs a loop that calls `world.process()`.
+- `async run(self, world: World, max_ticks: int | None = 100, start_tick: int = 0) -> None`: Runs a loop that calls `world.process()`. Pass `max_ticks=None` for infinite execution. The loop runs until a `TerminalComponent` is found.
+- `save_checkpoint(self, world: World, entity_id: EntityId) -> None`: Creates a state snapshot for the given entity.
+- `load_checkpoint(self, world: World, entity_id: EntityId) -> None`: Restores the entity state from the last snapshot.
 
 The loop stops if an entity with a `TerminalComponent` is found or if `max_ticks` is reached. If the loop hits the tick limit, it creates a new entity with a `TerminalComponent(reason="max_ticks")`.
 
@@ -124,5 +126,5 @@ world = World()
 # ... setup entities and systems ...
 
 runner = Runner()
-await runner.run(world, max_ticks=50)
+await runner.run(world, max_ticks=None)  # Run until TerminalComponent found
 ```

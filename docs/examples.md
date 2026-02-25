@@ -15,6 +15,14 @@ Overview of the included examples for the ECS-based LLM Agent framework.
 | [Retry with Backoff](#retry-with-exponential-backoff) | Automatic retries for transient errors | Optional | RetryProvider, RetryConfig |
 | [Structured Output](#structured-output-with-pydantic) | JSON mode with Pydantic validation | Optional | pydantic_to_response_format |
 | [World Serialization](#world-serialization) | Save/load world state to/from JSON | No | WorldSerializer.save/load |
+| [Tool Approval Agent](#tool-approval-agent) | Policy-based tool call approval flow | No | ToolApprovalComponent, ToolApprovalSystem |
+| [Tree Search Agent](#tree-search-agent) | MCTS planning for complex goals | No | PlanSearchComponent, TreeSearchSystem |
+| [RAG Agent](#rag-agent) | Vector search retrieval-augmented generation | No | RAGTriggerComponent, RAGSystem |
+| [Sub-Agent Delegation](#sub-agent-delegation) | Parent agent delegates to child agents | No | OwnerComponent, CollaborationComponent |
+| [Claude Agent](#claude-agent) | Native Anthropic Claude provider | Yes (Anthropic) | ClaudeProvider |
+| [LiteLLM Agent](#litellm-agent) | Unified access to 100+ LLM providers | Yes (varies) | LiteLLMProvider |
+| [System Streaming](#system-streaming) | System-level streaming with events | Optional | StreamingComponent, StreamStartEvent |
+| [Context Management](#context-management) | Checkpoint, undo, and compaction demo | Optional | CheckpointSystem, CompactionSystem |
 
 ---
 
@@ -329,3 +337,66 @@ Landmarks:
   - Tokyo Tower
 ...
 ```
+---
+
+### Tool Approval Agent
+- **File:** `examples/tool_approval_agent.py`
+- **What it demonstrates:** Policy-based manual approval flow for sensitive tool calls.
+- **Run:** `uv run python examples/tool_approval_agent.py`
+- **Pattern:** `ToolApprovalComponent` + `ToolApprovalSystem`.
+
+---
+
+### Tree Search Agent
+- **File:** `examples/tree_search_agent.py`
+- **What it demonstrates:** MCTS planning for complex goals using Monte Carlo Tree Search.
+- **Run:** `uv run python examples/tree_search_agent.py`
+- **Pattern:** `PlanSearchComponent` + `TreeSearchSystem`.
+
+---
+
+### RAG Agent
+- **File:** `examples/rag_agent.py`
+- **What it demonstrates:** Retrieval-augmented generation using vector search.
+- **Run:** `uv run python examples/rag_agent.py`
+- **Pattern:** `RAGTriggerComponent` + `RAGSystem` + `EmbeddingComponent` + `VectorStoreComponent`.
+
+---
+
+### Sub-Agent Delegation
+- **File:** `examples/subagent_delegation.py`
+- **What it demonstrates:** Parent agent delegating tasks to child agents.
+- **Run:** `uv run python examples/subagent_delegation.py`
+- **Pattern:** `OwnerComponent` + `CollaborationComponent`.
+
+---
+
+### Claude Agent
+- **File:** `examples/claude_agent.py`
+- **What it demonstrates:** Native usage of the Anthropic Claude provider.
+- **Run:** `uv run python examples/claude_agent.py`
+- **Pattern:** `ClaudeProvider`.
+
+---
+
+### LiteLLM Agent
+- **File:** `examples/litellm_agent.py`
+- **What it demonstrates:** Unified access to 100+ LLM providers.
+- **Run:** `uv run python examples/litellm_agent.py`
+- **Pattern:** `LiteLLMProvider`.
+
+---
+
+### System Streaming
+- **File:** `examples/streaming_system_agent.py`
+- **What it demonstrates:** System-level streaming using the event bus.
+- **Run:** `uv run python examples/streaming_system_agent.py`
+- **Pattern:** `StreamingComponent` + `StreamStartEvent` + `StreamDeltaEvent` + `StreamEndEvent`.
+
+---
+
+### Context Management
+- **File:** `examples/context_management_agent.py`
+- **What it demonstrates:** Checkpoint, undo, and conversation compaction lifecycle.
+- **Run:** `uv run python examples/context_management_agent.py`
+- **Pattern:** `CheckpointSystem` + `CompactionSystem` + `CheckpointComponent` + `CompactionConfigComponent`.

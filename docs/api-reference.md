@@ -10,10 +10,17 @@ __version__: str = "0.1.0"
 
 The following types and classes are re-exported for convenience:
 
-- `Message`, `CompletionResult`, `ToolSchema`, `EntityId`, `StreamDelta`, `RetryConfig` from `ecs_agent.types`
+- `Message`, `CompletionResult`, `ToolSchema`, `EntityId`, `StreamDelta`, `RetryConfig`, `ApprovalPolicy`, `ToolTimeoutError` from `ecs_agent.types`
 - `RetryProvider` from `ecs_agent.providers.retry_provider`
 - `WorldSerializer` from `ecs_agent.serialization`
 - `configure_logging`, `get_logger` from `ecs_agent.logging`
+- `StreamingComponent`, `CheckpointComponent`, `CompactionConfigComponent`, `ConversationArchiveComponent`, `RunnerStateComponent`, `UserInputComponent` from `ecs_agent.components`
+- `ClaudeProvider` from `ecs_agent.providers.claude_provider`
+- `LiteLLMProvider` from `ecs_agent.providers.litellm_provider`
+- `OpenAIEmbeddingProvider`, `FakeEmbeddingProvider` from `ecs_agent.providers`
+- `RAGSystem`, `TreeSearchSystem`, `ToolApprovalSystem`, `CheckpointSystem`, `CompactionSystem`, `UserInputSystem` from `ecs_agent.systems`
+- `StreamStartEvent`, `StreamDeltaEvent`, `StreamEndEvent`, `CheckpointCreatedEvent`, `CheckpointRestoredEvent`, `CompactionCompleteEvent`, `ToolApprovalRequestedEvent`, `ToolApprovedEvent`, `ToolDeniedEvent`, `RAGRetrievalCompletedEvent`, `UserInputRequestedEvent`, `MCTSNodeScoredEvent` from `ecs_agent.types`
+- `scan_module`, `sandboxed_execute`, `tool` from `ecs_agent.tools`
 
 ---
 
@@ -73,7 +80,14 @@ class RetryConfig:
     max_wait: float = 60.0
     retry_status_codes: tuple[int, ...] = (429, 500, 502, 503, 504)
 ```
+```python
+class ApprovalPolicy(Enum):
+    ALWAYS_APPROVE = "always_approve"
+    ALWAYS_DENY = "always_deny"
+    REQUIRE_APPROVAL = "require_approval"
 
+class ToolTimeoutError(Exception): ...
+```
 ### Event Classes
 
 ```python
@@ -105,7 +119,69 @@ class PlanRevisedEvent:
     entity_id: EntityId
     old_steps: list[str]
     new_steps: list[str]
-```
+
+@dataclass(slots=True)
+class ToolApprovalRequestedEvent:
+    entity_id: EntityId
+    tool_call: ToolCall
+    future: asyncio.Future[bool]
+
+@dataclass(slots=True)
+class ToolApprovedEvent:
+    entity_id: EntityId
+    tool_call_id: str
+
+@dataclass(slots=True)
+class ToolDeniedEvent:
+    entity_id: EntityId
+    tool_call_id: str
+
+@dataclass(slots=True)
+class MCTSNodeScoredEvent:
+    entity_id: EntityId
+    node_path: list[str]
+    score: float
+
+@dataclass(slots=True)
+class StreamStartEvent:
+    entity_id: EntityId
+
+@dataclass(slots=True)
+class StreamDeltaEvent:
+    entity_id: EntityId
+    delta: StreamDelta
+
+@dataclass(slots=True)
+class StreamEndEvent:
+    entity_id: EntityId
+    result: CompletionResult
+
+@dataclass(slots=True)
+class CheckpointCreatedEvent:
+    entity_id: EntityId
+    snapshot_index: int
+
+@dataclass(slots=True)
+class CheckpointRestoredEvent:
+    entity_id: EntityId
+    snapshot_index: int
+
+@dataclass(slots=True)
+class CompactionCompleteEvent:
+    entity_id: EntityId
+    removed_count: int
+    summary_length: int
+
+@dataclass(slots=True)
+class RAGRetrievalCompletedEvent:
+    entity_id: EntityId
+    query: str
+    num_docs: int
+
+@dataclass(slots=True)
+class UserInputRequestedEvent:
+    entity_id: EntityId
+    prompt: str
 
 ---
 
@@ -132,7 +208,10 @@ class World:
 
 ```python
 class Runner:
-    async def run(self, world: World, max_ticks: int = 100) -> None: ...
+    async def run(self, world: World, max_ticks: int | None = 100, start_tick: int = 0) -> None: ...
+    def save_checkpoint(self, world: World, path: str | Path) -> None: ...
+    @classmethod
+    def load_checkpoint(cls, path: str | Path, providers: dict[str, LLMProvider], tool_handlers: dict[str, Callable]) -> tuple[World, int]: ...
 ```
 
 ### EventBus
@@ -177,6 +256,18 @@ All components are implemented as `@dataclass(slots=True)`.
  `ErrorComponent(error: str, system_name: str, timestamp: float)`
  `TerminalComponent(reason: str)`
  `SystemPromptComponent(content: str)`
+ `StreamingComponent(enabled: bool = False)`
+ `CheckpointComponent(snapshots: list[dict[str, Any]] = [], max_snapshots: int = 10)`
+ `CompactionConfigComponent(threshold_tokens: int, summary_model: str)`
+ `ConversationArchiveComponent(archived_summaries: list[str] = [])`
+ `RunnerStateComponent(current_tick: int, is_paused: bool = False, checkpoint_path: str | None = None)`
+ `UserInputComponent(prompt: str = "", future: asyncio.Future[str] | None = None, timeout: float | None = None, result: str | None = None)`
+ `ToolApprovalComponent(policy: ApprovalPolicy, timeout: float | None = 30.0, approved_calls: list[str] = [], denied_calls: list[str] = [])`
+ `SandboxConfigComponent(timeout: float = 30.0, max_output_size: int = 10000)`
+ `PlanSearchComponent(max_depth: int = 5, max_branching: int = 3, exploration_weight: float = 1.414, best_plan: list[str] = [], search_active: bool = False)`
+ `RAGTriggerComponent(query: str = "", top_k: int = 5, retrieved_docs: list[str] = [])`
+ `EmbeddingComponent(provider: EmbeddingProvider, dimension: int = 0)`
+ `VectorStoreComponent(store: VectorStore)`
 
 ---
 
@@ -230,6 +321,48 @@ class ErrorHandlingSystem(priority: int = 99):
 class ReplanningSystem(priority: int = 7):
     async def process(self, world: World) -> None: ...
 ```
+### ToolApprovalSystem
+
+```python
+class ToolApprovalSystem(priority: int = -5):
+    async def process(self, world: World) -> None: ...
+```
+
+### TreeSearchSystem
+
+```python
+class TreeSearchSystem(priority: int = 0):
+    async def process(self, world: World) -> None: ...
+```
+
+### RAGSystem
+
+```python
+class RAGSystem(priority: int = -10):
+    async def process(self, world: World) -> None: ...
+```
+
+### CheckpointSystem
+```python
+class CheckpointSystem:
+    async def process(self, world: World) -> None: ...
+    @staticmethod
+    def undo(world: World, providers: dict[str, LLMProvider], tool_handlers: dict[str, Callable]) -> None: ...
+```
+
+### CompactionSystem
+
+```python
+class CompactionSystem(bisect_ratio: float = 0.5):
+    async def process(self, world: World) -> None: ...
+```
+
+### UserInputSystem
+
+```python
+class UserInputSystem(priority: int = -10):
+    async def process(self, world: World) -> None: ...
+```
 
 ---
 
@@ -281,6 +414,34 @@ class RetryProvider:
         retry_config: RetryConfig | None = None,
     ): ...
 ```
+### ClaudeProvider
+
+```python
+class ClaudeProvider:
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str = "https://api.anthropic.com",
+        model: str = "claude-3-5-haiku-latest",
+        max_tokens: int = 4096,
+        connect_timeout: float = 10.0,
+        read_timeout: float = 120.0,
+        write_timeout: float = 10.0,
+        pool_timeout: float = 10.0,
+    ): ...
+```
+
+### LiteLLMProvider
+
+```python
+class LiteLLMProvider:
+    def __init__(
+        self,
+        model: str,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ): ...
+```
 
 ---
 
@@ -326,4 +487,13 @@ class WorldSerializer:
 ```python
 def configure_logging(json_output: bool = False, level: str = "INFO") -> None: ...
 def get_logger(name: str) -> BoundLogger: ...
+```
+---
+
+## ecs_agent.tools
+
+```python
+def scan_module(module: ModuleType) -> tuple[dict[str, ToolSchema], dict[str, Callable[..., Awaitable[str]]]]: ...
+async def sandboxed_execute(func: Callable[..., Awaitable[str]], args: dict[str, Any], timeout: float = 30.0, max_output_size: int = 10000) -> str: ...
+def tool(name: str, description: str, parameters: dict[str, Any]) -> Callable: ...
 ```
