@@ -1,6 +1,8 @@
 """Structured logging configuration using structlog."""
 
 import logging
+from typing import Any
+
 import structlog
 from structlog.contextvars import merge_contextvars
 from structlog.processors import add_log_level, TimeStamper, JSONRenderer
@@ -9,7 +11,11 @@ from structlog.dev import ConsoleRenderer
 _log_level = "INFO"
 
 
-def _filter_by_level(logger, method_name, event_dict):
+def _filter_by_level(
+    logger: Any,
+    method_name: str,
+    event_dict: dict[str, Any],
+) -> dict[str, Any]:
     """Filter events by configured log level."""
     level_map = {
         "DEBUG": logging.DEBUG,
@@ -32,7 +38,7 @@ def _filter_by_level(logger, method_name, event_dict):
     raise structlog.DropEvent()
 
 
-def configure_logging(json_output: bool = False, level: str = "INFO"):
+def configure_logging(json_output: bool = False, level: str = "INFO") -> None:
     """Configure structlog with processors for structured logging.
 
     Args:
@@ -42,7 +48,7 @@ def configure_logging(json_output: bool = False, level: str = "INFO"):
     global _log_level
     _log_level = level
 
-    processors = [
+    processors: list[Any] = [
         merge_contextvars,
         _filter_by_level,
         add_log_level,
@@ -58,7 +64,7 @@ def configure_logging(json_output: bool = False, level: str = "INFO"):
     )
 
 
-def get_logger(name: str):
+def get_logger(name: str) -> Any:
     """Get a bound logger instance with the given name.
 
     Args:
