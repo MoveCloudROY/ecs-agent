@@ -23,6 +23,7 @@ from ecs_agent.components.definitions import (
     ToolApprovalComponent,
     ToolRegistryComponent,
     ToolResultsComponent,
+    UserInputComponent,
     VectorStoreComponent,
 )
 
@@ -49,5 +50,6 @@ __all__ = [
     "ToolApprovalComponent",
     "ToolRegistryComponent",
     "ToolResultsComponent",
+    "UserInputComponent",
     "VectorStoreComponent",
 ]

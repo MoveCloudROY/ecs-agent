@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
+import asyncio
+
 from ecs_agent.types import ApprovalPolicy, EntityId, Message, ToolCall, ToolSchema
 
 try:
@@ -110,7 +112,7 @@ class ToolApprovalComponent:
     """Tool approval policy configuration."""
 
     policy: ApprovalPolicy
-    timeout: float = 30.0
+    timeout: float | None = 30.0
     approved_calls: list[str] = field(default_factory=list)
     denied_calls: list[str] = field(default_factory=list)
 
@@ -195,3 +197,26 @@ class RunnerStateComponent:
     current_tick: int
     is_paused: bool = False
     checkpoint_path: str | None = None
+
+
+@dataclass(slots=True)
+class UserInputComponent:
+    """Awaits external user input via an asyncio Future.
+
+    Attach this component to an entity that requires user input.
+    A UserInputSystem (or external code) creates the future and
+    publishes a UserInputRequestedEvent.  External code resolves
+    the future via ``future.set_result(user_text)``.
+
+    Attributes:
+        prompt: Prompt text shown to the user.
+        future: An asyncio Future that will be resolved with the user's input.
+                ``None`` means no pending request yet.
+        timeout: Seconds to wait for input.  ``None`` means wait indefinitely.
+        result: The resolved user input (set by UserInputSystem).
+    """
+
+    prompt: str = ""
+    future: asyncio.Future[str] | None = field(default=None, repr=False)
+    timeout: float | None = None
+    result: str | None = None

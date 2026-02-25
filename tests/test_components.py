@@ -284,7 +284,7 @@ class TestComponentCount:
             and dataclasses.is_dataclass(getattr(d, name, None))
             and getattr(d, name).__module__ == "ecs_agent.components.definitions"
         )
-        assert count <= 23, f"Component count {count} exceeds limit of 23"
+        assert count <= 24, f"Component count {count} exceeds limit of 24"
 
 
 class TestComponentsExportedInInit:
