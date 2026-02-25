@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from ecs_agent.components import (
+    CheckpointComponent,
     CollaborationComponent,
+    CompactionConfigComponent,
+    ConversationArchiveComponent,
     ConversationComponent,
     EmbeddingComponent,
     ErrorComponent,
@@ -17,7 +20,9 @@ from ecs_agent.components import (
     PlanComponent,
     PlanSearchComponent,
     RAGTriggerComponent,
+    RunnerStateComponent,
     SandboxConfigComponent,
+    StreamingComponent,
     SystemPromptComponent,
     TerminalComponent,
     ToolApprovalComponent,
@@ -49,6 +54,11 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     RAGTriggerComponent.__name__: RAGTriggerComponent,
     EmbeddingComponent.__name__: EmbeddingComponent,
     VectorStoreComponent.__name__: VectorStoreComponent,
+    StreamingComponent.__name__: StreamingComponent,
+    CheckpointComponent.__name__: CheckpointComponent,
+    CompactionConfigComponent.__name__: CompactionConfigComponent,
+    ConversationArchiveComponent.__name__: ConversationArchiveComponent,
+    RunnerStateComponent.__name__: RunnerStateComponent,
 }
 
 

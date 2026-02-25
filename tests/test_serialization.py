@@ -21,6 +21,12 @@ from ecs_agent.components import (
     ToolRegistryComponent,
     ToolResultsComponent,
     VectorStoreComponent,
+    VectorStoreComponent,
+    CheckpointComponent,
+    CompactionConfigComponent,
+    ConversationArchiveComponent,
+    RunnerStateComponent,
+    StreamingComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.serialization import NON_SERIALIZABLE_PLACEHOLDER, WorldSerializer
@@ -463,3 +469,189 @@ def test_serialization_roundtrip_mixed_new_components() -> None:
     assert restored.has_component(entity, SandboxConfigComponent)
     assert restored.has_component(entity, PlanSearchComponent)
     assert restored.has_component(entity, RAGTriggerComponent)
+
+
+def test_serialization_roundtrip_streaming_component() -> None:
+    """Test that StreamingComponent roundtrips correctly."""
+    world = World()
+    entity = world.create_entity()
+    world.add_component(entity, StreamingComponent(enabled=True))
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+
+    restored_comp = restored.get_component(entity, StreamingComponent)
+    assert restored_comp is not None
+    assert restored_comp.enabled is True
+
+
+def test_serialization_roundtrip_checkpoint_component() -> None:
+    """Test that CheckpointComponent with snapshots roundtrips correctly."""
+    world = World()
+    entity = world.create_entity()
+    snapshot1 = {"entities": {"1": {"ConversationComponent": {"messages": []}}}, "next_entity_id": 2}
+    snapshot2 = {"entities": {"1": {"KVStoreComponent": {"store": {"k": "v"}}}}, "next_entity_id": 3}
+    world.add_component(
+        entity,
+        CheckpointComponent(snapshots=[snapshot1, snapshot2], max_snapshots=5),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+
+    restored_comp = restored.get_component(entity, CheckpointComponent)
+    assert restored_comp is not None
+    assert len(restored_comp.snapshots) == 2
+    assert restored_comp.snapshots[0] == snapshot1
+    assert restored_comp.snapshots[1] == snapshot2
+    assert restored_comp.max_snapshots == 5
+
+
+def test_serialization_roundtrip_compaction_config_component() -> None:
+    """Test that CompactionConfigComponent roundtrips correctly."""
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        CompactionConfigComponent(threshold_tokens=5000, summary_model="gpt-4"),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+
+    restored_comp = restored.get_component(entity, CompactionConfigComponent)
+    assert restored_comp is not None
+    assert restored_comp.threshold_tokens == 5000
+    assert restored_comp.summary_model == "gpt-4"
+
+
+def test_serialization_roundtrip_conversation_archive_component() -> None:
+    """Test that ConversationArchiveComponent roundtrips correctly."""
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        ConversationArchiveComponent(archived_summaries=["summary1", "summary2"]),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+
+    restored_comp = restored.get_component(entity, ConversationArchiveComponent)
+    assert restored_comp is not None
+    assert restored_comp.archived_summaries == ["summary1", "summary2"]
+
+
+def test_serialization_roundtrip_runner_state_component() -> None:
+    """Test that RunnerStateComponent roundtrips correctly."""
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        RunnerStateComponent(
+            current_tick=5, is_paused=True, checkpoint_path="/tmp/checkpoint.json"
+        ),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+
+    restored_comp = restored.get_component(entity, RunnerStateComponent)
+    assert restored_comp is not None
+    assert restored_comp.current_tick == 5
+    assert restored_comp.is_paused is True
+    assert restored_comp.checkpoint_path == "/tmp/checkpoint.json"
+
+
+def test_serialization_backward_compatibility_without_new_components() -> None:
+    """Test that world without new components deserializes successfully."""
+    # Old serialized data without new components
+    old_data = {
+        "next_entity_id": 2,
+        "entities": {
+            "1": {
+                "ConversationComponent": {
+                    "messages": [{"role": "user", "content": "hi", "tool_calls": None, "tool_call_id": None}],
+                    "max_messages": 100,
+                }
+            }
+        },
+    }
+
+    # Should not raise KeyError or other errors
+    restored = WorldSerializer.from_dict(old_data, providers={}, tool_handlers={})
+    assert restored is not None
+    conv = restored.get_component(EntityId(1), ConversationComponent)
+    assert conv is not None
+    assert conv.messages[0].content == "hi"
+
+
+def test_serialization_full_world_with_all_new_components() -> None:
+    """Test full world round-trip with all 5 new components together."""
+    world = World()
+    entity = world.create_entity()
+
+    # Add all 5 new components
+    world.add_component(entity, StreamingComponent(enabled=True))
+    world.add_component(
+        entity,
+        CheckpointComponent(
+            snapshots=[{"test": "data"}], max_snapshots=15
+        ),
+    )
+    world.add_component(
+        entity,
+        CompactionConfigComponent(threshold_tokens=3000, summary_model="gpt-3.5"),
+    )
+    world.add_component(
+        entity,
+        ConversationArchiveComponent(archived_summaries=["archive1"]),
+    )
+    world.add_component(
+        entity, RunnerStateComponent(current_tick=10, is_paused=False)
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    component_names = set(serialized["entities"]["1"].keys())
+    expected = {
+        "StreamingComponent",
+        "CheckpointComponent",
+        "CompactionConfigComponent",
+        "ConversationArchiveComponent",
+        "RunnerStateComponent",
+    }
+    assert component_names == expected
+
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+
+    # Verify all components survived round-trip
+    assert restored.has_component(entity, StreamingComponent)
+    assert restored.has_component(entity, CheckpointComponent)
+    assert restored.has_component(entity, CompactionConfigComponent)
+    assert restored.has_component(entity, ConversationArchiveComponent)
+    assert restored.has_component(entity, RunnerStateComponent)
+
+    # Verify field values
+    streaming = restored.get_component(entity, StreamingComponent)
+    assert streaming is not None
+    assert streaming.enabled is True
+
+    checkpoint = restored.get_component(entity, CheckpointComponent)
+    assert checkpoint is not None
+    assert checkpoint.snapshots == [{"test": "data"}]
+    assert checkpoint.max_snapshots == 15
+
+    compaction = restored.get_component(entity, CompactionConfigComponent)
+    assert compaction is not None
+    assert compaction.threshold_tokens == 3000
+    assert compaction.summary_model == "gpt-3.5"
+
+    archive = restored.get_component(entity, ConversationArchiveComponent)
+    assert archive is not None
+    assert archive.archived_summaries == ["archive1"]
+
+    runner_state = restored.get_component(entity, RunnerStateComponent)
+    assert runner_state is not None
+    assert runner_state.current_tick == 10
+    assert runner_state.is_paused is False
+    assert runner_state.checkpoint_path is None
