@@ -11,19 +11,23 @@ from ecs_agent.serialization import WorldSerializer
 class Runner:
     """Orchestrates the main execution loop."""
 
-    async def run(self, world: World, max_ticks: int = 100, start_tick: int = 0) -> None:
+    async def run(self, world: World, max_ticks: int | None = 100, start_tick: int = 0) -> None:
         """Run the main execution loop until terminal condition.
 
         Executes world.process() repeatedly until either:
         1. A TerminalComponent is found on any entity
         2. max_ticks iterations are reached (from start_tick)
 
+        When max_ticks is None the loop runs indefinitely until a
+        TerminalComponent appears (useful for interactive / chat agents).
+
         If max_ticks is reached, adds TerminalComponent(reason='max_ticks')
-        to the first available entity.
+        to a newly created entity.
 
         Args:
             world: World instance to process
-            max_ticks: Maximum number of ticks to run (default 100)
+            max_ticks: Maximum number of ticks to run (default 100).
+                       Pass None for unlimited execution.
             start_tick: Starting tick count for resume (default 0)
         """
         # Create or update RunnerStateComponent
@@ -35,11 +39,16 @@ class Runner:
             runner_state = RunnerStateComponent(current_tick=start_tick)
             world.add_component(runner_state_entity, runner_state)
 
-        for tick in range(start_tick, max_ticks):
-            await world.process()
-            # Update current_tick in RunnerStateComponent
-            runner_state.current_tick = tick + 1
+        tick = start_tick
+        while True:
+            if max_ticks is not None and tick >= max_ticks:
+                entity_id = world.create_entity()
+                world.add_component(entity_id, TerminalComponent(reason="max_ticks"))
+                return
 
+            await world.process()
+            tick += 1
+            runner_state.current_tick = tick
 
             has_terminal = any(
                 world.has_component(eid, TerminalComponent)
@@ -47,9 +56,6 @@ class Runner:
             )
             if has_terminal:
                 return
-
-        entity_id = world.create_entity()
-        world.add_component(entity_id, TerminalComponent(reason="max_ticks"))
 
     def save_checkpoint(self, world: World, path: str | Path) -> None:
         """Save world state and runner state to checkpoint file.
