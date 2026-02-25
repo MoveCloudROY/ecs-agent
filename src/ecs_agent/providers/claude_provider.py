@@ -1,3 +1,4 @@
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -147,6 +148,173 @@ class ClaudeProvider:
         )
         return CompletionResult(message=message, usage=usage)
 
+    async def _stream_complete(
+        self,
+        url: str,
+        headers: dict[str, str],
+        request_body: dict[str, Any],
+    ) -> AsyncIterator[StreamDelta]:
+        stream_body = dict(request_body)
+        stream_body["stream"] = True
+        timeout = httpx.Timeout(
+            connect=self._timeout.connect,
+            read=None,
+            write=self._timeout.write,
+            pool=self._timeout.pool,
+        )
+
+        tool_use_state: dict[int, dict[str, str]] = {}
+
+        async def handle_event(
+            event_type: str | None,
+            payload_data: str,
+        ) -> AsyncIterator[StreamDelta]:
+            if not payload_data or payload_data == "[DONE]":
+                return
+
+            event_data = json.loads(payload_data)
+            resolved_event_type = event_type or event_data.get("type")
+
+            if resolved_event_type == "content_block_start":
+                index = event_data.get("index")
+                block = event_data.get("content_block", {})
+                if isinstance(index, int) and block.get("type") == "tool_use":
+                    tool_use_state[index] = {
+                        "id": block.get("id", ""),
+                        "name": block.get("name", ""),
+                        "arguments": "",
+                    }
+                return
+
+            if resolved_event_type == "content_block_delta":
+                index = event_data.get("index")
+                delta = event_data.get("delta", {})
+                delta_type = delta.get("type")
+
+                if delta_type == "text_delta":
+                    text = delta.get("text")
+                    if isinstance(text, str):
+                        yield StreamDelta(content=text)
+                    return
+
+                if delta_type == "input_json_delta" and isinstance(index, int):
+                    partial_json = delta.get("partial_json")
+                    if isinstance(partial_json, str):
+                        accumulated = tool_use_state.setdefault(
+                            index,
+                            {
+                                "id": f"index_{index}",
+                                "name": "",
+                                "arguments": "",
+                            },
+                        )
+                        accumulated["arguments"] += partial_json
+                return
+
+            if resolved_event_type == "content_block_stop":
+                index = event_data.get("index")
+                if not isinstance(index, int):
+                    return
+
+                if index not in tool_use_state:
+                    return
+                accumulated = tool_use_state.pop(index)
+
+                parsed_arguments: dict[str, Any]
+                try:
+                    parsed_arguments = json.loads(accumulated["arguments"])
+                except json.JSONDecodeError:
+                    parsed_arguments = {"_partial": accumulated["arguments"]}
+
+                yield StreamDelta(
+                    tool_calls=[
+                        ToolCall(
+                            id=accumulated["id"] or f"index_{index}",
+                            name=accumulated["name"],
+                            arguments=parsed_arguments,
+                        )
+                    ]
+                )
+                return
+
+            if resolved_event_type == "message_delta":
+                delta = event_data.get("delta", {})
+                stop_reason = delta.get("stop_reason")
+                if isinstance(stop_reason, str):
+                    yield StreamDelta(finish_reason=stop_reason)
+                return
+
+        try:
+            async with self._client.stream(
+                "POST",
+                url,
+                json=stream_body,
+                headers=headers,
+                timeout=timeout,
+            ) as response:
+                response.raise_for_status()
+
+                current_event: str | None = None
+                current_data_lines: list[str] = []
+
+                async for line in response.aiter_lines():
+                    if not line:
+                        if current_data_lines:
+                            payload_data = "\n".join(current_data_lines).strip()
+                            if payload_data == "[DONE]":
+                                break
+                            async for delta in handle_event(
+                                current_event, payload_data
+                            ):
+                                yield delta
+                        current_event = None
+                        current_data_lines = []
+                        continue
+
+                    payload_line = line.strip()
+                    if payload_line.startswith("event:"):
+                        current_event = payload_line[6:].strip()
+                        continue
+
+                    if payload_line.startswith("data:"):
+                        data_line = payload_line[5:].strip()
+                        if data_line == "[DONE]":
+                            break
+                        current_data_lines.append(data_line)
+                        continue
+
+                    current_data_lines.append(payload_line)
+
+                if current_data_lines:
+                    payload_data = "\n".join(current_data_lines).strip()
+                    if payload_data != "[DONE]":
+                        async for delta in handle_event(current_event, payload_data):
+                            yield delta
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                "llm_http_error",
+                status_code=exc.response.status_code,
+                response_body=exc.response.text,
+                exception=str(exc),
+            )
+            raise
+        except httpx.RequestError as exc:
+            request_method: str | None = None
+            request_url: str | None = None
+            try:
+                request_method = exc.request.method
+                request_url = str(exc.request.url)
+            except RuntimeError:
+                pass
+            logger.error(
+                "llm_network_error",
+                exception_type=type(exc).__name__,
+                exception=str(exc),
+                request_method=request_method,
+                request_url=request_url,
+            )
+            raise
+
     async def complete(
         self,
         messages: list[Message],
@@ -154,11 +322,6 @@ class ClaudeProvider:
         stream: bool = False,
         response_format: dict[str, Any] | None = None,
     ) -> CompletionResult | AsyncIterator[StreamDelta]:
-        if stream:
-            raise NotImplementedError(
-                "ClaudeProvider streaming path is not implemented"
-            )
-
         system_prompt, anthropic_messages = self._build_messages(messages)
         anthropic_tools = self._build_tools(tools)
 
@@ -181,6 +344,9 @@ class ClaudeProvider:
         }
 
         url = f"{self._base_url}/v1/messages"
+
+        if stream:
+            return self._stream_complete(url, headers, request_body)
 
         try:
             response = await self._client.post(url, json=request_body, headers=headers)

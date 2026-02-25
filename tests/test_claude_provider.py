@@ -1,3 +1,5 @@
+import json
+from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
@@ -6,7 +8,32 @@ import pytest
 
 from ecs_agent.providers.claude_provider import ClaudeProvider
 from ecs_agent.providers.protocol import LLMProvider
-from ecs_agent.types import Message, ToolCall, ToolSchema
+from ecs_agent.types import Message, StreamDelta, ToolCall, ToolSchema
+
+
+class _MockStreamResponse:
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+        self.raise_for_status = Mock()
+
+    async def aiter_lines(self) -> AsyncIterator[str]:
+        for line in self._lines:
+            yield line
+
+
+class _MockStreamContext:
+    def __init__(self, response: _MockStreamResponse) -> None:
+        self._response = response
+
+    async def __aenter__(self) -> _MockStreamResponse:
+        return self._response
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        return None
+
+
+def _anthropic_sse(event_name: str, payload: dict[str, Any]) -> list[str]:
+    return [f"event: {event_name}", f"data: {json.dumps(payload)}", ""]
 
 
 def test_constructor_stores_configuration() -> None:
@@ -253,3 +280,354 @@ async def test_complete_raises_on_http_status_error() -> None:
 def test_protocol_compliance() -> None:
     provider = ClaudeProvider(api_key="test-key", model="claude-3-haiku-20240307")
     assert isinstance(provider, LLMProvider)
+
+
+@pytest.mark.asyncio
+async def test_complete_streaming_returns_async_iterator() -> None:
+    lines: list[str] = []
+    lines.extend(
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "type": "message"}},
+        )
+    )
+    lines.extend(
+        _anthropic_sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+        )
+    )
+    lines.extend(
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "Hi"},
+            },
+        )
+    )
+    lines.extend(
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+    )
+    lines.extend(_anthropic_sse("message_stop", {"type": "message_stop"}))
+    stream_response = _MockStreamResponse(lines)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
+
+    provider = ClaudeProvider(api_key="test-key", model="claude-3-haiku-20240307")
+    provider._client = mock_client
+
+    stream_iter = await provider.complete(
+        messages=[Message(role="user", content="hello")],
+        stream=True,
+    )
+
+    assert isinstance(stream_iter, AsyncIterator)
+    deltas = [delta async for delta in stream_iter]
+    assert len(deltas) == 1
+    assert deltas[0] == StreamDelta(content="Hi")
+
+
+@pytest.mark.asyncio
+async def test_complete_streaming_uses_stream_request_with_stream_true() -> None:
+    lines: list[str] = []
+    lines.extend(_anthropic_sse("message_start", {"type": "message_start"}))
+    lines.extend(_anthropic_sse("message_stop", {"type": "message_stop"}))
+    stream_response = _MockStreamResponse(lines)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
+
+    provider = ClaudeProvider(
+        api_key="test-key",
+        base_url="https://api.anthropic.com",
+        model="claude-3-haiku-20240307",
+    )
+    provider._client = mock_client
+
+    stream_iter = await provider.complete(
+        messages=[Message(role="user", content="hello")],
+        stream=True,
+    )
+    _ = [delta async for delta in stream_iter]
+
+    assert not mock_client.post.called
+    stream_call = mock_client.stream.call_args
+    assert stream_call[0][0] == "POST"
+    assert stream_call[0][1] == "https://api.anthropic.com/v1/messages"
+    assert stream_call[1]["json"]["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_streaming_yields_text_deltas_from_content_block_delta() -> None:
+    lines: list[str] = []
+    lines.extend(_anthropic_sse("message_start", {"type": "message_start"}))
+    lines.extend(
+        _anthropic_sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+        )
+    )
+    lines.extend(
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "Hello"},
+            },
+        )
+    )
+    lines.extend(
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": " world"},
+            },
+        )
+    )
+    lines.extend(
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+    )
+    lines.extend(_anthropic_sse("message_stop", {"type": "message_stop"}))
+    stream_response = _MockStreamResponse(lines)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
+
+    provider = ClaudeProvider(api_key="test-key", model="claude-3-haiku-20240307")
+    provider._client = mock_client
+
+    stream_iter = await provider.complete(
+        messages=[Message(role="user", content="hello")],
+        stream=True,
+    )
+    deltas = [delta async for delta in stream_iter]
+
+    assert [delta.content for delta in deltas] == ["Hello", " world"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_accumulates_tool_use_input_json_until_content_block_stop() -> (
+    None
+):
+    lines: list[str] = []
+    lines.extend(_anthropic_sse("message_start", {"type": "message_start"}))
+    lines.extend(
+        _anthropic_sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "get_weather",
+                    "input": {},
+                },
+            },
+        )
+    )
+    lines.extend(
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": '{"city":"'},
+            },
+        )
+    )
+    lines.extend(
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": 'Paris"}'},
+            },
+        )
+    )
+    lines.extend(
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 1})
+    )
+    lines.extend(_anthropic_sse("message_stop", {"type": "message_stop"}))
+    stream_response = _MockStreamResponse(lines)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
+
+    provider = ClaudeProvider(api_key="test-key", model="claude-3-haiku-20240307")
+    provider._client = mock_client
+
+    stream_iter = await provider.complete(
+        messages=[Message(role="user", content="weather")],
+        stream=True,
+    )
+    deltas = [delta async for delta in stream_iter]
+
+    assert len(deltas) == 1
+    assert deltas[0].tool_calls is not None
+    assert deltas[0].tool_calls == [
+        ToolCall(id="toolu_1", name="get_weather", arguments={"city": "Paris"})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_tool_use_invalid_json_yields_partial_arguments() -> None:
+    lines: list[str] = []
+    lines.extend(_anthropic_sse("message_start", {"type": "message_start"}))
+    lines.extend(
+        _anthropic_sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_2",
+                    "name": "lookup",
+                    "input": {},
+                },
+            },
+        )
+    )
+    lines.extend(
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"q":"news"'},
+            },
+        )
+    )
+    lines.extend(
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+    )
+    lines.extend(_anthropic_sse("message_stop", {"type": "message_stop"}))
+    stream_response = _MockStreamResponse(lines)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
+
+    provider = ClaudeProvider(api_key="test-key", model="claude-3-haiku-20240307")
+    provider._client = mock_client
+
+    stream_iter = await provider.complete(
+        messages=[Message(role="user", content="lookup")],
+        stream=True,
+    )
+    deltas = [delta async for delta in stream_iter]
+
+    assert len(deltas) == 1
+    assert deltas[0].tool_calls is not None
+    assert deltas[0].tool_calls[0].arguments == {"_partial": '{"q":"news"'}
+
+
+@pytest.mark.asyncio
+async def test_streaming_handles_message_delta_finish_reason() -> None:
+    lines: list[str] = []
+    lines.extend(_anthropic_sse("message_start", {"type": "message_start"}))
+    lines.extend(
+        _anthropic_sse(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use"},
+                "usage": {"output_tokens": 22},
+            },
+        )
+    )
+    lines.extend(_anthropic_sse("message_stop", {"type": "message_stop"}))
+    stream_response = _MockStreamResponse(lines)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
+
+    provider = ClaudeProvider(api_key="test-key", model="claude-3-haiku-20240307")
+    provider._client = mock_client
+
+    stream_iter = await provider.complete(
+        messages=[Message(role="user", content="x")],
+        stream=True,
+    )
+    deltas = [delta async for delta in stream_iter]
+
+    assert len(deltas) == 1
+    assert deltas[0].finish_reason == "tool_use"
+
+
+@pytest.mark.asyncio
+async def test_streaming_skips_empty_lines_and_done_marker() -> None:
+    lines: list[str] = ["", "data: [DONE]"]
+    lines.extend(
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "ignored"},
+            },
+        )
+    )
+    stream_response = _MockStreamResponse(lines)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
+
+    provider = ClaudeProvider(api_key="test-key", model="claude-3-haiku-20240307")
+    provider._client = mock_client
+
+    stream_iter = await provider.complete(
+        messages=[Message(role="user", content="x")],
+        stream=True,
+    )
+    deltas = [delta async for delta in stream_iter]
+
+    assert deltas == []
+
+
+@pytest.mark.asyncio
+async def test_streaming_timeout_uses_read_none_and_custom_values() -> None:
+    lines: list[str] = []
+    lines.extend(_anthropic_sse("message_start", {"type": "message_start"}))
+    lines.extend(_anthropic_sse("message_stop", {"type": "message_stop"}))
+    stream_response = _MockStreamResponse(lines)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
+
+    provider = ClaudeProvider(
+        api_key="test-key",
+        connect_timeout=5.0,
+        read_timeout=90.0,
+        write_timeout=8.0,
+        pool_timeout=6.0,
+    )
+    provider._client = mock_client
+
+    stream_iter = await provider.complete(
+        messages=[Message(role="user", content="hello")],
+        stream=True,
+    )
+    _ = [delta async for delta in stream_iter]
+
+    timeout = mock_client.stream.call_args[1]["timeout"]
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.connect == 5.0
+    assert timeout.read is None
+    assert timeout.write == 8.0
+    assert timeout.pool == 6.0
