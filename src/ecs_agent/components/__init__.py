@@ -1,7 +1,10 @@
 """ECS Components for Agent system."""
 
 from ecs_agent.components.definitions import (
+    CheckpointComponent,
     CollaborationComponent,
+    CompactionConfigComponent,
+    ConversationArchiveComponent,
     ConversationComponent,
     EmbeddingComponent,
     ErrorComponent,
@@ -12,7 +15,9 @@ from ecs_agent.components.definitions import (
     PlanComponent,
     PlanSearchComponent,
     RAGTriggerComponent,
+    RunnerStateComponent,
     SandboxConfigComponent,
+    StreamingComponent,
     SystemPromptComponent,
     TerminalComponent,
     ToolApprovalComponent,
@@ -22,7 +27,10 @@ from ecs_agent.components.definitions import (
 )
 
 __all__ = [
+    "CheckpointComponent",
     "CollaborationComponent",
+    "CompactionConfigComponent",
+    "ConversationArchiveComponent",
     "ConversationComponent",
     "EmbeddingComponent",
     "ErrorComponent",
@@ -33,7 +41,9 @@ __all__ = [
     "PlanComponent",
     "PlanSearchComponent",
     "RAGTriggerComponent",
+    "RunnerStateComponent",
     "SandboxConfigComponent",
+    "StreamingComponent",
     "SystemPromptComponent",
     "TerminalComponent",
     "ToolApprovalComponent",

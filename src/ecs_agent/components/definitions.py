@@ -156,3 +156,42 @@ class VectorStoreComponent:
     """Vector store reference."""
 
     store: Any
+
+
+@dataclass(slots=True)
+class StreamingComponent:
+    """Streaming output configuration."""
+
+    enabled: bool = False
+
+
+@dataclass(slots=True)
+class CheckpointComponent:
+    """Checkpoint snapshots storage."""
+
+    snapshots: list[dict[str, Any]] = field(default_factory=list)
+    max_snapshots: int = 10
+
+
+@dataclass(slots=True)
+class CompactionConfigComponent:
+    """Configuration for context compaction."""
+
+    threshold_tokens: int
+    summary_model: str
+
+
+@dataclass(slots=True)
+class ConversationArchiveComponent:
+    """Archive of past conversation summaries."""
+
+    archived_summaries: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class RunnerStateComponent:
+    """Maintains runner execution state."""
+
+    current_tick: int
+    is_paused: bool = False
+    checkpoint_path: str | None = None

@@ -160,6 +160,57 @@ class MCTSNodeScoredEvent:
 
 
 @dataclass(slots=True)
+class StreamStartEvent:
+    """Event emitted when streaming starts."""
+
+    entity_id: EntityId
+    timestamp: float
+
+
+@dataclass(slots=True)
+class StreamDeltaEvent:
+    """Event emitted when a streaming delta is received."""
+
+    entity_id: EntityId
+    delta: str
+
+
+@dataclass(slots=True)
+class StreamEndEvent:
+    """Event emitted when streaming ends."""
+
+    entity_id: EntityId
+    timestamp: float
+
+
+@dataclass(slots=True)
+class CheckpointCreatedEvent:
+    """Event emitted when a checkpoint is created."""
+
+    entity_id: EntityId
+    checkpoint_id: int
+    timestamp: float
+
+
+@dataclass(slots=True)
+class CheckpointRestoredEvent:
+    """Event emitted when a checkpoint is restored."""
+
+    entity_id: EntityId
+    checkpoint_id: int
+    timestamp: float
+
+
+@dataclass(slots=True)
+class CompactionCompleteEvent:
+    """Event emitted when context compaction completes."""
+
+    entity_id: EntityId
+    original_tokens: int
+    compacted_tokens: int
+
+
+@dataclass(slots=True)
 class RAGRetrievalCompletedEvent:
     """Event emitted when RAG retrieval completes."""
 
@@ -169,6 +220,9 @@ class RAGRetrievalCompletedEvent:
 
 __all__ = [
     "ApprovalPolicy",
+    "CheckpointCreatedEvent",
+    "CheckpointRestoredEvent",
+    "CompactionCompleteEvent",
     "CompletionResult",
     "ConversationTruncatedEvent",
     "EntityId",
@@ -181,6 +235,9 @@ __all__ = [
     "RAGRetrievalCompletedEvent",
     "RetryConfig",
     "StreamDelta",
+    "StreamDeltaEvent",
+    "StreamEndEvent",
+    "StreamStartEvent",
     "ToolApprovedEvent",
     "ToolApprovalRequestedEvent",
     "ToolCall",
