@@ -16,15 +16,16 @@ def mock_litellm(monkeypatch: pytest.MonkeyPatch):
     mock_acompletion = AsyncMock()
     mock_module.acompletion = mock_acompletion
 
-    # Inject mock before import
+    # Inject mock before reload
     monkeypatch.setitem(__import__("sys").modules, "litellm", mock_module)
 
-    # Make HAS_LITELLM=True so provider can be instantiated
+    # Reload the provider module so it picks up the mocked litellm from sys.modules
+    import importlib
     import ecs_agent.providers.litellm_provider
+    importlib.reload(ecs_agent.providers.litellm_provider)
 
+    # Make HAS_LITELLM=True so provider can be instantiated
     monkeypatch.setattr("ecs_agent.providers.litellm_provider.HAS_LITELLM", True)
-    monkeypatch.setattr("ecs_agent.providers.litellm_provider.litellm", mock_module)
-
     return mock_module
 
 
