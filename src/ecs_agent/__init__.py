@@ -20,6 +20,7 @@ from ecs_agent.types import (
     ToolDeniedEvent,
     ToolSchema,
     ToolTimeoutError,
+    UserInputRequestedEvent,
 )
 from typing import Any
 from ecs_agent.providers.retry_provider import RetryProvider
@@ -38,6 +39,7 @@ from ecs_agent.components.definitions import (
     ConversationArchiveComponent,
     RunnerStateComponent,
     StreamingComponent,
+    UserInputComponent,
 )
 
 from ecs_agent.providers import ClaudeProvider
@@ -47,7 +49,7 @@ try:
 except ImportError:
     LiteLLMProvider = None  # type: ignore[assignment, misc]
 
-from ecs_agent.systems import CheckpointSystem, CompactionSystem
+from ecs_agent.systems import CheckpointSystem, CompactionSystem, UserInputSystem
 
 
 __all__ = [
@@ -86,6 +88,9 @@ __all__ = [
     "ToolSchema",
     "ToolTimeoutError",
     "TreeSearchSystem",
+    "UserInputComponent",
+    "UserInputRequestedEvent",
+    "UserInputSystem",
     "WorldSerializer",
     "sandboxed_execute",
     "scan_module",

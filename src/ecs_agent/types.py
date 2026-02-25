@@ -218,6 +218,19 @@ class RAGRetrievalCompletedEvent:
     query: str
     num_results: int
 
+
+@dataclass(slots=True)
+class UserInputRequestedEvent:
+    """Event emitted when a system needs user input.
+
+    External code should subscribe to this event, present the prompt to
+    the user, and resolve ``input_future`` with the user's text.
+    """
+
+    entity_id: EntityId
+    prompt: str
+    input_future: asyncio.Future[str]
+
 __all__ = [
     "ApprovalPolicy",
     "CheckpointCreatedEvent",
@@ -245,4 +258,5 @@ __all__ = [
     "ToolSchema",
     "ToolTimeoutError",
     "Usage",
+    "UserInputRequestedEvent",
 ]
