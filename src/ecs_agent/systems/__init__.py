@@ -10,6 +10,7 @@ from ecs_agent.systems.replanning import ReplanningSystem
 from ecs_agent.systems.tool_approval import ToolApprovalSystem
 from ecs_agent.systems.tree_search import TreeSearchSystem
 from ecs_agent.systems.rag import RAGSystem
+from ecs_agent.systems.user_input import UserInputSystem
 
 __all__ = [
     "CheckpointSystem",
@@ -24,4 +25,5 @@ __all__ = [
     "ToolApprovalSystem",
     "ToolExecutionSystem",
     "TreeSearchSystem",
+    "UserInputSystem",
 ]

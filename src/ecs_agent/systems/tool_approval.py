@@ -102,7 +102,7 @@ class ToolApprovalSystem:
         self,
         entity_id: EntityId,
         tool_call: ToolCall,
-        timeout: float,
+        timeout: float | None,
         world: World,
     ) -> bool:
         approval_future: asyncio.Future[bool] = (
