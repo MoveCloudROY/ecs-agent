@@ -47,6 +47,19 @@ class ToolRegistryComponent:
 
 
 @dataclass(slots=True)
+class SkillMetadata:
+    name: str
+    description: str
+    tool_names: list[str]
+    has_system_prompt: bool
+
+
+@dataclass(slots=True)
+class SkillComponent:
+    skills: dict[str, SkillMetadata]
+
+
+@dataclass(slots=True)
 class PendingToolCallsComponent:
     """Pending tool calls."""
 
