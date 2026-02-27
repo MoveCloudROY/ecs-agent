@@ -32,6 +32,9 @@ Build modular, testable LLM agents by composing behavior from dataclass componen
 - **Tool Auto-Discovery & Approval**, Secure your agent with manual approval policies for sensitive tool calls.
 - **MCTS Plan Optimization**, Find optimal execution paths using Monte Carlo Tree Search (MCTS) for complex goals.
 - **RAG (Vector Search)**, Retrieval-Augmented Generation with pluggable embedding providers and vector stores.
+- **Skills System**, Composable capability modules with progressive disclosure (Tier 1/2/3) to optimize token usage.
+- **MCP Integration**, Connect to external tool servers via the Model Context Protocol (stdio, SSE, HTTP).
+- **Built-in Tools**, High-quality file manipulation (read/write/hash-anchored edit) and bash execution tools.
 
 ## Installation
 
@@ -42,6 +45,8 @@ cd ecs-agent
 uv sync --group dev
 # Install with embeddings support (optional)
 uv pip install -e ".[embeddings]"
+# Install with MCP support (optional)
+uv pip install -e ".[mcp]"
 ```
 
 > **Requires Python ≥ 3.11**
@@ -172,9 +177,21 @@ src/ecs_agent/
 │   ├── __init__.py           # Tool utilities
 │   ├── discovery.py          # Auto-discovery of tools
 │   └── sandbox.py            # Secure execution environment
+│   ├── builtins/               # Standard library skills
+│   │   ├── file_tools.py       # read/write/edit logic
+│   │   ├── bash_tool.py        # Shell execution
+│   │   ├── edit_tool.py        # Hash-anchored editing core
+│   │   └── __init__.py         # BuiltinToolsSkill definition
 ├── types.py                  # Core types (EntityId, Message, ToolCall, etc.)
 ├── serialization.py          # WorldSerializer for save/load
 └── logging.py                # structlog configuration
+├── skills/                       # Skills system
+│   ├── protocol.py             # Skill Protocol definition
+│   └── manager.py              # SkillManager lifecycle handler
+├── mcp/                          # MCP integration
+│   ├── client.py               # MCP client wrapper
+│   ├── adapter.py              # MCP-to-Skill adapter
+│   └── components.py           # MCP transport components
 ```
 
 ### How It Works
@@ -224,6 +241,10 @@ World
 | `ConversationArchiveComponent` | Archived conversation summaries |
 | `RunnerStateComponent` | Tracks runner tick state and pause |
 | `UserInputComponent` | Async user input with optional timeout |
+| `SkillComponent` | Registry of installed skills and metadata |
+| `SkillMetadata` | Tier 1 metadata for an installed skill |
+| `MCPConfigComponent` | Configuration for MCP transport (stdio/SSE/HTTP) |
+| `MCPClientComponent` | Active MCP client session and tool cache |
 
 ## Examples
 
@@ -248,6 +269,8 @@ The `examples/` directory contains 17 runnable demos:
 | [`litellm_agent.py`](examples/litellm_agent.py) | LiteLLM unified provider for 100+ models |
 | [`streaming_system_agent.py`](examples/streaming_system_agent.py) | System-level streaming with events |
 | [`context_management_agent.py`](examples/context_management_agent.py) | Checkpoint, undo, and compaction demo |
+| [`skill_agent.py`](examples/skill_agent.py) | Skill system and BuiltinToolsSkill (read/write/edit) lifecycle |
+| [`mcp_agent.py`](examples/mcp_agent.py) | MCP server integration and namespaced tool usage |
 
 Run any example:
 
@@ -316,6 +339,9 @@ See [`docs/`](docs/) for detailed guides:
 - [Context Management](docs/features/context-management.md), Checkpoint, undo, and compaction
 - [Tool Discovery & Approval](docs/features/tool-discovery.md), Auto-discovery, sandbox, approval flow
 - [User Input](docs/features/user-input.md), Async human-in-the-loop input
+- [Skills](docs/features/skills.md), Composable capabilities and progressive disclosure
+- [MCP Integration](docs/features/mcp.md), Connecting to external MCP tool servers
+- [Built-in Tools](docs/features/builtin-tools.md), File manipulation and shell execution
 
 ## License
 
