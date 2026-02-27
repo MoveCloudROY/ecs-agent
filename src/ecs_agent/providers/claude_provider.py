@@ -18,6 +18,7 @@ logger = structlog.get_logger(__name__)
 
 
 class ClaudeProvider:
+    """Native Anthropic Messages API provider with streaming and tool use support."""
     def __init__(
         self,
         api_key: str,

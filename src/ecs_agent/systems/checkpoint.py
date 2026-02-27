@@ -11,6 +11,7 @@ from ecs_agent.types import CheckpointCreatedEvent, CheckpointRestoredEvent, Ent
 
 
 class CheckpointSystem:
+    """Creates and restores tick-level World snapshots for undo functionality."""
     async def process(self, world: World) -> None:
         snapshot = WorldSerializer.to_dict(world)
         timestamp = time.time()

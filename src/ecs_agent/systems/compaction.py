@@ -18,6 +18,7 @@ logger = get_logger(__name__)
 
 
 class CompactionSystem:
+    """LLM-based conversation summarization using bisect algorithm."""
     def __init__(self, bisect_ratio: float = 0.5) -> None:
         if bisect_ratio <= 0 or bisect_ratio >= 1:
             raise ValueError("bisect_ratio must be between 0 and 1")
