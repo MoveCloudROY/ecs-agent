@@ -2,6 +2,38 @@
 
 The ECS Agent framework provides a complete pipeline for tool management: automatic discovery, sandboxed execution, and human-in-the-loop approval.
 
+## Enhanced Events
+
+The framework features an extensive event system for monitoring tool execution, skill lifecycles, and MCP connectivity. These events are published to the `EventBus` and can be used for logging, UI updates, or debugging.
+
+### New Event Types
+
+| Event Name | Fired When | Key Fields |
+|------------|------------|------------|
+| `ToolExecutionStartedEvent` | Before a tool handler is called | `tool_call`, `entity_id` |
+| `ToolExecutionCompletedEvent` | After a tool handler returns | `tool_call_id`, `result`, `success` |
+| `SkillInstalledEvent` | After a skill is installed | `skill_name`, `tool_names`, `entity_id` |
+| `SkillUninstalledEvent` | After a skill is uninstalled | `skill_name`, `entity_id` |
+| `SkillDiscoveryEvent` | After scanning a discovery source | `source`, `skills_found`, `errors` |
+| `MCPConnectedEvent` | After an MCP server connects | `server_name` |
+| `MCPDisconnectedEvent` | After an MCP server disconnects | `server_name` |
+| `MCPToolCallEvent` | After an MCP tool is called | `server_name`, `tool_name`, `success` |
+
+### Code Example: Subscribing to Events
+
+You can subscribe to these events to track the agent's progress in real-time.
+
+```python
+async def on_tool_start(event: ToolExecutionStartedEvent):
+    print(f"Tool {event.tool_call.name} started execution.")
+
+async def on_discovery(event: SkillDiscoveryEvent):
+    print(f"Discovered {len(event.skills_found)} skills from {event.source}")
+
+world.event_bus.subscribe(ToolExecutionStartedEvent, on_tool_start)
+world.event_bus.subscribe(SkillDiscoveryEvent, on_discovery)
+```
+
 ## Tool Auto-Discovery
 
 The `scan_module` function automatically discovers tool-decorated functions in a Python module.

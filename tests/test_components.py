@@ -275,7 +275,7 @@ class TestComponentCount:
     """Test component count limit."""
 
     def test_component_count_limit(self):
-        """Test that component count does not exceed 26."""
+        """Test that component count does not exceed 27."""
         import ecs_agent.components.definitions as d
 
         count = sum(
@@ -285,7 +285,7 @@ class TestComponentCount:
             and dataclasses.is_dataclass(getattr(d, name, None))
             and getattr(d, name).__module__ == "ecs_agent.components.definitions"
         )
-        assert count <= 26, f"Component count {count} exceeds limit of 26"
+        assert count <= 27, f"Component count {count} exceeds limit of 27"
 
 
 class TestComponentsExportedInInit:

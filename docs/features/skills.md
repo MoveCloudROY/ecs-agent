@@ -68,6 +68,68 @@ skills = manager.list_skills(world, agent_entity)
 # Uninstall a skill
 manager.uninstall(world, agent_entity, "my-skill")
 ```
+## File-based Skill Discovery
+
+The `SkillDiscovery` class allows you to automatically load and instantiate `Skill` implementations from a directory. This is useful for plugins or modular capability loading.
+
+### SkillDiscovery
+
+`SkillDiscovery` scans a list of filesystem paths for `.py` files, dynamically imports them, and instantiates any classes that implement the `Skill` protocol.
+
+```python
+from ecs_agent.skills.discovery import SkillDiscovery
+
+# Initialize discovery with a list of paths
+discovery = SkillDiscovery(skill_paths=["./my_skills", "/opt/ecs/plugins"])
+
+# Discover skills (returns list[Skill])
+skills = discovery.discover()
+
+# Or discover and install directly
+installed_names = discovery.discover_and_install(world, agent_entity, manager)
+```
+
+- **Dynamic Loading**: Uses `importlib.util` for dynamic module loading.
+- **Protocol Checking**: Only instantiates classes that match the `Skill` protocol (name, description, tools, system_prompt).
+- **Graceful Handling**: Skips `__init__.py` and files that don't contain valid skills.
+
+## Discovery Manager
+
+The `DiscoveryManager` provides a high-level API for discovering and installing skills from both the filesystem and external MCP servers.
+
+### Using DiscoveryManager
+
+It combines the capabilities of `SkillDiscovery` and `MCPSkillAdapter` into a single operation.
+
+```python
+from ecs_agent.skills.discovery import DiscoveryManager
+
+mcp_configs = [
+    {
+        "server_name": "sqlite",
+        "command": "uvx mcp-server-sqlite --db-path ./test.db"
+    }
+]
+
+discovery_mgr = DiscoveryManager(
+    skill_paths=["./examples/skills"],
+    mcp_configs=mcp_configs
+)
+
+# Discover and install everything
+report = await discovery_mgr.auto_discover_and_install(world, agent_entity, manager)
+```
+
+### DiscoveryReport
+
+The `auto_discover_and_install` method returns a `DiscoveryReport` containing the results of the discovery process:
+
+- `installed_skills`: List of successfully installed skill names.
+- `failed_sources`: List of `(source, error)` tuples for failed imports or connections.
+- `skipped_mcp`: List of MCP servers that were skipped (e.g., due to missing dependencies).
+
+The manager publishes a `SkillDiscoveryEvent` to the `EventBus` for each source scanned, allowing for real-time tracking of the discovery process.
+
 
 ### Installation Side Effects
 -   Tools are registered in the `ToolRegistryComponent`.
@@ -124,4 +186,4 @@ The framework includes several built-in skills:
 
 ## Examples
 
-See [`examples/skill_agent.py`](../../examples/skill_agent.py) for a complete demonstration of the skill lifecycle.
+See [`examples/skill_agent.py`](../../examples/skill_agent.py) for a basic skill demo, and [`examples/skill_discovery_agent.py`](../../examples/skill_discovery_agent.py) for file-based auto-discovery.

@@ -5,11 +5,19 @@ from typing import Awaitable, Callable
 from ecs_agent.components import (
     ConversationComponent,
     PendingToolCallsComponent,
+    SandboxConfigComponent,
     ToolRegistryComponent,
     ToolResultsComponent,
 )
 from ecs_agent.core.world import World
-from ecs_agent.types import Message, ToolCall
+from ecs_agent.tools.sandbox import sandboxed_execute
+from ecs_agent.types import (
+    EntityId,
+    Message,
+    ToolCall,
+    ToolExecutionCompletedEvent,
+    ToolExecutionStartedEvent,
+)
 
 
 class ToolExecutionSystem:
@@ -29,7 +37,33 @@ class ToolExecutionSystem:
 
             results: dict[str, str] = {}
             for tool_call in pending.tool_calls:
-                result = await self._execute_tool_call(tool_call, registry.handlers)
+                # Publish ToolExecutionStartedEvent
+                await world.event_bus.publish(
+                    ToolExecutionStartedEvent(
+                        entity_id=entity_id,
+                        tool_call=tool_call,
+                    )
+                )
+
+                # Execute the tool call
+                result = await self._execute_tool_call(
+                    entity_id,
+                    world,
+                    tool_call,
+                    registry.handlers,
+                )
+
+                # Publish ToolExecutionCompletedEvent
+                success = not result.startswith("Error")
+                await world.event_bus.publish(
+                    ToolExecutionCompletedEvent(
+                        entity_id=entity_id,
+                        tool_call_id=tool_call.id,
+                        result=result,
+                        success=success,
+                    )
+                )
+
                 results[tool_call.id] = result
                 conversation.messages.append(
                     Message(role="tool", content=result, tool_call_id=tool_call.id)
@@ -41,6 +75,8 @@ class ToolExecutionSystem:
 
     async def _execute_tool_call(
         self,
+        entity_id: EntityId,
+        world: World,
         tool_call: ToolCall,
         handlers: dict[str, Callable[..., Awaitable[str]]],
     ) -> str:
@@ -50,7 +86,16 @@ class ToolExecutionSystem:
 
         try:
             arguments = tool_call.arguments
-            result = await handler(**arguments)
+            sandbox_config = world.get_component(entity_id, SandboxConfigComponent)
+            if sandbox_config is None:
+                result = await handler(**arguments)
+            else:
+                result = await sandboxed_execute(
+                    handler,
+                    arguments,
+                    timeout=sandbox_config.timeout,
+                    max_output_size=sandbox_config.max_output_size,
+                )
             return str(result)
         except Exception as exc:
             return f"Error executing tool '{tool_call.name}': {exc}"

@@ -34,6 +34,7 @@ class ToolSchema:
     name: str
     description: str
     parameters: dict[str, Any]
+    sandbox_compatible: bool = False
 
 
 @dataclass(slots=True)
@@ -231,6 +232,74 @@ class UserInputRequestedEvent:
     prompt: str
     input_future: asyncio.Future[str]
 
+
+@dataclass(slots=True)
+class ToolExecutionStartedEvent:
+    """Event emitted when tool execution starts."""
+
+    entity_id: EntityId
+    tool_call: ToolCall
+
+
+@dataclass(slots=True)
+class ToolExecutionCompletedEvent:
+    """Event emitted when tool execution completes."""
+
+    entity_id: EntityId
+    tool_call_id: str
+    result: str
+    success: bool
+
+
+@dataclass(slots=True)
+class SkillInstalledEvent:
+    """Event emitted when a skill is installed."""
+
+    entity_id: EntityId
+    skill_name: str
+    tool_names: list[str]
+
+
+@dataclass(slots=True)
+class SkillUninstalledEvent:
+    """Event emitted when a skill is uninstalled."""
+
+    entity_id: EntityId
+    skill_name: str
+
+
+@dataclass(slots=True)
+class SkillDiscoveryEvent:
+    """Event emitted when skill discovery completes."""
+
+    source: str
+    skills_found: list[str]
+    errors: list[str]
+
+
+@dataclass(slots=True)
+class MCPConnectedEvent:
+    """Event emitted when MCP server connects."""
+
+    server_name: str
+
+
+@dataclass(slots=True)
+class MCPDisconnectedEvent:
+    """Event emitted when MCP server disconnects."""
+
+    server_name: str
+
+
+@dataclass(slots=True)
+class MCPToolCallEvent:
+    """Event emitted when an MCP tool is called."""
+
+    server_name: str
+    tool_name: str
+    success: bool
+
+
 __all__ = [
     "ApprovalPolicy",
     "CheckpointCreatedEvent",
@@ -240,6 +309,9 @@ __all__ = [
     "ConversationTruncatedEvent",
     "EntityId",
     "ErrorOccurredEvent",
+    "MCPConnectedEvent",
+    "MCPDisconnectedEvent",
+    "MCPToolCallEvent",
     "MCTSNodeScoredEvent",
     "Message",
     "MessageDeliveredEvent",
@@ -247,14 +319,19 @@ __all__ = [
     "PlanStepCompletedEvent",
     "RAGRetrievalCompletedEvent",
     "RetryConfig",
+    "SkillDiscoveryEvent",
+    "SkillInstalledEvent",
+    "SkillUninstalledEvent",
     "StreamDelta",
     "StreamDeltaEvent",
     "StreamEndEvent",
     "StreamStartEvent",
-    "ToolApprovedEvent",
     "ToolApprovalRequestedEvent",
+    "ToolApprovedEvent",
     "ToolCall",
     "ToolDeniedEvent",
+    "ToolExecutionCompletedEvent",
+    "ToolExecutionStartedEvent",
     "ToolSchema",
     "ToolTimeoutError",
     "Usage",
