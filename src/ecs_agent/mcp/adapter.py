@@ -10,7 +10,12 @@ from ecs_agent.components.definitions import SkillComponent
 from ecs_agent.core.world import World
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.protocol import Skill
-from ecs_agent.types import EntityId, ToolSchema
+from ecs_agent.types import (
+    EntityId,
+    MCPConnectedEvent,
+    MCPDisconnectedEvent,
+    ToolSchema,
+)
 
 if TYPE_CHECKING:
     from ecs_agent.mcp.client import MCPClient
@@ -89,6 +94,12 @@ class MCPSkillAdapter(Skill):
         try:
             self._ensure_loaded()
             self._manager.install(world, entity_id, self)
+            # Publish MCPConnectedEvent after successful connection
+            self._run_sync(
+                world.event_bus.publish(
+                    MCPConnectedEvent(server_name=self._server_name)
+                )
+            )
         except Exception as exc:
             raise RuntimeError(
                 f"Failed to install MCP skill '{self.name}': {exc}"
@@ -122,6 +133,13 @@ class MCPSkillAdapter(Skill):
             self._run_sync(self._mcp_client.disconnect())
             self._tool_bundle = {}
             self._loaded = False
+
+            # Publish MCPDisconnectedEvent after disconnection
+            self._run_sync(
+                world.event_bus.publish(
+                    MCPDisconnectedEvent(server_name=self._server_name)
+                )
+            )
         finally:
             self._is_uninstalling = False
 

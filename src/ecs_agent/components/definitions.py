@@ -131,11 +131,18 @@ class ToolApprovalComponent:
 
 
 @dataclass(slots=True)
+class PermissionComponent:
+    allowed_tools: list[str] = field(default_factory=list)
+    denied_tools: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class SandboxConfigComponent:
     """Sandbox execution limits."""
 
     timeout: float = 30.0
     max_output_size: int = 10_000
+    sandbox_mode: str = "asyncio"
 
 
 @dataclass(slots=True)

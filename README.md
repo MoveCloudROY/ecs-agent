@@ -32,7 +32,10 @@ Build modular, testable LLM agents by composing behavior from dataclass componen
 - **Tool Auto-Discovery & Approval**, Secure your agent with manual approval policies for sensitive tool calls.
 - **MCTS Plan Optimization**, Find optimal execution paths using Monte Carlo Tree Search (MCTS) for complex goals.
 - **RAG (Vector Search)**, Retrieval-Augmented Generation with pluggable embedding providers and vector stores.
-- **Skills System**, Composable capability modules with progressive disclosure (Tier 1/2/3) to optimize token usage.
+- **Skills System**, Composable capability modules with progressive disclosure (Tier 1/2/3) and file-based auto-discovery.
+- **Web Search**, Built-in web search capabilities via Brave Search API.
+- **Permission System**, Granular tool whitelisting/blacklisting and secure `bwrap` sandboxing.
+- **Enhanced Observability**, 8 new event types for deep tracking of tool execution, skill lifecycle, and MCP connectivity.
 - **MCP Integration**, Connect to external tool servers via the Model Context Protocol (stdio, SSE, HTTP).
 - **Built-in Tools**, High-quality file manipulation (read/write/hash-anchored edit) and bash execution tools.
 
@@ -151,7 +154,7 @@ src/ecs_agent/
 │   ├── query.py              # Query engine for entity filtering
 │   └── event_bus.py          # Pub/sub EventBus
 ├── components/
-│   └── definitions.py        # 24 component dataclasses
+│   └── definitions.py        # 27 component dataclasses
 ├── providers/
 │   ├── protocol.py           # LLMProvider Protocol
 │   ├── openai_provider.py    # OpenAI-compatible HTTP provider (httpx)
@@ -159,11 +162,12 @@ src/ecs_agent/
 │   ├── litellm_provider.py   # LiteLLM unified provider
 │   ├── fake_provider.py      # Deterministic test provider
 │   └── retry_provider.py     # Retry wrapper (tenacity)
-├── systems/                  # 13 built-in systems
+├── systems/                  # 14 built-in systems
 │   ├── reasoning.py          # LLM inference
 │   ├── planning.py           # Multi-step plan execution
 │   ├── replanning.py         # Dynamic plan adjustment
 │   ├── tool_execution.py     # Tool call dispatch
+│   ├── permission.py         # Tool whitelisting/blacklisting
 │   ├── memory.py             # Conversation memory management
 │   ├── collaboration.py      # Multi-agent messaging
 │   ├── error_handling.py     # Error capture and recovery
@@ -176,7 +180,8 @@ src/ecs_agent/
 ├── tools/
 │   ├── __init__.py           # Tool utilities
 │   ├── discovery.py          # Auto-discovery of tools
-│   └── sandbox.py            # Secure execution environment
+│   ├── sandbox.py            # Secure execution environment
+│   ├── bwrap_sandbox.py      # bwrap-backed isolation
 │   ├── builtins/               # Standard library skills
 │   │   ├── file_tools.py       # read/write/edit logic
 │   │   ├── bash_tool.py        # Shell execution
@@ -187,12 +192,12 @@ src/ecs_agent/
 └── logging.py                # structlog configuration
 ├── skills/                       # Skills system
 │   ├── protocol.py             # Skill Protocol definition
-│   └── manager.py              # SkillManager lifecycle handler
+│   ├── manager.py              # SkillManager lifecycle handler
+│   ├── discovery.py            # File-based skill discovery
+│   └── web_search.py           # Brave Search integration
 ├── mcp/                          # MCP integration
-│   ├── client.py               # MCP client wrapper
-│   ├── adapter.py              # MCP-to-Skill adapter
-│   └── components.py           # MCP transport components
-```
+
+
 
 ### How It Works
 
@@ -242,13 +247,14 @@ World
 | `RunnerStateComponent` | Tracks runner tick state and pause |
 | `UserInputComponent` | Async user input with optional timeout |
 | `SkillComponent` | Registry of installed skills and metadata |
+| `PermissionComponent` | Tool whitelist/blacklist for permission control |
 | `SkillMetadata` | Tier 1 metadata for an installed skill |
 | `MCPConfigComponent` | Configuration for MCP transport (stdio/SSE/HTTP) |
 | `MCPClientComponent` | Active MCP client session and tool cache |
 
 ## Examples
 
-The `examples/` directory contains 17 runnable demos:
+The `examples/` directory contains 21 runnable demos:
 
 | Example | Description |
 |---------|-------------|
@@ -270,7 +276,10 @@ The `examples/` directory contains 17 runnable demos:
 | [`streaming_system_agent.py`](examples/streaming_system_agent.py) | System-level streaming with events |
 | [`context_management_agent.py`](examples/context_management_agent.py) | Checkpoint, undo, and compaction demo |
 | [`skill_agent.py`](examples/skill_agent.py) | Skill system and BuiltinToolsSkill (read/write/edit) lifecycle |
+| [`skill_discovery_agent.py`](examples/skill_discovery_agent.py) | File-based skill loading from folder |
+| [`permission_agent.py`](examples/permission_agent.py) | Permission-restricted agent with tool filtering |
 | [`mcp_agent.py`](examples/mcp_agent.py) | MCP server integration and namespaced tool usage |
+
 
 Run any example:
 
@@ -326,11 +335,12 @@ See [`docs/`](docs/) for detailed guides:
 - [Getting Started](docs/getting-started.md), Installation, first agent, key concepts
 - [Architecture](docs/architecture.md), ECS pattern, data flow, system lifecycle
 - [Core Concepts](docs/core-concepts.md), World, Entity, Component, System, Runner
-- [Components](docs/components.md), All 24 components with usage examples
-- [Systems](docs/systems.md), All 13 systems with configuration details
+- [Components](docs/components.md), All 27 components with usage examples
+- [Systems](docs/systems.md), All 14 systems with configuration details
+
 - [Providers](docs/providers.md), LLM provider protocol, built-in providers
 - [API Reference](docs/api-reference.md), Complete API surface
-- [Examples](docs/examples.md), Walkthrough of all 17 examples
+- [Examples](docs/examples.md), Walkthrough of all 21 examples
 - [Streaming](docs/features/streaming.md), SSE streaming setup and usage
 - [Retry](docs/features/retry.md), RetryProvider configuration
 - [Serialization](docs/features/serialization.md), World state persistence
@@ -342,6 +352,8 @@ See [`docs/`](docs/) for detailed guides:
 - [Skills](docs/features/skills.md), Composable capabilities and progressive disclosure
 - [MCP Integration](docs/features/mcp.md), Connecting to external MCP tool servers
 - [Built-in Tools](docs/features/builtin-tools.md), File manipulation and shell execution
+- [Web Search](docs/features/web-search.md), Brave Search API integration
+- [Permissions](docs/features/permissions.md), Tool filtering and bwrap sandboxing
 
 ## License
 

@@ -1,10 +1,24 @@
-import json
+"""Skill manager for lifecycle handling and tool registry integration."""
 
-from ecs_agent.components import SystemPromptComponent, ToolRegistryComponent
+import json
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Coroutine
+
+from ecs_agent.components import (
+    SandboxConfigComponent,
+    SystemPromptComponent,
+    ToolRegistryComponent,
+)
 from ecs_agent.components.definitions import SkillComponent, SkillMetadata
 from ecs_agent.core.world import World
-from ecs_agent.types import EntityId
-from ecs_agent.types import ToolSchema
+from ecs_agent.tools.bwrap_sandbox import wrap_sandbox_handler
+from ecs_agent.types import (
+    EntityId,
+    SkillInstalledEvent,
+    SkillUninstalledEvent,
+    ToolSchema,
+)
 
 from ecs_agent.skills.protocol import Skill
 
@@ -31,8 +45,12 @@ class SkillManager:
                 f"Tool name collision for skill '{skill.name}': {collision_list}"
             )
 
+        sandbox_config = world.get_component(entity_id, SandboxConfigComponent)
+
         for tool_name, tool_data in skill_tools.items():
             schema, handler = tool_data
+            if sandbox_config is not None:
+                handler = wrap_sandbox_handler(handler, schema, sandbox_config)
             registry.tools[tool_name] = schema
             registry.handlers[tool_name] = handler
 
@@ -60,6 +78,16 @@ class SkillManager:
         self._installed_skills[(entity_id, skill.name)] = skill
         skill.install(world, entity_id)
 
+        # Publish SkillInstalledEvent
+        self._publish_event(
+            world,
+            SkillInstalledEvent(
+                entity_id=entity_id,
+                skill_name=skill.name,
+                tool_names=list(skill_tools.keys()),
+            ),
+        )
+
     def uninstall(self, world: World, entity_id: EntityId, skill_name: str) -> None:
         skill_component = world.get_component(entity_id, SkillComponent)
         if skill_component is None:
@@ -80,6 +108,15 @@ class SkillManager:
             skill.uninstall(world, entity_id)
 
         self._cleanup_skill_details_tool(world, entity_id)
+
+        # Publish SkillUninstalledEvent
+        self._publish_event(
+            world,
+            SkillUninstalledEvent(
+                entity_id=entity_id,
+                skill_name=skill_name,
+            ),
+        )
 
     def list_skills(self, world: World, entity_id: EntityId) -> list[SkillMetadata]:
         skill_component = world.get_component(entity_id, SkillComponent)
@@ -167,3 +204,23 @@ class SkillManager:
 
         registry.tools.pop(self._DETAILS_TOOL_NAME, None)
         registry.handlers.pop(self._DETAILS_TOOL_NAME, None)
+
+    def _publish_event(self, world: World, event: object) -> None:
+        """Publish an event synchronously using the sync→async bridge pattern."""
+        self._run_sync(world.event_bus.publish(event))
+
+    def _run_sync(self, operation: Coroutine[object, object, object]) -> object:
+        """Run an async operation synchronously, handling both sync and async contexts."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # Not in an event loop, can use asyncio.run()
+            return asyncio.run(operation)
+
+        # In an event loop, need to run in a thread
+        def _run_in_thread() -> object:
+            return asyncio.run(operation)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_run_in_thread)
+            return future.result()
