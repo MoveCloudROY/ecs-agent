@@ -1,12 +1,17 @@
+import json
+
 from ecs_agent.components import SystemPromptComponent, ToolRegistryComponent
 from ecs_agent.components.definitions import SkillComponent, SkillMetadata
 from ecs_agent.core.world import World
 from ecs_agent.types import EntityId
+from ecs_agent.types import ToolSchema
 
 from ecs_agent.skills.protocol import Skill
 
 
 class SkillManager:
+    _DETAILS_TOOL_NAME = "load_skill_details"
+
     def __init__(self) -> None:
         self._installed_skills: dict[tuple[EntityId, str], Skill] = {}
 
@@ -15,6 +20,8 @@ class SkillManager:
         if registry is None:
             registry = ToolRegistryComponent(tools={}, handlers={})
             world.add_component(entity_id, registry)
+
+        self._ensure_skill_details_tool(world, entity_id, registry)
 
         skill_tools = skill.tools()
         collisions = sorted(set(skill_tools).intersection(registry.tools))
@@ -72,6 +79,8 @@ class SkillManager:
         if skill is not None:
             skill.uninstall(world, entity_id)
 
+        self._cleanup_skill_details_tool(world, entity_id)
+
     def list_skills(self, world: World, entity_id: EntityId) -> list[SkillMetadata]:
         skill_component = world.get_component(entity_id, SkillComponent)
         if skill_component is None:
@@ -85,3 +94,76 @@ class SkillManager:
         if skill_component is None:
             return None
         return skill_component.skills.get(skill_name)
+
+    def format_skill_details(
+        self, world: World, entity_id: EntityId, skill_name: str
+    ) -> str | None:
+        metadata = self.get_skill_metadata(world, entity_id, skill_name)
+        if metadata is None:
+            return None
+
+        registry = world.get_component(entity_id, ToolRegistryComponent)
+        if registry is None:
+            return None
+
+        lines = [
+            f"Skill: {metadata.name}",
+            f"Description: {metadata.description}",
+            "Tools:",
+        ]
+
+        for tool_name in metadata.tool_names:
+            schema = registry.tools.get(tool_name)
+            if schema is None:
+                continue
+
+            lines.extend(
+                [
+                    f"- {schema.name}",
+                    f"  description: {schema.description}",
+                    "  parameters:",
+                    json.dumps(schema.parameters, indent=2, sort_keys=True),
+                ]
+            )
+
+        return "\n".join(lines)
+
+    def _ensure_skill_details_tool(
+        self, world: World, entity_id: EntityId, registry: ToolRegistryComponent
+    ) -> None:
+        if self._DETAILS_TOOL_NAME in registry.tools:
+            return
+
+        async def load_skill_details(skill_name: str) -> str:
+            details = self.format_skill_details(world, entity_id, skill_name)
+            if details is None:
+                return f"Skill '{skill_name}' is not installed."
+            return details
+
+        registry.tools[self._DETAILS_TOOL_NAME] = ToolSchema(
+            name=self._DETAILS_TOOL_NAME,
+            description=("Load detailed Tier 2 tool schemas for an installed skill."),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "skill_name": {
+                        "type": "string",
+                        "description": "Installed skill name to inspect.",
+                    }
+                },
+                "required": ["skill_name"],
+            },
+        )
+        registry.handlers[self._DETAILS_TOOL_NAME] = load_skill_details
+
+    def _cleanup_skill_details_tool(self, world: World, entity_id: EntityId) -> None:
+        skill_component = world.get_component(entity_id, SkillComponent)
+        if skill_component is not None and skill_component.skills:
+            return
+
+        registry = world.get_component(entity_id, ToolRegistryComponent)
+        if registry is None:
+            return
+
+        registry.tools.pop(self._DETAILS_TOOL_NAME, None)
+        registry.handlers.pop(self._DETAILS_TOOL_NAME, None)

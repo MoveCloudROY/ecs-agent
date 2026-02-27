@@ -237,5 +237,17 @@ def test_builtin_skill_install() -> None:
 
     registry = world.get_component(entity_id, ToolRegistryComponent)
     assert registry is not None
-    assert set(registry.tools) == {"read_file", "write_file", "edit_file", "bash"}
-    assert set(registry.handlers) == {"read_file", "write_file", "edit_file", "bash"}
+    assert set(registry.tools) == {
+        "read_file",
+        "write_file",
+        "edit_file",
+        "bash",
+        "load_skill_details",
+    }
+    assert set(registry.handlers) == {
+        "read_file",
+        "write_file",
+        "edit_file",
+        "bash",
+        "load_skill_details",
+    }

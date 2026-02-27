@@ -112,8 +112,18 @@ def test_skill_install_merges_tools() -> None:
     skills = world.get_component(entity_id, SkillComponent)
 
     assert registry is not None
-    assert set(registry.tools) == {"existing", "sum", "multiply"}
-    assert set(registry.handlers) == {"existing", "sum", "multiply"}
+    assert set(registry.tools) == {
+        "existing",
+        "sum",
+        "multiply",
+        "load_skill_details",
+    }
+    assert set(registry.handlers) == {
+        "existing",
+        "sum",
+        "multiply",
+        "load_skill_details",
+    }
     assert callable(registry.handlers["existing"])
     assert callable(registry.handlers["sum"])
     assert prompts is not None
@@ -143,7 +153,7 @@ def test_skill_install_get_or_create_components() -> None:
     prompts = world.get_component(entity_id, SystemPromptComponent)
     skills = world.get_component(entity_id, SkillComponent)
     assert registry is not None
-    assert list(registry.tools) == ["sum"]
+    assert set(registry.tools) == {"sum", "load_skill_details"}
     assert prompts is not None
     assert prompts.content == "Respond with equations."
     assert skills is not None
@@ -174,7 +184,7 @@ def test_skill_install_collision_raises() -> None:
     registry = world.get_component(entity_id, ToolRegistryComponent)
     skills = world.get_component(entity_id, SkillComponent)
     assert registry is not None
-    assert set(registry.tools) == {"read_file"}
+    assert set(registry.tools) == {"read_file", "load_skill_details"}
     assert skills is None
 
 
@@ -256,7 +266,7 @@ def test_skill_uninstall_one_does_not_affect_another() -> None:
     text_meta = manager.get_skill_metadata(world, entity_id, "text")
     math_meta = manager.get_skill_metadata(world, entity_id, "math")
     assert registry is not None
-    assert set(registry.tools) == {"title"}
+    assert set(registry.tools) == {"title", "load_skill_details"}
     assert text_meta is not None
     assert text_meta.tool_names == ["title"]
     assert math_meta is None
