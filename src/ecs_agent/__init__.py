@@ -27,6 +27,10 @@ from ecs_agent.providers.retry_provider import RetryProvider
 from ecs_agent.providers.embedding_provider import OpenAIEmbeddingProvider
 from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider
 from ecs_agent.tools import scan_module, sandboxed_execute, tool
+from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.manager import SkillManager
+from ecs_agent.components.definitions import SkillComponent, SkillMetadata
+from ecs_agent.tools.builtins import BuiltinToolsSkill
 from ecs_agent.systems.tool_approval import ToolApprovalSystem
 from ecs_agent.systems.tree_search import TreeSearchSystem
 from ecs_agent.systems.rag import RAGSystem
@@ -49,12 +53,14 @@ try:
 except ImportError:
     LiteLLMProvider = None  # type: ignore[assignment, misc]
 
+
 from ecs_agent.systems import CheckpointSystem, CompactionSystem, UserInputSystem
 
 
 __all__ = [
     "__version__",
     "ApprovalPolicy",
+    "BuiltinToolsSkill",
     "CheckpointComponent",
     "CheckpointCreatedEvent",
     "CheckpointRestoredEvent",
@@ -63,7 +69,7 @@ __all__ = [
     "CompactionCompleteEvent",
     "CompactionConfigComponent",
     "CompactionSystem",
-
+    "CompletionResult",
     "ConversationArchiveComponent",
     "configure_logging",
     "EntityId",
@@ -76,6 +82,10 @@ __all__ = [
     "RetryConfig",
     "RetryProvider",
     "RunnerStateComponent",
+    "Skill",
+    "SkillComponent",
+    "SkillManager",
+    "SkillMetadata",
     "StreamDelta",
     "StreamDeltaEvent",
     "StreamEndEvent",
@@ -96,3 +106,13 @@ __all__ = [
     "scan_module",
     "tool",
 ]
+
+# MCP (optional dependency)
+try:
+    from ecs_agent.mcp.client import MCPClient
+    from ecs_agent.mcp.adapter import MCPSkillAdapter
+    from ecs_agent.mcp.components import MCPConfigComponent, MCPClientComponent
+
+    __all__.extend(["MCPClient", "MCPSkillAdapter", "MCPConfigComponent", "MCPClientComponent"])
+except ImportError:
+    pass
