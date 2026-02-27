@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from typing import Literal
 
 from ecs_agent.logging import get_logger
+from ecs_agent.tools.discovery import tool
 
 logger = get_logger(__name__)
 
@@ -118,3 +120,23 @@ def apply_edits(original_content: str, edits: list[EditOperation]) -> str:
         raise ValueError(f"Unsupported edit operation: {edit.op}")
 
     return "\n".join(lines)
+
+
+@tool(description="Apply hash-anchored edits to a workspace file.")
+async def edit_file(file_path: str, edits_json: str, workspace_root: str) -> str:
+    """Apply hash-anchored edits to a workspace file."""
+    from ecs_agent.tools.builtins.file_tools import _validate_path
+
+    target = _validate_path(file_path, workspace_root)
+    original = target.read_text(encoding="utf-8")
+    _ = format_file_with_hashes(original)
+
+    edits_data = json.loads(edits_json)
+    if not isinstance(edits_data, list):
+        raise ValueError("edits_json must be a JSON array")
+
+    edits = [EditOperation(**edit) for edit in edits_data]
+    updated = apply_edits(original, edits)
+    target.write_text(updated, encoding="utf-8")
+    logger.info("edit_file", file_path=file_path, edit_count=len(edits))
+    return f"Applied {len(edits)} edits to {file_path}"
