@@ -300,6 +300,14 @@ class MCPToolCallEvent:
     success: bool
 
 
+@dataclass(slots=True)
+class ResponsesAPICallEvent:
+    """Event emitted when a Responses API call completes."""
+
+    entity_id: EntityId
+    response_id: str
+    model: str
+
 __all__ = [
     "ApprovalPolicy",
     "CheckpointCreatedEvent",
@@ -336,4 +344,5 @@ __all__ = [
     "ToolTimeoutError",
     "Usage",
     "UserInputRequestedEvent",
+    "ResponsesAPICallEvent",
 ]

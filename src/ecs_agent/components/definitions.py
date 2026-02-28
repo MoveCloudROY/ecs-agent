@@ -164,6 +164,12 @@ class RAGTriggerComponent:
     top_k: int = 5
     retrieved_docs: list[str] = field(default_factory=list)
 
+@dataclass(slots=True)
+class ResponsesAPIStateComponent:
+    """Tracks OpenAI Responses API state for conversation threading."""
+
+    previous_response_id: str | None = None
+
 
 @dataclass(slots=True)
 class EmbeddingComponent:
