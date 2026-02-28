@@ -154,7 +154,9 @@ async def test_http_error_handling(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test HTTP 4xx/5xx errors are raised and full error content is printed."""
     mock_response = Mock(spec=httpx.Response)
     mock_response.status_code = 429
-    mock_response.text = '{"error": {"message": "Rate limit exceeded", "type": "rate_limit_error"}}'
+    mock_response.text = (
+        '{"error": {"message": "Rate limit exceeded", "type": "rate_limit_error"}}'
+    )
     mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
         "Too Many Requests", request=Mock(spec=httpx.Request), response=mock_response
     )
@@ -172,11 +174,15 @@ async def test_http_error_handling(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_http_error_prints_response_body(capsys: pytest.CaptureFixture[str]) -> None:
+async def test_http_error_prints_response_body(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """Test HTTP error prints status code and full response body."""
     mock_response = Mock(spec=httpx.Response)
     mock_response.status_code = 400
-    mock_response.text = '{"error": {"message": "Invalid model", "type": "invalid_request_error"}}'
+    mock_response.text = (
+        '{"error": {"message": "Invalid model", "type": "invalid_request_error"}}'
+    )
     mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
         "Bad Request", request=Mock(spec=httpx.Request), response=mock_response
     )
@@ -198,7 +204,9 @@ async def test_http_error_prints_response_body(capsys: pytest.CaptureFixture[str
 
 
 @pytest.mark.asyncio
-async def test_network_error_prints_full_message(capsys: pytest.CaptureFixture[str]) -> None:
+async def test_network_error_prints_full_message(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """Test connection/timeout errors print full error details."""
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.side_effect = httpx.ConnectError("Connection refused")
@@ -267,7 +275,9 @@ async def test_tool_call_messages_serialize_content_as_null() -> None:
         Message(
             role="assistant",
             content="",
-            tool_calls=[ToolCall(id="call_1", name="get_weather", arguments={"city": "Beijing"})],
+            tool_calls=[
+                ToolCall(id="call_1", name="get_weather", arguments={"city": "Beijing"})
+            ],
         ),
         Message(role="tool", content="Sunny 28C", tool_call_id="call_1"),
     ]
@@ -284,7 +294,9 @@ async def test_tool_call_messages_serialize_content_as_null() -> None:
 
 
 @pytest.mark.asyncio
-async def test_assistant_message_with_content_and_tool_calls_preserves_content() -> None:
+async def test_assistant_message_with_content_and_tool_calls_preserves_content() -> (
+    None
+):
     mock_response = Mock(spec=httpx.Response)
     mock_response.json.return_value = {
         "choices": [{"message": {"role": "assistant", "content": "ok"}}],
@@ -302,7 +314,9 @@ async def test_assistant_message_with_content_and_tool_calls_preserves_content()
         Message(
             role="assistant",
             content="Let me check the weather",
-            tool_calls=[ToolCall(id="call_2", name="get_weather", arguments={"city": "NYC"})],
+            tool_calls=[
+                ToolCall(id="call_2", name="get_weather", arguments={"city": "NYC"})
+            ],
         ),
     ]
     await provider.complete(messages)
@@ -310,3 +324,45 @@ async def test_assistant_message_with_content_and_tool_calls_preserves_content()
     body = mock_client.post.call_args[1]["json"]
     assistant_msg = body["messages"][0]
     assert assistant_msg["content"] == "Let me check the weather"
+
+
+@pytest.mark.asyncio
+async def test_convert_messages_serializes_tool_call_arguments_as_json_string() -> None:
+    """Test _convert_messages serializes tool call arguments as JSON string, not dict."""
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "done"}}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+    mock_response.raise_for_status = Mock()
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post.return_value = mock_response
+
+    provider = OpenAIProvider(api_key="test-key")
+    provider._client = mock_client
+
+    # Create message with tool call containing dict arguments
+    message = Message(
+        role="assistant",
+        content="",
+        tool_calls=[
+            ToolCall(
+                id="call_123",
+                name="test_function",
+                arguments={"key": "value", "count": 42},
+            )
+        ],
+    )
+
+    await provider.complete([message])
+
+    # Verify the request was made with JSON-serialized arguments
+    body = mock_client.post.call_args[1]["json"]
+    args = body["messages"][0]["tool_calls"][0]["function"]["arguments"]
+
+    # CRITICAL: Must be JSON string, not dict
+    assert isinstance(args, str), f"Expected string, got {type(args)}"
+
+    # Verify round-trip: string should deserialize back to original dict
+    assert json.loads(args) == {"key": "value", "count": 42}
