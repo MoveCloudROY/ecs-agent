@@ -1,7 +1,7 @@
 """Core type definitions for ECS-based LLM Agent."""
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, NewType
 
@@ -26,6 +26,27 @@ class Message:
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
 
+
+@dataclass(slots=True)
+class ConversationMessage:
+    """A message node in a conversation tree."""
+
+    id: str
+    parent_message_id: str | None
+    role: str  # 'system' | 'user' | 'assistant' | 'tool'
+    content: str | None
+    tool_calls: list[ToolCall] | None = None
+    tool_call_id: str | None = None
+    created_at: str = ""  # ISO timestamp
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ConversationBranch:
+    """A named branch pointing to a leaf message."""
+
+    branch_id: str
+    leaf_message_id: str
 
 @dataclass(slots=True)
 class ToolSchema:
@@ -308,12 +329,24 @@ class ResponsesAPICallEvent:
     response_id: str
     model: str
 
+@dataclass(slots=True)
+class BranchCreatedEvent:
+    """Event emitted when a conversation branch is created."""
+
+    entity_id: EntityId
+    branch_id: str
+    parent_message_id: str
+
+
 __all__ = [
     "ApprovalPolicy",
+    "BranchCreatedEvent",
     "CheckpointCreatedEvent",
     "CheckpointRestoredEvent",
     "CompactionCompleteEvent",
     "CompletionResult",
+    "ConversationBranch",
+    "ConversationMessage",
     "ConversationTruncatedEvent",
     "EntityId",
     "ErrorOccurredEvent",

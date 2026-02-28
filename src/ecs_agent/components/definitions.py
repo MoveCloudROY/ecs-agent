@@ -5,7 +5,7 @@ from typing import Any, Awaitable, Callable
 
 import asyncio
 
-from ecs_agent.types import ApprovalPolicy, EntityId, Message, ToolCall, ToolSchema
+from ecs_agent.types import ApprovalPolicy, ConversationBranch, ConversationMessage, EntityId, Message, ToolCall, ToolSchema
 
 try:
     from ecs_agent.providers.protocol import LLMProvider
@@ -29,6 +29,15 @@ class ConversationComponent:
 
     messages: list[Message]
     max_messages: int = 100
+
+
+@dataclass(slots=True)
+class ConversationTreeComponent:
+    """Tree-structured conversation with branching support."""
+
+    messages: dict[str, ConversationMessage] = field(default_factory=dict)
+    current_branch_id: str | None = None
+    branches: dict[str, ConversationBranch] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
