@@ -1,6 +1,6 @@
 # Built-in Systems Reference
 
-This document provides a comprehensive guide to the thirteen built-in systems available in the ECS Agent framework. These systems handle the core logic of agent behavior, from reasoning and planning to tool execution and error management.
+This document provides a comprehensive guide to the fourteen built-in systems available in the ECS Agent framework. These systems handle the core logic of agent behavior, from reasoning and planning to tool execution and error management.
 
 ## Recommended System Priority Order
 
@@ -16,6 +16,7 @@ The table below summarizes the recommended priorities for each system. Priority 
 | TreeSearchSystem | 0 | Uses MCTS to find the best plan path. |
 | CollaborationSystem | 5 | Ingests messages from other entities. |
 | ToolExecutionSystem | 5 | Executes pending tool calls and returns results. |
+| SubagentSystem | 5 | Manages subagent delegation and execution. |
 | ReplanningSystem | 7 | Periodically revises the current plan based on progress. |
 | MemorySystem | 10 | Truncates conversation history to stay within context limits. |
 | CheckpointSystem | (configurable) | Creates world state snapshots for undo. |
@@ -317,6 +318,64 @@ world.register_system(UserInputSystem(priority=-10), priority=-10)
 
 ---
 
+## 14. SubagentSystem
+
+The SubagentSystem manages subagent delegation, allowing parent agents to spawn child agents for subtask execution with isolated contexts and automatic result aggregation.
+
+- **Constructor**: `__init__(self, priority: int = 0)`
+- **Queries**: `SubagentRegistryComponent`, `ToolRegistryComponent`
+- **Modifies**: `ToolRegistryComponent.tools` (registers `delegate` tool), `ToolRegistryComponent.handlers` (registers delegate handler).
+- **Events Published**: `DelegationStartedEvent(parent_entity, child_entity, subagent_name, task)`, `DelegationCompletedEvent(parent_entity, child_entity, subagent_name, result)`
+- **Recommended Priority**: 5 (runs alongside `CollaborationSystem` and `ToolExecutionSystem`)
+
+### Behavior
+The system automatically registers a `delegate` tool for entities that have both `SubagentRegistryComponent` and `ToolRegistryComponent`. When the delegate tool is called by an LLM, the system:
+1. Looks up the subagent configuration by name in the registry
+2. Creates a new child entity with the subagent's provider, model, and system prompt
+3. Runs the child entity to completion (or until `max_ticks` is reached)
+4. Returns the child's final assistant message as the tool result
+5. Publishes delegation lifecycle events to the event bus
+
+Each subagent runs in complete isolation with its own conversation history and state. The parent agent receives only the final result.
+
+### Tool Schema
+The `delegate` tool accepts two parameters:
+- `subagent_name` (required): Name of the subagent to invoke (must exist in registry)
+- `task` (required): Task description for the subagent
+
+### Error Handling
+If the specified subagent name is not found in the registry, the tool returns an error message. If the subagent execution fails or times out, the error details are returned as the tool result.
+
+### Usage Example
+```python
+from ecs_agent.systems.subagent import SubagentSystem
+from ecs_agent.components import SubagentRegistryComponent
+from ecs_agent.types import SubagentConfig
+
+# Configure subagents
+researcher = SubagentConfig(
+    name="researcher",
+    provider=OpenAIProvider(...),
+    model="gpt-4o",
+    system_prompt="You are a research specialist.",
+    max_ticks=10,
+)
+
+# Register with parent entity
+world.add_component(
+    parent_entity,
+    SubagentRegistryComponent(subagents={"researcher": researcher}),
+)
+
+# Register system
+world.register_system(SubagentSystem(priority=5), priority=5)
+```
+
+### See Also
+- [Subagent Feature Documentation](features/subagent.md) — Detailed guide with delegation patterns
+- [SubagentRegistryComponent](components.md#subagentregistrycomponent) — Component reference
+---
+
 ## Complete Integration Example
 
 The following code demonstrates how to register all built-in systems with their recommended execution order.
@@ -336,6 +395,7 @@ from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.checkpoint import CheckpointSystem
 from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
+from ecs_agent.systems.subagent import SubagentSystem
 
 world = World()
 
@@ -354,6 +414,7 @@ world.register_system(TreeSearchSystem(priority=0), priority=0)
 # Interaction and communication
 world.register_system(CollaborationSystem(priority=5), priority=5)
 world.register_system(ToolExecutionSystem(priority=5), priority=5)
+world.register_system(SubagentSystem(priority=5), priority=5)
 
 # Dynamic adjustment
 world.register_system(ReplanningSystem(priority=7), priority=7)

@@ -6,12 +6,20 @@ The framework uses `structlog` for structured logging, allowing for easy parsing
 
 The primary way to interact with the logging system is through `configure_logging()` and `get_logger()`.
 
-- `configure_logging(json_output: bool = False, level: str = "INFO")`: Initializes the global logging configuration.
+- `configure_logging(json_output: bool = False, level: str = "INFO", module_levels: dict[str, str] | None = None, colors: bool = True)`: Initializes the global logging configuration with per-module filtering, caller info, and exception formatting.
 - `get_logger(name: str)`: Returns a structured logger instance for the given name.
 
 ### JSON vs. Console Output
 - **`json_output=False`**: Uses `ConsoleRenderer`, providing a colorized, human-readable output that is ideal for local development.
 - **`json_output=True`**: Uses `JSONRenderer`, producing machine-readable JSON logs for production observability systems like ELK or Datadog.
+
+### Enhanced Features
+
+- **Caller Information**: Automatically captures file, function, and line number for each log entry
+- **Exception Formatting**: Pretty-prints exceptions with full tracebacks
+- **Per-Module Log Levels**: Fine-grained control over logging verbosity per module
+- **Colored Output**: Syntax-highlighted console output for development
+- **Stdlib Bridge**: Redirects standard library logging to structlog
 
 ## Logging Processors
 
@@ -28,17 +36,31 @@ You can import logging utilities from `ecs_agent.logging` or directly from `ecs_
 ```python
 from ecs_agent.logging import configure_logging, get_logger
 
-# 1. Initialize global logging
-configure_logging(json_output=False, level="DEBUG")
+# Configure with per-module levels
+configure_logging(
+    json_output=False,
+    level="INFO",
+    module_levels={
+        "ecs_agent.providers.openai_provider": "DEBUG",
+        "ecs_agent.systems.reasoning": "DEBUG",
+        "httpx": "WARNING",  # Suppress noisy HTTP logs
+    },
+    colors=True,  # Enable colored output
+)
 
-# 2. Get a logger instance
+# Get a logger instance
 logger = get_logger(__name__)
 
-# 3. Use structured logging
-logger.info("system_initialized", status="ready", components=["llm", "world"])
-logger.debug("received_response", response_length=150, latency=0.45)
-logger.warning("retry_attempt", attempt=2, error="Rate limit exceeded")
-logger.error("connection_failed", error="Endpoint not reachable")
+# Logs include caller info automatically
+logger.info("system_initialized", status="ready")
+# Output: [INFO] system_initialized | status=ready | caller=main.py:15:setup()
+
+# Exception formatting
+try:
+    raise ValueError("Example error")
+except Exception as exc:
+    logger.error("operation_failed", exception=str(exc))
+    # Pretty-printed traceback in output
 ```
 
 ## Internal Usage

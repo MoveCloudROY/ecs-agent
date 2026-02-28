@@ -17,6 +17,7 @@ Build modular, testable LLM agents by composing behavior from dataclass componen
 - **Async-Native**, Built on `asyncio` with structured concurrency. Systems at the same priority run concurrently via `TaskGroup`.
 - **Provider-Agnostic**, Swap between providers without touching agent logic. Ships with `OpenAIProvider`, `ClaudeProvider`, `LiteLLMProvider`, `FakeProvider`, and `RetryProvider`.
 - **Streaming**, First-class SSE streaming with `AsyncIterator[StreamDelta]` for real-time token delivery.
+- **OpenAI Responses API**, Native support for `/v1/responses` endpoint with automatic Chat Completions fallback, streaming, and enhanced metadata tracking.
 - **Streaming Output (System-Level)**, `StreamingComponent` enables system-level streaming with `StreamStartEvent`, `StreamDeltaEvent`, `StreamEndEvent`.
 - **Context Management**, Checkpoint-based undo (`CheckpointSystem`), LLM-powered conversation compaction (`CompactionSystem`), and resume from checkpoint.
 - **Claude Provider**, Native Anthropic API provider with SSE streaming support.
@@ -26,6 +27,8 @@ Build modular, testable LLM agents by composing behavior from dataclass componen
 - **Tool Use**, Register tool schemas and async handlers. The framework manages the LLM ↔ tool call loop automatically.
 - **Planning & ReAct**, Built-in `PlanningSystem` and `ReplanningSystem` for multi-step reasoning with dynamic plan adjustment.
 - **Multi-Agent**, Multiple agent entities in one `World`, collaborating through an `EventBus` and inbox-based messaging.
+- **Subagent Delegation**, Spawn child agents for subtasks via `SubagentSystem`. Named subagent registry, isolated execution, and automatic result aggregation with the `delegate` tool.
+- **Tree-Structured Conversations**, Branch and merge conversation history with `ConversationTreeComponent`. Navigate multiple reasoning paths, compare outcomes, and linearize for system compatibility.
 - **Structured Output**, JSON mode with Pydantic schema support for type-safe LLM responses.
 - **Serialization**, Save and restore full `World` state (entities, components, conversation history) via `WorldSerializer`.
 - **Type-Safe**, Full type annotations, `dataclass(slots=True)` components, mypy strict mode. Errors surface at write-time, not runtime.
@@ -33,9 +36,10 @@ Build modular, testable LLM agents by composing behavior from dataclass componen
 - **MCTS Plan Optimization**, Find optimal execution paths using Monte Carlo Tree Search (MCTS) for complex goals.
 - **RAG (Vector Search)**, Retrieval-Augmented Generation with pluggable embedding providers and vector stores.
 - **Skills System**, Composable capability modules with progressive disclosure (Tier 1/2/3) and file-based auto-discovery.
+- **Markdown Skills**, Load skills from `.claude/skills/<name>/SKILL.md` format with YAML frontmatter, automatic tool discovery from `scripts/` directory, and progressive disclosure.
 - **Web Search**, Built-in web search capabilities via Brave Search API.
 - **Permission System**, Granular tool whitelisting/blacklisting and secure `bwrap` sandboxing.
-- **Enhanced Observability**, 8 new event types for deep tracking of tool execution, skill lifecycle, and MCP connectivity.
+- **Enhanced Logging**, Structured logging with `structlog` featuring caller info, exception formatting, per-module log level filtering, and stdlib logging bridge.
 - **MCP Integration**, Connect to external tool servers via the Model Context Protocol (stdio, SSE, HTTP).
 - **Built-in Tools**, High-quality file manipulation (read/write/hash-anchored edit) and bash execution tools.
 
@@ -154,7 +158,7 @@ src/ecs_agent/
 │   ├── query.py              # Query engine for entity filtering
 │   └── event_bus.py          # Pub/sub EventBus
 ├── components/
-│   └── definitions.py        # 27 component dataclasses
+│   └── definitions.py        # 30 component dataclasses
 ├── providers/
 │   ├── protocol.py           # LLMProvider Protocol
 │   ├── openai_provider.py    # OpenAI-compatible HTTP provider (httpx)
@@ -162,7 +166,7 @@ src/ecs_agent/
 │   ├── litellm_provider.py   # LiteLLM unified provider
 │   ├── fake_provider.py      # Deterministic test provider
 │   └── retry_provider.py     # Retry wrapper (tenacity)
-├── systems/                  # 14 built-in systems
+├── systems/                  # 15 built-in systems
 │   ├── reasoning.py          # LLM inference
 │   ├── planning.py           # Multi-step plan execution
 │   ├── replanning.py         # Dynamic plan adjustment
@@ -176,7 +180,8 @@ src/ecs_agent/
 │   ├── rag.py                # Retrieval-Augmented Generation
 │   ├── checkpoint.py         # World state snapshots
 │   ├── compaction.py         # Conversation compaction
-│   └── user_input.py         # Async user input
+│   ├── user_input.py         # Async user input
+│   └── subagent.py           # Subagent delegation
 ├── tools/
 │   ├── __init__.py           # Tool utilities
 │   ├── discovery.py          # Auto-discovery of tools
@@ -251,6 +256,9 @@ World
 | `SkillMetadata` | Tier 1 metadata for an installed skill |
 | `MCPConfigComponent` | Configuration for MCP transport (stdio/SSE/HTTP) |
 | `MCPClientComponent` | Active MCP client session and tool cache |
+| `ConversationTreeComponent` | Tree-structured conversation with branching and linearization |
+| `ResponsesAPIStateComponent` | Tracks OpenAI Responses API state and metadata |
+| `SubagentRegistryComponent` | Registry of named subagent configurations |
 
 ## Examples
 
