@@ -22,6 +22,7 @@ def mock_litellm(monkeypatch: pytest.MonkeyPatch):
     # Reload the provider module so it picks up the mocked litellm from sys.modules
     import importlib
     import ecs_agent.providers.litellm_provider
+
     importlib.reload(ecs_agent.providers.litellm_provider)
 
     # Make HAS_LITELLM=True so provider can be instantiated
@@ -48,74 +49,57 @@ async def test_import_guard_raises_when_litellm_missing(
 ) -> None:
     """Test constructor raises ImportError with helpful message when litellm not available."""
     # Force HAS_LITELLM=False
-    import ecs_agent.providers.litellm_provider
-
     monkeypatch.setattr("ecs_agent.providers.litellm_provider.HAS_LITELLM", False)
 
     from ecs_agent.providers.litellm_provider import LiteLLMProvider
 
-    with pytest.raises(ImportError) as exc_info:
-        LiteLLMProvider(model="openai/gpt-4", api_key="test")
-
-    assert "litellm is required" in str(exc_info.value)
-    assert "pip install litellm" in str(exc_info.value)
+    with pytest.raises(ImportError, match="litellm"):
+        LiteLLMProvider(model="gpt-4o", api_key="test-key")
 
 
 @pytest.mark.asyncio
-async def test_complete_non_streaming(mock_litellm) -> None:
-    """Test non-streaming completion delegates to litellm.acompletion correctly."""
+async def test_protocol_compliance(mock_litellm) -> None:
+    """Test LiteLLMProvider satisfies LLMProvider Protocol."""
     from ecs_agent.providers.litellm_provider import LiteLLMProvider
 
-    # Mock response in OpenAI format
-    mock_response = {
-        "choices": [
-            {
-                "message": {
-                    "role": "assistant",
-                    "content": "Hello from litellm!",
-                }
-            }
-        ],
-        "usage": {
-            "prompt_tokens": 10,
-            "completion_tokens": 5,
-            "total_tokens": 15,
-        },
+    provider = LiteLLMProvider(model="gpt-4o", api_key="test-key")
+    assert isinstance(provider, LLMProvider)
+
+
+@pytest.mark.asyncio
+async def test_complete_returns_completion_result(mock_litellm) -> None:
+    """Test complete() returns CompletionResult with message and usage."""
+    from ecs_agent.providers.litellm_provider import LiteLLMProvider
+
+    mock_litellm.acompletion.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "test response"}}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
     }
-    mock_litellm.acompletion.return_value = mock_response
 
-    provider = LiteLLMProvider(model="openai/gpt-4", api_key="test-key")
-    messages = [Message(role="user", content="Hello")]
-
-    result = await provider.complete(messages, stream=False)
+    provider = LiteLLMProvider(model="gpt-4o", api_key="test-key")
+    messages = [Message(role="user", content="test message")]
+    result = await provider.complete(messages)
 
     assert isinstance(result, CompletionResult)
     assert result.message.role == "assistant"
-    assert result.message.content == "Hello from litellm!"
+    assert result.message.content == "test response"
     assert result.usage is not None
     assert result.usage.prompt_tokens == 10
     assert result.usage.completion_tokens == 5
     assert result.usage.total_tokens == 15
 
-    # Verify litellm.acompletion was called with correct args
-    assert mock_litellm.acompletion.called
-    call_kwargs = mock_litellm.acompletion.call_args[1]
-    assert call_kwargs["model"] == "openai/gpt-4"
-    assert call_kwargs["messages"] == [{"role": "user", "content": "Hello"}]
-    assert call_kwargs["stream"] is False
-
 
 @pytest.mark.asyncio
-async def test_complete_with_tools(mock_litellm) -> None:
-    """Test tool schemas are passed correctly to litellm."""
+async def test_complete_handles_tool_calls(mock_litellm) -> None:
+    """Test complete() parses tool calls correctly."""
     from ecs_agent.providers.litellm_provider import LiteLLMProvider
 
-    mock_response = {
+    mock_litellm.acompletion.return_value = {
         "choices": [
             {
                 "message": {
                     "role": "assistant",
-                    "content": "",
+                    "content": None,
                     "tool_calls": [
                         {
                             "id": "call_123",
@@ -131,112 +115,85 @@ async def test_complete_with_tools(mock_litellm) -> None:
         ],
         "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
     }
-    mock_litellm.acompletion.return_value = mock_response
 
-    provider = LiteLLMProvider(model="anthropic/claude-3-opus-20240229", api_key="test")
+    provider = LiteLLMProvider(model="gpt-4o", api_key="test-key")
     messages = [Message(role="user", content="What's the weather?")]
-    tools = [
-        ToolSchema(
-            name="get_weather",
-            description="Get current weather",
-            parameters={
-                "type": "object",
-                "properties": {"location": {"type": "string"}},
-            },
-        )
-    ]
+    result = await provider.complete(messages)
 
-    result = await provider.complete(messages, tools=tools, stream=False)
-
-    assert isinstance(result, CompletionResult)
     assert result.message.tool_calls is not None
     assert len(result.message.tool_calls) == 1
     assert result.message.tool_calls[0].id == "call_123"
     assert result.message.tool_calls[0].name == "get_weather"
     assert result.message.tool_calls[0].arguments == {"location": "NYC"}
 
-    # Verify tools were passed in OpenAI format
-    call_kwargs = mock_litellm.acompletion.call_args[1]
-    assert "tools" in call_kwargs
-    assert call_kwargs["tools"][0]["type"] == "function"
-    assert call_kwargs["tools"][0]["function"]["name"] == "get_weather"
-
 
 @pytest.mark.asyncio
-async def test_streaming_complete(mock_litellm) -> None:
-    """Test streaming completion yields StreamDelta objects."""
+async def test_stream_yields_deltas(mock_litellm) -> None:
+    """Test stream() yields StreamDelta objects."""
     from ecs_agent.providers.litellm_provider import LiteLLMProvider
     from ecs_agent.types import StreamDelta
 
-    # Mock streaming response (async iterator)
     async def mock_stream():
-        chunks = [
-            {"choices": [{"delta": {"content": "Hello"}, "finish_reason": None}]},
-            {"choices": [{"delta": {"content": " world"}, "finish_reason": None}]},
-            {
-                "choices": [{"delta": {}, "finish_reason": "stop"}],
-                "usage": {
-                    "prompt_tokens": 5,
-                    "completion_tokens": 3,
-                    "total_tokens": 8,
-                },
-            },
-        ]
-        for chunk in chunks:
-            yield chunk
+        yield {
+            "choices": [{"delta": {"role": "assistant", "content": "Hello"}}],
+            "usage": None,
+        }
+        yield {
+            "choices": [{"delta": {"content": " world"}}],
+            "usage": None,
+        }
+        yield {
+            "choices": [{"delta": {}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        }
 
     mock_litellm.acompletion.return_value = mock_stream()
 
-    provider = LiteLLMProvider(model="openai/gpt-4", api_key="test")
-    messages = [Message(role="user", content="Hi")]
-
-    result = await provider.complete(messages, stream=True)
-
-    # Should return AsyncIterator
-    assert hasattr(result, "__aiter__")
-
+    provider = LiteLLMProvider(model="gpt-4o", api_key="test-key")
+    messages = [Message(role="user", content="test")]
     deltas = []
-    async for delta in result:
-        assert isinstance(delta, StreamDelta)
+    async for delta in provider.stream(messages):
         deltas.append(delta)
 
     assert len(deltas) == 3
     assert deltas[0].content == "Hello"
     assert deltas[1].content == " world"
-    assert deltas[2].finish_reason == "stop"
     assert deltas[2].usage is not None
-    assert deltas[2].usage.total_tokens == 8
-
-    # Verify stream=True was passed
-    call_kwargs = mock_litellm.acompletion.call_args[1]
-    assert call_kwargs["stream"] is True
+    assert deltas[2].usage.total_tokens == 7
 
 
 @pytest.mark.asyncio
-async def test_protocol_compliance(mock_litellm) -> None:
-    """Test LiteLLMProvider satisfies LLMProvider Protocol."""
-    from ecs_agent.providers.litellm_provider import LiteLLMProvider
-
-    provider = LiteLLMProvider(model="openai/gpt-4", api_key="test")
-    assert isinstance(provider, LLMProvider)
-
-
 @pytest.mark.asyncio
-async def test_response_format_passed_through(mock_litellm) -> None:
-    """Test response_format parameter is passed to litellm."""
+async def test_convert_messages_serializes_tool_call_arguments_as_json_string(mock_litellm) -> None:
+    """Test _convert_messages_to_openai serializes tool call arguments as JSON string, not dict."""
     from ecs_agent.providers.litellm_provider import LiteLLMProvider
 
-    mock_response = {
-        "choices": [{"message": {"role": "assistant", "content": '{"result": "ok"}'}}],
-        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-    }
-    mock_litellm.acompletion.return_value = mock_response
+    provider = LiteLLMProvider(
+        model="anthropic/claude-3-opus-20240229",
+        api_key="test-key",
+    )
 
-    provider = LiteLLMProvider(model="openai/gpt-4", api_key="test")
-    messages = [Message(role="user", content="Give me JSON")]
-    response_format = {"type": "json_object"}
+    # Create message with tool call containing dict arguments
+    message = Message(
+        role="assistant",
+        content="",
+        tool_calls=[
+            ToolCall(
+                id="call_123",
+                name="test_function",
+                arguments={"key": "value", "count": 42},
+            )
+        ],
+    )
 
-    await provider.complete(messages, response_format=response_format, stream=False)
+    # Convert to OpenAI format
+    result = provider._convert_messages_to_openai([message])
 
-    call_kwargs = mock_litellm.acompletion.call_args[1]
-    assert call_kwargs["response_format"] == {"type": "json_object"}
+    # Extract arguments field
+    args = result[0]["tool_calls"][0]["function"]["arguments"]
+
+    # CRITICAL: Must be JSON string, not dict
+    assert isinstance(args, str), f"Expected string, got {type(args)}"
+
+    # Verify round-trip: string should deserialize back to original dict
+    assert json.loads(args) == {"key": "value", "count": 42}

@@ -202,7 +202,7 @@ class LiteLLMProvider:
                         "type": "function",
                         "function": {
                             "name": tc.name,
-                            "arguments": tc.arguments,
+                            "arguments": json.dumps(tc.arguments),
                         },
                     }
                     for tc in msg.tool_calls
