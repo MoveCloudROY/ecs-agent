@@ -152,9 +152,10 @@ async def test_stream_yields_deltas(mock_litellm) -> None:
     provider = LiteLLMProvider(model="gpt-4o", api_key="test-key")
     messages = [Message(role="user", content="test")]
     deltas = []
-    async for delta in provider.stream(messages):
+    result = await provider.complete(messages, stream=True)
+    assert hasattr(result, "__aiter__"), "Stream should return AsyncIterator"
+    async for delta in result:
         deltas.append(delta)
-
     assert len(deltas) == 3
     assert deltas[0].content == "Hello"
     assert deltas[1].content == " world"
