@@ -655,3 +655,15 @@ def test_serialization_full_world_with_all_new_components() -> None:
     assert runner_state.current_tick == 10
     assert runner_state.is_paused is False
     assert runner_state.checkpoint_path is None
+
+def test_new_components_in_registry() -> None:
+    """Verify ResponsesAPIStateComponent, ConversationTreeComponent, SubagentRegistryComponent are in COMPONENT_REGISTRY."""
+    from ecs_agent.serialization import COMPONENT_REGISTRY
+    
+    # Check all three new components are registered
+    assert "ResponsesAPIStateComponent" in COMPONENT_REGISTRY, "ResponsesAPIStateComponent missing from registry"
+    assert "ConversationTreeComponent" in COMPONENT_REGISTRY, "ConversationTreeComponent missing from registry"
+    assert "SubagentRegistryComponent" in COMPONENT_REGISTRY, "SubagentRegistryComponent missing from registry"
+    
+    # Verify registry has expected size (23 baseline + 3 new = 26)
+    assert len(COMPONENT_REGISTRY) >= 26, f"Registry has {len(COMPONENT_REGISTRY)} components, expected at least 26"

@@ -13,7 +13,7 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
-from ecs_agent.types import Message, PlanStepCompletedEvent
+from ecs_agent.types import CompletionResult, Message, PlanStepCompletedEvent
 from ecs_agent.logging import get_logger
 
 logger = get_logger(__name__)
@@ -60,9 +60,12 @@ class PlanningSystem:
             try:
                 logger.debug("planning_request", message_count=len(messages))
                 result = await llm_component.provider.complete(messages, tools=tools)
+                if not isinstance(result, CompletionResult):
+                    raise RuntimeError(
+                        "Provider returned stream iterator in non-streaming mode"
+                    )
                 # Add the step description to the conversation history
                 conversation.messages.append(result.message)
-
                 if result.message.tool_calls:
                     world.add_component(
                         entity_id,

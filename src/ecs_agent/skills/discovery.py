@@ -150,7 +150,11 @@ class DiscoveryManager:
         self.mcp_configs = mcp_configs or []
 
     async def auto_discover_and_install(
-        self, world: World, entity_id: EntityId, manager: "SkillManager"
+        self,
+        world: World,
+        entity_id: EntityId,
+        manager: "SkillManager",
+        directories: list[Path] | None = None,
     ) -> DiscoveryReport:
         report = DiscoveryReport(installed_skills=[], failed_sources=[], skipped_mcp=[])
 
@@ -185,6 +189,37 @@ class DiscoveryManager:
                     source=source, skills_found=source_installed, errors=source_errors
                 )
             )
+
+        # Discover and install markdown skills if directories provided
+        if directories:
+            for base_dir in directories:
+                source = str(base_dir)
+                md_source_installed: list[str] = []
+                md_source_errors: list[str] = []
+
+                try:
+                    markdown_skills = discover_markdown_skills([base_dir])
+                    for skill in markdown_skills:
+                        try:
+                            manager.install(world, entity_id, skill)
+                            report.installed_skills.append(skill.name)
+                            md_source_installed.append(skill.name)
+                        except Exception as exc:
+                            error = str(exc)
+                            report.failed_sources.append((source, error))
+                            md_source_errors.append(error)
+
+                    await world.event_bus.publish(
+                        SkillDiscoveryEvent(
+                            source=source, skills_found=md_source_installed, errors=md_source_errors
+                        )
+                    )
+                except Exception as exc:
+                    error = str(exc)
+                    report.failed_sources.append((source, error))
+                    await world.event_bus.publish(
+                        SkillDiscoveryEvent(source=source, skills_found=[], errors=[error])
+                    )
 
         for mcp_config in self.mcp_configs:
             server_name = self._server_name_from_config(mcp_config)
@@ -244,3 +279,44 @@ class DiscoveryManager:
             transport_type=transport_type,
             config=config_data,
         )
+
+
+def discover_markdown_skills(directories: list[Path]) -> list[Skill]:
+    """Discover MarkdownSkill instances from SKILL.md files.
+
+    Recursively scans directories for SKILL.md files and creates MarkdownSkill instances.
+
+    Args:
+        directories: List of directory paths to scan
+
+    Returns:
+        List of MarkdownSkill instances found
+    """
+    from ecs_agent.skills.markdown_skill import MarkdownSkill
+
+    skills: list[Skill] = []
+
+    for base_dir in directories:
+        if not base_dir.exists():
+            logger.warning("markdown_skill_path_not_found", path=str(base_dir))
+            continue
+
+        # Recursively find all SKILL.md files
+        for skill_file in base_dir.rglob("SKILL.md"):
+            try:
+                from typing import cast
+                skill = MarkdownSkill(skill_file)
+                skills.append(cast(Skill, skill))
+                logger.info(
+                    "markdown_skill_discovered",
+                    path=str(skill_file),
+                    skill_name=skill.name,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "markdown_skill_load_failed",
+                    path=str(skill_file),
+                    error=str(exc),
+                )
+
+    return skills

@@ -416,3 +416,85 @@ Enables an entity to request and receive async user input.
 from ecs_agent.components import UserInputComponent
 world.add_component(agent, UserInputComponent(prompt="Enter your name: ", timeout=None))
 ```
+### ConversationTreeComponent
+Tree-structured conversation with branching and linearization.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `messages` | `dict[str, ConversationMessage]` | `{}` | All messages indexed by ID |
+| `current_branch_id` | `str | None` | `None` | Active branch ID |
+| `branches` | `dict[str, ConversationBranch]` | `{}` | All branches indexed by ID |
+
+**Used by:** `conversation_tree` module, `ReasoningSystem` (auto-linearizes current branch)
+
+**Usage:**
+```python
+from ecs_agent.components import ConversationTreeComponent
+from ecs_agent.types import ConversationMessage, ConversationBranch
+
+root_msg = ConversationMessage(
+    id="msg_0",
+    parent_message_id=None,
+    role="user",
+    content="Hello",
+)
+branch = ConversationBranch(branch_id="main", leaf_message_id="msg_0")
+
+world.add_component(
+    agent,
+    ConversationTreeComponent(
+        messages={"msg_0": root_msg},
+        current_branch_id="main",
+        branches={"main": branch},
+    ),
+)
+```
+
+### ResponsesAPIStateComponent
+Tracks OpenAI Responses API state for multi-turn conversations.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `previous_response_id` | `str | None` | `None` | Response ID from last API call |
+
+**Used by:** `OpenAIProvider` (when `use_responses_api=True`)
+
+**Usage:**
+```python
+from ecs_agent.components import ResponsesAPIStateComponent
+
+world.add_component(
+    agent,
+    ResponsesAPIStateComponent(previous_response_id=None),
+)
+# System automatically updates previous_response_id after each LLM call
+```
+
+### SubagentRegistryComponent
+Registry of named subagent configurations for delegation.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `subagents` | `dict[str, SubagentConfig]` | `{}` | Subagent configurations by name |
+
+**Used by:** `SubagentSystem`, `delegate` tool
+
+**Usage:**
+```python
+from ecs_agent.components import SubagentRegistryComponent
+from ecs_agent.types import SubagentConfig
+
+researcher = SubagentConfig(
+    name="researcher",
+    provider=your_provider,
+    model="gpt-4o",
+    system_prompt="You are a research assistant.",
+    max_ticks=10,
+    skills=[],
+)
+
+world.add_component(
+    agent,
+    SubagentRegistryComponent(subagents={"researcher": researcher}),
+)
+```

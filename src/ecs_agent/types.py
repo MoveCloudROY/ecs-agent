@@ -1,7 +1,7 @@
 """Core type definitions for ECS-based LLM Agent."""
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, NewType
 
@@ -26,6 +26,27 @@ class Message:
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
 
+
+@dataclass(slots=True)
+class ConversationMessage:
+    """A message node in a conversation tree."""
+
+    id: str
+    parent_message_id: str | None
+    role: str  # 'system' | 'user' | 'assistant' | 'tool'
+    content: str | None
+    tool_calls: list[ToolCall] | None = None
+    tool_call_id: str | None = None
+    created_at: str = ""  # ISO timestamp
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ConversationBranch:
+    """A named branch pointing to a leaf message."""
+
+    branch_id: str
+    leaf_message_id: str
 
 @dataclass(slots=True)
 class ToolSchema:
@@ -300,13 +321,65 @@ class MCPToolCallEvent:
     success: bool
 
 
+@dataclass(slots=True)
+class ResponsesAPICallEvent:
+    """Event emitted when a Responses API call completes."""
+
+    entity_id: EntityId
+    response_id: str
+    model: str
+
+@dataclass(slots=True)
+class BranchCreatedEvent:
+    """Event emitted when a conversation branch is created."""
+
+    entity_id: EntityId
+    branch_id: str
+    parent_message_id: str
+
+
+@dataclass(slots=True)
+class SubagentConfig:
+    """Configuration for a named subagent."""
+
+    name: str
+    provider: Any  # LLMProvider (can't reference Protocol in dataclass field type)
+    model: str
+    system_prompt: str = ""
+    skills: list[str] = field(default_factory=list)  # skill names to install
+    max_ticks: int = 10
+
+
+@dataclass(slots=True)
+class DelegationStartedEvent:
+    """Event emitted when subagent delegation starts."""
+
+    entity_id: EntityId
+    subagent_name: str
+    task: str
+
+
+@dataclass(slots=True)
+class DelegationCompletedEvent:
+    """Event emitted when subagent delegation completes."""
+
+    entity_id: EntityId
+    subagent_name: str
+    result: str
+
+
 __all__ = [
     "ApprovalPolicy",
+    "BranchCreatedEvent",
     "CheckpointCreatedEvent",
     "CheckpointRestoredEvent",
     "CompactionCompleteEvent",
     "CompletionResult",
+    "ConversationBranch",
+    "ConversationMessage",
     "ConversationTruncatedEvent",
+    "DelegationCompletedEvent",
+    "DelegationStartedEvent",
     "EntityId",
     "ErrorOccurredEvent",
     "MCPConnectedEvent",
@@ -318,6 +391,7 @@ __all__ = [
     "PlanRevisedEvent",
     "PlanStepCompletedEvent",
     "RAGRetrievalCompletedEvent",
+    "ResponsesAPICallEvent",
     "RetryConfig",
     "SkillDiscoveryEvent",
     "SkillInstalledEvent",
@@ -326,6 +400,7 @@ __all__ = [
     "StreamDeltaEvent",
     "StreamEndEvent",
     "StreamStartEvent",
+    "SubagentConfig",
     "ToolApprovalRequestedEvent",
     "ToolApprovedEvent",
     "ToolCall",
@@ -335,5 +410,6 @@ __all__ = [
     "ToolSchema",
     "ToolTimeoutError",
     "Usage",
+    "UserInputReceivedEvent",
     "UserInputRequestedEvent",
 ]

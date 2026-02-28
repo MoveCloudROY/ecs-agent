@@ -15,7 +15,7 @@ from ecs_agent.components import (
     SystemPromptComponent,
 )
 from ecs_agent.core.world import World
-from ecs_agent.types import EntityId, Message, PlanRevisedEvent
+from ecs_agent.types import CompletionResult, EntityId, Message, PlanRevisedEvent
 
 
 class ReplanningSystem:
@@ -67,7 +67,12 @@ class ReplanningSystem:
 
             try:
                 result = await llm_component.provider.complete(messages)
+                if not isinstance(result, CompletionResult):
+                    raise RuntimeError(
+                        "Provider returned stream iterator in non-streaming mode"
+                    )
                 revised = self._parse_revised_steps(result.message.content)
+
 
                 if revised is not None:
                     old_steps = list(plan.steps)

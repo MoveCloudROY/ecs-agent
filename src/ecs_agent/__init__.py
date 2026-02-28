@@ -4,15 +4,21 @@ __version__ = "0.1.0"
 
 from ecs_agent.types import (
     ApprovalPolicy,
+    BranchCreatedEvent,
     CheckpointCreatedEvent,
     CheckpointRestoredEvent,
     CompactionCompleteEvent,
+    ConversationBranch,
+    ConversationMessage,
     CompletionResult,
+    DelegationCompletedEvent,
+    DelegationStartedEvent,
     EntityId,
     MCPConnectedEvent,
     MCPDisconnectedEvent,
     MCPToolCallEvent,
     Message,
+    ResponsesAPICallEvent,
     RetryConfig,
     SkillDiscoveryEvent,
     SkillInstalledEvent,
@@ -21,6 +27,7 @@ from ecs_agent.types import (
     StreamDeltaEvent,
     StreamEndEvent,
     StreamStartEvent,
+    SubagentConfig,
     ToolApprovedEvent,
     ToolApprovalRequestedEvent,
     ToolDeniedEvent,
@@ -44,6 +51,7 @@ from ecs_agent.skills.protocol import Skill
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.discovery import DiscoveryManager, DiscoveryReport, SkillDiscovery
 from ecs_agent.skills.web_search import WebSearchSkill
+from ecs_agent.skills.markdown_skill import MarkdownSkill
 from ecs_agent.components.definitions import SkillComponent, SkillMetadata
 from ecs_agent.tools.builtins import BuiltinToolsSkill
 from ecs_agent.systems.permission import PermissionSystem
@@ -57,10 +65,15 @@ from ecs_agent.components.definitions import (
     CheckpointComponent,
     CompactionConfigComponent,
     ConversationArchiveComponent,
+    ConversationTreeComponent,
     PermissionComponent,
+    PermissionComponent,
+    ResponsesAPIStateComponent,
     RunnerStateComponent,
     SandboxConfigComponent,
     StreamingComponent,
+    SubagentRegistryComponent,
+    UserInputComponent,
     UserInputComponent,
 )
 
@@ -73,11 +86,13 @@ except ImportError:
 
 
 from ecs_agent.systems import CheckpointSystem, CompactionSystem, UserInputSystem
+from ecs_agent.systems.subagent import SubagentSystem
+from ecs_agent.conversation_tree import add_message, create_branch, linearize, switch_branch
 
 
 __all__ = [
-    "__version__",
     "ApprovalPolicy",
+    "BranchCreatedEvent",
     "BuiltinToolsSkill",
     "CheckpointComponent",
     "CheckpointCreatedEvent",
@@ -89,21 +104,27 @@ __all__ = [
     "CompactionSystem",
     "CompletionResult",
     "ConversationArchiveComponent",
+    "ConversationBranch",
+    "ConversationMessage",
+    "ConversationTreeComponent",
+    "DelegationCompletedEvent",
+    "DelegationStartedEvent",
     "DiscoveryManager",
     "DiscoveryReport",
-    "configure_logging",
     "EntityId",
     "FakeEmbeddingProvider",
-    "get_logger",
     "LiteLLMProvider",
     "MCPConnectedEvent",
     "MCPDisconnectedEvent",
     "MCPToolCallEvent",
+    "MarkdownSkill",
     "Message",
     "OpenAIEmbeddingProvider",
     "PermissionComponent",
     "PermissionSystem",
     "RAGSystem",
+    "ResponsesAPICallEvent",
+    "ResponsesAPIStateComponent",
     "RetryConfig",
     "RetryProvider",
     "RunnerStateComponent",
@@ -119,11 +140,14 @@ __all__ = [
     "StreamDelta",
     "StreamDeltaEvent",
     "StreamEndEvent",
-    "StreamingComponent",
     "StreamStartEvent",
-    "ToolApprovedEvent",
+    "StreamingComponent",
+    "SubagentConfig",
+    "SubagentRegistryComponent",
+    "SubagentSystem",
     "ToolApprovalRequestedEvent",
     "ToolApprovalSystem",
+    "ToolApprovedEvent",
     "ToolDeniedEvent",
     "ToolExecutionCompletedEvent",
     "ToolExecutionStartedEvent",
@@ -133,13 +157,20 @@ __all__ = [
     "UserInputComponent",
     "UserInputRequestedEvent",
     "UserInputSystem",
+    "WebSearchSkill",
     "WorldSerializer",
+    "__version__",
+    "add_message",
     "bwrap_execute",
+    "configure_logging",
+    "create_branch",
+    "get_logger",
+    "linearize",
     "sandboxed_execute",
     "scan_module",
+    "switch_branch",
     "tool",
     "wrap_sandbox_handler",
-    "WebSearchSkill",
 ]
 
 # MCP (optional dependency)
