@@ -5,7 +5,7 @@ from typing import Any, Awaitable, Callable
 
 import asyncio
 
-from ecs_agent.types import ApprovalPolicy, ConversationBranch, ConversationMessage, EntityId, Message, ToolCall, ToolSchema
+from ecs_agent.types import ApprovalPolicy, ConversationBranch, ConversationMessage, EntityId, Message, SubagentConfig, ToolCall, ToolSchema
 
 try:
     from ecs_agent.providers.protocol import LLMProvider
@@ -255,3 +255,10 @@ class UserInputComponent:
     future: asyncio.Future[str] | None = field(default=None, repr=False)
     timeout: float | None = None
     result: str | None = None
+
+
+@dataclass(slots=True)
+class SubagentRegistryComponent:
+    """Registry of named subagents available for delegation."""
+
+    subagents: dict[str, SubagentConfig] = field(default_factory=dict)

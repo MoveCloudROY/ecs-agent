@@ -338,6 +338,36 @@ class BranchCreatedEvent:
     parent_message_id: str
 
 
+@dataclass(slots=True)
+class SubagentConfig:
+    """Configuration for a named subagent."""
+
+    name: str
+    provider: Any  # LLMProvider (can't reference Protocol in dataclass field type)
+    model: str
+    system_prompt: str = ""
+    skills: list[str] = field(default_factory=list)  # skill names to install
+    max_ticks: int = 10
+
+
+@dataclass(slots=True)
+class DelegationStartedEvent:
+    """Event emitted when subagent delegation starts."""
+
+    entity_id: EntityId
+    subagent_name: str
+    task: str
+
+
+@dataclass(slots=True)
+class DelegationCompletedEvent:
+    """Event emitted when subagent delegation completes."""
+
+    entity_id: EntityId
+    subagent_name: str
+    result: str
+
+
 __all__ = [
     "ApprovalPolicy",
     "BranchCreatedEvent",
@@ -348,6 +378,8 @@ __all__ = [
     "ConversationBranch",
     "ConversationMessage",
     "ConversationTruncatedEvent",
+    "DelegationCompletedEvent",
+    "DelegationStartedEvent",
     "EntityId",
     "ErrorOccurredEvent",
     "MCPConnectedEvent",
@@ -359,6 +391,7 @@ __all__ = [
     "PlanRevisedEvent",
     "PlanStepCompletedEvent",
     "RAGRetrievalCompletedEvent",
+    "ResponsesAPICallEvent",
     "RetryConfig",
     "SkillDiscoveryEvent",
     "SkillInstalledEvent",
@@ -367,6 +400,7 @@ __all__ = [
     "StreamDeltaEvent",
     "StreamEndEvent",
     "StreamStartEvent",
+    "SubagentConfig",
     "ToolApprovalRequestedEvent",
     "ToolApprovedEvent",
     "ToolCall",
@@ -376,6 +410,6 @@ __all__ = [
     "ToolSchema",
     "ToolTimeoutError",
     "Usage",
+    "UserInputReceivedEvent",
     "UserInputRequestedEvent",
-    "ResponsesAPICallEvent",
 ]
