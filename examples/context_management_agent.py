@@ -26,8 +26,6 @@ import asyncio
 import json
 import os
 import tempfile
-import json
-import tempfile
 from pathlib import Path
 
 from ecs_agent.components import (
