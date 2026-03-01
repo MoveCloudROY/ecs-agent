@@ -12,9 +12,17 @@ This creates an adaptive tree search where the agent discovers and scores differ
 plan paths, eventually converging on the best_plan (highest cumulative scores).
 
 Usage:
+  # With FakeProvider (no LLM_API_KEY):
   uv run python examples/tree_search_agent.py
 
-The example uses FakeProvider with deterministic responses:
+  # With real LLM (set LLM_API_KEY, LLM_BASE_URL, LLM_MODEL):
+  LLM_API_KEY=your-key uv run python examples/tree_search_agent.py
+
+MCTS Mode:
+- FakeProvider: Uses 9 deterministic responses (3 expansions, 6 simulations).
+- Real LLM: Generates actions/scores dynamically. Results will vary based on model.
+
+Response patterns:
 - Expansion responses: one action per line, max max_branching lines
 - Simulation responses: a float value 0.0-1.0 (or text containing a number)
 """
@@ -22,6 +30,7 @@ The example uses FakeProvider with deterministic responses:
 from __future__ import annotations
 
 import asyncio
+import os
 
 from ecs_agent.components import (
     ConversationComponent,
@@ -29,13 +38,21 @@ from ecs_agent.components import (
     PlanSearchComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeProvider, OpenAIProvider
 from ecs_agent.systems.tree_search import TreeSearchSystem
 from ecs_agent.types import CompletionResult, Message
 
 
 async def main() -> None:
     """Run a Tree Search Agent exploring problem-solving strategies."""
+
+    # --- Read environment variables ---
+    api_key = os.environ.get("LLM_API_KEY", "")
+    base_url = os.environ.get(
+        "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
+
 
     # =========================================================================
     # MCTS Setup: Fake provider with alternating expand/simulate responses
@@ -114,20 +131,28 @@ async def main() -> None:
     # =========================================================================
     world = World()
 
-    # Create provider with pre-defined responses in order
-    provider = FakeProvider(
-        responses=[
-            response_expand_0,
-            response_score_0,
-            response_score_1,
-            response_expand_1,
-            response_score_2,
-            response_score_3,
-            response_expand_2,
-            response_score_4,
-            response_score_5,
-        ]
-    )
+    # Create provider with pre-defined responses (FakeProvider) or real LLM
+    if api_key:
+        print(f"Using OpenAIProvider with model: {model}")
+        print(f"Base URL: {base_url}")
+        provider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+    else:
+        print("No LLM_API_KEY set. Using FakeProvider for demonstration.")
+        print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
+        print()
+        provider = FakeProvider(
+            responses=[
+                response_expand_0,
+                response_score_0,
+                response_score_1,
+                response_expand_1,
+                response_score_2,
+                response_score_3,
+                response_expand_2,
+                response_score_4,
+                response_score_5,
+            ]
+        )
 
     # Create the agent entity
     agent = world.create_entity()
@@ -137,7 +162,7 @@ async def main() -> None:
         agent,
         LLMComponent(
             provider=provider,
-            model="fake-model",
+            model=model if api_key else "fake-model",
             system_prompt=(
                 "You are a planning expert using MCTS to explore solution strategies. "
                 "When asked to generate actions, return one per line. "

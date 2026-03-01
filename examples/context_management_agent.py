@@ -6,7 +6,14 @@ This example showcases three advanced features for managing agent execution stat
 2. **Resume** — Save checkpoint to file, load, and continue execution
 3. **Compact** — Build up a long conversation and trigger LLM-based summarization
 
-Uses FakeProvider for deterministic, reproducible output.
+Supports dual-mode operation via environment variables:
+- Without LLM_API_KEY: Uses FakeProvider for deterministic output
+- With LLM_API_KEY: Uses OpenAIProvider with real LLM
+
+Environment variables (optional, for OpenAI mode):
+    LLM_API_KEY       — API key for OpenAI-compatible provider
+    LLM_BASE_URL      — Base URL (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
+    LLM_MODEL         — Model name (default: qwen3.5-flash)
 
 Usage:
     python examples/context_management_agent.py
@@ -14,7 +21,11 @@ Usage:
 
 from __future__ import annotations
 
+
 import asyncio
+import json
+import os
+import tempfile
 import json
 import tempfile
 from pathlib import Path
@@ -27,6 +38,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeProvider
+from ecs_agent.providers.openai_provider import OpenAIProvider
 from ecs_agent.systems.checkpoint import CheckpointSystem
 from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
@@ -35,8 +47,20 @@ from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import CompletionResult, Message, Usage
 
 
-def create_fake_provider() -> FakeProvider:
-    """Create a FakeProvider with deterministic responses."""
+
+def create_provider() -> FakeProvider | OpenAIProvider:
+    """Create LLM provider based on environment variables.
+    
+    Uses OpenAIProvider if LLM_API_KEY is set, otherwise FakeProvider.
+    """
+    api_key = os.environ.get("LLM_API_KEY", "")
+    base_url = os.environ.get(
+        "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
+    
+    if api_key:
+        return OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
     return FakeProvider(
         responses=[
             CompletionResult(
@@ -71,6 +95,14 @@ def create_fake_provider() -> FakeProvider:
     )
 
 
+def _get_model_name() -> str:
+    """Get model name from environment or default to 'fake'."""
+    api_key = os.environ.get("LLM_API_KEY", "")
+    if api_key:
+        return os.environ.get("LLM_MODEL", "qwen3.5-flash")
+    return "fake"
+
+
 async def part_1_undo() -> None:
     """Part 1: Demonstrate undo functionality."""
     print("\n" + "=" * 70)
@@ -79,14 +111,14 @@ async def part_1_undo() -> None:
 
     # Create world and agent
     world = World()
-    provider = create_fake_provider()
+    provider = create_provider()
 
     agent_id = world.create_entity()
     world.add_component(
         agent_id,
         LLMComponent(
             provider=provider,
-            model="fake",
+            model=_get_model_name(),
             system_prompt="You are a helpful assistant.",
         ),
     )
@@ -120,7 +152,7 @@ async def part_1_undo() -> None:
 
     # Undo the last tick
     print("\nUndoing last tick...")
-    await CheckpointSystem.undo(world, {"fake": provider}, {})
+    await CheckpointSystem.undo(world, {_get_model_name(): provider}, {})
 
     # Show conversation after undo
     conv = world.get_component(agent_id, ConversationComponent)
@@ -141,14 +173,14 @@ async def part_2_resume() -> None:
 
     # Create initial world and agent
     world = World()
-    provider = create_fake_provider()
+    provider = create_provider()
 
     agent_id = world.create_entity()
     world.add_component(
         agent_id,
         LLMComponent(
             provider=provider,
-            model="fake",
+            model=_get_model_name(),
             system_prompt="You are a helpful assistant.",
         ),
     )
@@ -188,7 +220,7 @@ async def part_2_resume() -> None:
 
         # Load checkpoint and resume
         loaded_world, current_tick = Runner.load_checkpoint(
-            checkpoint_path, {"fake": provider}, {}
+            checkpoint_path, {_get_model_name(): provider}, {}
         )
         print(f"✓ Checkpoint loaded (current_tick={current_tick})")
 
@@ -223,7 +255,7 @@ async def part_3_compact() -> None:
 
     # Create world with many initial messages to trigger compaction
     world = World()
-    provider = create_fake_provider()
+    provider = create_provider()
 
     agent_id = world.create_entity()
 
@@ -260,7 +292,7 @@ async def part_3_compact() -> None:
         agent_id,
         LLMComponent(
             provider=provider,
-            model="fake",
+            model=_get_model_name(),
             system_prompt="You are a helpful assistant.",
         ),
     )
@@ -272,7 +304,7 @@ async def part_3_compact() -> None:
         agent_id,
         CompactionConfigComponent(
             threshold_tokens=50,  # Low threshold to trigger compaction
-            summary_model="fake",
+            summary_model=_get_model_name(),
         ),
     )
 
@@ -314,6 +346,17 @@ async def main() -> None:
     print("CONTEXT MANAGEMENT FEATURES DEMO")
     print("Demonstrating Undo, Resume, and Compaction")
     print("=" * 70)
+    api_key = os.environ.get("LLM_API_KEY", "")
+    if api_key:
+        model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
+        base_url = os.environ.get(
+            "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        )
+        print(f"Using OpenAIProvider with model: {model}")
+        print(f"Base URL: {base_url}")
+    else:
+        print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
+        print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
 
     await part_1_undo()
     await part_2_resume()

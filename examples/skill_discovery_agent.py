@@ -1,16 +1,18 @@
-"""
-Example demonstrating file-based skill discovery and installation.
+"""Example demonstrating file-based skill discovery with dual-mode LLM provider.
 
-This script shows how to use the SkillDiscovery class to automatically find
-and install Skill implementations from a filesystem path.
+This script shows how to use SkillDiscovery to automatically find and install Skill
+implementations from a filesystem path. Supports both real LLM (OpenAIProvider via
+LLM_API_KEY) and FakeProvider (default, no credentials required).
 """
 
 import asyncio
+import os
 from pathlib import Path
+from typing import Union
 
 from ecs_agent.core import World, Runner
 from ecs_agent.components import LLMComponent, ConversationComponent
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeProvider, OpenAIProvider
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.discovery import SkillDiscovery
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -20,6 +22,13 @@ from ecs_agent.types import CompletionResult, Message
 async def main() -> None:
     world = World()
     manager = SkillManager()
+
+    # --- Load LLM configuration ---
+    api_key = os.environ.get("LLM_API_KEY", "")
+    base_url = os.environ.get(
+        "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
 
     # Path to the directory containing skill implementations
     # In this demo, we point to the examples/skills folder
@@ -41,21 +50,28 @@ async def main() -> None:
     # This registers tools, adds system prompts, and tracks metadata
     installed_names = discovery.discover_and_install(world, agent, manager)
     print(f"Installed skills: {installed_names}")
-
-    # Setup agent components
-    provider = FakeProvider(
-        responses=[
-            CompletionResult(
-                message=Message(
-                    role="assistant",
-                    content="I have loaded the following skills: "
-                    + ", ".join(installed_names),
+    # --- Create LLM provider ---
+    if api_key:
+        print(f"Using OpenAIProvider with model: {model}")
+        print(f"Base URL: {base_url}")
+        provider: Union[OpenAIProvider, FakeProvider] = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+    else:
+        print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
+        print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
+        print()
+        provider = FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(
+                        role="assistant",
+                        content="I have loaded the following skills: "
+                        + ", ".join(installed_names),
+                    )
                 )
-            )
-        ]
-    )
+            ]
+        )
 
-    world.add_component(agent, LLMComponent(provider=provider, model="fake"))
+    world.add_component(agent, LLMComponent(provider=provider, model=model if api_key else "fake"))
     world.add_component(
         agent,
         ConversationComponent(

@@ -6,10 +6,13 @@ This example demonstrates:
 - CollaborationComponent inbox messaging for result delivery
 - Multi-phase execution: manager delegates → sub-agent works → manager summarizes
 
-No API key required — uses FakeProvider throughout.
+Dual-mode operation:
+- Without LLM_API_KEY: Uses FakeProvider for demonstration
+- With LLM_API_KEY: Uses OpenAIProvider for real LLM interaction
 """
 
 import asyncio
+import os
 
 from ecs_agent.components import (
     CollaborationComponent,
@@ -20,6 +23,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeProvider
+from ecs_agent.providers.openai_provider import OpenAIProvider
 from ecs_agent.systems.collaboration import CollaborationSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -38,6 +42,22 @@ async def main() -> None:
     """
     world = World()
 
+    # ── LLM Provider Configuration ──────────────────────────────────
+    api_key = os.environ.get("LLM_API_KEY", "")
+    base_url = os.environ.get(
+        "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
+
+    if api_key:
+        print(f"Using OpenAIProvider with model: {model}")
+        print(f"Base URL: {base_url}")
+        print()
+    else:
+        print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
+        print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
+        print()
+
     # ── Systems ──────────────────────────────────────────────────────
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(CollaborationSystem(priority=5), priority=5)
@@ -49,27 +69,30 @@ async def main() -> None:
     # ================================================================
     # Phase 1 — Manager decides to delegate
     # ================================================================
-    manager_provider = FakeProvider(
-        responses=[
-            CompletionResult(
-                message=Message(
-                    role="assistant",
-                    content=(
-                        "Good question. I'll delegate the research on quantum "
-                        "computing applications to my sub-agent and summarize "
-                        "the findings once they report back."
-                    ),
-                )
-            ),
-        ]
-    )
+    if api_key:
+        manager_provider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+    else:
+        manager_provider = FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(
+                        role="assistant",
+                        content=(
+                            "Good question. I'll delegate the research on quantum "
+                            "computing applications to my sub-agent and summarize "
+                            "the findings once they report back."
+                        ),
+                    )
+                ),
+            ]
+        )
 
     manager_id = world.create_entity()
     world.add_component(
         manager_id,
         LLMComponent(
             provider=manager_provider,
-            model="fake-manager",
+            model=model if api_key else "fake-manager",
             system_prompt=(
                 "You are a manager agent. When given a complex question, "
                 "delegate research to your sub-agent and then synthesize "
@@ -107,29 +130,32 @@ async def main() -> None:
     # ================================================================
     # Phase 2 — Spawn sub-agent to do research
     # ================================================================
-    subagent_provider = FakeProvider(
-        responses=[
-            CompletionResult(
-                message=Message(
-                    role="assistant",
-                    content=(
-                        "After researching quantum computing applications, I found "
-                        "three promising areas: (1) drug discovery through molecular "
-                        "simulation, (2) combinatorial optimization for logistics, "
-                        "and (3) post-quantum cryptography. Each has active research "
-                        "programs and early commercial prototypes."
-                    ),
-                )
-            ),
-        ]
-    )
+    if api_key:
+        subagent_provider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+    else:
+        subagent_provider = FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(
+                        role="assistant",
+                        content=(
+                            "After researching quantum computing applications, I found "
+                            "three promising areas: (1) drug discovery through molecular "
+                            "simulation, (2) combinatorial optimization for logistics, "
+                            "and (3) post-quantum cryptography. Each has active research "
+                            "programs and early commercial prototypes."
+                        ),
+                    )
+                ),
+            ]
+        )
 
     subagent_id = world.create_entity()
     world.add_component(
         subagent_id,
         LLMComponent(
             provider=subagent_provider,
-            model="fake-researcher",
+            model=model if api_key else "fake-researcher",
             system_prompt=(
                 "You are a research sub-agent. Investigate the given topic "
                 "thoroughly and report your findings back to the manager."
@@ -172,29 +198,32 @@ async def main() -> None:
     # ================================================================
 
     # Restore manager's LLM with a fresh provider for the summary.
-    summary_provider = FakeProvider(
-        responses=[
-            CompletionResult(
-                message=Message(
-                    role="assistant",
-                    content=(
-                        "Based on my sub-agent's research, here is the summary:\n\n"
-                        "Quantum computing has three key near-term applications:\n"
-                        "1. Drug discovery — simulating molecular interactions\n"
-                        "2. Optimization — logistics and supply-chain routing\n"
-                        "3. Cryptography — post-quantum encryption standards\n\n"
-                        "These areas are expected to see practical impact within "
-                        "the next 5–10 years."
-                    ),
-                )
-            ),
-        ]
-    )
+    if api_key:
+        summary_provider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+    else:
+        summary_provider = FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(
+                        role="assistant",
+                        content=(
+                            "Based on my sub-agent's research, here is the summary:\n\n"
+                            "Quantum computing has three key near-term applications:\n"
+                            "1. Drug discovery — simulating molecular interactions\n"
+                            "2. Optimization — logistics and supply-chain routing\n"
+                            "3. Cryptography — post-quantum encryption standards\n\n"
+                            "These areas are expected to see practical impact within "
+                            "the next 5–10 years."
+                        ),
+                    )
+                ),
+            ]
+        )
     world.add_component(
         manager_id,
         LLMComponent(
             provider=summary_provider,
-            model="fake-manager",
+            model=model if api_key else "fake-manager",
             system_prompt=manager_llm.system_prompt,
         ),
     )

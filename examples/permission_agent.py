@@ -1,11 +1,12 @@
-"""
-Example demonstrating PermissionComponent and PermissionSystem.
+"""Example demonstrating PermissionComponent and PermissionSystem with dual-mode LLM provider.
 
 This script shows how to restrict an agent's access to specific tools using
-a whitelist/blacklist policy.
+a whitelist/blacklist policy. Supports both FakeProvider (no API key) and
+OpenAIProvider (with LLM_API_KEY) for flexible testing.
 """
 
 import asyncio
+import os
 
 from ecs_agent.core import World, Runner
 from ecs_agent.components import (
@@ -15,13 +16,31 @@ from ecs_agent.components import (
     PendingToolCallsComponent,
     ToolRegistryComponent,
 )
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeProvider, OpenAIProvider
 from ecs_agent.systems.permission import PermissionSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import CompletionResult, Message, ToolCall, ToolSchema
 
 
 async def main() -> None:
+    # --- Read environment variables for LLM provider ---
+    api_key = os.environ.get("LLM_API_KEY", "")
+    base_url = os.environ.get(
+        "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
+    
+    # --- Create LLM provider ---
+    if api_key:
+        print(f"Using OpenAIProvider with model: {model}")
+        print(f"Base URL: {base_url}")
+        provider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+    else:
+        print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
+        print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
+        print()
+        provider = FakeProvider([])
+    
     world = World()
 
     # 1. Register tools in the registry
@@ -49,7 +68,7 @@ async def main() -> None:
     world.add_component(agent, PermissionComponent(denied_tools=["dangerous_tool"]))
 
     # Setup conversation and LLM
-    world.add_component(agent, LLMComponent(provider=FakeProvider([]), model="fake"))
+    world.add_component(agent, LLMComponent(provider=provider, model=model if api_key else "fake"))
     world.add_component(agent, ConversationComponent(messages=[]))
 
     # 3. Register PermissionSystem (priority -10) and ToolExecutionSystem (priority 5)
