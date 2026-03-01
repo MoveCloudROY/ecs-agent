@@ -26,6 +26,64 @@ Overview of the included examples for the ECS-based LLM Agent framework.
 
 ---
 
+## Dual-Mode Provider Selection
+
+Eight examples support **dual-mode execution** — automatically switching between `FakeProvider` (default) and `OpenAIProvider` (with API credentials) based on environment variables.
+
+### What is Dual-Mode?
+
+Dual-mode examples work in two ways:
+
+1. **Fake Mode (No API Key)**: Uses `FakeProvider` with pre-scripted responses. Perfect for testing, demos, and learning without incurring API costs.
+2. **Real Mode (With API Key)**: Uses `OpenAIProvider` to call your LLM API. Set environment variables to activate real mode.
+
+### Supported Examples
+
+These 8 examples support dual-mode:
+
+- `chat_agent.py` — Minimal chat with provider fallback
+- `multi_agent.py` — Two agents collaborating
+- `skill_discovery_agent.py` — Skills auto-discovery
+- `permission_agent.py` — Permission-controlled tools
+- `subagent_delegation.py` — Parent delegating to child agents
+- `tree_search_agent.py` — MCTS planning
+- `context_management_agent.py` — Checkpoint and undo
+- `rag_agent.py` — Retrieval-Augmented Generation
+
+### Environment Variables
+
+Control dual-mode behavior with these environment variables:
+
+| Variable | Purpose | Default | Example |
+| :--- | :--- | :--- | :--- |
+| `LLM_API_KEY` | **Trigger for real mode.** If set, activates `OpenAIProvider`. If unset, uses `FakeProvider`. | Unset (fake mode) | `sk-...` |
+| `LLM_BASE_URL` | API endpoint (OpenAI-compatible) | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `https://api.openai.com/v1` |
+| `LLM_MODEL` | LLM model name | `qwen3.5-flash` | `gpt-4o-mini` |
+| `EMBEDDING_MODEL` | Embedding model (RAG only) | `text-embedding-v3` | `text-embedding-3-small` |
+| `EMBEDDING_DIMENSION` | Embedding vector dimension (RAG only) | `1024` | `1536` |
+
+### Quick Start
+
+**Run in fake mode (no API key needed):**
+```bash
+uv run python examples/chat_agent.py
+```
+
+**Run in real mode (requires `.env` with credentials):**
+```bash
+export LLM_API_KEY=sk-your-api-key-here
+export LLM_BASE_URL=https://api.openai.com/v1
+export LLM_MODEL=gpt-4o-mini
+uv run python examples/chat_agent.py
+```
+
+Or use `.env` file:
+```bash
+cp .env.example .env
+# Edit .env with your credentials
+uv run python examples/chat_agent.py
+```
+
 ## No API Key Required
 
 ### Simple Chat Agent
@@ -54,6 +112,8 @@ Conversation:
   user: Hello, how are you?
   assistant: Hello! I'm doing great, thank you for asking! How can I help you today?
 ```
+
+> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
 
 ---
 
@@ -121,6 +181,8 @@ Agent B (summarizer) conversation:
   assistant (from researcher): I found interesting data.
   assistant: Thank you! I'll summarize the key findings for you.
 ```
+
+> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
 
 ---
 
@@ -353,6 +415,7 @@ Landmarks:
 - **Run:** `uv run python examples/tree_search_agent.py`
 - **Pattern:** `PlanSearchComponent` + `TreeSearchSystem`.
 
+> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
 ---
 
 ### RAG Agent
@@ -361,6 +424,7 @@ Landmarks:
 - **Run:** `uv run python examples/rag_agent.py`
 - **Pattern:** `RAGTriggerComponent` + `RAGSystem` + `EmbeddingComponent` + `VectorStoreComponent`.
 
+> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` + `EMBEDDING_MODEL` + `EMBEDDING_DIMENSION` to use real embedding providers. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
 ---
 
 ### Sub-Agent Delegation
@@ -369,6 +433,7 @@ Landmarks:
 - **Run:** `uv run python examples/subagent_delegation.py`
 - **Pattern:** `OwnerComponent` + `CollaborationComponent`.
 
+> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
 ---
 
 ### Claude Agent
@@ -400,3 +465,5 @@ Landmarks:
 - **What it demonstrates:** Checkpoint, undo, and conversation compaction lifecycle.
 - **Run:** `uv run python examples/context_management_agent.py`
 - **Pattern:** `CheckpointSystem` + `CompactionSystem` + `CheckpointComponent` + `CompactionConfigComponent`.
+
+> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.

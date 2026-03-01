@@ -266,39 +266,42 @@ The `examples/` directory contains 21 runnable demos:
 
 | Example | Description |
 |---------|-------------|
-| [`chat_agent.py`](examples/chat_agent.py) | Minimal agent with FakeProvider, good starting point |
+| [`chat_agent.py`](examples/chat_agent.py) | Minimal agent with dual-mode provider (FakeProvider / OpenAIProvider) |
 | [`tool_agent.py`](examples/tool_agent.py) | Tool use with automatic call/result cycling |
 | [`react_agent.py`](examples/react_agent.py) | ReAct pattern. Thought → Action → Observation loop |
 | [`plan_and_execute_agent.py`](examples/plan_and_execute_agent.py) | Dynamic replanning with RetryProvider and configurable timeouts |
 | [`streaming_agent.py`](examples/streaming_agent.py) | Real-time token streaming via SSE |
 | [`retry_agent.py`](examples/retry_agent.py) | RetryProvider with custom retry configuration |
-| [`multi_agent.py`](examples/multi_agent.py) | Two agents collaborating through inbox messaging |
+| [`multi_agent.py`](examples/multi_agent.py) | Two agents collaborating through inbox messaging (dual-mode) |
 | [`structured_output_agent.py`](examples/structured_output_agent.py) | Pydantic schema → JSON mode for type-safe responses |
 | [`serialization_demo.py`](examples/serialization_demo.py) | Save and restore World state to/from JSON |
 | [`tool_approval_agent.py`](examples/tool_approval_agent.py) | Manual approval flow for sensitive tools |
-| [`tree_search_agent.py`](examples/tree_search_agent.py) | MCTS-based planning for complex goals |
-| [`rag_agent.py`](examples/rag_agent.py) | Retrieval-Augmented Generation demo |
-| [`subagent_delegation.py`](examples/subagent_delegation.py) | Parent agent delegates subtasks to child agents |
+| [`tree_search_agent.py`](examples/tree_search_agent.py) | MCTS-based planning for complex goals (dual-mode) |
+| [`rag_agent.py`](examples/rag_agent.py) | Retrieval-Augmented Generation demo (dual-mode with real embeddings) |
+| [`subagent_delegation.py`](examples/subagent_delegation.py) | Parent agent delegates subtasks to child agents (dual-mode) |
 | [`claude_agent.py`](examples/claude_agent.py) | Native Anthropic Claude provider usage |
 | [`litellm_agent.py`](examples/litellm_agent.py) | LiteLLM unified provider for 100+ models |
 | [`streaming_system_agent.py`](examples/streaming_system_agent.py) | System-level streaming with events |
-| [`context_management_agent.py`](examples/context_management_agent.py) | Checkpoint, undo, and compaction demo |
+| [`context_management_agent.py`](examples/context_management_agent.py) | Checkpoint, undo, and compaction demo (dual-mode) |
 | [`skill_agent.py`](examples/skill_agent.py) | Skill system and BuiltinToolsSkill (read/write/edit) lifecycle |
-| [`skill_discovery_agent.py`](examples/skill_discovery_agent.py) | File-based skill loading from folder |
-| [`permission_agent.py`](examples/permission_agent.py) | Permission-restricted agent with tool filtering |
+| [`skill_discovery_agent.py`](examples/skill_discovery_agent.py) | File-based skill loading from folder (dual-mode) |
+| [`permission_agent.py`](examples/permission_agent.py) | Permission-restricted agent with tool filtering (dual-mode) |
 | [`mcp_agent.py`](examples/mcp_agent.py) | MCP server integration and namespaced tool usage |
 
 
 Run any example:
 
 ```bash
-# FakeProvider examples (no API key needed)
+# FakeProvider mode (no API key needed — works out of the box)
 uv run python examples/chat_agent.py
 uv run python examples/tool_agent.py
 
-# Real LLM examples (requires .env with API credentials)
+# Real LLM mode (set API credentials)
+LLM_API_KEY=your-api-key uv run python examples/chat_agent.py
 uv run python examples/react_agent.py
-uv run python examples/streaming_agent.py
+
+# RAG with real embeddings
+LLM_API_KEY=your-api-key EMBEDDING_MODEL=text-embedding-3-small uv run python examples/rag_agent.py
 ```
 
 ## Development
