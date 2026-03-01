@@ -114,7 +114,7 @@ async def main() -> None:
     )
     world.add_component(
         agent_b_id,
-        ConversationComponent(messages=[]),
+        ConversationComponent(messages=[Message(role="user", content="Waiting for research results...")])
     )
 
     # Set up collaboration: Agent A sends message to Agent B
