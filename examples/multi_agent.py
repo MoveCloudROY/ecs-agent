@@ -1,4 +1,4 @@
-"""Multi-agent collaboration example using the ECS-based LLM Agent framework.
+"""Multi-agent collaboration example with dual-mode LLM provider selection.
 
 This example demonstrates:
 - Creating a World with ReasoningSystem, CollaborationSystem, MemorySystem, and ErrorHandlingSystem
@@ -7,9 +7,19 @@ This example demonstrates:
 - Agent A sends a message to Agent B via inbox
 - Running the agents to process collaboration messages
 - Printing both agents' conversations
+
+Dual-mode provider selection: uses FakeProvider by default (no API key needed),
+or switches to OpenAIProvider when LLM_API_KEY environment variable is set.
+Environment variables:
+  LLM_API_KEY: Trigger for OpenAIProvider mode (if set, uses real LLM)
+  LLM_BASE_URL: Base URL for LLM API (defaults to https://dashscope.aliyuncs.com/compatible-mode/v1)
+  LLM_MODEL: Model name (defaults to qwen3.5-flash)
 """
 
+from __future__ import annotations
+
 import asyncio
+import os
 
 from ecs_agent.components import (
     CollaborationComponent,
@@ -17,7 +27,8 @@ from ecs_agent.components import (
     LLMComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.systems.collaboration import CollaborationSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -27,32 +38,52 @@ from ecs_agent.types import CompletionResult, Message
 
 async def main() -> None:
     """Run a multi-agent collaboration example."""
+    # --- Environment variable configuration ---
+    api_key = os.environ.get("LLM_API_KEY", "")
+    base_url = os.environ.get(
+        "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
+
+    # --- Create LLM providers (two separate instances) ---
+    provider_a: LLMProvider
+    provider_b: LLMProvider
+    if api_key:
+        print(f"Using OpenAIProvider with model: {model}")
+        print(f"Base URL: {base_url}")
+        provider_a = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+        provider_b = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+    else:
+        print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
+        print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
+        print()
+
+        # Create FakeProvider for Agent A (researcher)
+        provider_a = FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(
+                        role="assistant",
+                        content="I've analyzed the data and found interesting patterns.",
+                    )
+                )
+            ]
+        )
+
+        # Create FakeProvider for Agent B (summarizer)
+        provider_b = FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(
+                        role="assistant",
+                        content="Thank you! I'll summarize the key findings for you.",
+                    )
+                )
+            ]
+        )
+
     # Create World
     world = World()
-
-    # Create FakeProvider for Agent A (researcher)
-    provider_a = FakeProvider(
-        responses=[
-            CompletionResult(
-                message=Message(
-                    role="assistant",
-                    content="I've analyzed the data and found interesting patterns.",
-                )
-            )
-        ]
-    )
-
-    # Create FakeProvider for Agent B (summarizer)
-    provider_b = FakeProvider(
-        responses=[
-            CompletionResult(
-                message=Message(
-                    role="assistant",
-                    content="Thank you! I'll summarize the key findings for you.",
-                )
-            )
-        ]
-    )
 
     # Create Agent A (researcher)
     agent_a_id = world.create_entity()
@@ -60,7 +91,7 @@ async def main() -> None:
         agent_a_id,
         LLMComponent(
             provider=provider_a,
-            model="fake",
+            model=model if api_key else "fake",
             system_prompt="You are a researcher agent.",
         ),
     )
@@ -77,7 +108,7 @@ async def main() -> None:
         agent_b_id,
         LLMComponent(
             provider=provider_b,
-            model="fake",
+            model=model if api_key else "fake",
             system_prompt="You are a summarizer agent.",
         ),
     )
