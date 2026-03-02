@@ -268,7 +268,7 @@ class MessageBusSystem:
     def _build_envelope(self, payload: dict[str, Any]) -> MessageBusEnvelope:
         return MessageBusEnvelope(
             id=str(uuid.uuid4()),
-            source="ecs://message-bus",
+            source=f"ecs://entity/{self._bus_entity_id if self._bus_entity_id is not None else EntityId(0)}",
             type="ecs.bus.publish",
             specversion="1.0",
             correlationid=str(uuid.uuid4()),
@@ -298,6 +298,13 @@ class MessageBusSystem:
         response_future: asyncio.Future[MessageBusEnvelope] = (
             asyncio.get_running_loop().create_future()
         )
+        # Enforce max_pending_requests limit
+        if len(self._pending_requests) >= self._config.max_pending_requests:
+            raise ValueError(
+                f"Max pending requests ({self._config.max_pending_requests}) exceeded. "
+                f"Current: {len(self._pending_requests)}"
+            )
+        
         self._pending_requests[correlation_id] = response_future
 
         request_payload = dict(message)
@@ -305,7 +312,7 @@ class MessageBusSystem:
 
         request_envelope = MessageBusEnvelope(
             id=str(uuid.uuid4()),
-            source="ecs://message-bus",
+            source=f"ecs://entity/{self._bus_entity_id if self._bus_entity_id is not None else EntityId(0)}",
             type="ecs.bus.request",
             specversion="1.0",
             correlationid=correlation_id,
@@ -326,13 +333,13 @@ class MessageBusSystem:
                 timeout=request_timeout,
             )
         except asyncio.TimeoutError as exc:
-            logger.error(
-                "bus_request_timeout",
-                topic=topic,
+            from ecs_agent.logging import log_bus_timeout
+            log_bus_timeout(
+                logger=logger,
+                request_id=request_envelope.id,
+                trace_id=self._safe_trace_id(request_envelope.traceparent),
                 correlation_id=correlation_id,
                 timeout_seconds=request_timeout,
-                trace_id=self._safe_trace_id(request_envelope.traceparent),
-                exception=str(exc),
             )
             await self._emit_timeout_event(correlation_id=correlation_id)
             raise TimeoutError(
@@ -378,7 +385,7 @@ class MessageBusSystem:
 
         response_envelope = MessageBusEnvelope(
             id=str(uuid.uuid4()),
-            source="ecs://message-bus",
+            source=f"ecs://entity/{self._bus_entity_id if self._bus_entity_id is not None else EntityId(0)}",
             type="ecs.bus.response",
             specversion="1.0",
             correlationid=correlation_id,

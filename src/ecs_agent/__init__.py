@@ -103,7 +103,7 @@ except ImportError:
     LiteLLMProvider = None  # type: ignore[assignment, misc]
 
 
-from ecs_agent.systems import CheckpointSystem, CompactionSystem, UserInputSystem
+from ecs_agent.systems import CheckpointSystem, CompactionSystem, UserInputSystem, MessageBusSystem
 from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.conversation_tree import add_message, create_branch, linearize, switch_branch
 
@@ -143,6 +143,7 @@ __all__ = [
     "MessageBusEnvelope",
     "MessageBusPublishedEvent",
     "MessageBusResponseEvent",
+    "MessageBusSystem",
     "MessageBusTimeoutEvent",
     "PermissionComponent",
     "PermissionSystem",
