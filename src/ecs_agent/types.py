@@ -49,6 +49,7 @@ class ConversationBranch:
     branch_id: str
     leaf_message_id: str
 
+
 @dataclass(slots=True)
 class ToolSchema:
     """Describes the schema of a tool."""
@@ -330,6 +331,7 @@ class ResponsesAPICallEvent:
     response_id: str
     model: str
 
+
 @dataclass(slots=True)
 class BranchCreatedEvent:
     """Event emitted when a conversation branch is created."""
@@ -358,6 +360,8 @@ class DelegationStartedEvent:
     entity_id: EntityId
     subagent_name: str
     task: str
+    correlation_id: str
+    traceparent: str
 
 
 @dataclass(slots=True)
@@ -367,6 +371,10 @@ class DelegationCompletedEvent:
     entity_id: EntityId
     subagent_name: str
     result: str
+    success: bool = True
+    error: str | None = None
+    correlation_id: str = ""
+    traceparent: str = ""
 
 
 @dataclass(slots=True)

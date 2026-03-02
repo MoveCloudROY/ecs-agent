@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import uuid
 from typing import Any
 
 from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
+    MessageBusConfigComponent,
     OwnerComponent,
     SubagentRegistryComponent,
     TerminalComponent,
@@ -16,8 +19,10 @@ from ecs_agent.core.runner import Runner
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
+from ecs_agent.systems.message_bus import MessageBusSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.observability import generate_traceparent
 from ecs_agent.types import (
     DelegationCompletedEvent,
     DelegationStartedEvent,
@@ -105,12 +110,17 @@ class SubagentSystem:
             Returns:
                 Result string from the subagent's final assistant message
             """
+            correlation_id = str(uuid.uuid4())
+            traceparent = generate_traceparent()
+
             # Publish DelegationStartedEvent
             await world.event_bus.publish(
                 DelegationStartedEvent(
                     entity_id=parent_entity_id,
                     subagent_name=subagent_name,
                     task=task,
+                    correlation_id=correlation_id,
+                    traceparent=traceparent,
                 )
             )
 
@@ -133,6 +143,10 @@ class SubagentSystem:
                         entity_id=parent_entity_id,
                         subagent_name=subagent_name,
                         result=error_msg,
+                        success=False,
+                        error=error_msg,
+                        correlation_id=correlation_id,
+                        traceparent=traceparent,
                     )
                 )
                 return error_msg
@@ -151,6 +165,10 @@ class SubagentSystem:
                         entity_id=parent_entity_id,
                         subagent_name=subagent_name,
                         result=error_msg,
+                        success=False,
+                        error=error_msg,
+                        correlation_id=correlation_id,
+                        traceparent=traceparent,
                     )
                 )
                 return error_msg
@@ -229,16 +247,52 @@ class SubagentSystem:
                     result_length=len(result),
                 )
 
+                delivered_result = await self._deliver_result_via_message_bus(
+                    world=world,
+                    parent_entity_id=parent_entity_id,
+                    child_entity_id=child_entity_id,
+                    subagent_name=subagent_name,
+                    result=result,
+                    correlation_id=correlation_id,
+                    traceparent=traceparent,
+                )
+
                 # Publish DelegationCompletedEvent
                 await world.event_bus.publish(
                     DelegationCompletedEvent(
                         entity_id=parent_entity_id,
                         subagent_name=subagent_name,
-                        result=result,
+                        result=delivered_result,
+                        success=True,
+                        error=None,
+                        correlation_id=correlation_id,
+                        traceparent=traceparent,
                     )
                 )
 
-                return result
+                return delivered_result
+
+            except TimeoutError as exc:
+                error_msg = "Error: Subagent timeout"
+                logger.error(
+                    "delegation_timeout",
+                    parent_entity=parent_entity_id,
+                    subagent_name=subagent_name,
+                    correlation_id=correlation_id,
+                    exception=str(exc),
+                )
+                await world.event_bus.publish(
+                    DelegationCompletedEvent(
+                        entity_id=parent_entity_id,
+                        subagent_name=subagent_name,
+                        result=error_msg,
+                        success=False,
+                        error=error_msg,
+                        correlation_id=correlation_id,
+                        traceparent=traceparent,
+                    )
+                )
+                return error_msg
 
             except Exception as exc:
                 error_msg = f"Error during delegation: {exc}"
@@ -253,8 +307,82 @@ class SubagentSystem:
                         entity_id=parent_entity_id,
                         subagent_name=subagent_name,
                         result=error_msg,
+                        success=False,
+                        error=error_msg,
+                        correlation_id=correlation_id,
+                        traceparent=traceparent,
                     )
                 )
                 return error_msg
 
         return delegate_handler
+
+    def _get_message_bus_system(self, world: World) -> MessageBusSystem:
+        for system, _priority in world._systems._systems:
+            if isinstance(system, MessageBusSystem):
+                return system
+
+        message_bus = MessageBusSystem(priority=5)
+        world.register_system(message_bus, priority=5)
+        return message_bus
+
+    async def _deliver_result_via_message_bus(
+        self,
+        *,
+        world: World,
+        parent_entity_id: EntityId,
+        child_entity_id: EntityId,
+        subagent_name: str,
+        result: str,
+        correlation_id: str,
+        traceparent: str,
+    ) -> str:
+        config_component = world.get_component(
+            parent_entity_id, MessageBusConfigComponent
+        )
+        if config_component is None:
+            config_component = MessageBusConfigComponent()
+            world.add_component(parent_entity_id, config_component)
+
+        message_bus = self._get_message_bus_system(world)
+        if message_bus._world is None:
+            await message_bus.process(world)
+
+        topic = f"subagent.result.{child_entity_id}"
+        request_payload = {
+            "subagent_name": subagent_name,
+            "result": result,
+            "parent_entity_id": int(parent_entity_id),
+            "child_entity_id": int(child_entity_id),
+            "correlationid": correlation_id,
+            "traceparent": traceparent,
+        }
+
+        request_task = asyncio.create_task(
+            message_bus.request(
+                topic=topic,
+                message=request_payload,
+                timeout=config_component.request_timeout,
+            )
+        )
+        await asyncio.sleep(0)
+
+        pending_requests = getattr(message_bus, "_pending_requests", {})
+        pending_ids = list(pending_requests.keys())
+        if pending_ids:
+            bus_correlation_id = pending_ids[-1]
+            await message_bus.respond(
+                correlation_id=bus_correlation_id,
+                message={
+                    "subagent_name": subagent_name,
+                    "result": result,
+                    "correlationid": correlation_id,
+                    "traceparent": traceparent,
+                },
+            )
+
+        response = await request_task
+        response_result = response.get("result")
+        if isinstance(response_result, str):
+            return response_result
+        return result

@@ -20,6 +20,7 @@ from ecs_agent.components import (
     ConversationComponent,
     ConversationTreeComponent,
     LLMComponent,
+    MessageBusConfigComponent,
     SubagentRegistryComponent,
     ToolRegistryComponent,
 )
@@ -33,6 +34,7 @@ from ecs_agent.skills.markdown_skill import MarkdownSkill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.message_bus import MessageBusSystem
 from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.types import (
     CompletionResult,
@@ -46,16 +48,18 @@ from ecs_agent.types import (
 @pytest.mark.skipif(not os.environ.get("LLM_API_KEY"), reason="LLM_API_KEY not set")
 async def test_responses_api_with_real_llm() -> None:
     """Test Responses API with real LLM provider.
-    
+
     Note: DashScope may not support Responses API, so this test handles both
     Responses API and fallback to Chat Completions.
     """
     api_key = os.environ.get("LLM_API_KEY", "")
-    base_url = os.environ.get("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    base_url = os.environ.get(
+        "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
     model = os.environ.get("LLM_MODEL", "qwen3.5-plus")
-    
+
     world = World()
-    
+
     # Create provider with Responses API enabled (will fallback to Chat Completions if not supported)
     provider = OpenAIProvider(
         api_key=api_key,
@@ -63,21 +67,23 @@ async def test_responses_api_with_real_llm() -> None:
         model=model,
         use_responses_api=True,
     )
-    
+
     entity = world.create_entity()
     world.add_component(entity, LLMComponent(provider=provider, model=model))
     world.add_component(
         entity,
-        ConversationComponent(messages=[Message(role="user", content="Say 'hello' and nothing else")]),
+        ConversationComponent(
+            messages=[Message(role="user", content="Say 'hello' and nothing else")]
+        ),
     )
-    
+
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
-    
+
     runner = Runner()
     await runner.run(world, max_ticks=3)
-    
+
     # Verify response was generated
     conv = world.get_component(entity, ConversationComponent)
     assert conv is not None
@@ -89,17 +95,21 @@ async def test_responses_api_with_real_llm() -> None:
 async def test_tree_conversation_with_reasoning_system() -> None:
     """Test ConversationTreeComponent with ReasoningSystem integration."""
     world = World()
-    
+
     # Create provider with deterministic response
     provider = FakeProvider(
         responses=[
-            CompletionResult(message=Message(role="assistant", content="Test response 1")),
-            CompletionResult(message=Message(role="assistant", content="Test response 2")),
+            CompletionResult(
+                message=Message(role="assistant", content="Test response 1")
+            ),
+            CompletionResult(
+                message=Message(role="assistant", content="Test response 2")
+            ),
         ]
     )
-    
+
     entity = world.create_entity()
-    
+
     # Initialize tree conversation with root message
     root_msg = ConversationMessage(
         id="msg_root",
@@ -111,7 +121,7 @@ async def test_tree_conversation_with_reasoning_system() -> None:
         branch_id="branch_main",
         leaf_message_id="msg_root",
     )
-    
+
     world.add_component(
         entity,
         ConversationTreeComponent(
@@ -120,28 +130,28 @@ async def test_tree_conversation_with_reasoning_system() -> None:
             branches={"branch_main": branch},
         ),
     )
-    
+
     world.add_component(entity, LLMComponent(provider=provider, model="fake"))
-    
+
     # Add flat conversation for reasoning system
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="Hello")]),
     )
-    
+
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
-    
+
     runner = Runner()
     await runner.run(world, max_ticks=3)
-    
+
     # Verify response was added to flat conversation
     conv = world.get_component(entity, ConversationComponent)
     assert conv is not None
     assert len(conv.messages) >= 2
     assert conv.messages[-1].role == "assistant"
-    
+
     # Verify tree component still exists (not modified by default)
     tree = world.get_component(entity, ConversationTreeComponent)
     assert tree is not None
@@ -172,41 +182,49 @@ You are a test assistant.
 
 None
 """)
-        
+
         # Load skill
         skill = MarkdownSkill(skill_path=skill_path)
-        
+
         # Verify metadata
         assert skill.description == "Test skill for integration testing"
-        
+
         # Verify content — system_prompt() is a method that returns full body
         assert "You are a test assistant" in skill.system_prompt()
-        
+
         # Create world and entity with skill installed
         world = World()
         entity = world.create_entity()
-        
+
         provider = FakeProvider(
-            responses=[CompletionResult(message=Message(role="assistant", content="I am a test assistant"))]
+            responses=[
+                CompletionResult(
+                    message=Message(role="assistant", content="I am a test assistant")
+                )
+            ]
         )
-        
+
         # Apply skill to entity (system prompt)
         world.add_component(
             entity,
-            LLMComponent(provider=provider, model="fake", system_prompt=skill.system_prompt()),
+            LLMComponent(
+                provider=provider, model="fake", system_prompt=skill.system_prompt()
+            ),
         )
         world.add_component(
             entity,
-            ConversationComponent(messages=[Message(role="user", content="Who are you?")]),
+            ConversationComponent(
+                messages=[Message(role="user", content="Who are you?")]
+            ),
         )
-        
+
         world.register_system(ReasoningSystem(priority=0), priority=0)
         world.register_system(MemorySystem(), priority=10)
         world.register_system(ErrorHandlingSystem(priority=99), priority=99)
-        
+
         runner = Runner()
         await runner.run(world, max_ticks=3)
-        
+
         # Verify skill was used
         llm = world.get_component(entity, LLMComponent)
         assert llm is not None
@@ -216,26 +234,30 @@ None
 async def test_subagent_delegation_end_to_end() -> None:
     """Test full subagent delegation flow from parent to child."""
     world = World()
-    
+
     # Create parent entity
     parent_entity = world.create_entity()
-    
+
     # Create FakeProvider-based subagent config
     subagent_config = SubagentConfig(
         name="test-subagent",
         provider=FakeProvider(
-            responses=[CompletionResult(message=Message(role="assistant", content="Subagent result"))]
+            responses=[
+                CompletionResult(
+                    message=Message(role="assistant", content="Subagent result")
+                )
+            ]
         ),
         model="fake",
         system_prompt="You are a test subagent",
         max_ticks=5,
         skills=[],
     )
-    
+
     # Register subagent
     registry = SubagentRegistryComponent(subagents={"test-subagent": subagent_config})
     world.add_component(parent_entity, registry)
-    
+
     # Add LLM and conversation to parent
     world.add_component(
         parent_entity,
@@ -248,27 +270,29 @@ async def test_subagent_delegation_end_to_end() -> None:
         parent_entity,
         ConversationComponent(messages=[]),
     )
-    
+
     # Add tool registry (SubagentSystem will populate delegate tool)
     world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
-    
+    world.add_component(parent_entity, MessageBusConfigComponent(request_timeout=1.0))
+
     # Register SubagentSystem
     world.register_system(SubagentSystem(priority=0), priority=0)
+    world.register_system(MessageBusSystem(priority=5), priority=5)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
-    
+
     # Process to register delegate tool
     await world.process()
-    
+
     # Get delegate handler
     tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
     assert tool_registry is not None
     assert "delegate" in tool_registry.handlers
-    
+
     delegate_handler = tool_registry.handlers["delegate"]
-    
+
     # Call delegate
     result = await delegate_handler(subagent_name="test-subagent", task="Do something")
-    
+
     # Verify result
     assert isinstance(result, str)
     assert result == "Subagent result"
@@ -278,31 +302,35 @@ async def test_enhanced_logging_in_system_execution() -> None:
     """Test enhanced logging with caller info in system execution."""
     # Configure logging with enhanced features
     configure_logging(level="INFO", colors=False)
-    
+
     world = World()
     entity = world.create_entity()
-    
+
     provider = FakeProvider(
-        responses=[CompletionResult(message=Message(role="assistant", content="Logged response"))]
+        responses=[
+            CompletionResult(
+                message=Message(role="assistant", content="Logged response")
+            )
+        ]
     )
-    
+
     world.add_component(entity, LLMComponent(provider=provider, model="fake"))
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="Test")]),
     )
-    
+
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
-    
+
     # Get logger and verify it works
     logger = get_logger("test_integration")
     logger.info("test_event", entity_id=entity, message="Testing enhanced logging")
-    
+
     runner = Runner()
     await runner.run(world, max_ticks=3)
-    
+
     # Verify execution completed (logging is tested via output, not assertions)
     conv = world.get_component(entity, ConversationComponent)
     assert conv is not None
@@ -313,12 +341,14 @@ async def test_all_new_components_serializable() -> None:
     """Test that all new components can be serialized and deserialized."""
     world = World()
     entity = world.create_entity()
-    
+
     # Add all new components
     from ecs_agent.components import ResponsesAPIStateComponent
-    
+
     # ConversationTreeComponent
-    root_msg = ConversationMessage(id="msg_1", parent_message_id=None, role="user", content="Test")
+    root_msg = ConversationMessage(
+        id="msg_1", parent_message_id=None, role="user", content="Test"
+    )
     branch = ConversationBranch(branch_id="branch_1", leaf_message_id="msg_1")
     world.add_component(
         entity,
@@ -328,7 +358,7 @@ async def test_all_new_components_serializable() -> None:
             branches={"branch_1": branch},
         ),
     )
-    
+
     # ResponsesAPIStateComponent
     world.add_component(
         entity,
@@ -336,7 +366,7 @@ async def test_all_new_components_serializable() -> None:
             previous_response_id="resp_122",
         ),
     )
-    
+
     # SubagentRegistryComponent
     subagent_config = SubagentConfig(
         name="test",
@@ -350,28 +380,28 @@ async def test_all_new_components_serializable() -> None:
         entity,
         SubagentRegistryComponent(subagents={"test": subagent_config}),
     )
-    
+
     # Serialize
     serialized = WorldSerializer.to_dict(world)
-    
+
     # Verify components are in serialized data
     entity_data = serialized["entities"][str(entity)]
     assert "ConversationTreeComponent" in entity_data
     assert "ResponsesAPIStateComponent" in entity_data
     assert "SubagentRegistryComponent" in entity_data
-    
+
     # Deserialize
     restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
-    
+
     # Verify all components restored
     tree = restored.get_component(entity, ConversationTreeComponent)
     assert tree is not None
     assert tree.current_branch_id == "branch_1"
-    
+
     responses_api = restored.get_component(entity, ResponsesAPIStateComponent)
     assert responses_api is not None
     assert responses_api.previous_response_id == "resp_122"
-    
+
     registry = restored.get_component(entity, SubagentRegistryComponent)
     assert registry is not None
     assert "test" in registry.subagents
