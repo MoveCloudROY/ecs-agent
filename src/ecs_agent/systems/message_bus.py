@@ -22,6 +22,8 @@ from ecs_agent.types import (
     MessageBusDeliveredEvent,
     MessageBusEnvelope,
     MessageBusPublishedEvent,
+    MessageBusResponseEvent,
+    MessageBusTimeoutEvent,
 )
 
 logger = get_logger(__name__)
@@ -49,6 +51,8 @@ class MessageBusSystem:
         self._subscriber_failures: dict[tuple[str, str], int] = {}
         self._conversations: dict[str, MessageBusConversationComponent] = {}
         self._pending_requests: dict[str, asyncio.Future[MessageBusEnvelope]] = {}
+        self._pending_request_topics: dict[str, str] = {}
+        self._pending_request_event_ids: dict[str, str] = {}
         self._world: World | None = None
         self._bus_entity_id: EntityId | None = None
 
@@ -279,12 +283,165 @@ class MessageBusSystem:
         except ValueError:
             return traceparent
 
-    async def request(self, topic: str, message: dict[str, Any]) -> dict[str, Any]:
-        del topic
-        del message
-        raise TimeoutError("request/response not implemented in this task")
+    async def request(
+        self,
+        topic: str,
+        message: dict[str, Any],
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        correlation_id = str(uuid.uuid4())
+        inbox_topic = f"ecs.bus.inbox.{correlation_id}"
+        requester_id = f"requester-{correlation_id}"
+        request_timeout = self._config.request_timeout if timeout is None else timeout
+
+        self.subscribe(topic=inbox_topic, subscriber_id=requester_id)
+        response_future: asyncio.Future[MessageBusEnvelope] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self._pending_requests[correlation_id] = response_future
+
+        request_payload = dict(message)
+        request_payload["reply_to"] = inbox_topic
+
+        request_envelope = MessageBusEnvelope(
+            id=str(uuid.uuid4()),
+            source="ecs://message-bus",
+            type="ecs.bus.request",
+            specversion="1.0",
+            correlationid=correlation_id,
+            traceparent=generate_traceparent(),
+            data=request_payload,
+            subject=topic,
+            time=datetime.now(),
+        )
+
+        self._pending_request_topics[correlation_id] = inbox_topic
+        self._pending_request_event_ids[correlation_id] = request_envelope.id
+
+        await self.publish(topic=topic, envelope=request_envelope)
+
+        try:
+            response = await asyncio.wait_for(
+                asyncio.shield(response_future),
+                timeout=request_timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            logger.error(
+                "bus_request_timeout",
+                topic=topic,
+                correlation_id=correlation_id,
+                timeout_seconds=request_timeout,
+                trace_id=self._safe_trace_id(request_envelope.traceparent),
+                exception=str(exc),
+            )
+            await self._emit_timeout_event(correlation_id=correlation_id)
+            raise TimeoutError(
+                f"message bus request timed out after {request_timeout}s"
+            ) from exc
+        finally:
+            self._pending_requests.pop(correlation_id, None)
+            self._pending_request_topics.pop(correlation_id, None)
+            self._pending_request_event_ids.pop(correlation_id, None)
+            self._remove_subscriber(topic=inbox_topic, subscriber_id=requester_id)
+
+        if isinstance(response.data, dict):
+            return response.data
+
+        return {"data": response.data}
 
     async def respond(self, correlation_id: str, message: dict[str, Any]) -> bool:
-        del correlation_id
-        del message
-        return False
+        response_future = self._pending_requests.get(correlation_id)
+        if response_future is None:
+            logger.info(
+                "bus_response_ignored",
+                correlation_id=correlation_id,
+                reason="unknown_or_expired_request",
+            )
+            return False
+
+        if response_future.done():
+            logger.info(
+                "bus_response_ignored",
+                correlation_id=correlation_id,
+                reason="duplicate_or_late_response",
+            )
+            return False
+
+        response_topic = self._pending_request_topics.get(correlation_id)
+        if response_topic is None:
+            logger.info(
+                "bus_response_ignored",
+                correlation_id=correlation_id,
+                reason="missing_response_topic",
+            )
+            return False
+
+        response_envelope = MessageBusEnvelope(
+            id=str(uuid.uuid4()),
+            source="ecs://message-bus",
+            type="ecs.bus.response",
+            specversion="1.0",
+            correlationid=correlation_id,
+            causationid=self._pending_request_event_ids.get(correlation_id),
+            traceparent=generate_traceparent(),
+            data=dict(message),
+            subject=response_topic,
+            time=datetime.now(),
+        )
+
+        await self.publish(topic=response_topic, envelope=response_envelope)
+
+        if response_future.done():
+            logger.info(
+                "bus_response_ignored",
+                correlation_id=correlation_id,
+                reason="duplicate_or_late_response",
+            )
+            return False
+
+        response_future.set_result(response_envelope)
+        logger.info(
+            "bus_response_delivered",
+            topic=response_topic,
+            correlation_id=correlation_id,
+            trace_id=self._safe_trace_id(response_envelope.traceparent),
+        )
+        await self._emit_response_event(
+            correlation_id=correlation_id,
+            envelope=response_envelope,
+        )
+        return True
+
+    async def _emit_timeout_event(self, *, correlation_id: str) -> None:
+        if self._world is None:
+            return
+
+        entity_id = (
+            self._bus_entity_id if self._bus_entity_id is not None else EntityId(0)
+        )
+        await self._world.event_bus.publish(
+            MessageBusTimeoutEvent(
+                entity_id=entity_id,
+                correlation_id=correlation_id,
+            )
+        )
+
+    async def _emit_response_event(
+        self,
+        *,
+        correlation_id: str,
+        envelope: MessageBusEnvelope,
+    ) -> None:
+        if self._world is None:
+            return
+
+        entity_id = (
+            self._bus_entity_id if self._bus_entity_id is not None else EntityId(0)
+        )
+        await self._world.event_bus.publish(
+            MessageBusResponseEvent(
+                entity_id=entity_id,
+                correlation_id=correlation_id,
+                envelope=envelope,
+            )
+        )
