@@ -1,10 +1,11 @@
 """Multi-agent collaboration example with dual-mode LLM provider selection.
 
 This example demonstrates:
-- Creating a World with ReasoningSystem, CollaborationSystem, MemorySystem, and ErrorHandlingSystem
+- Creating a World with ReasoningSystem, MessageBusSystem, MemorySystem, and ErrorHandlingSystem
 - Creating two Agent Entities (researcher and summarizer)
-- Setting up CollaborationComponent with peers and inbox
-- Agent A sends a message to Agent B via inbox
+- Setting up agents to communicate via MessageBusSystem pub/sub
+- Agent A publishes a message to Agent B via MessageBusSystem
+- Agent B receives the message in its conversation
 - Running the agents to process collaboration messages
 - Printing both agents' conversations
 
@@ -22,14 +23,15 @@ import asyncio
 import os
 
 from ecs_agent.components import (
-    CollaborationComponent,
     ConversationComponent,
     LLMComponent,
+    MessageBusConfigComponent,
+    MessageBusSubscriptionComponent,
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeProvider, OpenAIProvider
 from ecs_agent.providers.protocol import LLMProvider
-from ecs_agent.systems.collaboration import CollaborationSystem
+from ecs_agent.systems.message_bus import MessageBusSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -114,36 +116,53 @@ async def main() -> None:
     )
     world.add_component(
         agent_b_id,
-        ConversationComponent(messages=[Message(role="user", content="Waiting for research results...")])
+        ConversationComponent(
+            messages=[Message(role="user", content="Waiting for research results...")]
+        ),
     )
 
-    # Set up collaboration: Agent A sends message to Agent B
+    # Set up message bus: Agent A will publish, Agent B will subscribe
+    # Register MessageBusConfigComponent on a dedicated entity
+    bus_entity = world.create_entity()
+    world.add_component(bus_entity, MessageBusConfigComponent())
+    world.add_component(bus_entity, MessageBusSubscriptionComponent())
+
+    # Register both agents to use message bus
     world.add_component(
         agent_a_id,
-        CollaborationComponent(peers=[agent_b_id], inbox=[]),
+        MessageBusSubscriptionComponent(),
     )
     world.add_component(
         agent_b_id,
-        CollaborationComponent(
-            peers=[agent_a_id],
-            inbox=[
-                (
-                    agent_a_id,
-                    Message(role="assistant", content="I found interesting data."),
-                )
-            ],
-        ),
+        MessageBusSubscriptionComponent(),
     )
 
     # Register Systems
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(CollaborationSystem(priority=5), priority=5)
+    message_bus_system = MessageBusSystem(priority=5)
+    world.register_system(message_bus_system, priority=5)
     world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
-    # Run
+    # Run initial tick to let Agent A reason
     runner = Runner()
-    await runner.run(world, max_ticks=5)
+    await runner.run(world, max_ticks=1)
+
+    # Now have Agent A publish a message to Agent B via the message bus
+    message_bus_system.subscribe(
+        topic="research-results", subscriber_id=str(agent_b_id)
+    )
+    message_to_b = Message(
+        role="assistant",
+        content="I found interesting data while researching this topic.",
+    )
+    await message_bus_system.publish(
+        topic="research-results",
+        message={"content": message_to_b.content, "role": message_to_b.role},
+    )
+
+    # Run more ticks to let Agent B receive and process the message
+    await runner.run(world, max_ticks=4)
 
     # Print results
     print("Agent A (researcher) conversation:")

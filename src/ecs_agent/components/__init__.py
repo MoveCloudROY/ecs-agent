@@ -2,7 +2,6 @@
 
 from ecs_agent.components.definitions import (
     CheckpointComponent,
-    CollaborationComponent,
     CompactionConfigComponent,
     ConversationArchiveComponent,
     ConversationComponent,
@@ -11,6 +10,9 @@ from ecs_agent.components.definitions import (
     ErrorComponent,
     KVStoreComponent,
     LLMComponent,
+    MessageBusConfigComponent,
+    MessageBusConversationComponent,
+    MessageBusSubscriptionComponent,
     OwnerComponent,
     PendingToolCallsComponent,
     PermissionComponent,
@@ -35,7 +37,6 @@ from ecs_agent.components.definitions import (
 
 __all__ = [
     "CheckpointComponent",
-    "CollaborationComponent",
     "CompactionConfigComponent",
     "ConversationArchiveComponent",
     "ConversationComponent",
@@ -44,6 +45,9 @@ __all__ = [
     "ErrorComponent",
     "KVStoreComponent",
     "LLMComponent",
+    "MessageBusConfigComponent",
+    "MessageBusConversationComponent",
+    "MessageBusSubscriptionComponent",
     "OwnerComponent",
     "PendingToolCallsComponent",
     "PermissionComponent",

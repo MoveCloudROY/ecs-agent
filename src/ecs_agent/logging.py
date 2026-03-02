@@ -195,3 +195,103 @@ def get_logger(name: str) -> Any:
         A structlog bound logger instance.
     """
     return structlog.get_logger(name).bind(logger=name)
+
+
+def log_bus_publish(
+    logger: Any,
+    topic: str,
+    trace_id: str,
+    correlation_id: str,
+    payload_type: str | None = None,
+) -> None:
+    """Log message bus publish operation.
+
+    Args:
+        logger: Structlog logger instance.
+        topic: Topic name.
+        trace_id: W3C trace ID from traceparent.
+        correlation_id: Correlation ID for request/response matching.
+        payload_type: Optional payload type name.
+    """
+    logger.info(
+        "bus_publish",
+        topic=topic,
+        trace_id=trace_id,
+        correlation_id=correlation_id,
+        payload_type=payload_type,
+    )
+
+
+def log_bus_deliver(
+    logger: Any,
+    topic: str,
+    subscriber_id: str,
+    trace_id: str,
+    correlation_id: str,
+) -> None:
+    """Log message bus delivery operation.
+
+    Args:
+        logger: Structlog logger instance.
+        topic: Topic name.
+        subscriber_id: Subscriber identifier.
+        trace_id: W3C trace ID from traceparent.
+        correlation_id: Correlation ID for request/response matching.
+    """
+    logger.debug(
+        "bus_deliver",
+        topic=topic,
+        subscriber_id=subscriber_id,
+        trace_id=trace_id,
+        correlation_id=correlation_id,
+    )
+
+
+def log_bus_timeout(
+    logger: Any,
+    request_id: str,
+    trace_id: str,
+    correlation_id: str,
+    timeout_seconds: float,
+) -> None:
+    """Log message bus request timeout.
+
+    Args:
+        logger: Structlog logger instance.
+        request_id: Request identifier.
+        trace_id: W3C trace ID from traceparent.
+        correlation_id: Correlation ID for request/response matching.
+        timeout_seconds: Timeout duration in seconds.
+    """
+    logger.warning(
+        "bus_timeout",
+        request_id=request_id,
+        trace_id=trace_id,
+        correlation_id=correlation_id,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def log_bus_response(
+    logger: Any,
+    request_id: str,
+    trace_id: str,
+    correlation_id: str,
+    success: bool,
+) -> None:
+    """Log message bus request/response completion.
+
+    Args:
+        logger: Structlog logger instance.
+        request_id: Request identifier.
+        trace_id: W3C trace ID from traceparent.
+        correlation_id: Correlation ID for request/response matching.
+        success: Whether the request succeeded.
+    """
+    logger.info(
+        "bus_response",
+        request_id=request_id,
+        trace_id=trace_id,
+        correlation_id=correlation_id,
+        success=success,
+    )

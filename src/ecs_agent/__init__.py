@@ -18,6 +18,11 @@ from ecs_agent.types import (
     MCPDisconnectedEvent,
     MCPToolCallEvent,
     Message,
+    MessageBusDeliveredEvent,
+    MessageBusEnvelope,
+    MessageBusPublishedEvent,
+    MessageBusResponseEvent,
+    MessageBusTimeoutEvent,
     ResponsesAPICallEvent,
     RetryConfig,
     SkillDiscoveryEvent,
@@ -59,7 +64,20 @@ from ecs_agent.systems.tool_approval import ToolApprovalSystem
 from ecs_agent.systems.tree_search import TreeSearchSystem
 from ecs_agent.systems.rag import RAGSystem
 from ecs_agent.serialization import WorldSerializer
-from ecs_agent.logging import configure_logging, get_logger
+from ecs_agent.logging import (
+    configure_logging,
+    get_logger,
+    log_bus_deliver,
+    log_bus_publish,
+    log_bus_response,
+    log_bus_timeout,
+)
+from ecs_agent.observability import (
+    extract_parent_id,
+    extract_trace_id,
+    generate_traceparent,
+    propagate_trace_context,
+)
 
 from ecs_agent.components.definitions import (
     CheckpointComponent,
@@ -85,7 +103,7 @@ except ImportError:
     LiteLLMProvider = None  # type: ignore[assignment, misc]
 
 
-from ecs_agent.systems import CheckpointSystem, CompactionSystem, UserInputSystem
+from ecs_agent.systems import CheckpointSystem, CompactionSystem, UserInputSystem, MessageBusSystem
 from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.conversation_tree import add_message, create_branch, linearize, switch_branch
 
@@ -112,6 +130,8 @@ __all__ = [
     "DiscoveryManager",
     "DiscoveryReport",
     "EntityId",
+    "extract_parent_id",
+    "extract_trace_id",
     "FakeEmbeddingProvider",
     "LiteLLMProvider",
     "MCPConnectedEvent",
@@ -119,7 +139,12 @@ __all__ = [
     "MCPToolCallEvent",
     "MarkdownSkill",
     "Message",
-    "OpenAIEmbeddingProvider",
+    "MessageBusDeliveredEvent",
+    "MessageBusEnvelope",
+    "MessageBusPublishedEvent",
+    "MessageBusResponseEvent",
+    "MessageBusSystem",
+    "MessageBusTimeoutEvent",
     "PermissionComponent",
     "PermissionSystem",
     "RAGSystem",
@@ -165,11 +190,17 @@ __all__ = [
     "configure_logging",
     "create_branch",
     "get_logger",
+    "generate_traceparent",
     "linearize",
+    "log_bus_deliver",
+    "log_bus_publish",
+    "log_bus_response",
+    "log_bus_timeout",
     "sandboxed_execute",
     "scan_module",
     "switch_branch",
     "tool",
+    "propagate_trace_context",
     "wrap_sandbox_handler",
 ]
 

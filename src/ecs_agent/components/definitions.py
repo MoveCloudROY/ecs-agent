@@ -5,7 +5,16 @@ from typing import Any, Awaitable, Callable
 
 import asyncio
 
-from ecs_agent.types import ApprovalPolicy, ConversationBranch, ConversationMessage, EntityId, Message, SubagentConfig, ToolCall, ToolSchema
+from ecs_agent.types import (
+    ApprovalPolicy,
+    ConversationBranch,
+    ConversationMessage,
+    EntityId,
+    Message,
+    SubagentConfig,
+    ToolCall,
+    ToolSchema,
+)
 
 try:
     from ecs_agent.providers.protocol import LLMProvider
@@ -92,14 +101,6 @@ class PlanComponent:
 
 
 @dataclass(slots=True)
-class CollaborationComponent:
-    """Multi-agent messaging."""
-
-    peers: list[EntityId]
-    inbox: list[tuple[EntityId, Message]]
-
-
-@dataclass(slots=True)
 class OwnerComponent:
     """Entity ownership relationship."""
 
@@ -172,6 +173,7 @@ class RAGTriggerComponent:
     query: str = ""
     top_k: int = 5
     retrieved_docs: list[str] = field(default_factory=list)
+
 
 @dataclass(slots=True)
 class ResponsesAPIStateComponent:
@@ -255,6 +257,33 @@ class UserInputComponent:
     future: asyncio.Future[str] | None = field(default=None, repr=False)
     timeout: float | None = None
     result: str | None = None
+
+
+@dataclass(slots=True)
+class MessageBusConfigComponent:
+    """Bus configuration (buffer sizes, timeouts)."""
+
+    max_queue_size: int = 1000
+    publish_timeout: float = 2.0
+    request_timeout: float = 30.0
+    cleanup_interval: float = 60.0
+    max_pending_requests: int = 10000
+
+
+@dataclass(slots=True)
+class MessageBusSubscriptionComponent:
+    """Topic subscriptions per entity."""
+
+    subscriptions: dict[str, set[str]] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class MessageBusConversationComponent:
+    """Bounded conversation retention metadata."""
+
+    entity_id: EntityId
+    messages: list[Message] = field(default_factory=list)
+    max_messages: int = 1000
 
 
 @dataclass(slots=True)

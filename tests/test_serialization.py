@@ -3,30 +3,31 @@ from __future__ import annotations
 from typing import Any
 
 from ecs_agent.components import (
-    CollaborationComponent,
+    CheckpointComponent,
+    CompactionConfigComponent,
+    ConversationArchiveComponent,
     ConversationComponent,
     EmbeddingComponent,
     ErrorComponent,
     KVStoreComponent,
     LLMComponent,
+    MessageBusConfigComponent,
+    MessageBusConversationComponent,
+    MessageBusSubscriptionComponent,
     OwnerComponent,
     PendingToolCallsComponent,
     PlanComponent,
     PlanSearchComponent,
     RAGTriggerComponent,
+    RunnerStateComponent,
     SandboxConfigComponent,
+    StreamingComponent,
     SystemPromptComponent,
     TerminalComponent,
     ToolApprovalComponent,
     ToolRegistryComponent,
     ToolResultsComponent,
     VectorStoreComponent,
-    VectorStoreComponent,
-    CheckpointComponent,
-    CompactionConfigComponent,
-    ConversationArchiveComponent,
-    RunnerStateComponent,
-    StreamingComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.serialization import NON_SERIALIZABLE_PLACEHOLDER, WorldSerializer
@@ -244,9 +245,10 @@ def test_serialization_with_all_component_types() -> None:
     world.add_component(entity, KVStoreComponent(store={"memory": "value"}))
     world.add_component(
         entity,
-        CollaborationComponent(
-            peers=[EntityId(2)],
-            inbox=[(EntityId(2), Message(role="assistant", content="x"))],
+        MessageBusConversationComponent(
+            entity_id=entity,
+            messages=[Message(role="assistant", content="x")],
+            max_messages=100,
         ),
     )
     world.add_component(entity, OwnerComponent(owner_id=EntityId(99)))
@@ -266,7 +268,7 @@ def test_serialization_with_all_component_types() -> None:
         "PendingToolCallsComponent",
         "ToolResultsComponent",
         "KVStoreComponent",
-        "CollaborationComponent",
+        "MessageBusConversationComponent",
         "OwnerComponent",
         "ErrorComponent",
         "TerminalComponent",
@@ -284,7 +286,7 @@ def test_serialization_with_all_component_types() -> None:
     assert restored.has_component(EntityId(1), PendingToolCallsComponent)
     assert restored.has_component(EntityId(1), ToolResultsComponent)
     assert restored.has_component(EntityId(1), KVStoreComponent)
-    assert restored.has_component(EntityId(1), CollaborationComponent)
+    assert restored.has_component(EntityId(1), MessageBusConversationComponent)
     assert restored.has_component(EntityId(1), OwnerComponent)
     assert restored.has_component(EntityId(1), ErrorComponent)
     assert restored.has_component(EntityId(1), TerminalComponent)
@@ -306,9 +308,7 @@ def test_serialization_roundtrip_with_tool_approval_component() -> None:
     )
 
     serialized = WorldSerializer.to_dict(world)
-    restored = WorldSerializer.from_dict(
-        serialized, providers={}, tool_handlers={}
-    )
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
 
     restored_comp = restored.get_component(entity, ToolApprovalComponent)
     assert restored_comp is not None
@@ -328,9 +328,7 @@ def test_serialization_roundtrip_with_sandbox_config() -> None:
     )
 
     serialized = WorldSerializer.to_dict(world)
-    restored = WorldSerializer.from_dict(
-        serialized, providers={}, tool_handlers={}
-    )
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
 
     restored_comp = restored.get_component(entity, SandboxConfigComponent)
     assert restored_comp is not None
@@ -354,9 +352,7 @@ def test_serialization_roundtrip_with_plan_search() -> None:
     )
 
     serialized = WorldSerializer.to_dict(world)
-    restored = WorldSerializer.from_dict(
-        serialized, providers={}, tool_handlers={}
-    )
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
 
     restored_comp = restored.get_component(entity, PlanSearchComponent)
     assert restored_comp is not None
@@ -381,9 +377,7 @@ def test_serialization_roundtrip_with_rag_trigger() -> None:
     )
 
     serialized = WorldSerializer.to_dict(world)
-    restored = WorldSerializer.from_dict(
-        serialized, providers={}, tool_handlers={}
-    )
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
 
     restored_comp = restored.get_component(entity, RAGTriggerComponent)
     assert restored_comp is not None
@@ -462,9 +456,7 @@ def test_serialization_roundtrip_mixed_new_components() -> None:
     }
     assert component_names == expected
 
-    restored = WorldSerializer.from_dict(
-        serialized, providers={}, tool_handlers={}
-    )
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
     assert restored.has_component(entity, ToolApprovalComponent)
     assert restored.has_component(entity, SandboxConfigComponent)
     assert restored.has_component(entity, PlanSearchComponent)
@@ -489,8 +481,14 @@ def test_serialization_roundtrip_checkpoint_component() -> None:
     """Test that CheckpointComponent with snapshots roundtrips correctly."""
     world = World()
     entity = world.create_entity()
-    snapshot1 = {"entities": {"1": {"ConversationComponent": {"messages": []}}}, "next_entity_id": 2}
-    snapshot2 = {"entities": {"1": {"KVStoreComponent": {"store": {"k": "v"}}}}, "next_entity_id": 3}
+    snapshot1 = {
+        "entities": {"1": {"ConversationComponent": {"messages": []}}},
+        "next_entity_id": 2,
+    }
+    snapshot2 = {
+        "entities": {"1": {"KVStoreComponent": {"store": {"k": "v"}}}},
+        "next_entity_id": 3,
+    }
     world.add_component(
         entity,
         CheckpointComponent(snapshots=[snapshot1, snapshot2], max_snapshots=5),
@@ -571,7 +569,14 @@ def test_serialization_backward_compatibility_without_new_components() -> None:
         "entities": {
             "1": {
                 "ConversationComponent": {
-                    "messages": [{"role": "user", "content": "hi", "tool_calls": None, "tool_call_id": None}],
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "hi",
+                            "tool_calls": None,
+                            "tool_call_id": None,
+                        }
+                    ],
                     "max_messages": 100,
                 }
             }
@@ -595,9 +600,7 @@ def test_serialization_full_world_with_all_new_components() -> None:
     world.add_component(entity, StreamingComponent(enabled=True))
     world.add_component(
         entity,
-        CheckpointComponent(
-            snapshots=[{"test": "data"}], max_snapshots=15
-        ),
+        CheckpointComponent(snapshots=[{"test": "data"}], max_snapshots=15),
     )
     world.add_component(
         entity,
@@ -607,9 +610,7 @@ def test_serialization_full_world_with_all_new_components() -> None:
         entity,
         ConversationArchiveComponent(archived_summaries=["archive1"]),
     )
-    world.add_component(
-        entity, RunnerStateComponent(current_tick=10, is_paused=False)
-    )
+    world.add_component(entity, RunnerStateComponent(current_tick=10, is_paused=False))
 
     serialized = WorldSerializer.to_dict(world)
     component_names = set(serialized["entities"]["1"].keys())
@@ -656,14 +657,233 @@ def test_serialization_full_world_with_all_new_components() -> None:
     assert runner_state.is_paused is False
     assert runner_state.checkpoint_path is None
 
+
 def test_new_components_in_registry() -> None:
-    """Verify ResponsesAPIStateComponent, ConversationTreeComponent, SubagentRegistryComponent are in COMPONENT_REGISTRY."""
+    """Verify ResponsesAPIStateComponent, ConversationTreeComponent, SubagentRegistryComponent, and MessageBus components are in COMPONENT_REGISTRY."""
     from ecs_agent.serialization import COMPONENT_REGISTRY
-    
-    # Check all three new components are registered
-    assert "ResponsesAPIStateComponent" in COMPONENT_REGISTRY, "ResponsesAPIStateComponent missing from registry"
-    assert "ConversationTreeComponent" in COMPONENT_REGISTRY, "ConversationTreeComponent missing from registry"
-    assert "SubagentRegistryComponent" in COMPONENT_REGISTRY, "SubagentRegistryComponent missing from registry"
-    
-    # Verify registry has expected size (23 baseline + 3 new = 26)
-    assert len(COMPONENT_REGISTRY) >= 26, f"Registry has {len(COMPONENT_REGISTRY)} components, expected at least 26"
+
+    # Check all six new components are registered
+    assert "ResponsesAPIStateComponent" in COMPONENT_REGISTRY, (
+        "ResponsesAPIStateComponent missing from registry"
+    )
+    assert "ConversationTreeComponent" in COMPONENT_REGISTRY, (
+        "ConversationTreeComponent missing from registry"
+    )
+    assert "SubagentRegistryComponent" in COMPONENT_REGISTRY, (
+        "SubagentRegistryComponent missing from registry"
+    )
+    assert "MessageBusConfigComponent" in COMPONENT_REGISTRY, (
+        "MessageBusConfigComponent missing from registry"
+    )
+    assert "MessageBusSubscriptionComponent" in COMPONENT_REGISTRY, (
+        "MessageBusSubscriptionComponent missing from registry"
+    )
+    assert "MessageBusConversationComponent" in COMPONENT_REGISTRY, (
+        "MessageBusConversationComponent missing from registry"
+    )
+
+    assert len(COMPONENT_REGISTRY) >= 28, (
+        f"Registry has {len(COMPONENT_REGISTRY)} components, expected at least 28"
+    )
+
+
+def test_message_bus_config_roundtrip() -> None:
+    """Test that MessageBusConfigComponent roundtrips correctly."""
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        MessageBusConfigComponent(
+            max_queue_size=500,
+            publish_timeout=1.5,
+            request_timeout=20.0,
+            cleanup_interval=45.0,
+            max_pending_requests=5000,
+        ),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+
+    restored_comp = restored.get_component(entity, MessageBusConfigComponent)
+    assert restored_comp is not None
+    assert restored_comp.max_queue_size == 500
+    assert restored_comp.publish_timeout == 1.5
+    assert restored_comp.request_timeout == 20.0
+    assert restored_comp.cleanup_interval == 45.0
+    assert restored_comp.max_pending_requests == 5000
+
+
+def test_message_bus_subscription_roundtrip() -> None:
+    """Test that MessageBusSubscriptionComponent roundtrips correctly with set-to-list conversion."""
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        MessageBusSubscriptionComponent(
+            subscriptions={
+                "topic1": {"sub1", "sub2", "sub3"},
+                "topic2": {"sub4"},
+            }
+        ),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+
+    # Verify serialized format uses lists (JSON-compatible)
+    assert isinstance(
+        serialized["entities"]["1"]["MessageBusSubscriptionComponent"]["subscriptions"][
+            "topic1"
+        ],
+        list,
+    )
+
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+
+    restored_comp = restored.get_component(entity, MessageBusSubscriptionComponent)
+    assert restored_comp is not None
+    assert restored_comp.subscriptions["topic1"] == {"sub1", "sub2", "sub3"}
+    assert restored_comp.subscriptions["topic2"] == {"sub4"}
+
+
+def test_message_bus_conversation_roundtrip() -> None:
+    """Test that MessageBusConversationComponent roundtrips correctly with EntityId and Message conversion."""
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        MessageBusConversationComponent(
+            entity_id=EntityId(42),
+            messages=[
+                Message(role="user", content="Hello"),
+                Message(role="assistant", content="Hi there"),
+            ],
+            max_messages=100,
+        ),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+
+    # Verify EntityId is serialized as int
+    assert (
+        serialized["entities"]["1"]["MessageBusConversationComponent"]["entity_id"]
+        == 42
+    )
+
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+
+    restored_comp = restored.get_component(entity, MessageBusConversationComponent)
+    assert restored_comp is not None
+    assert restored_comp.entity_id == EntityId(42)
+    assert len(restored_comp.messages) == 2
+    assert isinstance(restored_comp.messages[0], Message)
+    assert restored_comp.messages[0].content == "Hello"
+    assert restored_comp.messages[1].content == "Hi there"
+    assert restored_comp.max_messages == 100
+
+
+def test_message_bus_no_runtime_state_serialized() -> None:
+    """Test serialization boundary: runtime state (queues, futures, pending requests) not serialized."""
+    world = World()
+    entity = world.create_entity()
+
+    # Add all three MessageBus components
+    world.add_component(
+        entity,
+        MessageBusConfigComponent(max_queue_size=1000),
+    )
+    world.add_component(
+        entity,
+        MessageBusSubscriptionComponent(subscriptions={"topic": {"sub1"}}),
+    )
+    world.add_component(
+        entity,
+        MessageBusConversationComponent(
+            entity_id=EntityId(1),
+            messages=[Message(role="user", content="test")],
+        ),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+
+    # Verify ONLY config, subscriptions, and conversation are serialized
+    entity_data = serialized["entities"]["1"]
+    component_names = set(entity_data.keys())
+
+    # These SHOULD be present
+    assert "MessageBusConfigComponent" in component_names
+    assert "MessageBusSubscriptionComponent" in component_names
+    assert "MessageBusConversationComponent" in component_names
+
+    # Runtime state should NOT be present (no queue fields, no futures, no pending_requests)
+    config_data = entity_data["MessageBusConfigComponent"]
+    assert "queue" not in config_data
+    assert "futures" not in config_data
+    assert "_pending_requests" not in config_data
+
+
+def test_message_bus_mixed_roundtrip() -> None:
+    """Test full world round-trip with all MessageBus components together."""
+    world = World()
+    entity = world.create_entity()
+
+    world.add_component(
+        entity,
+        MessageBusConfigComponent(
+            max_queue_size=800,
+            publish_timeout=2.5,
+        ),
+    )
+    world.add_component(
+        entity,
+        MessageBusSubscriptionComponent(
+            subscriptions={
+                "orders": {"order-processor", "analytics"},
+                "notifications": {"email-service"},
+            }
+        ),
+    )
+    world.add_component(
+        entity,
+        MessageBusConversationComponent(
+            entity_id=EntityId(99),
+            messages=[
+                Message(role="user", content="First"),
+                Message(role="assistant", content="Second"),
+            ],
+            max_messages=50,
+        ),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    component_names = set(serialized["entities"]["1"].keys())
+    expected = {
+        "MessageBusConfigComponent",
+        "MessageBusSubscriptionComponent",
+        "MessageBusConversationComponent",
+    }
+    assert component_names == expected
+
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+
+    # Verify all components survived round-trip
+    assert restored.has_component(entity, MessageBusConfigComponent)
+    assert restored.has_component(entity, MessageBusSubscriptionComponent)
+    assert restored.has_component(entity, MessageBusConversationComponent)
+
+    # Verify field values
+    config = restored.get_component(entity, MessageBusConfigComponent)
+    assert config is not None
+    assert config.max_queue_size == 800
+    assert config.publish_timeout == 2.5
+
+    subscription = restored.get_component(entity, MessageBusSubscriptionComponent)
+    assert subscription is not None
+    assert subscription.subscriptions["orders"] == {"order-processor", "analytics"}
+    assert subscription.subscriptions["notifications"] == {"email-service"}
+
+    conversation = restored.get_component(entity, MessageBusConversationComponent)
+    assert conversation is not None
+    assert conversation.entity_id == EntityId(99)
+    assert len(conversation.messages) == 2
+    assert conversation.max_messages == 50

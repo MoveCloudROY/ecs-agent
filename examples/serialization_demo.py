@@ -27,7 +27,6 @@ import os
 from pathlib import Path
 
 from ecs_agent.components import (
-    CollaborationComponent,
     ConversationComponent,
     ErrorComponent,
     KVStoreComponent,
@@ -155,13 +154,6 @@ async def main() -> None:
 
     world.add_component(
         peer_agent,
-        CollaborationComponent(
-            peers=[main_agent],
-            inbox=[(main_agent, Message(role="user", content="Collaboration message"))],
-        ),
-    )
-    world.add_component(
-        peer_agent,
         ErrorComponent(
             error="Test error", system_name="TestSystem", timestamp=1234567890.0
         ),
@@ -227,7 +219,6 @@ async def main() -> None:
             conv = loaded_world.get_component(entity_id, ConversationComponent)
             plan = loaded_world.get_component(entity_id, PlanComponent)
             kv = loaded_world.get_component(entity_id, KVStoreComponent)
-            collab = loaded_world.get_component(entity_id, CollaborationComponent)
             error = loaded_world.get_component(entity_id, ErrorComponent)
             owner = loaded_world.get_component(entity_id, OwnerComponent)
             terminal = loaded_world.get_component(entity_id, TerminalComponent)
@@ -259,10 +250,6 @@ async def main() -> None:
                 ]
             else:
                 checks = [
-                    (
-                        "CollaborationComponent",
-                        collab is not None and len(collab.peers) == 1,
-                    ),
                     (
                         "ErrorComponent",
                         error is not None and error.error == "Test error",

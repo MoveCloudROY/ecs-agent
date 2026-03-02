@@ -7,7 +7,6 @@ from typing import Any
 
 from ecs_agent.components import (
     CheckpointComponent,
-    CollaborationComponent,
     CompactionConfigComponent,
     ConversationArchiveComponent,
     ConversationComponent,
@@ -16,6 +15,9 @@ from ecs_agent.components import (
     ErrorComponent,
     KVStoreComponent,
     LLMComponent,
+    MessageBusConfigComponent,
+    MessageBusConversationComponent,
+    MessageBusSubscriptionComponent,
     OwnerComponent,
     PendingToolCallsComponent,
     PlanComponent,
@@ -47,7 +49,6 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     PendingToolCallsComponent.__name__: PendingToolCallsComponent,
     ToolResultsComponent.__name__: ToolResultsComponent,
     KVStoreComponent.__name__: KVStoreComponent,
-    CollaborationComponent.__name__: CollaborationComponent,
     OwnerComponent.__name__: OwnerComponent,
     ErrorComponent.__name__: ErrorComponent,
     TerminalComponent.__name__: TerminalComponent,
@@ -65,6 +66,9 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     CompactionConfigComponent.__name__: CompactionConfigComponent,
     ConversationArchiveComponent.__name__: ConversationArchiveComponent,
     RunnerStateComponent.__name__: RunnerStateComponent,
+    MessageBusConfigComponent.__name__: MessageBusConfigComponent,
+    MessageBusSubscriptionComponent.__name__: MessageBusSubscriptionComponent,
+    MessageBusConversationComponent.__name__: MessageBusConversationComponent,
 }
 
 
@@ -142,6 +146,12 @@ class WorldSerializer:
 
     @staticmethod
     def _serialize_component(component: Any) -> dict[str, Any]:
+        """Serialize component to dict, handling special types.
+
+        SERIALIZATION BOUNDARY:
+        - SERIALIZED: Config (timeouts, buffer sizes), subscriptions, conversation history
+        - NOT SERIALIZED: Runtime queues, pending futures, in-flight requests
+        """
         serialized = asdict(component)
 
         if isinstance(component, LLMComponent):
@@ -155,6 +165,18 @@ class WorldSerializer:
 
         if isinstance(component, VectorStoreComponent):
             serialized["store"] = NON_SERIALIZABLE_PLACEHOLDER
+
+        # MessageBusSubscriptionComponent: convert set[str] to list[str]
+        if isinstance(component, MessageBusSubscriptionComponent):
+            subscriptions_dict = {}
+            for topic, entity_ids in serialized.get("subscriptions", {}).items():
+                # Convert set of entity IDs (as strings) to list
+                subscriptions_dict[topic] = sorted(list(entity_ids))
+            serialized["subscriptions"] = subscriptions_dict
+
+        # MessageBusConversationComponent: convert EntityId to int
+        if isinstance(component, MessageBusConversationComponent):
+            serialized["entity_id"] = int(serialized["entity_id"])
 
         return serialized
 
@@ -188,15 +210,6 @@ class WorldSerializer:
             if handlers_value == NON_SERIALIZABLE_PLACEHOLDER:
                 normalized_data["handlers"] = tool_handlers
 
-        if component_name == CollaborationComponent.__name__:
-            normalized_data["peers"] = [
-                EntityId(int(peer)) for peer in normalized_data.get("peers", [])
-            ]
-            normalized_data["inbox"] = [
-                (EntityId(int(sender)), WorldSerializer._message_from_dict(message))
-                for sender, message in normalized_data.get("inbox", [])
-            ]
-
         if component_name == OwnerComponent.__name__:
             normalized_data["owner_id"] = EntityId(int(normalized_data["owner_id"]))
 
@@ -217,6 +230,22 @@ class WorldSerializer:
                         f"No provider configured for model '{model}' and no default provider found"
                     )
                 normalized_data["provider"] = provider
+
+        # MessageBusSubscriptionComponent: convert list[str] back to set[str]
+        if component_name == MessageBusSubscriptionComponent.__name__:
+            subscriptions_dict = {}
+            for topic, entity_ids in normalized_data.get("subscriptions", {}).items():
+                # Convert list back to set
+                subscriptions_dict[topic] = set(entity_ids)
+            normalized_data["subscriptions"] = subscriptions_dict
+
+        # MessageBusConversationComponent: convert int to EntityId, reconstruct Messages
+        if component_name == MessageBusConversationComponent.__name__:
+            normalized_data["entity_id"] = EntityId(int(normalized_data["entity_id"]))
+            normalized_data["messages"] = [
+                WorldSerializer._message_from_dict(msg)
+                for msg in normalized_data.get("messages", [])
+            ]
 
         return normalized_data
 

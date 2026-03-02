@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ecs_agent.components import MessageBusConfigComponent
 from ecs_agent.components.definitions import SubagentRegistryComponent
 from ecs_agent.core.world import World
 from ecs_agent.providers.fake_provider import FakeProvider
@@ -13,6 +14,7 @@ from ecs_agent.types import (
     Message,
     SubagentConfig,
 )
+from ecs_agent.systems.message_bus import MessageBusSystem
 
 
 def test_subagent_config_dataclass() -> None:
@@ -92,11 +94,17 @@ def test_delegation_started_event() -> None:
         entity_id=entity,
         subagent_name="researcher",
         task="Find the latest AI research papers",
+        correlation_id="corr-123",
+        traceparent="00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
     )
 
     assert event.entity_id == entity
     assert event.subagent_name == "researcher"
     assert event.task == "Find the latest AI research papers"
+    assert event.correlation_id == "corr-123"
+    assert (
+        event.traceparent == "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+    )
 
 
 def test_delegation_completed_event() -> None:
@@ -108,11 +116,21 @@ def test_delegation_completed_event() -> None:
         entity_id=entity,
         subagent_name="researcher",
         result="Found 5 papers from 2024",
+        success=True,
+        error=None,
+        correlation_id="corr-123",
+        traceparent="00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
     )
 
     assert event.entity_id == entity
     assert event.subagent_name == "researcher"
     assert event.result == "Found 5 papers from 2024"
+    assert event.success is True
+    assert event.error is None
+    assert event.correlation_id == "corr-123"
+    assert (
+        event.traceparent == "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -129,6 +147,18 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.core.runner import Runner
+
+
+def _register_message_bus(
+    world: World, parent_entity: EntityId, request_timeout: float = 30.0
+) -> MessageBusSystem:
+    world.add_component(
+        parent_entity,
+        MessageBusConfigComponent(request_timeout=request_timeout),
+    )
+    message_bus = MessageBusSystem(priority=5, request_timeout=request_timeout)
+    world.register_system(message_bus, priority=5)
+    return message_bus
 
 
 def test_delegate_tool_schema() -> None:
@@ -165,7 +195,9 @@ async def test_delegate_creates_child_entity() -> None:
 
     # Set up parent with registry
     provider = FakeProvider(
-        responses=[CompletionResult(message=Message(role="assistant", content="Result"))]
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="Result"))
+        ]
     )
     config = SubagentConfig(
         name="test-agent", provider=provider, model="fake", system_prompt="Test prompt"
@@ -173,6 +205,7 @@ async def test_delegate_creates_child_entity() -> None:
     registry = SubagentRegistryComponent(subagents={"test-agent": config})
     world.add_component(parent_entity, registry)
     world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    _register_message_bus(world, parent_entity)
 
     system = SubagentSystem()
     await system.process(world)
@@ -225,7 +258,9 @@ async def test_delegate_runs_child_to_completion() -> None:
 
     # Set up parent with registry
     provider = FakeProvider(
-        responses=[CompletionResult(message=Message(role="assistant", content="Completed"))]
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="Completed"))
+        ]
     )
     config = SubagentConfig(
         name="test-agent", provider=provider, model="fake", max_ticks=2
@@ -233,6 +268,7 @@ async def test_delegate_runs_child_to_completion() -> None:
     registry = SubagentRegistryComponent(subagents={"test-agent": config})
     world.add_component(parent_entity, registry)
     world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    _register_message_bus(world, parent_entity)
 
     system = SubagentSystem()
     await system.process(world)
@@ -280,6 +316,7 @@ async def test_delegate_returns_last_assistant_message() -> None:
     registry = SubagentRegistryComponent(subagents={"test-agent": config})
     world.add_component(parent_entity, registry)
     world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    _register_message_bus(world, parent_entity)
 
     system = SubagentSystem()
     await system.process(world)
@@ -309,6 +346,7 @@ async def test_delegate_publishes_events() -> None:
     registry = SubagentRegistryComponent(subagents={"test-agent": config})
     world.add_component(parent_entity, registry)
     world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    _register_message_bus(world, parent_entity)
 
     # Subscribe to events
     started_events: list[DelegationStartedEvent] = []
@@ -336,11 +374,17 @@ async def test_delegate_publishes_events() -> None:
     assert started_events[0].entity_id == parent_entity
     assert started_events[0].subagent_name == "test-agent"
     assert started_events[0].task == "Do work"
+    assert started_events[0].correlation_id
+    assert started_events[0].traceparent
 
     assert len(completed_events) == 1
     assert completed_events[0].entity_id == parent_entity
     assert completed_events[0].subagent_name == "test-agent"
     assert isinstance(completed_events[0].result, str)
+    assert completed_events[0].success is True
+    assert completed_events[0].error is None
+    assert completed_events[0].correlation_id == started_events[0].correlation_id
+    assert completed_events[0].traceparent == started_events[0].traceparent
 
 
 async def test_delegate_unknown_subagent_returns_error() -> None:
@@ -353,6 +397,7 @@ async def test_delegate_unknown_subagent_returns_error() -> None:
     registry = SubagentRegistryComponent()  # Empty registry
     world.add_component(parent_entity, registry)
     world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    _register_message_bus(world, parent_entity)
 
     system = SubagentSystem()
     await system.process(world)
@@ -394,6 +439,58 @@ async def test_subagent_system_registers_delegate_tool() -> None:
 
 async def test_delegate_with_skills_installs_skills() -> None:
     """SubagentConfig with skills list, verify skills installed on child entity."""
-    pytest.skip("Skills installation requires SkillManager integration - defer to integration tests")
+    pytest.skip(
+        "Skills installation requires SkillManager integration - defer to integration tests"
+    )
     # This test is complex and requires full SkillManager setup
     # We'll test the basic flow and defer full skill installation to Task 15
+
+
+async def test_delegate_timeout_returns_deterministic_error_and_cleans_pending_requests() -> (
+    None
+):
+    from ecs_agent.systems.subagent import SubagentSystem
+
+    world = World()
+    parent_entity = world.create_entity()
+
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
+    registry = SubagentRegistryComponent(subagents={"test-agent": config})
+    world.add_component(parent_entity, registry)
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    message_bus = _register_message_bus(world, parent_entity, request_timeout=0.01)
+
+    completed_events: list[DelegationCompletedEvent] = []
+
+    async def on_completed(event: DelegationCompletedEvent) -> None:
+        completed_events.append(event)
+
+    world.event_bus.subscribe(DelegationCompletedEvent, on_completed)
+
+    async def never_respond(correlation_id: str, message: dict[str, object]) -> bool:
+        _ = correlation_id
+        _ = message
+        return False
+
+    setattr(message_bus, "respond", never_respond)
+
+    system = SubagentSystem()
+    await system.process(world)
+
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    delegate_handler = tool_registry.handlers["delegate"]
+
+    result = await delegate_handler(subagent_name="test-agent", task="Do work")
+
+    assert result == "Error: Subagent timeout"
+    assert len(completed_events) == 1
+    assert completed_events[0].success is False
+    assert completed_events[0].error == "Error: Subagent timeout"
+
+    pending_requests = getattr(message_bus, "_pending_requests", None)
+    assert isinstance(pending_requests, dict)
+    assert pending_requests == {}
