@@ -5,7 +5,16 @@ from typing import Any, Awaitable, Callable
 
 import asyncio
 
-from ecs_agent.types import ApprovalPolicy, ConversationBranch, ConversationMessage, EntityId, Message, SubagentConfig, ToolCall, ToolSchema
+from ecs_agent.types import (
+    ApprovalPolicy,
+    ConversationBranch,
+    ConversationMessage,
+    EntityId,
+    Message,
+    SubagentConfig,
+    ToolCall,
+    ToolSchema,
+)
 
 try:
     from ecs_agent.providers.protocol import LLMProvider
@@ -92,14 +101,6 @@ class PlanComponent:
 
 
 @dataclass(slots=True)
-class CollaborationComponent:
-    """Multi-agent messaging."""
-
-    peers: list[EntityId]
-    inbox: list[tuple[EntityId, Message]]
-
-
-@dataclass(slots=True)
 class OwnerComponent:
     """Entity ownership relationship."""
 
@@ -172,6 +173,7 @@ class RAGTriggerComponent:
     query: str = ""
     top_k: int = 5
     retrieved_docs: list[str] = field(default_factory=list)
+
 
 @dataclass(slots=True)
 class ResponsesAPIStateComponent:
@@ -282,6 +284,7 @@ class MessageBusConversationComponent:
     entity_id: EntityId
     messages: list[Message] = field(default_factory=list)
     max_messages: int = 1000
+
 
 @dataclass(slots=True)
 class SubagentRegistryComponent:

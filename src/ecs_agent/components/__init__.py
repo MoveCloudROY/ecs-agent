@@ -2,7 +2,6 @@
 
 from ecs_agent.components.definitions import (
     CheckpointComponent,
-    CollaborationComponent,
     CompactionConfigComponent,
     ConversationArchiveComponent,
     ConversationComponent,
@@ -38,7 +37,6 @@ from ecs_agent.components.definitions import (
 
 __all__ = [
     "CheckpointComponent",
-    "CollaborationComponent",
     "CompactionConfigComponent",
     "ConversationArchiveComponent",
     "ConversationComponent",

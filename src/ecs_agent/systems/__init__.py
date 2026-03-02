@@ -1,6 +1,5 @@
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.checkpoint import CheckpointSystem
-from ecs_agent.systems.collaboration import CollaborationSystem
 from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.planning import PlanningSystem
 from ecs_agent.systems.permission import PermissionSystem
@@ -16,7 +15,6 @@ from ecs_agent.systems.user_input import UserInputSystem
 
 __all__ = [
     "CheckpointSystem",
-    "CollaborationSystem",
     "CompactionSystem",
     "ErrorHandlingSystem",
     "MemorySystem",

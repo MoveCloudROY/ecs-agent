@@ -7,7 +7,6 @@ from typing import Any
 
 from ecs_agent.components import (
     CheckpointComponent,
-    CollaborationComponent,
     CompactionConfigComponent,
     ConversationArchiveComponent,
     ConversationComponent,
@@ -50,7 +49,6 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     PendingToolCallsComponent.__name__: PendingToolCallsComponent,
     ToolResultsComponent.__name__: ToolResultsComponent,
     KVStoreComponent.__name__: KVStoreComponent,
-    CollaborationComponent.__name__: CollaborationComponent,
     OwnerComponent.__name__: OwnerComponent,
     ErrorComponent.__name__: ErrorComponent,
     TerminalComponent.__name__: TerminalComponent,
@@ -211,15 +209,6 @@ class WorldSerializer:
             handlers_value = normalized_data.get("handlers")
             if handlers_value == NON_SERIALIZABLE_PLACEHOLDER:
                 normalized_data["handlers"] = tool_handlers
-
-        if component_name == CollaborationComponent.__name__:
-            normalized_data["peers"] = [
-                EntityId(int(peer)) for peer in normalized_data.get("peers", [])
-            ]
-            normalized_data["inbox"] = [
-                (EntityId(int(sender)), WorldSerializer._message_from_dict(message))
-                for sender, message in normalized_data.get("inbox", [])
-            ]
 
         if component_name == OwnerComponent.__name__:
             normalized_data["owner_id"] = EntityId(int(normalized_data["owner_id"]))

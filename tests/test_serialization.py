@@ -682,9 +682,8 @@ def test_new_components_in_registry() -> None:
         "MessageBusConversationComponent missing from registry"
     )
 
-    # Verify registry has expected size (23 baseline + 3 previous + 3 MessageBus = 29)
-    assert len(COMPONENT_REGISTRY) >= 29, (
-        f"Registry has {len(COMPONENT_REGISTRY)} components, expected at least 29"
+    assert len(COMPONENT_REGISTRY) >= 28, (
+        f"Registry has {len(COMPONENT_REGISTRY)} components, expected at least 28"
     )
 
 
