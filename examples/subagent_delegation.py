@@ -3,7 +3,7 @@
 This example demonstrates:
 - A manager agent that delegates a research task to a sub-agent
 - OwnerComponent linking the sub-agent to its parent
-- CollaborationComponent inbox messaging for result delivery
+- MessageBusSystem request-response for result delivery
 - Multi-phase execution: manager delegates → sub-agent works → manager summarizes
 
 Dual-mode operation:
@@ -15,16 +15,17 @@ import asyncio
 import os
 
 from ecs_agent.components import (
-    CollaborationComponent,
     ConversationComponent,
     LLMComponent,
+    MessageBusConfigComponent,
+    MessageBusSubscriptionComponent,
     OwnerComponent,
     TerminalComponent,
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeProvider
 from ecs_agent.providers.openai_provider import OpenAIProvider
-from ecs_agent.systems.collaboration import CollaborationSystem
+from ecs_agent.systems.message_bus import MessageBusSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -58,9 +59,15 @@ async def main() -> None:
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
         print()
 
+    # ── Message Bus Setup ──────────────────────────────────────────
+    bus_entity = world.create_entity()
+    world.add_component(bus_entity, MessageBusConfigComponent())
+    world.add_component(bus_entity, MessageBusSubscriptionComponent())
+
     # ── Systems ──────────────────────────────────────────────────────
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(CollaborationSystem(priority=5), priority=5)
+    message_bus_system = MessageBusSystem(priority=5)
+    world.register_system(message_bus_system, priority=5)
     world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
@@ -70,7 +77,9 @@ async def main() -> None:
     # Phase 1 — Manager decides to delegate
     # ================================================================
     if api_key:
-        manager_provider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+        manager_provider = OpenAIProvider(
+            api_key=api_key, base_url=base_url, model=model
+        )
     else:
         manager_provider = FakeProvider(
             responses=[
@@ -114,6 +123,7 @@ async def main() -> None:
             ]
         ),
     )
+    world.add_component(manager_id, MessageBusSubscriptionComponent())
 
     # Run one tick — manager produces its delegation response, then
     # FakeProvider is exhausted → TerminalComponent is added.
@@ -131,7 +141,9 @@ async def main() -> None:
     # Phase 2 — Spawn sub-agent to do research
     # ================================================================
     if api_key:
-        subagent_provider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+        subagent_provider = OpenAIProvider(
+            api_key=api_key, base_url=base_url, model=model
+        )
     else:
         subagent_provider = FakeProvider(
             responses=[
@@ -178,6 +190,7 @@ async def main() -> None:
     )
     # Link sub-agent to its parent.
     world.add_component(subagent_id, OwnerComponent(owner_id=manager_id))
+    world.add_component(subagent_id, MessageBusSubscriptionComponent())
 
     # Temporarily remove manager's LLM so only the sub-agent runs
     # reasoning this tick.
@@ -199,7 +212,9 @@ async def main() -> None:
 
     # Restore manager's LLM with a fresh provider for the summary.
     if api_key:
-        summary_provider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+        summary_provider = OpenAIProvider(
+            api_key=api_key, base_url=base_url, model=model
+        )
     else:
         summary_provider = FakeProvider(
             responses=[
@@ -228,17 +243,21 @@ async def main() -> None:
         ),
     )
 
-    # Deliver sub-agent's last message into manager's collaboration inbox.
+    # Deliver sub-agent's last message into manager's conversation via message bus.
     subagent_conv = world.get_component(subagent_id, ConversationComponent)
     assert subagent_conv is not None
     last_msg = subagent_conv.messages[-1]
 
-    world.add_component(
-        manager_id,
-        CollaborationComponent(
-            peers=[subagent_id],
-            inbox=[(subagent_id, last_msg)],
-        ),
+    # Subscribe manager to receive sub-agent's message
+    message_bus_system.subscribe(
+        topic=f"subagent-report-{subagent_id}",
+        subscriber_id=str(manager_id),
+    )
+
+    # Publish sub-agent's findings
+    await message_bus_system.publish(
+        topic=f"subagent-report-{subagent_id}",
+        message={"content": last_msg.content, "role": last_msg.role},
     )
 
     # Mark sub-agent as done.
@@ -246,10 +265,8 @@ async def main() -> None:
         subagent_id,
         TerminalComponent(reason="delegation_complete"),
     )
-    # Remove sub-agent's TerminalComponent added by provider exhaustion
-    # so our explicit terminal takes effect cleanly.
 
-    # Run final tick: CollaborationSystem delivers message → Reasoning
+    # Run final tick: MessageBusSystem delivers message → Reasoning
     # produces the summary.
     await runner.run(world, max_ticks=1)
 
