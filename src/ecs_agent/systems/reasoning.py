@@ -82,6 +82,11 @@ class ReasoningSystem:
                         entity_id,
                         PendingToolCallsComponent(tool_calls=result.message.tool_calls),
                     )
+                else:
+                    world.add_component(
+                        entity_id,
+                        TerminalComponent(reason="reasoning_complete"),
+                    )
             except (IndexError, StopIteration):
                 world.add_component(
                     entity_id,

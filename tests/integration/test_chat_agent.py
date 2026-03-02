@@ -88,7 +88,8 @@ async def test_simple_chat_agent_end_to_end() -> None:
 
 
 @pytest.mark.asyncio
-async def test_terminal_on_provider_exhausted() -> None:
+async def test_terminal_on_reasoning_complete() -> None:
+    """Agent terminates with reasoning_complete after a non-tool-call response."""
     world = World()
     provider, call_counts = make_recording_fake_provider(
         [CompletionResult(message=Message(role="assistant", content="Only once"))]
@@ -119,10 +120,10 @@ async def test_terminal_on_provider_exhausted() -> None:
 
     terminal = world.get_component(eid, TerminalComponent)
     assert terminal is not None
-    assert terminal.reason == "provider_exhausted"
-    assert call_counts["attempt"] == 2
+    assert terminal.reason == "reasoning_complete"
+    assert call_counts["attempt"] == 1
     assert call_counts["success"] == 1
-    assert counter.run_count == 2
+    assert counter.run_count == 1
 
 
 @pytest.mark.asyncio

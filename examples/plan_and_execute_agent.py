@@ -158,7 +158,7 @@ async def main() -> None:
     base_url = os.environ.get(
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
-    model = os.environ.get("LLM_MODEL", "qwen3.5-plus")
+    model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
     connect_timeout = float(os.environ.get("LLM_CONNECT_TIMEOUT", "10"))
     read_timeout = float(os.environ.get("LLM_READ_TIMEOUT", "120"))
     write_timeout = float(os.environ.get("LLM_WRITE_TIMEOUT", "10"))
