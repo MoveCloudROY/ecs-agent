@@ -1,7 +1,6 @@
 """Tests for Component dataclasses."""
 
 import dataclasses
-from typing import TYPE_CHECKING
 
 import pytest
 
@@ -14,7 +13,6 @@ from ecs_agent.components import (
     PendingToolCallsComponent,
     ToolResultsComponent,
     PlanComponent,
-    CollaborationComponent,
     OwnerComponent,
     ErrorComponent,
     TerminalComponent,
@@ -23,9 +21,6 @@ from ecs_agent.components import (
     MessageBusSubscriptionComponent,
     MessageBusConversationComponent,
 )
-
-if TYPE_CHECKING:
-    from ecs_agent.providers.protocol import LLMProvider
 
 
 class MockLLMProvider:
@@ -194,28 +189,6 @@ class TestPlanComponent:
     def test_dataclass_slots(self):
         """Test PlanComponent uses slots."""
         assert hasattr(PlanComponent, "__slots__")
-
-
-class TestCollaborationComponent:
-    """Test CollaborationComponent."""
-
-    def test_instantiation(self):
-        """Test CollaborationComponent can be instantiated."""
-        peers = [EntityId(1), EntityId(2)]
-        inbox = [(EntityId(1), Message(role="user", content="msg"))]
-        comp = CollaborationComponent(peers=peers, inbox=inbox)
-        assert comp.peers == peers
-        assert comp.inbox == inbox
-
-    def test_empty_peers_and_inbox(self):
-        """Test CollaborationComponent with empty peers and inbox."""
-        comp = CollaborationComponent(peers=[], inbox=[])
-        assert comp.peers == []
-        assert comp.inbox == []
-
-    def test_dataclass_slots(self):
-        """Test CollaborationComponent uses slots."""
-        assert hasattr(CollaborationComponent, "__slots__")
 
 
 class TestOwnerComponent:
@@ -415,7 +388,6 @@ class TestComponentsExportedInInit:
             "PendingToolCallsComponent",
             "ToolResultsComponent",
             "PlanComponent",
-            "CollaborationComponent",
             "OwnerComponent",
             "ErrorComponent",
             "TerminalComponent",

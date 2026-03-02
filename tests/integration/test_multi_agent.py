@@ -1,95 +1,105 @@
 from __future__ import annotations
 
-# mypy: disable-error-code=import-untyped
-
-import time
+import asyncio
+from datetime import datetime
 
 import pytest
 
 from ecs_agent.components import (
-    CollaborationComponent,
     ConversationComponent,
     ErrorComponent,
     LLMComponent,
+    MessageBusConfigComponent,
+    MessageBusConversationComponent,
     TerminalComponent,
 )
 from ecs_agent.core import Runner, World
+from ecs_agent.observability import generate_traceparent
 from ecs_agent.providers import FakeProvider
-from ecs_agent.systems.collaboration import CollaborationSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
+from ecs_agent.systems.message_bus import MessageBusSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
-from ecs_agent.types import CompletionResult, EntityId, Message, MessageDeliveredEvent
+from ecs_agent.types import (
+    CompletionResult,
+    Message,
+    MessageBusDeliveredEvent,
+    MessageBusEnvelope,
+    MessageBusPublishedEvent,
+)
 
 
 def _assistant_reply(content: str) -> CompletionResult:
     return CompletionResult(message=Message(role="assistant", content=content))
 
 
-def _deliver_to_peer(
-    world: World,
-    sender_id: EntityId,
-    target_id: EntityId,
-    message: Message,
-) -> bool:
-    target_collaboration = world.get_component(target_id, CollaborationComponent)
-    if target_collaboration is None:
-        world.add_component(
-            sender_id,
-            ErrorComponent(
-                error=f"Target peer {target_id} not found",
-                system_name="CollaborationSystem",
-                timestamp=time.time(),
-            ),
-        )
-        return False
-
-    target_collaboration.inbox.append((sender_id, message))
-    return True
+def _envelope(source: str, content: str) -> MessageBusEnvelope:
+    return MessageBusEnvelope(
+        id=f"evt-{source}-{content}",
+        source=source,
+        type="ecs.bus.publish",
+        specversion="1.0",
+        correlationid=f"corr-{source}-{content}",
+        traceparent=generate_traceparent(),
+        data=content,
+        time=datetime.now(),
+    )
 
 
 @pytest.mark.asyncio
-async def test_agent_sends_message_to_peer() -> None:
+async def test_agent_sends_message_to_peer_via_message_bus() -> None:
     world = World()
     agent_a_id = world.create_entity()
     agent_b_id = world.create_entity()
 
-    world.add_component(agent_a_id, ConversationComponent(messages=[]))
     world.add_component(
         agent_a_id,
-        CollaborationComponent(peers=[agent_b_id], inbox=[]),
+        MessageBusConfigComponent(),
     )
-
-    world.add_component(agent_b_id, ConversationComponent(messages=[]))
+    world.add_component(
+        agent_a_id,
+        MessageBusConversationComponent(entity_id=agent_a_id, max_messages=10),
+    )
     world.add_component(
         agent_b_id,
-        CollaborationComponent(peers=[agent_a_id], inbox=[]),
+        MessageBusConversationComponent(entity_id=agent_b_id, max_messages=10),
     )
 
-    collab_b = world.get_component(agent_b_id, CollaborationComponent)
-    assert collab_b is not None
+    bus = MessageBusSystem(priority=5)
+    queue_b = bus.subscribe(
+        topic=f"agent.chat.{agent_b_id}", subscriber_id=str(agent_b_id)
+    )
+    await bus.process(world)
 
-    outbound = Message(role="user", content="Hello from A")
-    collab_b.inbox.append((agent_a_id, outbound))
+    published_events: list[MessageBusPublishedEvent] = []
+    delivered_events: list[MessageBusDeliveredEvent] = []
 
-    assert len(collab_b.inbox) > 0
-    sender_id, message = collab_b.inbox[0]
-    assert sender_id == agent_a_id
-    assert message.content == "Hello from A"
+    async def on_published(event: MessageBusPublishedEvent) -> None:
+        published_events.append(event)
 
-    delivered_events: list[MessageDeliveredEvent] = []
-
-    async def on_delivered(event: MessageDeliveredEvent) -> None:
+    async def on_delivered(event: MessageBusDeliveredEvent) -> None:
         delivered_events.append(event)
 
-    world.event_bus.subscribe(MessageDeliveredEvent, on_delivered)
-    await CollaborationSystem(priority=5).process(world)
+    world.event_bus.subscribe(MessageBusPublishedEvent, on_published)
+    world.event_bus.subscribe(MessageBusDeliveredEvent, on_delivered)
 
-    conversation_b = world.get_component(agent_b_id, ConversationComponent)
-    assert conversation_b is not None
-    assert conversation_b.messages[-1].content == f"From: {agent_a_id}: Hello from A"
-    assert collab_b.inbox == []
+    delivered = await bus.publish(
+        topic=f"agent.chat.{agent_b_id}",
+        envelope=_envelope(source=str(agent_a_id), content="Hello from A"),
+    )
+
+    payload = await asyncio.wait_for(queue_b.get(), timeout=0.1)
+
+    assert delivered is True
+    assert payload == "Hello from A"
+    assert len(published_events) == 1
     assert len(delivered_events) == 1
+    assert published_events[0].topic == f"agent.chat.{agent_b_id}"
+    assert delivered_events[0].subscriber_id == agent_b_id
+    assert [msg.content for msg in bus.get_conversation(agent_a_id)] == [
+        f"From: {agent_a_id}: Hello from A"
+    ]
+    assert bus.get_conversation(agent_b_id) == []
 
 
 @pytest.mark.asyncio
@@ -98,60 +108,75 @@ async def test_bidirectional_communication() -> None:
     agent_a_id = world.create_entity()
     agent_b_id = world.create_entity()
 
-    world.add_component(agent_a_id, ConversationComponent(messages=[]))
     world.add_component(
         agent_a_id,
-        CollaborationComponent(peers=[agent_b_id], inbox=[]),
+        MessageBusConfigComponent(),
     )
-    world.add_component(agent_b_id, ConversationComponent(messages=[]))
+    world.add_component(
+        agent_a_id,
+        MessageBusConversationComponent(entity_id=agent_a_id, max_messages=10),
+    )
     world.add_component(
         agent_b_id,
-        CollaborationComponent(peers=[agent_a_id], inbox=[]),
+        MessageBusConversationComponent(entity_id=agent_b_id, max_messages=10),
     )
 
-    collab_a = world.get_component(agent_a_id, CollaborationComponent)
-    collab_b = world.get_component(agent_b_id, CollaborationComponent)
-    assert collab_a is not None
-    assert collab_b is not None
+    bus = MessageBusSystem(priority=5)
+    queue_a = bus.subscribe(
+        topic=f"agent.chat.{agent_a_id}", subscriber_id=str(agent_a_id)
+    )
+    queue_b = bus.subscribe(
+        topic=f"agent.chat.{agent_b_id}", subscriber_id=str(agent_b_id)
+    )
+    await bus.process(world)
 
-    collab_b.inbox.append((agent_a_id, Message(role="user", content="A to B")))
-    collab_a.inbox.append((agent_b_id, Message(role="user", content="B to A")))
+    delivered_to_a = await bus.publish(
+        topic=f"agent.chat.{agent_a_id}",
+        envelope=_envelope(source=str(agent_b_id), content="B to A"),
+    )
+    delivered_to_b = await bus.publish(
+        topic=f"agent.chat.{agent_b_id}",
+        envelope=_envelope(source=str(agent_a_id), content="A to B"),
+    )
 
-    await CollaborationSystem(priority=5).process(world)
+    payload_a = await asyncio.wait_for(queue_a.get(), timeout=0.1)
+    payload_b = await asyncio.wait_for(queue_b.get(), timeout=0.1)
 
-    conv_a = world.get_component(agent_a_id, ConversationComponent)
-    conv_b = world.get_component(agent_b_id, ConversationComponent)
-    assert conv_a is not None
-    assert conv_b is not None
-    assert any(msg.content == f"From: {agent_b_id}: B to A" for msg in conv_a.messages)
-    assert any(msg.content == f"From: {agent_a_id}: A to B" for msg in conv_b.messages)
-    assert collab_a.inbox == []
-    assert collab_b.inbox == []
+    assert delivered_to_a is True
+    assert delivered_to_b is True
+    assert payload_a == "B to A"
+    assert payload_b == "A to B"
+    assert [msg.content for msg in bus.get_conversation(agent_a_id)] == [
+        f"From: {agent_a_id}: A to B"
+    ]
+    assert [msg.content for msg in bus.get_conversation(agent_b_id)] == [
+        f"From: {agent_b_id}: B to A"
+    ]
 
 
 @pytest.mark.asyncio
-async def test_unknown_peer_graceful_failure() -> None:
+async def test_unknown_peer_graceful_failure_without_subscribers() -> None:
     world = World()
     agent_a_id = world.create_entity()
 
-    unknown_peer = EntityId(9999)
-    world.add_component(agent_a_id, ConversationComponent(messages=[]))
+    world.add_component(agent_a_id, MessageBusConfigComponent())
     world.add_component(
         agent_a_id,
-        CollaborationComponent(peers=[unknown_peer], inbox=[]),
+        MessageBusConversationComponent(entity_id=agent_a_id, max_messages=10),
     )
 
-    delivered = _deliver_to_peer(
-        world,
-        sender_id=agent_a_id,
-        target_id=unknown_peer,
-        message=Message(role="user", content="Can you hear me?"),
+    bus = MessageBusSystem(priority=5)
+    await bus.process(world)
+
+    delivered = await bus.publish(
+        topic="agent.chat.9999",
+        envelope=_envelope(source=str(agent_a_id), content="Can you hear me?"),
     )
 
     assert delivered is False
     error = world.get_component(agent_a_id, ErrorComponent)
-    assert error is not None
-    assert "not found" in error.error
+    assert error is None
+    assert bus.get_conversation(agent_a_id) == []
 
 
 @pytest.mark.asyncio
@@ -173,7 +198,11 @@ async def test_multi_agent_full_loop() -> None:
     )
     world.add_component(
         agent_a_id,
-        CollaborationComponent(peers=[agent_b_id], inbox=[]),
+        MessageBusConfigComponent(),
+    )
+    world.add_component(
+        agent_a_id,
+        MessageBusConversationComponent(entity_id=agent_a_id, max_messages=10),
     )
 
     world.add_component(
@@ -186,18 +215,13 @@ async def test_multi_agent_full_loop() -> None:
     )
     world.add_component(
         agent_b_id,
-        CollaborationComponent(peers=[agent_a_id], inbox=[]),
+        MessageBusConversationComponent(entity_id=agent_b_id, max_messages=10),
     )
 
-    collab_a = world.get_component(agent_a_id, CollaborationComponent)
-    collab_b = world.get_component(agent_b_id, CollaborationComponent)
-    assert collab_a is not None
-    assert collab_b is not None
-    collab_b.inbox.append((agent_a_id, Message(role="user", content="Ping from A")))
-    collab_a.inbox.append((agent_b_id, Message(role="user", content="Pong from B")))
+    message_bus = MessageBusSystem(priority=5)
+    world.register_system(message_bus, priority=5)
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(CollaborationSystem(priority=5), priority=5)
     world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
@@ -212,12 +236,28 @@ async def test_multi_agent_full_loop() -> None:
     conv_b = world.get_component(agent_b_id, ConversationComponent)
     assert conv_a is not None
     assert conv_b is not None
-    assert any(
-        msg.content == f"From: {agent_b_id}: Pong from B" for msg in conv_a.messages
+
+    request_task = asyncio.create_task(
+        message_bus.request(
+            topic=f"agent.rpc.{agent_b_id}",
+            message={"from": str(agent_a_id), "content": "Ping from A"},
+            timeout=0.2,
+        )
     )
-    assert any(
-        msg.content == f"From: {agent_a_id}: Ping from A" for msg in conv_b.messages
+    await asyncio.sleep(0)
+
+    pending = getattr(message_bus, "_pending_requests", None)
+    assert isinstance(pending, dict)
+    assert len(pending) == 1
+    correlation_id = next(iter(pending.keys()))
+
+    accepted = await message_bus.respond(
+        correlation_id=correlation_id,
+        message={"from": str(agent_b_id), "content": "Pong from B"},
     )
-    assert collab_a.inbox == []
-    assert collab_b.inbox == []
+    response = await asyncio.wait_for(request_task, timeout=0.2)
+
+    assert accepted is True
+    assert response["from"] == str(agent_b_id)
+    assert response["content"] == "Pong from B"
     assert list(world.query(ErrorComponent)) == []
