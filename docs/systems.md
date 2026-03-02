@@ -14,7 +14,7 @@ The table below summarizes the recommended priorities for each system. Priority 
 | ReasoningSystem | 0 | Generates responses using an LLM. |
 | PlanningSystem | 0 | Manages step-by-step execution of a plan. |
 | TreeSearchSystem | 0 | Uses MCTS to find the best plan path. |
-| CollaborationSystem | 5 | Ingests messages from other entities. |
+| MessageBusSystem | 5 | Handles pub/sub and request-response messaging. |
 | ToolExecutionSystem | 5 | Executes pending tool calls and returns results. |
 | SubagentSystem | 5 | Manages subagent delegation and execution. |
 | ReplanningSystem | 7 | Periodically revises the current plan based on progress. |
@@ -123,23 +123,41 @@ world.register_system(ToolExecutionSystem(priority=5), priority=5)
 
 ---
 
-## 5. CollaborationSystem
+## 5. MessageBusSystem
 
-The CollaborationSystem allows entities to communicate with one another by processing an incoming message inbox.
+The MessageBusSystem provides a robust messaging infrastructure for multi-agent communication. It supports asynchronous pub/sub messaging and synchronous request-response patterns with CloudEvents-aligned envelopes.
 
-- **Constructor**: `__init__(self, priority: int = 0)`
-- **Queries**: `CollaborationComponent`, `ConversationComponent`
-- **Modifies**: Appends messages to `ConversationComponent`, clears the `inbox` in `CollaborationComponent`.
-- **Events Published**: `MessageDeliveredEvent(from_entity, to_entity, message)`
+- **Constructor**: `__init__(self, priority: int = 5)`
+- **Queries**: `MessageBusConfigComponent`, `MessageBusSubscriptionComponent`, `MessageBusConversationComponent`, `ConversationComponent`
+- **Modifies**: `ConversationComponent` (appends delivered messages), `MessageBusSubscriptionComponent` (manages queues), `MessageBusConversationComponent` (tracks requests).
+- **Events Published**: `MessageBusPublishedEvent`, `MessageBusDeliveredEvent`, `MessageBusResponseEvent`, `MessageBusTimeoutEvent`.
 - **Recommended Priority**: 5
 
 ### Behavior
-The system drains all messages from the entity's inbox. Each message is converted into a user-role message formatted as "From {sender_id}: {content}" and added to the conversation history. It publishes a `MessageDeliveredEvent` for every message processed.
+The system manages per-subscriber message queues with bounded buffering (default `max_queue_size=1000`). It processes outgoing messages from entities and delivers them to subscribers based on topic filters.
+
+#### Pub/Sub
+Entities can publish messages to any topic. Subscribers receive copies of these messages in their conversation history, formatted as "From {sender_id} on {topic}: {content}".
+
+#### Request-Response
+The system implements a request-response pattern using temporary inbox topics and correlation IDs.
+- **Request**: An entity publishes a message with a `reply_to` topic. The system tracks this request and awaits a response.
+- **Response**: The recipient responds to the `reply_to` topic. The system routes the response back to the requester and clears the conversation state.
+- **Timeout**: If no response is received within the `request_timeout` (default 30s), a `MessageBusTimeoutEvent` is published and the conversation is cleaned up.
+
+### Message Schema
+All messages are wrapped in a `MessageBusEnvelope` following the CloudEvents spec:
+- `id`: Unique message identifier
+- `source`: Sending entity ID
+- `type`: Message type (e.g., `ecs.message.pub`)
+- `specversion`: "1.0"
+- `correlationid`: ID used to link requests and responses
+- `traceparent`: W3C TraceContext for distributed tracing
 
 ### Usage Example
 ```python
-from ecs_agent.systems.collaboration import CollaborationSystem
-world.register_system(CollaborationSystem(priority=5), priority=5)
+from ecs_agent.systems.message_bus import MessageBusSystem
+world.register_system(MessageBusSystem(priority=5), priority=5)
 ```
 
 ---
@@ -326,7 +344,7 @@ The SubagentSystem manages subagent delegation, allowing parent agents to spawn 
 - **Queries**: `SubagentRegistryComponent`, `ToolRegistryComponent`
 - **Modifies**: `ToolRegistryComponent.tools` (registers `delegate` tool), `ToolRegistryComponent.handlers` (registers delegate handler).
 - **Events Published**: `DelegationStartedEvent(parent_entity, child_entity, subagent_name, task)`, `DelegationCompletedEvent(parent_entity, child_entity, subagent_name, result)`
-- **Recommended Priority**: 5 (runs alongside `CollaborationSystem` and `ToolExecutionSystem`)
+- **Recommended Priority**: 5 (runs alongside `MessageBusSystem` and `ToolExecutionSystem`)
 
 ### Behavior
 The system automatically registers a `delegate` tool for entities that have both `SubagentRegistryComponent` and `ToolRegistryComponent`. When the delegate tool is called by an LLM, the system:
@@ -388,7 +406,8 @@ from ecs_agent.systems.tool_approval import ToolApprovalSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.planning import PlanningSystem
 from ecs_agent.systems.tree_search import TreeSearchSystem
-from ecs_agent.systems.collaboration import CollaborationSystem
+from ecs_agent.systems.message_bus import MessageBusSystem
+world.register_system(MessageBusSystem(priority=5), priority=5)
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.systems.replanning import ReplanningSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -412,7 +431,7 @@ world.register_system(PlanningSystem(priority=0), priority=0)
 world.register_system(TreeSearchSystem(priority=0), priority=0)
 
 # Interaction and communication
-world.register_system(CollaborationSystem(priority=5), priority=5)
+world.register_system(MessageBusSystem(priority=5), priority=5)
 world.register_system(ToolExecutionSystem(priority=5), priority=5)
 world.register_system(SubagentSystem(priority=5), priority=5)
 

@@ -10,7 +10,7 @@ __version__: str = "0.1.0"
 
 The following types and classes are re-exported for convenience:
 
-- `Message`, `CompletionResult`, `ToolSchema`, `EntityId`, `StreamDelta`, `RetryConfig`, `ApprovalPolicy`, `ToolTimeoutError` from `ecs_agent.types`
+- `Message`, `CompletionResult`, `ToolSchema`, `EntityId`, `StreamDelta`, `RetryConfig`, `ApprovalPolicy`, `ToolTimeoutError`, `MessageBusEnvelope` from `ecs_agent.types`
 - `RetryProvider` from `ecs_agent.providers.retry_provider`
 - `WorldSerializer` from `ecs_agent.serialization`
 - `configure_logging`, `get_logger` from `ecs_agent.logging`
@@ -18,8 +18,8 @@ The following types and classes are re-exported for convenience:
 - `ClaudeProvider` from `ecs_agent.providers.claude_provider`
 - `LiteLLMProvider` from `ecs_agent.providers.litellm_provider`
 - `OpenAIEmbeddingProvider`, `FakeEmbeddingProvider` from `ecs_agent.providers`
-- `RAGSystem`, `TreeSearchSystem`, `ToolApprovalSystem`, `CheckpointSystem`, `CompactionSystem`, `UserInputSystem` from `ecs_agent.systems`
-- `StreamStartEvent`, `StreamDeltaEvent`, `StreamEndEvent`, `CheckpointCreatedEvent`, `CheckpointRestoredEvent`, `CompactionCompleteEvent`, `ToolApprovalRequestedEvent`, `ToolApprovedEvent`, `ToolDeniedEvent`, `RAGRetrievalCompletedEvent`, `UserInputRequestedEvent`, `MCTSNodeScoredEvent` from `ecs_agent.types`
+- `MessageBusSystem`, `RAGSystem`, `TreeSearchSystem`, `ToolApprovalSystem`, `CheckpointSystem`, `CompactionSystem`, `UserInputSystem`, `SubagentSystem` from `ecs_agent.systems`
+- `StreamStartEvent`, `StreamDeltaEvent`, `StreamEndEvent`, `CheckpointCreatedEvent`, `CheckpointRestoredEvent`, `CompactionCompleteEvent`, `ToolApprovalRequestedEvent`, `ToolApprovedEvent`, `ToolDeniedEvent`, `RAGRetrievalCompletedEvent`, `UserInputRequestedEvent`, `MCTSNodeScoredEvent`, `MessageBusPublishedEvent`, `MessageBusDeliveredEvent`, `MessageBusResponseEvent`, `MessageBusTimeoutEvent` from `ecs_agent.types`
 - `scan_module`, `sandboxed_execute`, `tool` from `ecs_agent.tools`
 
 ---
@@ -73,12 +73,16 @@ class StreamDelta:
     usage: Usage | None = None
 
 @dataclass(slots=True)
-class RetryConfig:
-    max_attempts: int = 3
-    multiplier: float = 1.0
-    min_wait: float = 4.0
-    max_wait: float = 60.0
-    retry_status_codes: tuple[int, ...] = (429, 500, 502, 503, 504)
+class MessageBusEnvelope:
+    id: str
+    source: EntityId
+    type: str
+    data: Message
+    specversion: str = "1.0"
+    topic: str | None = None
+    reply_to: str | None = None
+    correlation_id: str | None = None
+    traceparent: str | None = None
 ```
 ```python
 class ApprovalPolicy(Enum):
@@ -103,11 +107,25 @@ class ErrorOccurredEvent:
     system_name: str
 
 @dataclass(slots=True)
-class MessageDeliveredEvent:
-    from_entity: EntityId
-    to_entity: EntityId
-    message: Message
+class MessageBusPublishedEvent:
+    entity_id: EntityId
+    envelope: MessageBusEnvelope
 
+@dataclass(slots=True)
+class MessageBusDeliveredEvent:
+    entity_id: EntityId
+    envelope: MessageBusEnvelope
+
+@dataclass(slots=True)
+class MessageBusResponseEvent:
+    entity_id: EntityId
+    envelope: MessageBusEnvelope
+
+@dataclass(slots=True)
+class MessageBusTimeoutEvent:
+    entity_id: EntityId
+    correlation_id: str
+```
 @dataclass(slots=True)
 class PlanStepCompletedEvent:
     entity_id: EntityId
@@ -251,7 +269,9 @@ All components are implemented as `@dataclass(slots=True)`.
  `PendingToolCallsComponent(tool_calls: list[ToolCall])`
  `ToolResultsComponent(results: dict[str, str])`
  `PlanComponent(steps: list[str], current_step: int = 0, completed: bool = False)`
- `CollaborationComponent(peers: list[EntityId], inbox: list[tuple[EntityId, Message]])`
+ `MessageBusConfigComponent(max_queue_size: int = 1000, publish_timeout: float = 2.0, request_timeout: float = 30.0, cleanup_interval: float = 10.0)`
+ `MessageBusSubscriptionComponent(subscriptions: set[str], inbox: deque[MessageBusEnvelope])`
+ `MessageBusConversationComponent(active_requests: dict[str, float])`
  `OwnerComponent(owner_id: EntityId)`
  `ErrorComponent(error: str, system_name: str, timestamp: float)`
  `TerminalComponent(reason: str)`
@@ -301,11 +321,16 @@ class ToolExecutionSystem(priority: int = 0):
     async def process(self, world: World) -> None: ...
 ```
 
-### CollaborationSystem
+### MessageBusSystem
 
 ```python
-class CollaborationSystem(priority: int = 0):
+class MessageBusSystem(priority: int = 5):
     async def process(self, world: World) -> None: ...
+    def subscribe(self, world: World, entity_id: EntityId, topic: str) -> None: ...
+    def unsubscribe(self, world: World, entity_id: EntityId, topic: str) -> None: ...
+    async def publish(self, world: World, entity_id: EntityId, topic: str, message: Message) -> None: ...
+    async def request(self, world: World, entity_id: EntityId, topic: str, message: Message, timeout: float | None = None) -> MessageBusEnvelope: ...
+    async def respond(self, world: World, entity_id: EntityId, request_envelope: MessageBusEnvelope, message: Message) -> None: ...
 ```
 
 ### ErrorHandlingSystem
