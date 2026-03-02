@@ -19,6 +19,9 @@ from ecs_agent.components import (
     ErrorComponent,
     TerminalComponent,
     SystemPromptComponent,
+    MessageBusConfigComponent,
+    MessageBusSubscriptionComponent,
+    MessageBusConversationComponent,
 )
 
 if TYPE_CHECKING:
@@ -271,11 +274,120 @@ class TestSystemPromptComponent:
         assert hasattr(SystemPromptComponent, "__slots__")
 
 
+class TestMessageBusConfigComponent:
+    """Test MessageBusConfigComponent."""
+
+    def test_instantiation(self):
+        """Test MessageBusConfigComponent can be instantiated with defaults."""
+        comp = MessageBusConfigComponent()
+        assert comp.max_queue_size == 1000
+        assert comp.publish_timeout == 2.0
+        assert comp.request_timeout == 30.0
+        assert comp.cleanup_interval == 60.0
+        assert comp.max_pending_requests == 10000
+
+    def test_custom_values(self):
+        """Test MessageBusConfigComponent can be instantiated with custom values."""
+        comp = MessageBusConfigComponent(
+            max_queue_size=500,
+            publish_timeout=1.0,
+            request_timeout=20.0,
+            cleanup_interval=30.0,
+            max_pending_requests=5000,
+        )
+        assert comp.max_queue_size == 500
+        assert comp.publish_timeout == 1.0
+        assert comp.request_timeout == 20.0
+        assert comp.cleanup_interval == 30.0
+        assert comp.max_pending_requests == 5000
+
+    def test_invalid_negative_queue_size(self):
+        """Test that negative queue size is caught by validation."""
+        # Dataclass doesn't validate, but the component is designed for positive values
+        comp = MessageBusConfigComponent(max_queue_size=-1)
+        assert comp.max_queue_size == -1  # Stored as-is, validation in system
+
+    def test_dataclass_slots(self):
+        """Test MessageBusConfigComponent uses slots."""
+        assert hasattr(MessageBusConfigComponent, "__slots__")
+
+
+class TestMessageBusSubscriptionComponent:
+    """Test MessageBusSubscriptionComponent."""
+
+    def test_instantiation(self):
+        """Test MessageBusSubscriptionComponent can be instantiated with empty subscriptions."""
+        comp = MessageBusSubscriptionComponent()
+        assert comp.subscriptions == {}
+
+    def test_mutable_default_independence(self):
+        """Test that mutable defaults are independent instances."""
+        comp1 = MessageBusSubscriptionComponent()
+        comp2 = MessageBusSubscriptionComponent()
+        comp1.subscriptions["topic1"] = {"sub1", "sub2"}
+        assert "topic1" not in comp2.subscriptions
+
+    def test_custom_subscriptions(self):
+        """Test MessageBusSubscriptionComponent with custom subscriptions."""
+        subs = {"topic1": {"subscriber_a", "subscriber_b"}}
+        comp = MessageBusSubscriptionComponent(subscriptions=subs)
+        assert comp.subscriptions == subs
+
+    def test_dataclass_slots(self):
+        """Test MessageBusSubscriptionComponent uses slots."""
+        assert hasattr(MessageBusSubscriptionComponent, "__slots__")
+
+
+class TestMessageBusConversationComponent:
+    """Test MessageBusConversationComponent."""
+
+    def test_instantiation(self):
+        """Test MessageBusConversationComponent can be instantiated."""
+        entity_id = EntityId(123)
+        comp = MessageBusConversationComponent(entity_id=entity_id)
+        assert comp.entity_id == entity_id
+        assert comp.messages == []
+        assert comp.max_messages == 1000
+
+    def test_custom_max_messages(self):
+        """Test MessageBusConversationComponent with custom max_messages."""
+        entity_id = EntityId(456)
+        comp = MessageBusConversationComponent(entity_id=entity_id, max_messages=500)
+        assert comp.entity_id == entity_id
+        assert comp.max_messages == 500
+
+    def test_message_history(self):
+        """Test MessageBusConversationComponent with message history."""
+        entity_id = EntityId(789)
+        messages = [Message(role="user", content="hello")]
+        comp = MessageBusConversationComponent(
+            entity_id=entity_id,
+            messages=messages,
+            max_messages=1000,
+        )
+        assert comp.entity_id == entity_id
+        assert len(comp.messages) == 1
+        assert comp.messages[0].role == "user"
+
+    def test_mutable_message_default_independence(self):
+        """Test that mutable message defaults are independent instances."""
+        entity_id1 = EntityId(111)
+        entity_id2 = EntityId(222)
+        comp1 = MessageBusConversationComponent(entity_id=entity_id1)
+        comp2 = MessageBusConversationComponent(entity_id=entity_id2)
+        comp1.messages.append(Message(role="user", content="test"))
+        assert len(comp2.messages) == 0
+
+    def test_dataclass_slots(self):
+        """Test MessageBusConversationComponent uses slots."""
+        assert hasattr(MessageBusConversationComponent, "__slots__")
+
+
 class TestComponentCount:
     """Test component count limit."""
 
     def test_component_count_limit(self):
-        """Test that component count does not exceed 30."""
+        """Test that component count does not exceed 35."""
         import ecs_agent.components.definitions as d
 
         count = sum(
@@ -285,14 +397,14 @@ class TestComponentCount:
             and dataclasses.is_dataclass(getattr(d, name, None))
             and getattr(d, name).__module__ == "ecs_agent.components.definitions"
         )
-        assert count <= 30, f"Component count {count} exceeds limit of 30"
+        assert count <= 35, f"Component count {count} exceeds limit of 35"
 
 
 class TestComponentsExportedInInit:
     """Test that all components are exported from __init__.py."""
 
     def test_all_components_exported(self):
-        """Test all 23 components can be imported from ecs_agent.components."""
+        """Test all 26 components can be imported from ecs_agent.components."""
         from ecs_agent import components
 
         component_names = [
@@ -319,6 +431,9 @@ class TestComponentsExportedInInit:
             "CompactionConfigComponent",
             "ConversationArchiveComponent",
             "RunnerStateComponent",
+            "MessageBusConfigComponent",
+            "MessageBusSubscriptionComponent",
+            "MessageBusConversationComponent",
         ]
 
         for name in component_names:

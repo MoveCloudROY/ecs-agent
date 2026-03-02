@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
+from datetime import datetime
 from typing import Any, NewType
 
 EntityId = NewType("EntityId", int)
@@ -368,6 +369,72 @@ class DelegationCompletedEvent:
     result: str
 
 
+@dataclass(slots=True)
+class MessageBusEnvelope:
+    """CloudEvents-aligned message bus envelope with correlation and tracing extensions.
+
+    Enforces CloudEvents required fields (id, source, type, specversion) plus
+    correlation extension (correlationid, causationid) and distributed tracing
+    extension (traceparent, tracestate).
+    """
+
+    # CloudEvents required fields
+    id: str
+    source: str
+    type: str
+    specversion: str
+    # Correlation extension (required for message bus)
+    correlationid: str
+    # Distributed tracing extension (required for message bus)
+    traceparent: str
+    # Optional CloudEvents fields
+    datacontenttype: str = "application/json"
+    subject: str | None = None
+    time: datetime | None = None
+    data: Any | None = None
+    # Correlation extension (optional)
+    causationid: str | None = None
+    # Distributed tracing extension (optional)
+    tracestate: str | None = None
+    # Message bus extension (optional)
+    expirytime: datetime | None = None
+
+
+@dataclass(slots=True)
+class MessageBusPublishedEvent:
+    """Event emitted when a message is published to a topic."""
+
+    entity_id: EntityId
+    envelope: MessageBusEnvelope
+    topic: str
+
+
+@dataclass(slots=True)
+class MessageBusDeliveredEvent:
+    """Event emitted when a message is delivered to a subscriber."""
+
+    entity_id: EntityId
+    subscriber_id: EntityId
+    envelope: MessageBusEnvelope
+
+
+@dataclass(slots=True)
+class MessageBusTimeoutEvent:
+    """Event emitted when a request times out waiting for response."""
+
+    entity_id: EntityId
+    correlation_id: str
+
+
+@dataclass(slots=True)
+class MessageBusResponseEvent:
+    """Event emitted when a response is received for a request."""
+
+    entity_id: EntityId
+    correlation_id: str
+    envelope: MessageBusEnvelope
+
+
 __all__ = [
     "ApprovalPolicy",
     "BranchCreatedEvent",
@@ -388,6 +455,11 @@ __all__ = [
     "MCTSNodeScoredEvent",
     "Message",
     "MessageDeliveredEvent",
+    "MessageBusDeliveredEvent",
+    "MessageBusEnvelope",
+    "MessageBusPublishedEvent",
+    "MessageBusResponseEvent",
+    "MessageBusTimeoutEvent",
     "PlanRevisedEvent",
     "PlanStepCompletedEvent",
     "RAGRetrievalCompletedEvent",
@@ -410,6 +482,5 @@ __all__ = [
     "ToolSchema",
     "ToolTimeoutError",
     "Usage",
-    "UserInputReceivedEvent",
     "UserInputRequestedEvent",
 ]

@@ -237,3 +237,141 @@ class TestLoggingIntegration:
             if parsed.get("event") == "error_event":
                 assert parsed.get("error_code") == 500
                 break
+
+
+class TestBusLogging:
+    """Tests for message bus log sampling hooks."""
+
+    def test_log_bus_publish_includes_trace_context(self, capsys):
+        """Test log_bus_publish includes trace_id and correlation_id."""
+        from ecs_agent.logging import log_bus_publish
+
+        configure_logging(json_output=True, level="INFO")
+
+        logger = get_logger("test_bus")
+        log_bus_publish(
+            logger,
+            topic="test.topic",
+            trace_id="4bf92f3577b34da6a3ce929d0e0e4736",
+            correlation_id="corr-123",
+            payload_type="TestPayload",
+        )
+
+        captured = capsys.readouterr()
+        lines = [line for line in captured.out.strip().split("\n") if line]
+
+        for line in reversed(lines):
+            parsed = json.loads(line)
+            if parsed.get("event") == "bus_publish":
+                assert parsed.get("topic") == "test.topic"
+                assert parsed.get("trace_id") == "4bf92f3577b34da6a3ce929d0e0e4736"
+                assert parsed.get("correlation_id") == "corr-123"
+                assert parsed.get("payload_type") == "TestPayload"
+                break
+
+    def test_log_bus_deliver_includes_subscriber_id(self, capsys):
+        """Test log_bus_deliver includes subscriber_id and trace context."""
+        from ecs_agent.logging import log_bus_deliver
+
+        configure_logging(json_output=True, level="DEBUG")
+
+        logger = get_logger("test_bus")
+        log_bus_deliver(
+            logger,
+            topic="test.topic",
+            subscriber_id="sub-456",
+            trace_id="4bf92f3577b34da6a3ce929d0e0e4736",
+            correlation_id="corr-123",
+        )
+
+        captured = capsys.readouterr()
+        lines = [line for line in captured.out.strip().split("\n") if line]
+
+        for line in reversed(lines):
+            parsed = json.loads(line)
+            if parsed.get("event") == "bus_deliver":
+                assert parsed.get("topic") == "test.topic"
+                assert parsed.get("subscriber_id") == "sub-456"
+                assert parsed.get("trace_id") == "4bf92f3577b34da6a3ce929d0e0e4736"
+                assert parsed.get("correlation_id") == "corr-123"
+                break
+
+    def test_log_bus_timeout_includes_timeout_seconds(self, capsys):
+        """Test log_bus_timeout includes timeout_seconds and trace context."""
+        from ecs_agent.logging import log_bus_timeout
+
+        configure_logging(json_output=True, level="WARNING")
+
+        logger = get_logger("test_bus")
+        log_bus_timeout(
+            logger,
+            request_id="req-789",
+            trace_id="4bf92f3577b34da6a3ce929d0e0e4736",
+            correlation_id="corr-123",
+            timeout_seconds=30.0,
+        )
+
+        captured = capsys.readouterr()
+        lines = [line for line in captured.out.strip().split("\n") if line]
+
+        for line in reversed(lines):
+            parsed = json.loads(line)
+            if parsed.get("event") == "bus_timeout":
+                assert parsed.get("request_id") == "req-789"
+                assert parsed.get("trace_id") == "4bf92f3577b34da6a3ce929d0e0e4736"
+                assert parsed.get("correlation_id") == "corr-123"
+                assert parsed.get("timeout_seconds") == 30.0
+                break
+
+    def test_log_bus_response_includes_success_flag(self, capsys):
+        """Test log_bus_response includes success flag and trace context."""
+        from ecs_agent.logging import log_bus_response
+
+        configure_logging(json_output=True, level="INFO")
+
+        logger = get_logger("test_bus")
+        log_bus_response(
+            logger,
+            request_id="req-789",
+            trace_id="4bf92f3577b34da6a3ce929d0e0e4736",
+            correlation_id="corr-123",
+            success=True,
+        )
+
+        captured = capsys.readouterr()
+        lines = [line for line in captured.out.strip().split("\n") if line]
+
+        for line in reversed(lines):
+            parsed = json.loads(line)
+            if parsed.get("event") == "bus_response":
+                assert parsed.get("request_id") == "req-789"
+                assert parsed.get("trace_id") == "4bf92f3577b34da6a3ce929d0e0e4736"
+                assert parsed.get("correlation_id") == "corr-123"
+                assert parsed.get("success") is True
+                break
+
+    def test_log_bus_publish_without_payload_type(self, capsys):
+        """Test log_bus_publish with None payload_type."""
+        from ecs_agent.logging import log_bus_publish
+
+        configure_logging(json_output=True, level="INFO")
+
+        logger = get_logger("test_bus")
+        log_bus_publish(
+            logger,
+            topic="test.topic",
+            trace_id="4bf92f3577b34da6a3ce929d0e0e4736",
+            correlation_id="corr-123",
+        )
+
+        captured = capsys.readouterr()
+        lines = [line for line in captured.out.strip().split("\n") if line]
+
+        for line in reversed(lines):
+            parsed = json.loads(line)
+            if parsed.get("event") == "bus_publish":
+                assert parsed.get("topic") == "test.topic"
+                assert parsed.get("trace_id") == "4bf92f3577b34da6a3ce929d0e0e4736"
+                assert parsed.get("correlation_id") == "corr-123"
+                assert parsed.get("payload_type") is None
+                break

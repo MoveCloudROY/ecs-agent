@@ -1,6 +1,7 @@
-"""Tests for new type definitions (Task 1): ToolTimeoutError, ApprovalPolicy, events."""
+"""Tests for new type definitions: ToolTimeoutError, ApprovalPolicy, events, and CloudEvents-aligned bus types."""
 
 import asyncio
+from datetime import datetime
 from enum import Enum
 
 import pytest
@@ -9,6 +10,11 @@ from ecs_agent.types import (
     ApprovalPolicy,
     EntityId,
     MCTSNodeScoredEvent,
+    MessageBusEnvelope,
+    MessageBusDeliveredEvent,
+    MessageBusPublishedEvent,
+    MessageBusResponseEvent,
+    MessageBusTimeoutEvent,
     RAGRetrievalCompletedEvent,
     ToolApprovedEvent,
     ToolApprovalRequestedEvent,
@@ -16,7 +22,6 @@ from ecs_agent.types import (
     ToolDeniedEvent,
     ToolTimeoutError,
 )
-
 
 class TestToolTimeoutError:
     """ToolTimeoutError exception tests."""
@@ -228,3 +233,178 @@ class TestAllExports:
         assert callable(ToolDeniedEvent)
         assert callable(MCTSNodeScoredEvent)
         assert callable(RAGRetrievalCompletedEvent)
+
+
+class TestMessageBusEnvelope:
+    """MessageBusEnvelope dataclass tests."""
+
+    def test_instantiate_with_required_fields(self) -> None:
+        """MessageBusEnvelope should instantiate with all required CloudEvents fields."""
+        env = MessageBusEnvelope(
+            id="evt-001",
+            source="ecs://entity/42",
+            type="ecs.bus.publish",
+            specversion="1.0",
+            correlationid="corr-001",
+            traceparent="00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        )
+        assert env.id == "evt-001"
+        assert env.source == "ecs://entity/42"
+        assert env.type == "ecs.bus.publish"
+        assert env.specversion == "1.0"
+        assert env.correlationid == "corr-001"
+        assert env.traceparent == "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+
+    def test_optional_fields_defaults(self) -> None:
+        """MessageBusEnvelope optional fields should have sensible defaults."""
+        env = MessageBusEnvelope(
+            id="evt-001",
+            source="ecs://entity/42",
+            type="ecs.bus.publish",
+            specversion="1.0",
+            correlationid="corr-001",
+            traceparent="00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        )
+        assert env.datacontenttype == "application/json"
+        assert env.causationid is None
+        assert env.tracestate is None
+        assert env.expirytime is None
+        assert env.subject is None
+        assert env.time is None
+        assert env.data is None
+
+    def test_extension_fields_all_set(self) -> None:
+        """MessageBusEnvelope extension fields should all be settable."""
+        now = datetime.now()
+        env = MessageBusEnvelope(
+            id="evt-001",
+            source="ecs://entity/42",
+            type="ecs.bus.publish",
+            specversion="1.0",
+            correlationid="corr-001",
+            causationid="parent-evt-001",
+            traceparent="00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            tracestate="vendor-trace-state",
+            expirytime=now,
+            datacontenttype="application/json",
+            subject="example/subject",
+            time=now,
+            data={"key": "value"},
+        )
+        assert env.causationid == "parent-evt-001"
+        assert env.tracestate == "vendor-trace-state"
+        assert env.expirytime == now
+        assert env.subject == "example/subject"
+        assert env.time == now
+        assert env.data == {"key": "value"}
+
+    def test_dataclass_has_slots(self) -> None:
+        """MessageBusEnvelope should have __slots__ (no __dict__)."""
+        env = MessageBusEnvelope(
+            id="evt-001",
+            source="ecs://entity/42",
+            type="ecs.bus.publish",
+            specversion="1.0",
+            correlationid="corr-001",
+            traceparent="00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        )
+        assert not hasattr(env, "__dict__")
+
+
+class TestMessageBusPublishedEvent:
+    """MessageBusPublishedEvent dataclass tests."""
+
+    def test_instantiate_with_required_fields(self) -> None:
+        """MessageBusPublishedEvent should instantiate with required fields."""
+        env = MessageBusEnvelope(
+            id="evt-001",
+            source="ecs://entity/42",
+            type="ecs.bus.publish",
+            specversion="1.0",
+            correlationid="corr-001",
+            traceparent="00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        )
+        event = MessageBusPublishedEvent(
+            entity_id=EntityId(42),
+            envelope=env,
+            topic="orders.created",
+        )
+        assert event.entity_id == EntityId(42)
+        assert event.envelope == env
+        assert event.topic == "orders.created"
+
+    def test_dataclass_has_slots(self) -> None:
+        """MessageBusPublishedEvent should have __slots__."""
+        env = MessageBusEnvelope(
+            id="evt-001",
+            source="ecs://entity/42",
+            type="ecs.bus.publish",
+            specversion="1.0",
+            correlationid="corr-001",
+            traceparent="00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        )
+        event = MessageBusPublishedEvent(
+            entity_id=EntityId(42),
+            envelope=env,
+            topic="orders.created",
+        )
+        assert not hasattr(event, "__dict__")
+
+
+class TestMessageBusDeliveredEvent:
+    """MessageBusDeliveredEvent dataclass tests."""
+
+    def test_instantiate_with_required_fields(self) -> None:
+        """MessageBusDeliveredEvent should instantiate with required fields."""
+        env = MessageBusEnvelope(
+            id="evt-001",
+            source="ecs://entity/42",
+            type="ecs.bus.publish",
+            specversion="1.0",
+            correlationid="corr-001",
+            traceparent="00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        )
+        event = MessageBusDeliveredEvent(
+            entity_id=EntityId(42),
+            subscriber_id=EntityId(99),
+            envelope=env,
+        )
+        assert event.entity_id == EntityId(42)
+        assert event.subscriber_id == EntityId(99)
+        assert event.envelope == env
+
+
+class TestMessageBusTimeoutEvent:
+    """MessageBusTimeoutEvent dataclass tests."""
+
+    def test_instantiate_with_required_fields(self) -> None:
+        """MessageBusTimeoutEvent should instantiate with required fields."""
+        event = MessageBusTimeoutEvent(
+            entity_id=EntityId(42),
+            correlation_id="corr-001",
+        )
+        assert event.entity_id == EntityId(42)
+        assert event.correlation_id == "corr-001"
+
+
+class TestMessageBusResponseEvent:
+    """MessageBusResponseEvent dataclass tests."""
+
+    def test_instantiate_with_required_fields(self) -> None:
+        """MessageBusResponseEvent should instantiate with required fields."""
+        env = MessageBusEnvelope(
+            id="resp-001",
+            source="ecs://entity/99",
+            type="ecs.bus.response",
+            specversion="1.0",
+            correlationid="corr-001",
+            traceparent="00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        )
+        event = MessageBusResponseEvent(
+            entity_id=EntityId(42),
+            correlation_id="corr-001",
+            envelope=env,
+        )
+        assert event.entity_id == EntityId(42)
+        assert event.correlation_id == "corr-001"
+        assert event.envelope == env

@@ -258,6 +258,32 @@ class UserInputComponent:
 
 
 @dataclass(slots=True)
+class MessageBusConfigComponent:
+    """Bus configuration (buffer sizes, timeouts)."""
+
+    max_queue_size: int = 1000
+    publish_timeout: float = 2.0
+    request_timeout: float = 30.0
+    cleanup_interval: float = 60.0
+    max_pending_requests: int = 10000
+
+
+@dataclass(slots=True)
+class MessageBusSubscriptionComponent:
+    """Topic subscriptions per entity."""
+
+    subscriptions: dict[str, set[str]] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class MessageBusConversationComponent:
+    """Bounded conversation retention metadata."""
+
+    entity_id: EntityId
+    messages: list[Message] = field(default_factory=list)
+    max_messages: int = 1000
+
+@dataclass(slots=True)
 class SubagentRegistryComponent:
     """Registry of named subagents available for delegation."""
 
