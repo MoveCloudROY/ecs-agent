@@ -35,7 +35,7 @@ Maintains the full history of messages for an agent's conversation.
 | `messages` | `list[Message]` | (none) | History of conversation messages |
 | `max_messages` | `int` | `100` | Maximum number of messages to retain |
 
-**Used by:** `ReasoningSystem`, `PlanningSystem`, `MemorySystem`, `CollaborationSystem`, `ToolExecutionSystem`, `ReplanningSystem`
+**Used by:** `ReasoningSystem`, `PlanningSystem`, `MemorySystem`, `MessageBusSystem`, `ToolExecutionSystem`, `ReplanningSystem`
 
 **Usage:**
 ```python
@@ -128,20 +128,53 @@ world.add_component(agent, PlanComponent(steps=["Analyze", "Execute", "Verify"])
 
 ## Collaboration Components
 
-### CollaborationComponent
-Manages multi-agent interactions, peer lists, and message queues.
+### MessageBusConfigComponent
+Configures the behavior and limits for the message bus.
 
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `peers` | `list[EntityId]` | (none) | IDs of collaborating peers |
-| `inbox` | `list[tuple[EntityId, Message]]` | (none) | Incoming messages from other agents |
+| `max_queue_size` | `int` | `1000` | Maximum number of buffered messages per subscriber |
+| `publish_timeout` | `float` | `2.0` | Timeout in seconds for blocking publishes (backpressure) |
+| `request_timeout` | `float` | `30.0` | Default timeout for request-response conversations |
+| `cleanup_interval` | `float` | `10.0` | Seconds between cleanup of stale request states |
 
-**Used by:** `CollaborationSystem`
+**Used by:** `MessageBusSystem`
 
 **Usage:**
 ```python
-from ecs_agent.components import CollaborationComponent
-world.add_component(agent, CollaborationComponent(peers=[peer_id], inbox=[]))
+from ecs_agent.components import MessageBusConfigComponent
+world.add_component(agent, MessageBusConfigComponent(request_timeout=60.0))
+```
+
+### MessageBusSubscriptionComponent
+Tracks an entity's topic subscriptions and message queues.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `subscriptions` | `set[str]` | `set()` | Set of topics the entity is subscribed to |
+| `inbox` | `deque[MessageBusEnvelope]` | `deque()` | Incoming message queue for the subscriber |
+
+**Used by:** `MessageBusSystem`
+
+**Usage:**
+```python
+from ecs_agent.components import MessageBusSubscriptionComponent
+world.add_component(agent, MessageBusSubscriptionComponent(subscriptions={"agent.updates", "system.alerts"}))
+```
+
+### MessageBusConversationComponent
+Manages active request-response conversations for an entity.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `active_requests` | `dict[str, float]` | `{}` | Mapping of correlation IDs to request expiration timestamps |
+
+**Used by:** `MessageBusSystem`
+
+**Usage:**
+```python
+from ecs_agent.components import MessageBusConversationComponent
+world.add_component(agent, MessageBusConversationComponent())
 ```
 
 ## State & Lifecycle Components

@@ -26,7 +26,7 @@ Build modular, testable LLM agents by composing behavior from dataclass componen
 - **Infinite Runner Loop**, `max_ticks=None` for agents that run indefinitely until a `TerminalComponent` is found.
 - **Tool Use**, Register tool schemas and async handlers. The framework manages the LLM ↔ tool call loop automatically.
 - **Planning & ReAct**, Built-in `PlanningSystem` and `ReplanningSystem` for multi-step reasoning with dynamic plan adjustment.
-- **Multi-Agent**, Multiple agent entities in one `World`, collaborating through an `EventBus` and inbox-based messaging.
+- **Multi-Agent Messaging**, Entities communicate via `MessageBusSystem` using a pub/sub or request-response pattern with CloudEvents-compatible envelopes.
 - **Subagent Delegation**, Spawn child agents for subtasks via `SubagentSystem`. Named subagent registry, isolated execution, and automatic result aggregation with the `delegate` tool.
 - **Tree-Structured Conversations**, Branch and merge conversation history with `ConversationTreeComponent`. Navigate multiple reasoning paths, compare outcomes, and linearize for system compatibility.
 - **Structured Output**, JSON mode with Pydantic schema support for type-safe LLM responses.
@@ -173,7 +173,8 @@ src/ecs_agent/
 │   ├── tool_execution.py     # Tool call dispatch
 │   ├── permission.py         # Tool whitelisting/blacklisting
 │   ├── memory.py             # Conversation memory management
-│   ├── collaboration.py      # Multi-agent messaging
+│   ├── collaboration.py      # (Removed in favor of MessageBusSystem)
+│   ├── message_bus.py        # Pub/sub and request-response messaging
 │   ├── error_handling.py     # Error capture and recovery
 │   ├── tree_search.py        # MCTS plan optimization
 │   ├── tool_approval.py      # Human-in-the-loop approval
@@ -215,7 +216,8 @@ The **Runner** repeatedly ticks the **World** until a `TerminalComponent` is att
 ```
 World
  ├── Entity 0 ── [LLMComponent, ConversationComponent, PlanComponent, ...]
- ├── Entity 1 ── [LLMComponent, ConversationComponent, CollaborationComponent, ...]
+ ├── Entity 1 ── [LLMComponent, ConversationComponent, MessageBusSubscriptionComponent, ...]
+ └── Systems ─── [ReasoningSystem(0), PlanningSystem(0), MessageBusSystem(5), MemorySystem(10), ...]
  └── Systems ─── [ReasoningSystem(0), PlanningSystem(0), ToolExecutionSystem(5), MemorySystem(10), ...]
                           │
                     Runner.run()
@@ -233,8 +235,9 @@ World
 | `ToolRegistryComponent` | Tool schemas and async handler functions |
 | `PendingToolCallsComponent` | Tool calls awaiting execution |
 | `ToolResultsComponent` | Results from completed tool calls |
-| `CollaborationComponent` | Inbox for multi-agent messaging |
-| `OwnerComponent` | Parent entity reference |
+| `MessageBusConfigComponent` | Configuration for messaging (timeouts, queue sizes) |
+| `MessageBusSubscriptionComponent` | Registry of topic subscriptions for an entity |
+| `MessageBusConversationComponent` | Tracks active request-response conversations |
 | `SystemPromptComponent` | Dedicated system prompt storage |
 | `KVStoreComponent` | Generic key-value scratch space |
 | `ErrorComponent` | Error details for failed operations |
@@ -272,13 +275,13 @@ The `examples/` directory contains 21 runnable demos:
 | [`plan_and_execute_agent.py`](examples/plan_and_execute_agent.py) | Dynamic replanning with RetryProvider and configurable timeouts |
 | [`streaming_agent.py`](examples/streaming_agent.py) | Real-time token streaming via SSE |
 | [`retry_agent.py`](examples/retry_agent.py) | RetryProvider with custom retry configuration |
-| [`multi_agent.py`](examples/multi_agent.py) | Two agents collaborating through inbox messaging (dual-mode) |
+| [`multi_agent.py`](examples/multi_agent.py) | Two agents collaborating via `MessageBusSystem` pub/sub (dual-mode) |
 | [`structured_output_agent.py`](examples/structured_output_agent.py) | Pydantic schema → JSON mode for type-safe responses |
 | [`serialization_demo.py`](examples/serialization_demo.py) | Save and restore World state to/from JSON |
 | [`tool_approval_agent.py`](examples/tool_approval_agent.py) | Manual approval flow for sensitive tools |
 | [`tree_search_agent.py`](examples/tree_search_agent.py) | MCTS-based planning for complex goals (dual-mode) |
 | [`rag_agent.py`](examples/rag_agent.py) | Retrieval-Augmented Generation demo (dual-mode with real embeddings) |
-| [`subagent_delegation.py`](examples/subagent_delegation.py) | Parent agent delegates subtasks to child agents (dual-mode) |
+| [`subagent_delegation.py`](examples/subagent_delegation.py) | Parent agent delegates subtasks via `MessageBusSystem` request-response (dual-mode) |
 | [`claude_agent.py`](examples/claude_agent.py) | Native Anthropic Claude provider usage |
 | [`litellm_agent.py`](examples/litellm_agent.py) | LiteLLM unified provider for 100+ models |
 | [`streaming_system_agent.py`](examples/streaming_system_agent.py) | System-level streaming with events |

@@ -78,7 +78,7 @@ Systems run based on their priority. Lower numbers execute first. We recommend t
 - **Priority -10**: `RAGSystem`, `UserInputSystem`. Pre-processing: vector search retrieval and user input before reasoning.
 - **Priority -5**: `ToolApprovalSystem`. Filters tool calls before execution.
 - **Priority 0**: `ReasoningSystem` or `PlanningSystem`. These systems usually handle LLM calls to decide the next action.
-- **Priority 5**: `ToolExecutionSystem` or `CollaborationSystem`. These handle the actual work or interactions with other agents.
+- **Priority 5**: `ToolExecutionSystem` or `MessageBusSystem`. These handle the actual work or interactions with other agents.
 - **Priority 7**: `ReplanningSystem`. This checks results and updates the plan if needed.
 - **Priority 10**: `MemorySystem`. This persists important information to long-term storage.
 - **Priority 99**: `ErrorHandlingSystem`. This runs last to catch and process any issues that occurred during the tick.
@@ -92,7 +92,7 @@ The `EventBus` provides a typed pub/sub mechanism for asynchronous communication
 Common event types include:
 - `ConversationTruncatedEvent`: Triggered when context limits are reached.
 - `ErrorOccurredEvent`: Published when a system encounters an exception.
-- `MessageDeliveredEvent`: Sent when a message reaches its destination.
+- `MessageBusPublishedEvent`, `MessageBusDeliveredEvent`, `MessageBusResponseEvent`, `MessageBusTimeoutEvent`: Message bus lifecycle events.
 - `PlanStepCompletedEvent`: Published after a plan step finishes successfully.
 - `PlanRevisedEvent`: Triggered when an agent changes its strategy.
 - `ToolApprovalRequestedEvent`, `ToolApprovedEvent`, `ToolDeniedEvent`: Tool approval workflow.

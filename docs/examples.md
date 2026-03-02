@@ -8,7 +8,7 @@ Overview of the included examples for the ECS-based LLM Agent framework.
 | :--- | :--- | :--- | :--- |
 | [Simple Chat Agent](#simple-chat-agent) | Minimal single-agent chat with FakeProvider | No | World + LLMComponent + Runner |
 | [Tool-Using Agent](#tool-using-agent) | LLM calls a tool, system executes it | No | ToolRegistryComponent, ToolExecutionSystem |
-| [Multi-Agent Collaboration](#multi-agent-collaboration) | Two agents exchange messages | No | CollaborationComponent, CollaborationSystem |
+| [Multi-Agent Collaboration](#multi-agent-collaboration) | Two agents exchange messages | No | MessageBus components, MessageBusSystem |
 | [ReAct Pattern Agent](#react-pattern-agent) | PlanningSystem drives multi-step plan | Yes (OpenAI) | PlanningSystem, ToolExecutionSystem |
 | [Plan-and-Execute Agent](#plan-and-execute-with-replanning) | Dynamic replanning based on results | Yes (OpenAI) | ReplanningSystem, RetryProvider |
 | [Streaming Responses](#streaming-responses) | Real-time response streaming | Optional | stream=True, Delta iteration |
@@ -18,7 +18,7 @@ Overview of the included examples for the ECS-based LLM Agent framework.
 | [Tool Approval Agent](#tool-approval-agent) | Policy-based tool call approval flow | No | ToolApprovalComponent, ToolApprovalSystem |
 | [Tree Search Agent](#tree-search-agent) | MCTS planning for complex goals | No | PlanSearchComponent, TreeSearchSystem |
 | [RAG Agent](#rag-agent) | Vector search retrieval-augmented generation | No | RAGTriggerComponent, RAGSystem |
-| [Sub-Agent Delegation](#sub-agent-delegation) | Parent agent delegates to child agents | No | OwnerComponent, CollaborationComponent |
+| [Sub-Agent Delegation](#sub-agent-delegation) | Parent agent delegates to child agents | No | Subagent components, MessageBusSystem |
 | [Claude Agent](#claude-agent) | Native Anthropic Claude provider | Yes (Anthropic) | ClaudeProvider |
 | [LiteLLM Agent](#litellm-agent) | Unified access to 100+ LLM providers | Yes (varies) | LiteLLMProvider |
 | [System Streaming](#system-streaming) | System-level streaming with events | Optional | StreamingComponent, StreamStartEvent |
@@ -153,32 +153,27 @@ Conversation:
 
 ### Multi-Agent Collaboration
 - **File:** `examples/multi_agent.py`
-- **What it demonstrates:** Two agents (researcher and summarizer) exchanging messages.
+- **What it demonstrates:** Two agents (researcher and summarizer) collaborating via pub/sub messaging.
 - **Run:** `python examples/multi_agent.py`
-- **Pattern:** `CollaborationComponent(peers, inbox)` + `CollaborationSystem`.
+- **Pattern:** `MessageBusSubscriptionComponent` + `MessageBusSystem` (pub/sub).
 
 #### Key Code
 ```python
-# Set up collaboration: Agent A sends message to Agent B
-world.add_component(agent_a_id, CollaborationComponent(peers=[agent_b_id], inbox=[]))
-world.add_component(agent_b_id, CollaborationComponent(
-    peers=[agent_a_id],
-    inbox=[(agent_a_id, Message(role="assistant", content="I found interesting data."))],
-))
+# Agent A subscribes to researcher topic
+world.add_component(agent_a_id, MessageBusSubscriptionComponent(subscriptions={"research.updates"}))
 
-# Register CollaborationSystem
-world.register_system(CollaborationSystem(priority=5), priority=5)
+# Agent B publishes to researcher topic via MessageBusSystem.publish()
 ```
 
 #### Expected Output
-Conversations for both agents:
+Conversations for both agents showing messages routed via the bus:
 ```
 Agent A (researcher) conversation:
   user: Start researching the topic.
   assistant: I've analyzed the data and found interesting patterns.
 
 Agent B (summarizer) conversation:
-  assistant (from researcher): I found interesting data.
+  assistant (from researcher on research.updates): I found interesting data.
   assistant: Thank you! I'll summarize the key findings for you.
 ```
 
@@ -429,11 +424,18 @@ Landmarks:
 
 ### Sub-Agent Delegation
 - **File:** `examples/subagent_delegation.py`
-- **What it demonstrates:** Parent agent delegating tasks to child agents.
+- **What it demonstrates:** Parent agent delegating tasks to child agents with result delivery via the message bus.
 - **Run:** `uv run python examples/subagent_delegation.py`
-- **Pattern:** `OwnerComponent` + `CollaborationComponent`.
+- **Pattern:** `SubagentRegistryComponent` + `MessageBusSystem` (request-response).
+
+#### Key Code
+```python
+# Parent agent uses SubagentSystem to spawn a researcher
+# Researcher agent publishes its final result back to the parent's inbox topic
+```
 
 > **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
+
 ---
 
 ### Claude Agent
