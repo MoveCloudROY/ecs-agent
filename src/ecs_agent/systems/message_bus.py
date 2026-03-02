@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import uuid
 from datetime import datetime
 from typing import Any
@@ -35,11 +34,13 @@ class MessageBusSystem:
     def __init__(
         self,
         *,
+        priority: int = 5,
         buffer_size: int = 1000,
         publish_timeout: float = 2.0,
         request_timeout: float = 30.0,
         dead_subscriber_failures: int = 3,
     ) -> None:
+        self.priority = priority
         self._config = MessageBusConfigComponent(
             max_queue_size=buffer_size,
             publish_timeout=publish_timeout,
@@ -96,7 +97,7 @@ class MessageBusSystem:
         topic: str,
         envelope: MessageBusEnvelope | None = None,
         message: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
         if envelope is None:
             if message is None:
                 raise ValueError("publish requires envelope or message")
@@ -115,6 +116,7 @@ class MessageBusSystem:
         )
         await self._emit_published_event(topic=topic, envelope=envelope)
 
+        delivered = False
         for subscriber_id in sorted(self._subscriptions.get(topic, set())):
             queue = self._queues.setdefault(topic, {}).get(subscriber_id)
             if queue is None:
@@ -129,6 +131,12 @@ class MessageBusSystem:
                 trace_id=trace_id,
                 correlation_id=correlation_id,
             )
+            delivered = True
+
+        if delivered:
+            self._append_published_message(envelope=envelope)
+
+        return delivered
 
     async def _deliver_to_subscriber(
         self,
@@ -175,34 +183,26 @@ class MessageBusSystem:
             trace_id=trace_id,
             correlation_id=correlation_id,
         )
-        self._append_conversation_message(
-            subscriber_id=subscriber_id, envelope=envelope
-        )
         await self._emit_delivered_event(envelope=envelope, subscriber_id=subscriber_id)
 
-    def _append_conversation_message(
-        self,
-        *,
-        subscriber_id: str,
-        envelope: MessageBusEnvelope,
-    ) -> None:
-        conversation = self._conversations.get(subscriber_id)
+    def _append_published_message(self, *, envelope: MessageBusEnvelope) -> None:
+        conversation = self._conversations.get(envelope.source)
         if conversation is None:
             return
 
-        conversation.messages.append(self._as_message(envelope))
+        conversation.messages.append(
+            Message(role="user", content=f"From: {envelope.source}: {envelope.data}")
+        )
         if len(conversation.messages) > conversation.max_messages:
             overflow = len(conversation.messages) - conversation.max_messages
             if overflow > 0:
                 del conversation.messages[:overflow]
 
-    def _as_message(self, envelope: MessageBusEnvelope) -> Message:
-        payload = envelope.data
-        if isinstance(payload, str):
-            content = payload
-        else:
-            content = json.dumps(payload, default=str)
-        return Message(role="system", content=content)
+    def get_conversation(self, entity_id: EntityId) -> list[Message]:
+        conversation = self._conversations.get(str(entity_id))
+        if conversation is None:
+            return []
+        return list(conversation.messages)
 
     def _remove_subscriber(self, *, topic: str, subscriber_id: str) -> None:
         topic_subscribers = self._subscriptions.get(topic)
