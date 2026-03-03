@@ -436,14 +436,14 @@ Landmarks:
 
 ### Sub-Agent Delegation
 - **File:** `examples/subagent_delegation.py`
-- **What it demonstrates:** Parent agent delegating tasks to child agents with result delivery via the message bus.
+- **What it demonstrates:** Parent agent delegating tasks via `delegate` tool. SubagentSystem manages child execution.
 - **Run:** `uv run python examples/subagent_delegation.py`
-- **Pattern:** `SubagentRegistryComponent` + `MessageBusSystem` (request-response).
+- **Pattern:** `SubagentRegistryComponent` + `SubagentSystem` (auto-registers `delegate` tool).
 
 #### Key Code
 ```python
-# Parent agent uses SubagentSystem to spawn a researcher
-# Researcher agent publishes its final result back to the parent's inbox topic
+# SubagentSystem auto-registers the delegate tool
+# Parent LLM calls delegate → SubagentSystem executes child → result returned
 ```
 
 > **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.

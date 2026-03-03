@@ -281,7 +281,7 @@ The `examples/` directory contains 22 runnable demos:
 | [`tool_approval_agent.py`](examples/tool_approval_agent.py) | Manual approval flow for sensitive tools |
 | [`tree_search_agent.py`](examples/tree_search_agent.py) | MCTS-based planning for complex goals (dual-mode) |
 | [`rag_agent.py`](examples/rag_agent.py) | Retrieval-Augmented Generation demo (dual-mode with real embeddings) |
-| [`subagent_delegation.py`](examples/subagent_delegation.py) | Parent agent delegates subtasks via `MessageBusSystem` request-response (dual-mode) |
+| [`subagent_delegation.py`](examples/subagent_delegation.py) | Parent agent delegates subtasks via `delegate` tool with SubagentSystem (dual-mode) |
 | [`claude_agent.py`](examples/claude_agent.py) | Native Anthropic Claude provider usage |
 | [`litellm_agent.py`](examples/litellm_agent.py) | LiteLLM unified provider for 100+ models |
 | [`streaming_system_agent.py`](examples/streaming_system_agent.py) | System-level streaming with events |
