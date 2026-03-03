@@ -75,7 +75,7 @@ from ecs_agent.components import (
     ToolRegistryComponent,
     SubagentRegistryComponent,
 )
-from ecs_agent.systems.subagent import SubagentSystem, DELEGATE_TOOL_SCHEMA
+from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.types import Message, SubagentConfig
 
 # Create parent world
@@ -92,21 +92,13 @@ researcher = SubagentConfig(
     skills=[],
 )
 
-# Register subagent
+# Register subagent and tools
+# (SubagentSystem automatically registers the 'delegate' tool schema and handler)
 world.add_component(
     parent,
     SubagentRegistryComponent(subagents={"researcher": researcher}),
 )
-
-# Register delegate tool
-from ecs_agent.systems.subagent import delegate_tool_handler
-
-world.add_component(
-    parent,
-    ToolRegistryComponent(
-        tools={"delegate": (DELEGATE_TOOL_SCHEMA, delegate_tool_handler)}
-    ),
-)
+world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
 
 # Add LLM and conversation
 world.add_component(
@@ -211,7 +203,7 @@ from ecs_agent.types import DelegationStartedEvent
 def on_delegation_started(event: DelegationStartedEvent) -> None:
     print(f"Delegating to {event.subagent_name}: {event.task}")
 
-world.event_bus.subscribe("delegation_started", on_delegation_started)
+world.event_bus.subscribe(DelegationStartedEvent, on_delegation_started)
 ```
 
 ### DelegationCompletedEvent
@@ -225,7 +217,7 @@ def on_delegation_completed(event: DelegationCompletedEvent) -> None:
     print(f"Subagent {event.subagent_name} completed in {event.ticks_used} ticks")
     print(f"Result: {event.result}")
 
-world.event_bus.subscribe("delegation_completed", on_delegation_completed)
+world.event_bus.subscribe(DelegationCompletedEvent, on_delegation_completed)
 ```
 
 ## Error Handling
@@ -281,7 +273,7 @@ def track_delegations(event: DelegationStartedEvent) -> None:
     if delegation_count > 10:
         print("Warning: Excessive delegations detected")
 
-world.event_bus.subscribe("delegation_started", track_delegations)
+world.event_bus.subscribe(DelegationStartedEvent, track_delegations)
 ```
 
 ### 4. Provide Clear Tasks

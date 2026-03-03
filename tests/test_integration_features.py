@@ -405,3 +405,31 @@ async def test_all_new_components_serializable() -> None:
     registry = restored.get_component(entity, SubagentRegistryComponent)
     assert registry is not None
     assert "test" in registry.subagents
+
+async def test_subagent_doc_consistency_stale_symbols() -> None:
+    """Contract test: Docs should not reference stale symbols."""
+    doc_path = "docs/features/subagent.md"
+    if not os.path.exists(doc_path):
+        pytest.skip(f"{doc_path} not found")
+        
+    content = Path(doc_path).read_text()
+    
+    # These symbols no longer exist or are not public
+    assert "DELEGATE_TOOL_SCHEMA" not in content, "Docs reference DELEGATE_TOOL_SCHEMA which does not exist."
+    assert "delegate_tool_handler" not in content, "Docs reference delegate_tool_handler which does not exist."
+
+async def test_subagent_doc_consistency_event_subscriptions() -> None:
+    """Contract test: Docs should use typed event subscriptions."""
+    doc_path = "docs/features/subagent.md"
+    if not os.path.exists(doc_path):
+        pytest.skip(f"{doc_path} not found")
+        
+    content = Path(doc_path).read_text()
+    
+    # Should use typed events, not string topics
+    assert "subscribe(\"delegation_started\"" not in content, "Docs use outdated subscription with string 'delegation_started'."
+    assert "subscribe(\"delegation_completed\"" not in content, "Docs use outdated subscription with string 'delegation_completed'."
+    
+    # Should show the correct typed subscription
+    assert "subscribe(DelegationStartedEvent" in content or "subscribe(DelegationStartedEvent," in content
+    assert "subscribe(DelegationCompletedEvent" in content or "subscribe(DelegationCompletedEvent," in content
