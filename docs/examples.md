@@ -16,6 +16,7 @@ Overview of the included examples for the ECS-based LLM Agent framework.
 | [Structured Output](#structured-output-with-pydantic) | JSON mode with Pydantic validation | Optional | pydantic_to_response_format |
 | [World Serialization](#world-serialization) | Save/load world state to/from JSON | No | WorldSerializer.save/load |
 | [Tool Approval Agent](#tool-approval-agent) | Policy-based tool call approval flow | No | ToolApprovalComponent, ToolApprovalSystem |
+| [Markdown Skill Agent](#markdown-skill-agent) | Load SKILL.md and install markdown-driven skill | Optional | MarkdownSkill, SkillManager |
 | [Tree Search Agent](#tree-search-agent) | MCTS planning for complex goals | No | PlanSearchComponent, TreeSearchSystem |
 | [RAG Agent](#rag-agent) | Vector search retrieval-augmented generation | No | RAGTriggerComponent, RAGSystem |
 | [Sub-Agent Delegation](#sub-agent-delegation) | Parent agent delegates to child agents | No | Subagent components, MessageBusSystem |
@@ -28,7 +29,7 @@ Overview of the included examples for the ECS-based LLM Agent framework.
 
 ## Dual-Mode Provider Selection
 
-Eight examples support **dual-mode execution** — automatically switching between `FakeProvider` (default) and `OpenAIProvider` (with API credentials) based on environment variables.
+Nine examples support **dual-mode execution** — automatically switching between `FakeProvider` (default) and `OpenAIProvider` (with API credentials) based on environment variables.
 
 ### What is Dual-Mode?
 
@@ -39,12 +40,13 @@ Dual-mode examples work in two ways:
 
 ### Supported Examples
 
-These 8 examples support dual-mode:
+These 9 examples support dual-mode:
 
 - `chat_agent.py` — Minimal chat with provider fallback
 - `multi_agent.py` — Two agents collaborating
 - `skill_discovery_agent.py` — Skills auto-discovery
 - `permission_agent.py` — Permission-controlled tools
+- `markdown_skill_agent.py` — Markdown skill loading and install
 - `subagent_delegation.py` — Parent delegating to child agents
 - `tree_search_agent.py` — MCTS planning
 - `context_management_agent.py` — Checkpoint and undo
@@ -401,6 +403,16 @@ Landmarks:
 - **What it demonstrates:** Policy-based manual approval flow for sensitive tool calls.
 - **Run:** `uv run python examples/tool_approval_agent.py`
 - **Pattern:** `ToolApprovalComponent` + `ToolApprovalSystem`.
+
+---
+
+### Markdown Skill Agent
+- **File:** `examples/markdown_skill_agent.py`
+- **What it demonstrates:** Loading a markdown skill from `SKILL.md`, auto-discovering script-based tools, and installing it with `SkillManager`.
+- **Run:** `uv run python examples/markdown_skill_agent.py`
+- **Pattern:** `MarkdownSkill` + `SkillManager` + `ReasoningSystem`.
+
+> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
 
 ---
 

@@ -282,13 +282,59 @@ async def test_responses_api_complete_non_streaming_falls_back_when_disabled() -
 
 
 @pytest.mark.asyncio
+async def test_responses_api_complete_non_streaming_falls_back_on_404() -> None:
+    responses_request = httpx.Request("POST", "https://test.openai.com/v1/responses")
+    responses_response = httpx.Response(
+        404,
+        request=responses_request,
+        text="Not Found",
+    )
+    responses_error = httpx.HTTPStatusError(
+        "404 Not Found",
+        request=responses_request,
+        response=responses_response,
+    )
+
+    fallback_response = Mock(spec=httpx.Response)
+    fallback_response.json.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "fallback"}}]
+    }
+    fallback_response.raise_for_status = Mock()
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post.side_effect = [responses_error, fallback_response]
+
+    provider = OpenAIProvider(
+        api_key="test-key",
+        base_url="https://test.openai.com/v1",
+        use_responses_api=True,
+    )
+    provider._client = mock_client
+
+    result = await provider.complete([Message(role="user", content="hello")])
+
+    assert result.message.role == "assistant"
+    assert result.message.content == "fallback"
+    assert provider._responses_api_available is False
+    assert mock_client.post.call_count == 2
+    assert (
+        mock_client.post.call_args_list[0][0][0]
+        == "https://test.openai.com/v1/responses"
+    )
+    assert (
+        mock_client.post.call_args_list[1][0][0]
+        == "https://test.openai.com/v1/chat/completions"
+    )
+
+
+@pytest.mark.asyncio
 async def test_responses_api_streaming_yields_stream_deltas() -> None:
     """Test Responses API streaming yields StreamDelta objects."""
     from ecs_agent.types import StreamDelta
-    
+
     mock_response = AsyncMock()
     mock_response.raise_for_status = Mock()
-    
+
     async def mock_aiter_lines():
         yield "event: response.created"
         yield 'data: {"type": "response.created", "response": {"id": "resp_stream_1"}}'
@@ -308,21 +354,23 @@ async def test_responses_api_streaming_yields_stream_deltas() -> None:
         yield "event: response.done"
         yield 'data: {"type": "response.done", "response": {"id": "resp_stream_1", "usage": {"input_tokens": 5, "output_tokens": 10, "total_tokens": 15}}}'
         yield ""
-    
+
     mock_response.aiter_lines = mock_aiter_lines
-    
+
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = MagicMock()
     mock_client.stream.return_value.__aenter__.return_value = mock_response
-    
+
     provider = OpenAIProvider(api_key="test-key", use_responses_api=True)
     provider._client = mock_client
-    
+
     deltas = []
-    stream_result = await provider.complete([Message(role="user", content="Hi")], stream=True)
+    stream_result = await provider.complete(
+        [Message(role="user", content="Hi")], stream=True
+    )
     async for delta in stream_result:
         deltas.append(delta)
-    
+
     assert len(deltas) >= 2
     assert any(d.content == "Hello" for d in deltas)
     assert any(d.content == " world" for d in deltas)
@@ -332,10 +380,10 @@ async def test_responses_api_streaming_yields_stream_deltas() -> None:
 async def test_responses_api_streaming_handles_tool_calls() -> None:
     """Test Responses API streaming accumulates tool calls correctly."""
     from ecs_agent.types import StreamDelta
-    
+
     mock_response = AsyncMock()
     mock_response.raise_for_status = Mock()
-    
+
     async def mock_aiter_lines():
         yield "event: response.output_item.added"
         yield 'data: {"type": "response.output_item.added", "output_index": 0, "item": {"type": "function_call", "id": "call_abc", "name": "get_weather"}}'
@@ -352,21 +400,23 @@ async def test_responses_api_streaming_handles_tool_calls() -> None:
         yield "event: response.done"
         yield 'data: {"type": "response.done", "response": {"id": "resp_tool_1"}}'
         yield ""
-    
+
     mock_response.aiter_lines = mock_aiter_lines
-    
+
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = MagicMock()
     mock_client.stream.return_value.__aenter__.return_value = mock_response
-    
+
     provider = OpenAIProvider(api_key="test-key", use_responses_api=True)
     provider._client = mock_client
-    
+
     deltas = []
-    stream_result = await provider.complete([Message(role="user", content="weather?")], stream=True)
+    stream_result = await provider.complete(
+        [Message(role="user", content="weather?")], stream=True
+    )
     async for delta in stream_result:
         deltas.append(delta)
-    
+
     # Find the delta with tool calls
     tool_delta = next((d for d in deltas if d.tool_calls), None)
     assert tool_delta is not None
@@ -379,10 +429,10 @@ async def test_responses_api_streaming_handles_tool_calls() -> None:
 async def test_responses_api_streaming_emits_done() -> None:
     """Test Responses API streaming emits final delta with finish_reason and usage."""
     from ecs_agent.types import StreamDelta
-    
+
     mock_response = AsyncMock()
     mock_response.raise_for_status = Mock()
-    
+
     async def mock_aiter_lines():
         yield "event: response.output_item.added"
         yield 'data: {"type": "response.output_item.added", "output_index": 0, "item": {"type": "message"}}'
@@ -396,21 +446,23 @@ async def test_responses_api_streaming_emits_done() -> None:
         yield "event: response.done"
         yield 'data: {"type": "response.done", "response": {"id": "resp_done", "usage": {"input_tokens": 3, "output_tokens": 5, "total_tokens": 8}}}'
         yield ""
-    
+
     mock_response.aiter_lines = mock_aiter_lines
-    
+
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = MagicMock()
     mock_client.stream.return_value.__aenter__.return_value = mock_response
-    
+
     provider = OpenAIProvider(api_key="test-key", use_responses_api=True)
     provider._client = mock_client
-    
+
     deltas = []
-    stream_result = await provider.complete([Message(role="user", content="test")], stream=True)
+    stream_result = await provider.complete(
+        [Message(role="user", content="test")], stream=True
+    )
     async for delta in stream_result:
         deltas.append(delta)
-    
+
     # Last delta should have finish_reason and usage
     last_delta = deltas[-1]
     assert last_delta.finish_reason == "stop"
@@ -425,7 +477,7 @@ async def test_responses_api_streaming_updates_response_id() -> None:
     """Test Responses API streaming updates provider.previous_response_id."""
     mock_response = AsyncMock()
     mock_response.raise_for_status = Mock()
-    
+
     async def mock_aiter_lines():
         yield "event: response.created"
         yield 'data: {"type": "response.created", "response": {"id": "resp_streaming_123"}}'
@@ -439,18 +491,20 @@ async def test_responses_api_streaming_updates_response_id() -> None:
         yield "event: response.done"
         yield 'data: {"type": "response.done", "response": {"id": "resp_streaming_123"}}'
         yield ""
-    
+
     mock_response.aiter_lines = mock_aiter_lines
-    
+
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = MagicMock()
     mock_client.stream.return_value.__aenter__.return_value = mock_response
-    
+
     provider = OpenAIProvider(api_key="test-key", use_responses_api=True)
     provider._client = mock_client
-    
-    stream_result = await provider.complete([Message(role="user", content="hi")], stream=True)
+
+    stream_result = await provider.complete(
+        [Message(role="user", content="hi")], stream=True
+    )
     async for _ in stream_result:
         pass
-    
+
     assert provider.previous_response_id == "resp_streaming_123"

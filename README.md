@@ -265,7 +265,7 @@ World
 
 ## Examples
 
-The `examples/` directory contains 21 runnable demos:
+The `examples/` directory contains 22 runnable demos:
 
 | Example | Description |
 |---------|-------------|
@@ -289,6 +289,7 @@ The `examples/` directory contains 21 runnable demos:
 | [`skill_agent.py`](examples/skill_agent.py) | Skill system and BuiltinToolsSkill (read/write/edit) lifecycle |
 | [`skill_discovery_agent.py`](examples/skill_discovery_agent.py) | File-based skill loading from folder (dual-mode) |
 | [`permission_agent.py`](examples/permission_agent.py) | Permission-restricted agent with tool filtering (dual-mode) |
+| [`markdown_skill_agent.py`](examples/markdown_skill_agent.py) | Load a SKILL.md markdown skill and install it on an agent (dual-mode) |
 | [`mcp_agent.py`](examples/mcp_agent.py) | MCP server integration and namespaced tool usage |
 
 

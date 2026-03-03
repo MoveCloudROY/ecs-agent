@@ -36,6 +36,7 @@ class OpenAIProvider:
         self._base_url = base_url
         self._model = model
         self.use_responses_api = use_responses_api
+        self._responses_api_available: bool | None = None
         self.previous_response_id: str | None = None
         self._timeout = httpx.Timeout(
             connect=connect_timeout,
@@ -52,11 +53,43 @@ class OpenAIProvider:
         stream: bool = False,
         response_format: dict[str, Any] | None = None,
     ) -> CompletionResult | AsyncIterator[StreamDelta]:
-        if self.use_responses_api:
+        if self.use_responses_api and self._responses_api_available is not False:
             if stream:
                 return self._stream_responses_api(messages, tools, response_format)
-            return await self._complete_responses_api(messages, tools, response_format)
 
+            try:
+                result = await self._complete_responses_api(
+                    messages, tools, response_format
+                )
+                self._responses_api_available = True
+                return result
+            except httpx.HTTPStatusError as exc:
+                if not self._should_fallback_from_responses(exc):
+                    raise
+                self._responses_api_available = False
+                logger.info(
+                    "responses_api_fallback",
+                    status_code=exc.response.status_code,
+                    endpoint=f"{self._base_url}/responses",
+                )
+
+        url, headers, request_body = self._build_chat_completion_request(
+            messages,
+            tools,
+            response_format,
+        )
+
+        if stream:
+            return self._stream_complete(url, headers, request_body)
+
+        return await self._complete_non_streaming(url, headers, request_body)
+
+    def _build_chat_completion_request(
+        self,
+        messages: list[Message],
+        tools: list[ToolSchema] | None,
+        response_format: dict[str, Any] | None,
+    ) -> tuple[str, dict[str, str], dict[str, Any]]:
         url = f"{self._base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -74,10 +107,10 @@ class OpenAIProvider:
         if response_format is not None:
             request_body["response_format"] = response_format
 
-        if stream:
-            return self._stream_complete(url, headers, request_body)
+        return url, headers, request_body
 
-        return await self._complete_non_streaming(url, headers, request_body)
+    def _should_fallback_from_responses(self, exc: httpx.HTTPStatusError) -> bool:
+        return exc.response.status_code == 404
 
     async def _complete_non_streaming(
         self,
@@ -230,8 +263,6 @@ class OpenAIProvider:
                 timeout=timeout,
             ) as response:
                 response.raise_for_status()
-                current_event: str | None = None
-
                 async for line in response.aiter_lines():
                     if not line:
                         continue
@@ -242,7 +273,6 @@ class OpenAIProvider:
 
                     # Parse SSE format: 'event: <event_name>' or 'data: <json>'
                     if stripped.startswith("event:"):
-                        current_event = stripped[6:].strip()
                         continue
 
                     if stripped.startswith("data:"):
@@ -378,6 +408,8 @@ class OpenAIProvider:
         # Update response_id after streaming completes
         if current_response_id:
             self.previous_response_id = current_response_id
+        self._responses_api_available = True
+
     async def _stream_complete(
         self,
         url: str,
