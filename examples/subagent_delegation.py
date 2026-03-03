@@ -1,10 +1,10 @@
 """Sub-agent delegation example using the ECS-based LLM Agent framework.
 
 This example demonstrates:
-- A manager agent that delegates a research task to a sub-agent
+- A manager agent that delegates a research task to a sub-agent using the 'delegate' tool
+- SubagentSystem auto-registration of the delegate tool
+- Tool-driven roundtrip workflow: manager calls delegate → SubagentSystem executes child → result returned as tool response
 - OwnerComponent linking the sub-agent to its parent
-- MessageBusSystem request-response for result delivery
-- Multi-phase execution: manager delegates → sub-agent works → manager summarizes
 
 Dual-mode operation:
 - Without LLM_API_KEY: Uses FakeProvider for demonstration
@@ -17,29 +17,30 @@ import os
 from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
-    MessageBusConfigComponent,
-    MessageBusSubscriptionComponent,
+    SubagentRegistryComponent,
+    ToolRegistryComponent,
     OwnerComponent,
-    TerminalComponent,
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeProvider
 from ecs_agent.providers.openai_provider import OpenAIProvider
-from ecs_agent.systems.message_bus import MessageBusSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
-from ecs_agent.types import CompletionResult, Message
+from ecs_agent.systems.subagent import SubagentSystem
+from ecs_agent.systems.tool_execution import ToolExecutionSystem
+from ecs_agent.types import CompletionResult, Message, SubagentConfig, ToolCall
 
 
 async def main() -> None:
-    """Run a sub-agent delegation example.
+    """Run a sub-agent delegation example using delegate-tool workflow.
 
-    Flow (3 phases):
-      Phase 1 — Manager receives user question, decides to delegate.
-      Phase 2 — Sub-agent is spawned, researches the topic, reports findings.
-      Phase 3 — Sub-agent's findings are delivered to manager's inbox.
-                Manager reads them and produces a final summary.
+    Flow:
+      1. Manager receives user question
+      2. Manager calls delegate tool
+      3. SubagentSystem creates and executes child entity
+      4. Tool result delivered to manager conversation
+      5. Manager synthesizes final summary
     """
     world = World()
 
@@ -59,92 +60,55 @@ async def main() -> None:
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
         print()
 
-    # ── Message Bus Setup ──────────────────────────────────────────
-    bus_entity = world.create_entity()
-    world.add_component(bus_entity, MessageBusConfigComponent())
-    world.add_component(bus_entity, MessageBusSubscriptionComponent())
-
-    # ── Systems ──────────────────────────────────────────────────────
-    world.register_system(ReasoningSystem(priority=0), priority=0)
-    message_bus_system = MessageBusSystem(priority=5)
-    world.register_system(message_bus_system, priority=5)
-    world.register_system(MemorySystem(), priority=10)
-    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
-
-    runner = Runner()
-
-    # ================================================================
-    # Phase 1 — Manager decides to delegate
-    # ================================================================
+    # ── Provider Setup ──────────────────────────────────────────────
     if api_key:
         manager_provider = OpenAIProvider(
             api_key=api_key, base_url=base_url, model=model
         )
+        subagent_provider = OpenAIProvider(
+            api_key=api_key, base_url=base_url, model=model
+        )
     else:
+        # FakeProvider for manager: first response calls delegate tool, second produces summary
         manager_provider = FakeProvider(
             responses=[
                 CompletionResult(
                     message=Message(
                         role="assistant",
+                        content="I'll delegate this research to my subagent.",
+                        tool_calls=[
+                            ToolCall(
+                                id="call_001",
+                                name="delegate",
+                                arguments={
+                                    "subagent_name": "researcher",
+                                    "task": (
+                                        "Research the most promising near-term applications "
+                                        "of quantum computing. Report your findings."
+                                    ),
+                                },
+                            )
+                        ],
+                    )
+                ),
+                CompletionResult(
+                    message=Message(
+                        role="assistant",
                         content=(
-                            "Good question. I'll delegate the research on quantum "
-                            "computing applications to my sub-agent and summarize "
-                            "the findings once they report back."
+                            "Based on my sub-agent's research, here is the summary:\n\n"
+                            "Quantum computing has three key near-term applications:\n"
+                            "1. Drug discovery — simulating molecular interactions\n"
+                            "2. Optimization — logistics and supply-chain routing\n"
+                            "3. Cryptography — post-quantum encryption standards\n\n"
+                            "These areas are expected to see practical impact within "
+                            "the next 5–10 years."
                         ),
                     )
                 ),
             ]
         )
 
-    manager_id = world.create_entity()
-    world.add_component(
-        manager_id,
-        LLMComponent(
-            provider=manager_provider,
-            model=model if api_key else "fake-manager",
-            system_prompt=(
-                "You are a manager agent. When given a complex question, "
-                "delegate research to your sub-agent and then synthesize "
-                "the results into a concise summary."
-            ),
-        ),
-    )
-    world.add_component(
-        manager_id,
-        ConversationComponent(
-            messages=[
-                Message(
-                    role="user",
-                    content=(
-                        "What are the most promising near-term applications "
-                        "of quantum computing?"
-                    ),
-                )
-            ]
-        ),
-    )
-    world.add_component(manager_id, MessageBusSubscriptionComponent())
-
-    # Run one tick — manager produces its delegation response, then
-    # FakeProvider is exhausted → TerminalComponent is added.
-    await runner.run(world, max_ticks=1)
-
-    print("=" * 60)
-    print("Phase 1: Manager decided to delegate")
-    print("=" * 60)
-    _print_conversation("Manager", manager_id, world)
-
-    # Remove the terminal so the manager can continue later.
-    world.remove_component(manager_id, TerminalComponent)
-
-    # ================================================================
-    # Phase 2 — Spawn sub-agent to do research
-    # ================================================================
-    if api_key:
-        subagent_provider = OpenAIProvider(
-            api_key=api_key, base_url=base_url, model=model
-        )
-    else:
+        # FakeProvider for subagent (used by SubagentSystem when delegate tool is called)
         subagent_provider = FakeProvider(
             responses=[
                 CompletionResult(
@@ -162,126 +126,84 @@ async def main() -> None:
             ]
         )
 
-    subagent_id = world.create_entity()
+    # ── Manager Entity Setup ────────────────────────────────────────
+    manager_id = world.create_entity()
+
     world.add_component(
-        subagent_id,
+        manager_id,
         LLMComponent(
-            provider=subagent_provider,
-            model=model if api_key else "fake-researcher",
+            provider=manager_provider,
+            model=model if api_key else "fake-manager",
             system_prompt=(
-                "You are a research sub-agent. Investigate the given topic "
-                "thoroughly and report your findings back to the manager."
+                "You are a manager agent. When given a complex question, "
+                "use the 'delegate' tool to assign research to your 'researcher' subagent. "
+                "After receiving the results, synthesize them into a concise summary."
             ),
         ),
     )
+
     world.add_component(
-        subagent_id,
+        manager_id,
         ConversationComponent(
             messages=[
                 Message(
                     role="user",
                     content=(
-                        "Research the most promising near-term applications "
-                        "of quantum computing. Report your findings."
+                        "What are the most promising near-term applications "
+                        "of quantum computing?"
                     ),
                 )
             ]
         ),
     )
-    # Link sub-agent to its parent.
-    world.add_component(subagent_id, OwnerComponent(owner_id=manager_id))
-    world.add_component(subagent_id, MessageBusSubscriptionComponent())
 
-    # Temporarily remove manager's LLM so only the sub-agent runs
-    # reasoning this tick.
-    manager_llm = world.get_component(manager_id, LLMComponent)
-    assert manager_llm is not None
-    world.remove_component(manager_id, LLMComponent)
-
-    await runner.run(world, max_ticks=1)
-
-    print()
-    print("=" * 60)
-    print("Phase 2: Sub-agent completed research")
-    print("=" * 60)
-    _print_conversation("Sub-agent", subagent_id, world)
-
-    # ================================================================
-    # Phase 3 — Deliver findings to manager → manager summarizes
-    # ================================================================
-
-    # Restore manager's LLM with a fresh provider for the summary.
-    if api_key:
-        summary_provider = OpenAIProvider(
-            api_key=api_key, base_url=base_url, model=model
-        )
-    else:
-        summary_provider = FakeProvider(
-            responses=[
-                CompletionResult(
-                    message=Message(
-                        role="assistant",
-                        content=(
-                            "Based on my sub-agent's research, here is the summary:\n\n"
-                            "Quantum computing has three key near-term applications:\n"
-                            "1. Drug discovery — simulating molecular interactions\n"
-                            "2. Optimization — logistics and supply-chain routing\n"
-                            "3. Cryptography — post-quantum encryption standards\n\n"
-                            "These areas are expected to see practical impact within "
-                            "the next 5–10 years."
-                        ),
-                    )
-                ),
-            ]
-        )
+    # Configure subagent registry (SubagentSystem will auto-register delegate tool)
     world.add_component(
         manager_id,
-        LLMComponent(
-            provider=summary_provider,
-            model=model if api_key else "fake-manager",
-            system_prompt=manager_llm.system_prompt,
+        SubagentRegistryComponent(
+            subagents={
+                "researcher": SubagentConfig(
+                    name="researcher",
+                    provider=subagent_provider,
+                    model=model if api_key else "fake-researcher",
+                    system_prompt=(
+                        "You are a research sub-agent. Investigate the given topic "
+                        "thoroughly and report your findings back to the manager."
+                    ),
+                    max_ticks=10,
+                    skills=[],
+                )
+            }
         ),
     )
 
-    # Deliver sub-agent's last message into manager's conversation via message bus.
-    subagent_conv = world.get_component(subagent_id, ConversationComponent)
-    assert subagent_conv is not None
-    last_msg = subagent_conv.messages[-1]
+    # ToolRegistryComponent required for SubagentSystem to auto-register delegate tool
+    world.add_component(manager_id, ToolRegistryComponent(tools={}, handlers={}))
 
-    # Subscribe manager to receive sub-agent's message
-    message_bus_system.subscribe(
-        topic=f"subagent-report-{subagent_id}",
-        subscriber_id=str(manager_id),
-    )
+    # ── Systems Registration ────────────────────────────────────────
+    # SubagentSystem priority=-1 ensures delegate tool registered BEFORE ReasoningSystem runs
+    world.register_system(SubagentSystem(priority=-1), priority=-1)
+    world.register_system(ReasoningSystem(priority=0), priority=0)
+    world.register_system(ToolExecutionSystem(priority=5), priority=5)
+    world.register_system(MemorySystem(), priority=10)
+    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
-    # Publish sub-agent's findings
-    await message_bus_system.publish(
-        topic=f"subagent-report-{subagent_id}",
-        message={"content": last_msg.content, "role": last_msg.role},
-    )
+    # ── Run Agent ───────────────────────────────────────────────────
+    runner = Runner()
+    await runner.run(world, max_ticks=20)
 
-    # Mark sub-agent as done.
-    world.add_component(
-        subagent_id,
-        TerminalComponent(reason="delegation_complete"),
-    )
-
-    # Run final tick: MessageBusSystem delivers message → Reasoning
-    # produces the summary.
-    await runner.run(world, max_ticks=1)
-
-    print()
+    # ── Print Results ───────────────────────────────────────────────
     print("=" * 60)
-    print("Phase 3: Manager received findings and produced summary")
+    print("Manager Conversation (Delegate-Tool Roundtrip)")
     print("=" * 60)
-    _print_conversation("Manager (final)", manager_id, world)
+    _print_conversation("Manager", manager_id, world)
 
-    # Show the parent-child relationship.
-    owner = world.get_component(subagent_id, OwnerComponent)
-    if owner is not None:
+    # Show parent-child relationship
+    for entity_id, components in world.query(OwnerComponent):
+        (owner_comp,) = components
         print(
-            f"\n[OwnerComponent] Sub-agent (entity {subagent_id}) "
-            f"→ Manager (entity {owner.owner_id})"
+            f"\n[OwnerComponent] Sub-agent (entity {entity_id}) "
+            f"→ Manager (entity {owner_comp.owner_id})"
         )
 
 
@@ -294,11 +216,23 @@ def _print_conversation(label: str, entity_id: int, world: World) -> None:
         return
     for msg in conv.messages:
         role = msg.role.upper()
-        lines = (msg.content or "").split("\n")
-        first, rest = lines[0], lines[1:]
-        print(f"  [{role}] {first}")
-        for line in rest:
-            print(f"         {line}")
+        if msg.tool_calls:
+            print(f"  [{role}] {msg.content or '(no content)'}")
+            for tool_call in msg.tool_calls:
+                print(f"         → Tool Call: {tool_call.name}({tool_call.arguments})")
+        elif msg.role == "tool":
+            print(f"  [{role}] (tool_call_id={msg.tool_call_id})")
+            lines = (msg.content or "").split("\n")
+            first, rest = lines[0], lines[1:]
+            print(f"         {first}")
+            for line in rest:
+                print(f"         {line}")
+        else:
+            lines = (msg.content or "").split("\n")
+            first, rest = lines[0], lines[1:]
+            print(f"  [{role}] {first}")
+            for line in rest:
+                print(f"         {line}")
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ Overview of the included examples for the ECS-based LLM Agent framework.
 | [Markdown Skill Agent](#markdown-skill-agent) | Load SKILL.md and install markdown-driven skill | Optional | MarkdownSkill, SkillManager |
 | [Tree Search Agent](#tree-search-agent) | MCTS planning for complex goals | No | PlanSearchComponent, TreeSearchSystem |
 | [RAG Agent](#rag-agent) | Vector search retrieval-augmented generation | No | RAGTriggerComponent, RAGSystem |
-| [Sub-Agent Delegation](#sub-agent-delegation) | Parent agent delegates to child agents | No | Subagent components, MessageBusSystem |
+| [Sub-Agent Delegation](#sub-agent-delegation) | Parent agent delegates to child agents | No | Subagent components, `delegate` tool |
 | [Claude Agent](#claude-agent) | Native Anthropic Claude provider | Yes (Anthropic) | ClaudeProvider |
 | [LiteLLM Agent](#litellm-agent) | Unified access to 100+ LLM providers | Yes (varies) | LiteLLMProvider |
 | [System Streaming](#system-streaming) | System-level streaming with events | Optional | StreamingComponent, StreamStartEvent |
@@ -436,15 +436,37 @@ Landmarks:
 
 ### Sub-Agent Delegation
 - **File:** `examples/subagent_delegation.py`
-- **What it demonstrates:** Parent agent delegating tasks to child agents with result delivery via the message bus.
+- **What it demonstrates:** Parent agent delegating tasks to child agents via the `delegate` tool and `SubagentSystem`.
 - **Run:** `uv run python examples/subagent_delegation.py`
-- **Pattern:** `SubagentRegistryComponent` + `MessageBusSystem` (request-response).
+- **Pattern:** `SubagentRegistryComponent` + `SubagentSystem` (auto-registers `delegate` tool).
 
 #### Key Code
 ```python
-# Parent agent uses SubagentSystem to spawn a researcher
-# Researcher agent publishes its final result back to the parent's inbox topic
+# Configure subagent registry (SubagentSystem will auto-register delegate tool)
+world.add_component(
+    manager_id,
+    SubagentRegistryComponent(
+        subagents={
+            "researcher": SubagentConfig(
+                name="researcher",
+                provider=subagent_provider,
+                model="gpt-4o",
+                system_prompt="You are a researcher...",
+            )
+        }
+    ),
+)
+
+# SubagentSystem handles the 'delegate' tool call and executes the child
+world.register_system(SubagentSystem(priority=-1), priority=-1)
 ```
+
+#### Workflow
+1. **Manager** receives a complex request.
+2. **Manager** calls the `delegate` tool with subagent name and task.
+3. **SubagentSystem** detects the call, creates a child entity, and runs it to completion.
+4. **SubagentSystem** returns the child's final answer as the tool result.
+5. **Manager** receives the tool result and provides a final response to the user.
 
 > **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
 
