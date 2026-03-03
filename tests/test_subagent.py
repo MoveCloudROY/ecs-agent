@@ -494,11 +494,14 @@ async def test_delegate_with_skills_installs_skills() -> None:
         skills=["test-skill"],  # Request skill installation
     )
 
-    # Register the skill in a global registry (or use SkillManager discovery)
-    # For this test, we'll manually ensure the skill is available
+    # Register TestSkill on parent entity so it's available for delegation
+    test_skill = TestSkill()
+    skill_manager = SkillManager()
+    skill_manager.install(world, parent_entity, test_skill)
+    
+    # Register subagent config
     registry = SubagentRegistryComponent(subagents={"test-agent": config})
     world.add_component(parent_entity, registry)
-    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
     _register_message_bus(world, parent_entity)
 
     # Register SubagentSystem to auto-register delegate tool

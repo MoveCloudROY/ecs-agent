@@ -15,6 +15,7 @@ from ecs_agent.components import (
     TerminalComponent,
     ToolRegistryComponent,
 )
+from ecs_agent.components.definitions import SkillComponent
 from ecs_agent.core.runner import Runner
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
@@ -202,9 +203,73 @@ class SubagentSystem:
                     child_entity_id, OwnerComponent(owner_id=parent_entity_id)
                 )
 
-                # TODO: Install skills if config.skills is not empty
-                # This requires SkillManager integration - defer to Task 15
-
+                # Install skills if configured
+                if config.skills:
+                    # Get parent's skill and tool registry components
+                    parent_skill_comp = world.get_component(
+                        parent_entity_id, SkillComponent
+                    )
+                    parent_tool_reg = world.get_component(
+                        parent_entity_id, ToolRegistryComponent
+                    )
+                    
+                    if parent_skill_comp is not None and parent_tool_reg is not None:
+                        # Create or get child's components
+                        child_skill_comp = world.get_component(
+                            child_entity_id, SkillComponent
+                        )
+                        child_tool_reg = world.get_component(
+                            child_entity_id, ToolRegistryComponent
+                        )
+                        
+                        if child_skill_comp is None:
+                            child_skill_comp = SkillComponent(skills={})
+                            world.add_component(child_entity_id, child_skill_comp)
+                        
+                        if child_tool_reg is None:
+                            child_tool_reg = ToolRegistryComponent(tools={}, handlers={})
+                            world.add_component(child_entity_id, child_tool_reg)
+                        
+                        # Copy requested skills from parent to child
+                        for skill_name in config.skills:
+                            if skill_name in parent_skill_comp.skills:
+                                # Copy skill metadata
+                                child_skill_comp.skills[skill_name] = parent_skill_comp.skills[
+                                    skill_name
+                                ]
+                                
+                                # Copy skill's tools and handlers
+                                metadata = parent_skill_comp.skills[skill_name]
+                                for tool_name in metadata.tool_names:
+                                    if tool_name in parent_tool_reg.tools:
+                                        child_tool_reg.tools[tool_name] = parent_tool_reg.tools[
+                                            tool_name
+                                        ]
+                                    if tool_name in parent_tool_reg.handlers:
+                                        child_tool_reg.handlers[tool_name] = (
+                                            parent_tool_reg.handlers[tool_name]
+                                        )
+                                
+                                logger.info(
+                                    "skill_copied_to_child",
+                                    parent_entity=parent_entity_id,
+                                    child_entity=child_entity_id,
+                                    skill_name=skill_name,
+                                )
+                            else:
+                                logger.warning(
+                                    "skill_not_found_on_parent",
+                                    parent_entity=parent_entity_id,
+                                    child_entity=child_entity_id,
+                                    skill_name=skill_name,
+                                )
+                    else:
+                        logger.warning(
+                            "parent_missing_skill_components",
+                            parent_entity=parent_entity_id,
+                            has_skill_comp=parent_skill_comp is not None,
+                            has_tool_reg=parent_tool_reg is not None,
+                        )
                 child_world = World()
                 child_world_entity_id = child_world.create_entity()
                 child_world.add_component(
