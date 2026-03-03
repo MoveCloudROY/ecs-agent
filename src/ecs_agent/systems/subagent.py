@@ -366,33 +366,26 @@ class SubagentSystem:
             )
         )
 
-        request_message: dict[str, Any] | None = None
         try:
             queued_message = await asyncio.wait_for(
                 request_queue.get(),
                 timeout=config_component.request_timeout,
             )
             if isinstance(queued_message, dict):
-                request_message = queued_message
+                reply_to = queued_message.get("reply_to")
+                if isinstance(reply_to, str) and reply_to.startswith("ecs.bus.inbox."):
+                    bus_correlation_id = reply_to.removeprefix("ecs.bus.inbox.")
+                    await message_bus.respond(
+                        correlation_id=bus_correlation_id,
+                        message={
+                            "subagent_name": subagent_name,
+                            "result": result,
+                            "correlationid": correlation_id,
+                            "traceparent": traceparent,
+                        },
+                    )
         except TimeoutError:
-            request_message = None
-
-        if request_message is not None:
-            reply_to = request_message.get("reply_to")
-            bus_correlation_id: str | None = None
-            if isinstance(reply_to, str) and reply_to.startswith("ecs.bus.inbox."):
-                bus_correlation_id = reply_to.removeprefix("ecs.bus.inbox.")
-
-            if bus_correlation_id:
-                await message_bus.respond(
-                    correlation_id=bus_correlation_id,
-                    message={
-                        "subagent_name": subagent_name,
-                        "result": result,
-                        "correlationid": correlation_id,
-                        "traceparent": traceparent,
-                    },
-                )
+            pass
 
         response = await request_task
         response_result = response.get("result")
