@@ -534,13 +534,17 @@ async def test_delegate_with_skills_installs_skills() -> None:
     # ASSERTION 1: Child entity has SkillComponent with the requested skill
     skill_component = world.get_component(child_entity_id, SkillComponent)
     assert skill_component is not None, "Child entity should have SkillComponent"
-    assert "test-skill" in skill_component.skills, "test-skill should be installed on child"
+    assert "test-skill" in skill_component.skills, (
+        "test-skill should be installed on child"
+    )
 
     # ASSERTION 2: Child's ToolRegistryComponent has the skill's tools
     child_tool_registry = world.get_component(child_entity_id, ToolRegistryComponent)
     assert child_tool_registry is not None, "Child should have ToolRegistryComponent"
     assert "test_tool" in child_tool_registry.tools, "test_tool should be registered"
-    assert "test_tool" in child_tool_registry.handlers, "test_tool handler should be registered"
+    assert "test_tool" in child_tool_registry.handlers, (
+        "test_tool handler should be registered"
+    )
 
     # ASSERTION 3: Skill metadata is correctly populated
     metadata = skill_component.skills["test-skill"]
@@ -548,6 +552,7 @@ async def test_delegate_with_skills_installs_skills() -> None:
     assert metadata.description == "A test skill"
     assert "test_tool" in metadata.tool_names
     assert metadata.has_system_prompt is True
+
 
 async def test_delegate_timeout_returns_deterministic_error_and_cleans_pending_requests() -> (
     None
@@ -609,13 +614,30 @@ async def test_delegate_tool_available_before_first_reasoning_tick() -> None:
     from ecs_agent.systems.subagent import SubagentSystem
     from ecs_agent.systems.reasoning import ReasoningSystem
 
+    class ToolCheckingProvider:
+        def __init__(self) -> None:
+            self.saw_delegate = False
+
+        async def complete(
+            self,
+            messages: list[Message],
+            tools: list[ToolSchema] | None = None,
+            stream: bool = False,
+            response_format: dict[str, Any] | None = None,
+        ) -> CompletionResult:
+            _ = messages
+            _ = stream
+            _ = response_format
+            assert tools is not None
+            self.saw_delegate = any(tool.name == "delegate" for tool in tools)
+            assert self.saw_delegate
+            return CompletionResult(message=Message(role="assistant", content="Done"))
+
     world = World()
     parent_entity = world.create_entity()
 
     # Register subagent config
-    provider = FakeProvider(
-        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
-    )
+    provider = ToolCheckingProvider()
     config = SubagentConfig(name="test-agent", provider=provider, model="fake")
     registry = SubagentRegistryComponent(subagents={"test-agent": config})
     world.add_component(parent_entity, registry)
@@ -631,24 +653,23 @@ async def test_delegate_tool_available_before_first_reasoning_tick() -> None:
     world.register_system(SubagentSystem(priority=0), priority=0)
     world.register_system(ReasoningSystem(priority=1), priority=1)
 
-    # Process world once (SubagentSystem runs, ReasoningSystem hasn't run yet)
     await world.process()
 
     # Assert delegate tool is registered BEFORE reasoning system processes
     tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
     assert tool_registry is not None
-    assert (
-        "delegate" in tool_registry.tools
-    ), "Delegate tool MUST be registered before first reasoning tick"
-    assert (
-        "delegate" in tool_registry.handlers
-    ), "Delegate handler MUST be registered before first reasoning tick"
+    assert "delegate" in tool_registry.tools, (
+        "Delegate tool MUST be registered before first reasoning tick"
+    )
+    assert "delegate" in tool_registry.handlers, (
+        "Delegate handler MUST be registered before first reasoning tick"
+    )
 
-    # Verify ReasoningSystem hasn't run yet (conversation still has only user message)
     conv = world.get_component(parent_entity, ConversationComponent)
     assert conv is not None
-    assert len(conv.messages) == 1, "ReasoningSystem should not have run yet"
-    assert conv.messages[0].role == "user"
+    assert len(conv.messages) == 2
+    assert conv.messages[1].role == "assistant"
+    assert provider.saw_delegate
 
 
 async def test_delegate_roundtrip_parent_delegate_tool_result_parent_summary() -> None:
@@ -684,13 +705,15 @@ async def test_delegate_roundtrip_parent_delegate_tool_result_parent_summary() -
     delegate_handler = tool_registry.handlers["delegate"]
 
     # PARENT → DELEGATE CALL
-    result = await delegate_handler(subagent_name="child-agent", task="Execute this task")
+    result = await delegate_handler(
+        subagent_name="child-agent", task="Execute this task"
+    )
 
     # Assert result is string summary from child
     assert isinstance(result, str), "Delegate must return string summary"
-    assert (
-        result == "Child completed task"
-    ), "Result must match child's last assistant message"
+    assert result == "Child completed task", (
+        "Result must match child's last assistant message"
+    )
 
     # Find child entity
     child_entity = None
@@ -711,9 +734,9 @@ async def test_delegate_roundtrip_parent_delegate_tool_result_parent_summary() -
     child_conv = world.get_component(child_entity, ConversationComponent)
     assert child_conv is not None
     assert len(child_conv.messages) >= 1
-    assert (
-        child_conv.messages[0].content == "Execute this task"
-    ), "Child's first message must be delegated task"
+    assert child_conv.messages[0].content == "Execute this task", (
+        "Child's first message must be delegated task"
+    )
 
 
 async def test_delegation_event_correlation_integrity() -> None:
@@ -765,20 +788,20 @@ async def test_delegation_event_correlation_integrity() -> None:
     completed_event = completed_events[0]
 
     # Assert correlation_id matches
-    assert (
-        started_event.correlation_id == completed_event.correlation_id
-    ), "DelegationStartedEvent and DelegationCompletedEvent MUST share correlation_id"
+    assert started_event.correlation_id == completed_event.correlation_id, (
+        "DelegationStartedEvent and DelegationCompletedEvent MUST share correlation_id"
+    )
 
     # Assert traceparent matches (distributed tracing integrity)
-    assert (
-        started_event.traceparent == completed_event.traceparent
-    ), "DelegationStartedEvent and DelegationCompletedEvent MUST share traceparent"
+    assert started_event.traceparent == completed_event.traceparent, (
+        "DelegationStartedEvent and DelegationCompletedEvent MUST share traceparent"
+    )
 
     # Assert correlation_id is not empty (valid UUID)
     assert started_event.correlation_id, "correlation_id MUST be non-empty"
     assert len(started_event.correlation_id) > 0, "correlation_id MUST be valid UUID"
 
     # Assert traceparent format (W3C Trace Context: 00-{trace-id}-{parent-id}-{flags})
-    assert started_event.traceparent.startswith(
-        "00-"
-    ), "traceparent MUST follow W3C Trace Context format"
+    assert started_event.traceparent.startswith("00-"), (
+        "traceparent MUST follow W3C Trace Context format"
+    )

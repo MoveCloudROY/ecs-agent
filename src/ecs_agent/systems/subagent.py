@@ -28,7 +28,6 @@ from ecs_agent.types import (
     DelegationStartedEvent,
     EntityId,
     Message,
-    SubagentConfig,
     ToolSchema,
 )
 
@@ -46,7 +45,7 @@ class SubagentSystem:
     4. Publishes delegation events to the event bus
     """
 
-    def __init__(self, priority: int = 0) -> None:
+    def __init__(self, priority: int = -1) -> None:
         self.priority = priority
 
     async def process(self, world: World) -> None:
@@ -174,7 +173,6 @@ class SubagentSystem:
                 return error_msg
 
             try:
-                # Create child entity
                 child_entity_id = world.create_entity()
                 logger.info(
                     "child_entity_created",
@@ -207,28 +205,45 @@ class SubagentSystem:
                 # TODO: Install skills if config.skills is not empty
                 # This requires SkillManager integration - defer to Task 15
 
-                # Ensure minimal systems are registered in world for child execution
-                # Check if ReasoningSystem is already registered
-                has_reasoning = False
-                for sys, _ in world._systems._systems:
-                    if isinstance(sys, ReasoningSystem):
-                        has_reasoning = True
-                        break
+                child_world = World()
+                child_world_entity_id = child_world.create_entity()
+                child_world.add_component(
+                    child_world_entity_id,
+                    LLMComponent(
+                        provider=config.provider,
+                        model=config.model,
+                        system_prompt=config.system_prompt,
+                    ),
+                )
+                child_world.add_component(
+                    child_world_entity_id,
+                    ConversationComponent(
+                        messages=[Message(role="user", content=task)]
+                    ),
+                )
+                child_world.add_component(
+                    child_world_entity_id, OwnerComponent(owner_id=parent_entity_id)
+                )
+                child_world.register_system(ReasoningSystem(priority=0), priority=0)
+                child_world.register_system(MemorySystem(), priority=10)
+                child_world.register_system(
+                    ErrorHandlingSystem(priority=99), priority=99
+                )
 
-                if not has_reasoning:
-                    # Register minimal systems needed for subagent execution
-                    world.register_system(ReasoningSystem(priority=0), priority=0)
-                    world.register_system(MemorySystem(), priority=10)
-                    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
-
-                # Run child entity to completion
                 runner = Runner()
-                await runner.run(world, max_ticks=config.max_ticks)
+                await runner.run(child_world, max_ticks=config.max_ticks)
 
-                # Extract result from child's conversation
-                child_conv = world.get_component(child_entity_id, ConversationComponent)
+                child_conv = child_world.get_component(
+                    child_world_entity_id, ConversationComponent
+                )
                 result = "Error: No conversation found"
                 if child_conv is not None:
+                    parent_child_conv = world.get_component(
+                        child_entity_id, ConversationComponent
+                    )
+                    if parent_child_conv is not None:
+                        parent_child_conv.messages = list(child_conv.messages)
+
                     # Find the last assistant message
                     for message in reversed(child_conv.messages):
                         if message.role == "assistant":
@@ -238,6 +253,15 @@ class SubagentSystem:
                         result = (
                             "Error: No assistant message found in subagent conversation"
                         )
+
+                child_terminal = child_world.query(TerminalComponent)
+                if child_terminal:
+                    _, (terminal_comp,) = child_terminal[0]
+                    assert isinstance(terminal_comp, TerminalComponent)
+                    world.add_component(
+                        child_entity_id,
+                        TerminalComponent(reason=terminal_comp.reason),
+                    )
 
                 logger.info(
                     "delegation_completed",
