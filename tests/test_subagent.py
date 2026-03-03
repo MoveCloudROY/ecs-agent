@@ -449,13 +449,8 @@ async def test_delegate_with_skills_installs_skills() -> None:
 
     # Create a test skill to verify installation
     class TestSkill(Skill):
-        @property
-        def name(self) -> str:
-            return "test-skill"
-
-        @property
-        def description(self) -> str:
-            return "A test skill"
+        name: str = "test-skill"
+        description: str = "A test skill"
 
         def tools(self) -> dict[str, tuple[ToolSchema, Any]]:
             async def test_tool() -> str:

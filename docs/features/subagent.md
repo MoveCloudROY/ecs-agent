@@ -72,7 +72,7 @@ world.register_system(SubagentSystem(priority=-1), priority=-1)
 4. **LLM calls delegate tool** to invoke subagent
 5. **SubagentSystem executes** child and returns result
 ```python
-from ecs_agent import World
+from ecs_agent.core import World
 from ecs_agent.components import (
     LLMComponent,
     ConversationComponent,
@@ -227,7 +227,7 @@ Fired when subagent completes:
 from ecs_agent.types import DelegationCompletedEvent
 
 async def on_delegation_completed(event: DelegationCompletedEvent) -> None:
-    print(f"Subagent {event.subagent_name} completed in {event.ticks_used} ticks")
+    print(f"Subagent {event.subagent_name} completed: {event.result}")
     print(f"Result: {event.result}")
 
 world.event_bus.subscribe(DelegationCompletedEvent, on_delegation_completed)
