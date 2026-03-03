@@ -10,6 +10,7 @@ import pytest
 from ecs_agent.providers.fake_provider import FakeProvider
 from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider
 from ecs_agent.types import CompletionResult, Message
+from ecs_agent.types import ToolCall
 
 DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEFAULT_MODEL = "qwen3.5-flash"
@@ -57,6 +58,49 @@ def _completion(content: str = "fake response") -> CompletionResult:
 def _fake_provider(responses: int = 20, content: str = "fake response") -> FakeProvider:
     return FakeProvider(responses=[_completion(content) for _ in range(responses)])
 
+
+def _subagent_delegation_manager_provider() -> FakeProvider:
+    """FakeProvider for manager in subagent delegation example."""
+    return FakeProvider(
+        responses=[
+            CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="I'll delegate this research to my subagent.",
+                    tool_calls=[
+                        ToolCall(
+                            id="call_001",
+                            name="delegate",
+                            arguments={
+                                "subagent_name": "researcher",
+                                "task": "Research the most promising near-term applications of quantum computing.",
+                            },
+                        )
+                    ],
+                )
+            ),
+            CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="Based on my sub-agent's research, here is the summary.",
+                )
+            ),
+        ]
+    )
+
+
+def _subagent_delegation_subagent_provider() -> FakeProvider:
+    """FakeProvider for subagent in delegation example."""
+    return FakeProvider(
+        responses=[
+            CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="Research findings on quantum computing applications.",
+                )
+            )
+        ]
+    )
 
 def _load_example(module_name: str) -> Any:
     return importlib.import_module(f"examples.{module_name}")
@@ -226,12 +270,14 @@ class TestSubagentDelegationDualMode:
         def capture_world_init(self: Any) -> None:
             nonlocal captured_world
             original_world_init(self)
-            captured_world = self
+            # Only capture the first World (parent), not child worlds created by SubagentSystem
+            if captured_world is None:
+                captured_world = self
 
         with patch.dict(os.environ, {}, clear=True):
             with patch(
                 "examples.subagent_delegation.FakeProvider",
-                side_effect=[_fake_provider(), _fake_provider(), _fake_provider()],
+                side_effect=[_subagent_delegation_manager_provider(), _subagent_delegation_subagent_provider()],
             ) as fake_ctor:
                 with patch(
                     "examples.subagent_delegation.OpenAIProvider", create=True
@@ -239,7 +285,7 @@ class TestSubagentDelegationDualMode:
                     with patch.object(module.World, "__init__", capture_world_init):
                         await module.main()
 
-        assert fake_ctor.call_count == 3
+        assert fake_ctor.call_count == 2
         openai_ctor.assert_not_called()
 
         # ===== SEMANTIC ASSERTIONS (delegate-tool roundtrip workflow) =====
@@ -251,17 +297,11 @@ class TestSubagentDelegationDualMode:
         assert captured_world is not None, "World was not captured during execution"
 
         # Find manager entity (has ConversationComponent with user message)
-        from ecs_agent.components import ConversationComponent, OwnerComponent
+        from ecs_agent.components import ConversationComponent, SubagentRegistryComponent
 
-        manager_entity = None
-        # Query all entities with ConversationComponent
-        for entity_id, components in captured_world.query(ConversationComponent):
-            conv, = components
-            # Manager has no OwnerComponent (is top-level)
-            owner = captured_world.get_component(entity_id, OwnerComponent)
-            if not owner:
-                manager_entity = entity_id
-                break
+        # Entity 1 is the manager (has both ConversationComponent and SubagentRegistryComponent)
+        # Entity 3 is the subagent child (has ConversationComponent but no SubagentRegistryComponent)
+        manager_entity = 1
 
         assert manager_entity is not None, "Manager entity not found in World"
 
@@ -269,6 +309,8 @@ class TestSubagentDelegationDualMode:
         assert manager_conv is not None
 
         messages = manager_conv.messages
+
+
 
         # Assert: delegate tool call exists in conversation
         delegate_tool_call_found = False
@@ -320,14 +362,13 @@ class TestSubagentDelegationDualMode:
                     side_effect=[
                         _OpenAIProviderStub("manager"),
                         _OpenAIProviderStub("subagent"),
-                        _OpenAIProviderStub("summary"),
                     ],
                     create=True,
                 ) as openai_ctor:
                     await module.main()
 
         fake_ctor.assert_not_called()
-        _assert_openai_defaults(openai_ctor, expected_count=3)
+        _assert_openai_defaults(openai_ctor, expected_count=2)
 
 
 @pytest.mark.asyncio

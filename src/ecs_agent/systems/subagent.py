@@ -319,14 +319,6 @@ class SubagentSystem:
                             "Error: No assistant message found in subagent conversation"
                         )
 
-                child_terminal = child_world.query(TerminalComponent)
-                if child_terminal:
-                    _, (terminal_comp,) = child_terminal[0]
-                    assert isinstance(terminal_comp, TerminalComponent)
-                    world.add_component(
-                        child_entity_id,
-                        TerminalComponent(reason=terminal_comp.reason),
-                    )
 
                 logger.info(
                     "delegation_completed",

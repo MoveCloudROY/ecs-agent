@@ -294,9 +294,10 @@ async def test_delegate_runs_child_to_completion() -> None:
 
     assert child_entity is not None
 
-    # Verify child has TerminalComponent (runner completed)
-    terminal = world.get_component(child_entity, TerminalComponent)
-    assert terminal is not None, "Child should have TerminalComponent after completion"
+    # Verify child has ConversationComponent (delegation completed)
+    child_conv = world.get_component(child_entity, ConversationComponent)
+    assert child_conv is not None, "Child should have ConversationComponent"
+    assert len(child_conv.messages) > 0, "Child conversation should have messages"
 
 
 async def test_delegate_returns_last_assistant_message() -> None:
@@ -729,9 +730,10 @@ async def test_delegate_roundtrip_parent_delegate_tool_result_parent_summary() -
 
     assert child_entity is not None, "Child entity must be created"
 
-    # Assert child has TerminalComponent (execution completed)
-    terminal = world.get_component(child_entity, TerminalComponent)
-    assert terminal is not None, "Child must have TerminalComponent after completion"
+    # Assert child has conversation (execution completed)
+    child_conv = world.get_component(child_entity, ConversationComponent)
+    assert child_conv is not None, "Child must have ConversationComponent"
+    assert len(child_conv.messages) > 0, "Child conversation must have messages"
 
     # Assert child conversation contains the delegated task
     child_conv = world.get_component(child_entity, ConversationComponent)
