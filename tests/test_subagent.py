@@ -1,6 +1,7 @@
 """Tests for subagent types and SubagentSystem."""
 
 from __future__ import annotations
+from typing import Any
 
 from ecs_agent.components import MessageBusConfigComponent
 from ecs_agent.components.definitions import SubagentRegistryComponent
@@ -13,6 +14,7 @@ from ecs_agent.types import (
     EntityId,
     Message,
     SubagentConfig,
+    ToolSchema,
 )
 from ecs_agent.systems.message_bus import MessageBusSystem
 
@@ -439,12 +441,113 @@ async def test_subagent_system_registers_delegate_tool() -> None:
 
 async def test_delegate_with_skills_installs_skills() -> None:
     """SubagentConfig with skills list, verify skills installed on child entity."""
-    pytest.skip(
-        "Skills installation requires SkillManager integration - defer to integration tests"
-    )
-    # This test is complex and requires full SkillManager setup
-    # We'll test the basic flow and defer full skill installation to Task 15
+    from ecs_agent.systems.subagent import SubagentSystem
+    from ecs_agent.components.definitions import SkillComponent
+    from ecs_agent.skills.protocol import Skill
+    from ecs_agent.skills.manager import SkillManager
 
+    # Create a test skill to verify installation
+    class TestSkill(Skill):
+        @property
+        def name(self) -> str:
+            return "test-skill"
+
+        @property
+        def description(self) -> str:
+            return "A test skill"
+
+        def tools(self) -> dict[str, tuple[ToolSchema, Any]]:
+            async def test_tool() -> str:
+                return "test result"
+
+            return {
+                "test_tool": (
+                    ToolSchema(
+                        name="test_tool",
+                        description="A test tool",
+                        parameters={"type": "object", "properties": {}},
+                    ),
+                    test_tool,
+                )
+            }
+
+        def system_prompt(self) -> str:
+            return "Test skill prompt"
+
+        def install(self, world: World, entity_id: EntityId) -> None:
+            pass
+
+        def uninstall(self, world: World, entity_id: EntityId) -> None:
+            pass
+
+    world = World()
+    parent_entity = world.create_entity()
+
+    # Create a subagent config WITH skills list
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(
+        name="test-agent",
+        provider=provider,
+        model="fake",
+        skills=["test-skill"],  # Request skill installation
+    )
+
+    # Register the skill in a global registry (or use SkillManager discovery)
+    # For this test, we'll manually ensure the skill is available
+    registry = SubagentRegistryComponent(subagents={"test-agent": config})
+    world.add_component(parent_entity, registry)
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    _register_message_bus(world, parent_entity)
+
+    # Register SubagentSystem to auto-register delegate tool
+    system = SubagentSystem()
+    await system.process(world)
+
+    # Get the delegate handler
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    assert "delegate" in tool_registry.handlers
+
+    delegate_handler = tool_registry.handlers["delegate"]
+
+    # Track entities before delegation
+    entities_before = len([e for e in world.query(OwnerComponent)])
+
+    # Call delegate handler (this should create child and install skills)
+    result = await delegate_handler(subagent_name="test-agent", task="test task")
+
+    # Find child entity (has OwnerComponent pointing to parent)
+    child_entity_id = None
+    for entity_id, components in world.query(OwnerComponent):
+        owner_comp = components[0]
+        assert isinstance(owner_comp, OwnerComponent)
+        if owner_comp.owner_id == parent_entity:
+            child_entity_id = entity_id
+            break
+
+    assert child_entity_id is not None, "Child entity should be created"
+
+    # RED TEST: Verify skill installation happened on child entity
+
+    # ASSERTION 1: Child entity has SkillComponent with the requested skill
+    skill_component = world.get_component(child_entity_id, SkillComponent)
+    assert skill_component is not None, "Child entity should have SkillComponent"
+    assert "test-skill" in skill_component.skills, "test-skill should be installed on child"
+
+    # ASSERTION 2: Child's ToolRegistryComponent has the skill's tools
+    child_tool_registry = world.get_component(child_entity_id, ToolRegistryComponent)
+    assert child_tool_registry is not None, "Child should have ToolRegistryComponent"
+    assert "test_tool" in child_tool_registry.tools, "test_tool should be registered"
+    assert "test_tool" in child_tool_registry.handlers, "test_tool handler should be registered"
+
+    # ASSERTION 3: Skill metadata is correctly populated
+    metadata = skill_component.skills["test-skill"]
+    assert metadata.name == "test-skill"
+    assert metadata.description == "A test skill"
+    assert "test_tool" in metadata.tool_names
+    assert metadata.has_system_prompt is True
 
 async def test_delegate_timeout_returns_deterministic_error_and_cleans_pending_requests() -> (
     None
@@ -494,3 +597,188 @@ async def test_delegate_timeout_returns_deterministic_error_and_cleans_pending_r
     pending_requests = getattr(message_bus, "_pending_requests", None)
     assert isinstance(pending_requests, dict)
     assert pending_requests == {}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Wave 1: System-Level Delegation Contract Tests (RED)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+async def test_delegate_tool_available_before_first_reasoning_tick() -> None:
+    """Delegate tool MUST be registered before ReasoningSystem processes."""
+    from ecs_agent.systems.subagent import SubagentSystem
+    from ecs_agent.systems.reasoning import ReasoningSystem
+
+    world = World()
+    parent_entity = world.create_entity()
+
+    # Register subagent config
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
+    registry = SubagentRegistryComponent(subagents={"test-agent": config})
+    world.add_component(parent_entity, registry)
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(parent_entity, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        parent_entity,
+        ConversationComponent(messages=[Message(role="user", content="Use delegate")]),
+    )
+    _register_message_bus(world, parent_entity)
+
+    # Register systems (SubagentSystem BEFORE ReasoningSystem)
+    world.register_system(SubagentSystem(priority=0), priority=0)
+    world.register_system(ReasoningSystem(priority=1), priority=1)
+
+    # Process world once (SubagentSystem runs, ReasoningSystem hasn't run yet)
+    await world.process()
+
+    # Assert delegate tool is registered BEFORE reasoning system processes
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    assert (
+        "delegate" in tool_registry.tools
+    ), "Delegate tool MUST be registered before first reasoning tick"
+    assert (
+        "delegate" in tool_registry.handlers
+    ), "Delegate handler MUST be registered before first reasoning tick"
+
+    # Verify ReasoningSystem hasn't run yet (conversation still has only user message)
+    conv = world.get_component(parent_entity, ConversationComponent)
+    assert conv is not None
+    assert len(conv.messages) == 1, "ReasoningSystem should not have run yet"
+    assert conv.messages[0].role == "user"
+
+
+async def test_delegate_roundtrip_parent_delegate_tool_result_parent_summary() -> None:
+    """Test parent→delegate call→child execution→result→parent receives summary."""
+    from ecs_agent.systems.subagent import SubagentSystem
+
+    world = World()
+    parent_entity = world.create_entity()
+
+    # Set up child provider to return a specific result
+    child_provider = FakeProvider(
+        responses=[
+            CompletionResult(
+                message=Message(role="assistant", content="Child completed task")
+            )
+        ]
+    )
+    config = SubagentConfig(
+        name="child-agent", provider=child_provider, model="fake", max_ticks=2
+    )
+    registry = SubagentRegistryComponent(subagents={"child-agent": config})
+    world.add_component(parent_entity, registry)
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    _register_message_bus(world, parent_entity)
+
+    # Register and process SubagentSystem
+    system = SubagentSystem()
+    await system.process(world)
+
+    # Get delegate handler
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    delegate_handler = tool_registry.handlers["delegate"]
+
+    # PARENT → DELEGATE CALL
+    result = await delegate_handler(subagent_name="child-agent", task="Execute this task")
+
+    # Assert result is string summary from child
+    assert isinstance(result, str), "Delegate must return string summary"
+    assert (
+        result == "Child completed task"
+    ), "Result must match child's last assistant message"
+
+    # Find child entity
+    child_entity = None
+    for entity_id, components in world.query(OwnerComponent):
+        owner_comp = components[0]
+        assert isinstance(owner_comp, OwnerComponent)
+        if owner_comp.owner_id == parent_entity:
+            child_entity = entity_id
+            break
+
+    assert child_entity is not None, "Child entity must be created"
+
+    # Assert child has TerminalComponent (execution completed)
+    terminal = world.get_component(child_entity, TerminalComponent)
+    assert terminal is not None, "Child must have TerminalComponent after completion"
+
+    # Assert child conversation contains the delegated task
+    child_conv = world.get_component(child_entity, ConversationComponent)
+    assert child_conv is not None
+    assert len(child_conv.messages) >= 1
+    assert (
+        child_conv.messages[0].content == "Execute this task"
+    ), "Child's first message must be delegated task"
+
+
+async def test_delegation_event_correlation_integrity() -> None:
+    """DelegationStartedEvent and DelegationCompletedEvent MUST share correlation_id."""
+    from ecs_agent.systems.subagent import SubagentSystem
+
+    world = World()
+    parent_entity = world.create_entity()
+
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
+    registry = SubagentRegistryComponent(subagents={"test-agent": config})
+    world.add_component(parent_entity, registry)
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    _register_message_bus(world, parent_entity)
+
+    # Subscribe to delegation events
+    started_events: list[DelegationStartedEvent] = []
+    completed_events: list[DelegationCompletedEvent] = []
+
+    async def on_started(event: DelegationStartedEvent) -> None:
+        started_events.append(event)
+
+    async def on_completed(event: DelegationCompletedEvent) -> None:
+        completed_events.append(event)
+
+    world.event_bus.subscribe(DelegationStartedEvent, on_started)
+    world.event_bus.subscribe(DelegationCompletedEvent, on_completed)
+
+    # Process to register delegate tool
+    system = SubagentSystem()
+    await system.process(world)
+
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    delegate_handler = tool_registry.handlers["delegate"]
+
+    # Invoke delegation
+    await delegate_handler(subagent_name="test-agent", task="test task")
+
+    # Verify events published
+    assert len(started_events) == 1, "DelegationStartedEvent MUST be published"
+    assert len(completed_events) == 1, "DelegationCompletedEvent MUST be published"
+
+    # EVENT CORRELATION INTEGRITY
+    started_event = started_events[0]
+    completed_event = completed_events[0]
+
+    # Assert correlation_id matches
+    assert (
+        started_event.correlation_id == completed_event.correlation_id
+    ), "DelegationStartedEvent and DelegationCompletedEvent MUST share correlation_id"
+
+    # Assert traceparent matches (distributed tracing integrity)
+    assert (
+        started_event.traceparent == completed_event.traceparent
+    ), "DelegationStartedEvent and DelegationCompletedEvent MUST share traceparent"
+
+    # Assert correlation_id is not empty (valid UUID)
+    assert started_event.correlation_id, "correlation_id MUST be non-empty"
+    assert len(started_event.correlation_id) > 0, "correlation_id MUST be valid UUID"
+
+    # Assert traceparent format (W3C Trace Context: 00-{trace-id}-{parent-id}-{flags})
+    assert started_event.traceparent.startswith(
+        "00-"
+    ), "traceparent MUST follow W3C Trace Context format"

@@ -218,6 +218,16 @@ class TestSubagentDelegationDualMode:
     async def test_fake_mode(self) -> None:
         module = _load_example("subagent_delegation")
 
+        captured_world = None
+
+        # Patch World to capture the instance created during execution
+        original_world_init = module.World.__init__
+
+        def capture_world_init(self: Any) -> None:
+            nonlocal captured_world
+            original_world_init(self)
+            captured_world = self
+
         with patch.dict(os.environ, {}, clear=True):
             with patch(
                 "examples.subagent_delegation.FakeProvider",
@@ -226,10 +236,77 @@ class TestSubagentDelegationDualMode:
                 with patch(
                     "examples.subagent_delegation.OpenAIProvider", create=True
                 ) as openai_ctor:
-                    await module.main()
+                    with patch.object(module.World, "__init__", capture_world_init):
+                        await module.main()
 
         assert fake_ctor.call_count == 3
         openai_ctor.assert_not_called()
+
+        # ===== SEMANTIC ASSERTIONS (delegate-tool roundtrip workflow) =====
+        # When delegate tool is used, we expect:
+        # 1. Tool call with name="delegate" in manager's conversation
+        # 2. Tool result following the tool call
+        # 3. Final assistant summary after tool execution
+
+        assert captured_world is not None, "World was not captured during execution"
+
+        # Find manager entity (has ConversationComponent with user message)
+        from ecs_agent.components import ConversationComponent, OwnerComponent
+
+        manager_entity = None
+        # Query all entities with ConversationComponent
+        for entity_id, components in captured_world.query(ConversationComponent):
+            conv, = components
+            # Manager has no OwnerComponent (is top-level)
+            owner = captured_world.get_component(entity_id, OwnerComponent)
+            if not owner:
+                manager_entity = entity_id
+                break
+
+        assert manager_entity is not None, "Manager entity not found in World"
+
+        manager_conv = captured_world.get_component(manager_entity, ConversationComponent)
+        assert manager_conv is not None
+
+        messages = manager_conv.messages
+
+        # Assert: delegate tool call exists in conversation
+        delegate_tool_call_found = False
+        for msg in messages:
+            if msg.role == "assistant" and msg.tool_calls:
+                for tool_call in msg.tool_calls:
+                    if tool_call.name == "delegate":
+                        delegate_tool_call_found = True
+                        break
+
+        assert delegate_tool_call_found, (
+            "Expected delegate tool call in manager conversation, but none found. "
+            "This indicates the example is not using the delegate-tool roundtrip pattern."
+        )
+
+        # Assert: tool result message exists after tool call
+        tool_result_found = False
+        for msg in messages:
+            if msg.role == "tool" and msg.tool_call_id:
+                tool_result_found = True
+                break
+
+        assert tool_result_found, (
+            "Expected tool result message in manager conversation after delegate call, but none found."
+        )
+
+        # Assert: final assistant summary exists after tool execution cycle
+        final_assistant_message_found = False
+        for i, msg in enumerate(messages):
+            if msg.role == "tool" and i + 1 < len(messages):
+                if messages[i + 1].role == "assistant":
+                    final_assistant_message_found = True
+                    break
+
+        assert final_assistant_message_found, (
+            "Expected final assistant summary message after tool result, but none found. "
+            "The delegate-tool roundtrip should conclude with an assistant message."
+        )
 
     async def test_real_mode(self) -> None:
         module = _load_example("subagent_delegation")
