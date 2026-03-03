@@ -205,19 +205,10 @@ class SubagentSystem:
                 # TODO: Install skills if config.skills is not empty
                 # This requires SkillManager integration - defer to Task 15
 
-                # Ensure minimal systems are registered in world for child execution
-                # Check if ReasoningSystem is already registered
-                has_reasoning = False
-                for sys, _ in world._systems._systems:
-                    if isinstance(sys, ReasoningSystem):
-                        has_reasoning = True
-                        break
-
-                if not has_reasoning:
-                    # Register minimal systems needed for subagent execution
-                    world.register_system(ReasoningSystem(priority=0), priority=0)
-                    world.register_system(MemorySystem(), priority=10)
-                    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
+                # Register minimal systems needed for subagent execution
+                world.register_system(ReasoningSystem(priority=0), priority=0)
+                world.register_system(MemorySystem(), priority=10)
+                world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
                 # Run child entity to completion
                 runner = Runner()
@@ -245,22 +236,13 @@ class SubagentSystem:
                     result_length=len(result),
                 )
 
-                delivered_result = await self._deliver_result_via_message_bus(
-                    world=world,
-                    parent_entity_id=parent_entity_id,
-                    child_entity_id=child_entity_id,
-                    subagent_name=subagent_name,
-                    result=result,
-                    correlation_id=correlation_id,
-                    traceparent=traceparent,
-                )
 
                 # Publish DelegationCompletedEvent
                 await world.event_bus.publish(
                     DelegationCompletedEvent(
                         entity_id=parent_entity_id,
                         subagent_name=subagent_name,
-                        result=delivered_result,
+                        result=result,
                         success=True,
                         error=None,
                         correlation_id=correlation_id,
@@ -268,7 +250,7 @@ class SubagentSystem:
                     )
                 )
 
-                return delivered_result
+                return result
 
             except TimeoutError as exc:
                 error_msg = "Error: Subagent timeout"
@@ -315,80 +297,3 @@ class SubagentSystem:
 
         return delegate_handler
 
-    def _get_message_bus_system(self, world: World) -> MessageBusSystem:
-        for system, _priority in world._systems._systems:
-            if isinstance(system, MessageBusSystem):
-                return system
-
-        message_bus = MessageBusSystem(priority=5)
-        world.register_system(message_bus, priority=5)
-        return message_bus
-
-    async def _deliver_result_via_message_bus(
-        self,
-        *,
-        world: World,
-        parent_entity_id: EntityId,
-        child_entity_id: EntityId,
-        subagent_name: str,
-        result: str,
-        correlation_id: str,
-        traceparent: str,
-    ) -> str:
-        config_component = world.get_component(
-            parent_entity_id, MessageBusConfigComponent
-        )
-        if config_component is None:
-            config_component = MessageBusConfigComponent()
-            world.add_component(parent_entity_id, config_component)
-
-        message_bus = self._get_message_bus_system(world)
-        await message_bus.process(world)
-
-        topic = f"subagent.result.{child_entity_id}"
-        request_payload = {
-            "subagent_name": subagent_name,
-            "result": result,
-            "parent_entity_id": int(parent_entity_id),
-            "child_entity_id": int(child_entity_id),
-            "correlationid": correlation_id,
-            "traceparent": traceparent,
-        }
-
-        subscriber_id = f"subagent-delivery-{child_entity_id}"
-        request_queue = message_bus.subscribe(topic=topic, subscriber_id=subscriber_id)
-
-        request_task = asyncio.create_task(
-            message_bus.request(
-                topic=topic,
-                message=request_payload,
-                timeout=config_component.request_timeout,
-            )
-        )
-
-        try:
-            queued_message = await asyncio.wait_for(
-                request_queue.get(),
-                timeout=config_component.request_timeout,
-            )
-            if isinstance(queued_message, dict):
-                reply_to = queued_message.get("reply_to")
-                if isinstance(reply_to, str) and reply_to.startswith("ecs.bus.inbox."):
-                    bus_correlation_id = reply_to.removeprefix("ecs.bus.inbox.")
-                    await message_bus.respond(
-                        correlation_id=bus_correlation_id,
-                        message={
-                            "subagent_name": subagent_name,
-                            "result": result,
-                            "correlationid": correlation_id,
-                            "traceparent": traceparent,
-                        },
-                    )
-        except TimeoutError:
-            pass
-
-        response = await request_task
-        response_result = response.get("result")
-        if isinstance(response_result, str):
-            return response_result
-        return result
