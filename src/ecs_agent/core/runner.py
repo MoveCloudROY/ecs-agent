@@ -50,8 +50,12 @@ class Runner:
             tick += 1
             runner_state.current_tick = tick
 
+            # Check for TerminalComponent on top-level entities only (ignore child entities)
+            from ecs_agent.components import OwnerComponent
+
             has_terminal = any(
                 world.has_component(eid, TerminalComponent)
+                and not world.has_component(eid, OwnerComponent)
                 for eid, _ in world.query(TerminalComponent)
             )
             if has_terminal:
