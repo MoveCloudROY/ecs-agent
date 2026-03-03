@@ -12,7 +12,6 @@ from ecs_agent.components import (
     MessageBusConfigComponent,
     OwnerComponent,
     SubagentRegistryComponent,
-    TerminalComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.core.runner import Runner
@@ -28,7 +27,6 @@ from ecs_agent.types import (
     DelegationStartedEvent,
     EntityId,
     Message,
-    SubagentConfig,
     ToolSchema,
 )
 
@@ -345,8 +343,7 @@ class SubagentSystem:
             world.add_component(parent_entity_id, config_component)
 
         message_bus = self._get_message_bus_system(world)
-        if message_bus._world is None:
-            await message_bus.process(world)
+        await message_bus.process(world)
 
         topic = f"subagent.result.{child_entity_id}"
         request_payload = {
@@ -358,6 +355,9 @@ class SubagentSystem:
             "traceparent": traceparent,
         }
 
+        subscriber_id = f"subagent-delivery-{child_entity_id}"
+        request_queue = message_bus.subscribe(topic=topic, subscriber_id=subscriber_id)
+
         request_task = asyncio.create_task(
             message_bus.request(
                 topic=topic,
@@ -365,21 +365,34 @@ class SubagentSystem:
                 timeout=config_component.request_timeout,
             )
         )
-        await asyncio.sleep(0)
 
-        pending_requests = getattr(message_bus, "_pending_requests", {})
-        pending_ids = list(pending_requests.keys())
-        if pending_ids:
-            bus_correlation_id = pending_ids[-1]
-            await message_bus.respond(
-                correlation_id=bus_correlation_id,
-                message={
-                    "subagent_name": subagent_name,
-                    "result": result,
-                    "correlationid": correlation_id,
-                    "traceparent": traceparent,
-                },
+        request_message: dict[str, Any] | None = None
+        try:
+            queued_message = await asyncio.wait_for(
+                request_queue.get(),
+                timeout=config_component.request_timeout,
             )
+            if isinstance(queued_message, dict):
+                request_message = queued_message
+        except TimeoutError:
+            request_message = None
+
+        if request_message is not None:
+            reply_to = request_message.get("reply_to")
+            bus_correlation_id: str | None = None
+            if isinstance(reply_to, str) and reply_to.startswith("ecs.bus.inbox."):
+                bus_correlation_id = reply_to.removeprefix("ecs.bus.inbox.")
+
+            if bus_correlation_id:
+                await message_bus.respond(
+                    correlation_id=bus_correlation_id,
+                    message={
+                        "subagent_name": subagent_name,
+                        "result": result,
+                        "correlationid": correlation_id,
+                        "traceparent": traceparent,
+                    },
+                )
 
         response = await request_task
         response_result = response.get("result")
