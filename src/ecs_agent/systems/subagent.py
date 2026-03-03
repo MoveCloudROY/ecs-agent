@@ -434,8 +434,7 @@ class SubagentSystem:
             world.add_component(parent_entity_id, config_component)
 
         message_bus = self._get_message_bus_system(world)
-        if message_bus._world is None:
-            await message_bus.process(world)
+        await message_bus.process(world)
 
         topic = f"subagent.result.{child_entity_id}"
         request_payload = {
@@ -454,21 +453,30 @@ class SubagentSystem:
                 timeout=config_component.request_timeout,
             )
         )
-        await asyncio.sleep(0)
 
-        pending_requests = getattr(message_bus, "_pending_requests", {})
-        pending_ids = list(pending_requests.keys())
-        if pending_ids:
-            bus_correlation_id = pending_ids[-1]
-            await message_bus.respond(
-                correlation_id=bus_correlation_id,
-                message={
-                    "subagent_name": subagent_name,
-                    "result": result,
-                    "correlationid": correlation_id,
-                    "traceparent": traceparent,
-                },
+        subscriber_id = f"subagent-delivery-{child_entity_id}"
+        request_queue = message_bus.subscribe(topic=topic, subscriber_id=subscriber_id)
+
+        try:
+            queued_message = await asyncio.wait_for(
+                request_queue.get(),
+                timeout=config_component.request_timeout,
             )
+            if isinstance(queued_message, dict):
+                reply_to = queued_message.get("reply_to")
+                if isinstance(reply_to, str) and reply_to.startswith("ecs.bus.inbox."):
+                    bus_correlation_id = reply_to.removeprefix("ecs.bus.inbox.")
+                    await message_bus.respond(
+                        correlation_id=bus_correlation_id,
+                        message={
+                            "subagent_name": subagent_name,
+                            "result": result,
+                            "correlationid": correlation_id,
+                            "traceparent": traceparent,
+                        },
+                    )
+        except TimeoutError:
+            pass  # Request timed out before we could respond
 
         response = await request_task
         response_result = response.get("result")
