@@ -216,7 +216,8 @@ __marimo__/
 .streamlit/secrets.toml
 
 
-.sisyphus/**
+.sisyphus/
 ref/
 task-*.txt
 .evidence-task*
+QA_REPORT.md

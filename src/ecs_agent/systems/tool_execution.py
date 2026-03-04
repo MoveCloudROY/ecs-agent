@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Awaitable, Callable
 
 from ecs_agent.components import (
@@ -10,6 +11,7 @@ from ecs_agent.components import (
     ToolResultsComponent,
 )
 from ecs_agent.core.world import World
+from ecs_agent.logging import get_logger
 from ecs_agent.tools.sandbox import sandboxed_execute
 from ecs_agent.types import (
     EntityId,
@@ -19,6 +21,7 @@ from ecs_agent.types import (
     ToolExecutionStartedEvent,
 )
 
+logger = get_logger(__name__)
 
 class ToolExecutionSystem:
     def __init__(self, priority: int = 0) -> None:
@@ -80,10 +83,16 @@ class ToolExecutionSystem:
         tool_call: ToolCall,
         handlers: dict[str, Callable[..., Awaitable[str]]],
     ) -> str:
+        # Log tool invocation
+        logger.info("tool_called", tool_name=tool_call.name)
+
         handler = handlers.get(tool_call.name)
         if handler is None:
-            return f"Error: unknown tool '{tool_call.name}'"
+            reason = f"Error: unknown tool '{tool_call.name}'"
+            logger.error("tool_failed", tool_name=tool_call.name, reason=reason)
+            return reason
 
+        start_time = time.monotonic()
         try:
             arguments = tool_call.arguments
             sandbox_config = world.get_component(entity_id, SandboxConfigComponent)
@@ -96,6 +105,22 @@ class ToolExecutionSystem:
                     timeout=sandbox_config.timeout,
                     max_output_size=sandbox_config.max_output_size,
                 )
+            
+            duration_ms = (time.monotonic() - start_time) * 1000
+            logger.info(
+                "tool_result",
+                tool_name=tool_call.name,
+                success=True,
+                duration_ms=duration_ms,
+            )
             return str(result)
         except Exception as exc:
-            return f"Error executing tool '{tool_call.name}': {exc}"
+            duration_ms = (time.monotonic() - start_time) * 1000
+            reason = f"Error executing tool '{tool_call.name}': {exc}"
+            logger.error(
+                "tool_failed",
+                tool_name=tool_call.name,
+                reason=str(exc),
+                duration_ms=duration_ms,
+            )
+            return reason

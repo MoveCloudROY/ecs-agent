@@ -57,8 +57,9 @@ class PlanningSystem:
             tool_registry = world.get_component(entity_id, ToolRegistryComponent)
             tools = list(tool_registry.tools.values()) if tool_registry else None
 
+            start_time = time.monotonic()
             try:
-                logger.debug("planning_request", message_count=len(messages))
+                logger.info("planning_request", message_count=len(messages))
                 result = await llm_component.provider.complete(messages, tools=tools)
                 if not isinstance(result, CompletionResult):
                     raise RuntimeError(
@@ -74,6 +75,15 @@ class PlanningSystem:
 
                 plan.current_step += 1
                 completed_step_index = plan.current_step - 1
+                
+                duration_ms = (time.monotonic() - start_time) * 1000
+                logger.info(
+                    "planning_step_completed",
+                    step_index=completed_step_index,
+                    step_description=plan.steps[completed_step_index],
+                    duration_ms=duration_ms,
+                )
+                
                 await world.event_bus.publish(
                     PlanStepCompletedEvent(
                         entity_id=entity_id,
@@ -90,6 +100,11 @@ class PlanningSystem:
                     TerminalComponent(reason="provider_exhausted"),
                 )
             except Exception as exc:
+                logger.error(
+                    "planning_error",
+                    exception=str(exc),
+                    system_name="PlanningSystem",
+                )
                 world.add_component(
                     entity_id,
                     ErrorComponent(
