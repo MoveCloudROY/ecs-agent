@@ -9,6 +9,13 @@ Subagent delegation provides:
 - **Isolated Execution**: Each subagent runs in its own `World` with independent state
 - **Automatic Result Aggregation**: Results flow back to parent via tool result messages
 - **Event Tracking**: Monitor delegation lifecycle with `DelegationStartedEvent` and `DelegationCompletedEvent`
+- **Skill Inheritance**: Subagents can inherit specific skills from their parent agent
+
+Subagent delegation provides:
+- **Named Subagent Registry**: Pre-configure subagent profiles with specific capabilities
+- **Isolated Execution**: Each subagent runs in its own `World` with independent state
+- **Automatic Result Aggregation**: Results flow back to parent via tool result messages
+- **Event Tracking**: Monitor delegation lifecycle with `DelegationStartedEvent` and `DelegationCompletedEvent`
 
 ## Core Components
 
@@ -26,6 +33,8 @@ researcher_config = SubagentConfig(
     model="gpt-4o",
     system_prompt="You are a research specialist. Provide detailed, factual information.",
     max_ticks=10,
+    skills=["web_search", "file_tools"],  # List of skill names to inherit from parent
+)
     skills=[],  # Optional: list of skill names to load
 )
 ```
@@ -49,7 +58,35 @@ world.add_component(
 )
 ```
 
-### SubagentSystem
+The system handles delegation and auto-registers the `delegate` tool. It supports both manual registration and backward-compatible auto-discovery for entities with the required components.
+
+### Registration
+
+Register the `SubagentSystem` during world setup:
+
+```python
+from ecs_agent.systems.subagent import SubagentSystem
+
+# Register system (priority -1 recommended to run before ReasoningSystem)
+world.register_system(SubagentSystem(priority=-1), priority=-1)
+```
+
+### Auto-Registration Semantics
+
+The `SubagentSystem` automatically registers the `delegate` tool for any entity that has both:
+1. `SubagentRegistryComponent`
+2. `ToolRegistryComponent`
+
+If the `delegate` tool is already registered in the `ToolRegistryComponent`, the system skips registration for that entity to avoid overwriting custom implementations.
+
+## Skill Inheritance Policy
+
+When a parent delegates to a subagent, it can specify a list of skills to inherit. The `SubagentSystem` will:
+1. Check if the parent entity has the requested skill installed.
+2. Copy the skill metadata and its associated tools/handlers to the subagent's world.
+3. Log a warning if a requested skill is missing from the parent.
+
+This ensures subagents have the necessary capabilities (like web search or file access) while maintaining isolation.
 
 The system handles delegation and auto-registers the `delegate` tool:
 

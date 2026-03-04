@@ -435,7 +435,18 @@ Landmarks:
 ---
 
 ### Sub-Agent Delegation
+### Sub-Agent Delegation
 - **File:** `examples/subagent_delegation.py`
+- **What it demonstrates:** Parent agent delegating tasks via `delegate` tool with SubagentSystem managing child execution and skill inheritance.
+- **Run:** `uv run python examples/subagent_delegation.py`
+- **Pattern:** `SubagentRegistryComponent` + `SubagentSystem` (auto-registers `delegate` tool) + skill inheritance configuration.
+
+#### Key Code
+```python
+# SubagentSystem auto-registers the delegate tool for entities with registry.
+# If a subagent has 'skills' defined, they are inherited from the parent.
+world.register_system(SubagentSystem(priority=-1), priority=-1)
+```
 - **What it demonstrates:** Parent agent delegating tasks via `delegate` tool. SubagentSystem manages child execution.
 - **Run:** `uv run python examples/subagent_delegation.py`
 - **Pattern:** `SubagentRegistryComponent` + `SubagentSystem` (auto-registers `delegate` tool).

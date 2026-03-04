@@ -171,6 +171,24 @@ async def main() -> None:
                         "thoroughly and report your findings back to the manager."
                     ),
                     max_ticks=10,
+                    skills=[],  # Could inherit skills like 'web_search' if parent had them
+                )
+            }
+        ),
+    )
+    world.add_component(
+        manager_id,
+        SubagentRegistryComponent(
+            subagents={
+                "researcher": SubagentConfig(
+                    name="researcher",
+                    provider=subagent_provider,
+                    model=model if api_key else "fake-researcher",
+                    system_prompt=(
+                        "You are a research sub-agent. Investigate the given topic "
+                        "thoroughly and report your findings back to the manager."
+                    ),
+                    max_ticks=10,
                     skills=[],
                 )
             }
