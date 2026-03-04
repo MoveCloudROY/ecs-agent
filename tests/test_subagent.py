@@ -565,6 +565,7 @@ async def test_delegate_with_skills_installs_skills() -> None:
     assert metadata.has_system_prompt is True
 
 
+@pytest.mark.skip(reason="Timeout functionality removed in favor of synchronous delegation (commit 3bad29b)")
 async def test_delegate_timeout_returns_deterministic_error_and_cleans_pending_requests() -> (
     None
 ):
