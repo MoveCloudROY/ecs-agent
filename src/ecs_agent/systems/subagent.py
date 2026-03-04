@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from typing import Any
 
 from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
-    MessageBusConfigComponent,
     OwnerComponent,
     SubagentRegistryComponent,
-    TerminalComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.components.definitions import SkillComponent
@@ -20,7 +17,6 @@ from ecs_agent.core.runner import Runner
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.message_bus import MessageBusSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.observability import generate_traceparent
@@ -29,6 +25,7 @@ from ecs_agent.types import (
     DelegationStartedEvent,
     EntityId,
     Message,
+    SubagentConfig,
     ToolSchema,
 )
 
@@ -62,14 +59,40 @@ class SubagentSystem:
             if "delegate" in tool_registry.tools:
                 continue
 
-            # Register the delegate tool
-            delegate_schema = ToolSchema(
-                name="delegate",
-                description=(
+            schema_dict = self._build_delegate_tool_schema(
+                list(registry_comp.subagents.keys())
+            )
+            function_schema = schema_dict["function"]
+            tool_registry.tools["delegate"] = ToolSchema(
+                name=function_schema["name"],
+                description=function_schema["description"],
+                parameters=function_schema["parameters"],
+            )
+            self._install_delegate_handler(
+                world,
+                entity_id,
+                tool_name="delegate",
+                override=False,
+            )
+
+            logger.info(
+                "delegate_tool_registered",
+                entity_id=entity_id,
+                available_subagents=list(registry_comp.subagents.keys()),
+            )
+
+    def _build_delegate_tool_schema(self, subagent_names: list[str]) -> dict[str, Any]:
+        """Build OpenAI-style function schema for the delegate tool."""
+        del subagent_names
+        return {
+            "type": "function",
+            "function": {
+                "name": "delegate",
+                "description": (
                     "Delegate a task to a named subagent. The subagent will execute "
                     "the task independently and return its result."
                 ),
-                parameters={
+                "parameters": {
                     "type": "object",
                     "properties": {
                         "subagent_name": {
@@ -83,19 +106,29 @@ class SubagentSystem:
                     },
                     "required": ["subagent_name", "task"],
                 },
+            },
+        }
+
+    def _install_delegate_handler(
+        self,
+        world: World,
+        entity_id: EntityId,
+        tool_name: str,
+        override: bool,
+    ) -> None:
+        """Install delegate tool handler on ToolRegistryComponent."""
+        tool_registry = world.get_component(entity_id, ToolRegistryComponent)
+        if tool_registry is None:
+            raise ValueError(
+                f"Error: ToolRegistryComponent not found on entity {entity_id}"
             )
 
-            # Create the handler closure that captures world and entity_id
-            handler = self._make_delegate_handler(world, entity_id)
+        if tool_name in tool_registry.handlers and not override:
+            return
 
-            tool_registry.tools["delegate"] = delegate_schema
-            tool_registry.handlers["delegate"] = handler
-
-            logger.info(
-                "delegate_tool_registered",
-                entity_id=entity_id,
-                available_subagents=list(registry_comp.subagents.keys()),
-            )
+        tool_registry.handlers[tool_name] = self._make_delegate_handler(
+            world, entity_id
+        )
 
     def _make_delegate_handler(self, world: World, parent_entity_id: EntityId) -> Any:
         """Create a delegate handler closure that captures world and parent entity."""
@@ -113,15 +146,13 @@ class SubagentSystem:
             correlation_id = str(uuid.uuid4())
             traceparent = generate_traceparent()
 
-            # Publish DelegationStartedEvent
-            await world.event_bus.publish(
-                DelegationStartedEvent(
-                    entity_id=parent_entity_id,
-                    subagent_name=subagent_name,
-                    task=task,
-                    correlation_id=correlation_id,
-                    traceparent=traceparent,
-                )
+            await self._publish_delegation_events(
+                world,
+                parent_entity_id,
+                subagent_name,
+                correlation_id=correlation_id,
+                traceparent=traceparent,
+                task=task,
             )
 
             logger.info(
@@ -131,45 +162,43 @@ class SubagentSystem:
                 task=task,
             )
 
-            # Look up subagent config
             registry_comp = world.get_component(
                 parent_entity_id, SubagentRegistryComponent
             )
             if registry_comp is None:
                 error_msg = f"Error: SubagentRegistryComponent not found on entity {parent_entity_id}"
                 logger.error("delegation_failed", reason=error_msg)
-                await world.event_bus.publish(
-                    DelegationCompletedEvent(
-                        entity_id=parent_entity_id,
-                        subagent_name=subagent_name,
-                        result=error_msg,
-                        success=False,
-                        error=error_msg,
-                        correlation_id=correlation_id,
-                        traceparent=traceparent,
-                    )
+                await self._publish_delegation_events(
+                    world,
+                    parent_entity_id,
+                    subagent_name,
+                    correlation_id=correlation_id,
+                    traceparent=traceparent,
+                    result=error_msg,
+                    success=False,
+                    error=error_msg,
                 )
                 return error_msg
 
-            config = registry_comp.subagents.get(subagent_name)
-            if config is None:
-                error_msg = f"Error: Unknown subagent '{subagent_name}'. Available subagents: {list(registry_comp.subagents.keys())}"
+            try:
+                config = self._resolve_subagent_config(registry_comp, subagent_name)
+            except ValueError as exc:
+                error_msg = str(exc)
                 logger.error(
                     "delegation_failed",
                     reason="unknown_subagent",
                     subagent_name=subagent_name,
                     available=list(registry_comp.subagents.keys()),
                 )
-                await world.event_bus.publish(
-                    DelegationCompletedEvent(
-                        entity_id=parent_entity_id,
-                        subagent_name=subagent_name,
-                        result=error_msg,
-                        success=False,
-                        error=error_msg,
-                        correlation_id=correlation_id,
-                        traceparent=traceparent,
-                    )
+                await self._publish_delegation_events(
+                    world,
+                    parent_entity_id,
+                    subagent_name,
+                    correlation_id=correlation_id,
+                    traceparent=traceparent,
+                    result=error_msg,
+                    success=False,
+                    error=error_msg,
                 )
                 return error_msg
 
@@ -182,7 +211,6 @@ class SubagentSystem:
                     subagent_name=subagent_name,
                 )
 
-                # Add components to child entity
                 world.add_component(
                     child_entity_id,
                     LLMComponent(
@@ -203,53 +231,49 @@ class SubagentSystem:
                     child_entity_id, OwnerComponent(owner_id=parent_entity_id)
                 )
 
-                # Install skills if configured
                 if config.skills:
-                    # Get parent's skill and tool registry components
                     parent_skill_comp = world.get_component(
                         parent_entity_id, SkillComponent
                     )
                     parent_tool_reg = world.get_component(
                         parent_entity_id, ToolRegistryComponent
                     )
-                    
+
                     if parent_skill_comp is not None and parent_tool_reg is not None:
-                        # Create or get child's components
                         child_skill_comp = world.get_component(
                             child_entity_id, SkillComponent
                         )
                         child_tool_reg = world.get_component(
                             child_entity_id, ToolRegistryComponent
                         )
-                        
+
                         if child_skill_comp is None:
                             child_skill_comp = SkillComponent(skills={})
                             world.add_component(child_entity_id, child_skill_comp)
-                        
+
                         if child_tool_reg is None:
-                            child_tool_reg = ToolRegistryComponent(tools={}, handlers={})
+                            child_tool_reg = ToolRegistryComponent(
+                                tools={}, handlers={}
+                            )
                             world.add_component(child_entity_id, child_tool_reg)
-                        
-                        # Copy requested skills from parent to child
+
                         for skill_name in config.skills:
                             if skill_name in parent_skill_comp.skills:
-                                # Copy skill metadata
-                                child_skill_comp.skills[skill_name] = parent_skill_comp.skills[
-                                    skill_name
-                                ]
-                                
-                                # Copy skill's tools and handlers
+                                child_skill_comp.skills[skill_name] = (
+                                    parent_skill_comp.skills[skill_name]
+                                )
+
                                 metadata = parent_skill_comp.skills[skill_name]
                                 for tool_name in metadata.tool_names:
                                     if tool_name in parent_tool_reg.tools:
-                                        child_tool_reg.tools[tool_name] = parent_tool_reg.tools[
-                                            tool_name
-                                        ]
+                                        child_tool_reg.tools[tool_name] = (
+                                            parent_tool_reg.tools[tool_name]
+                                        )
                                     if tool_name in parent_tool_reg.handlers:
                                         child_tool_reg.handlers[tool_name] = (
                                             parent_tool_reg.handlers[tool_name]
                                         )
-                                
+
                                 logger.info(
                                     "skill_copied_to_child",
                                     parent_entity=parent_entity_id,
@@ -270,55 +294,26 @@ class SubagentSystem:
                             has_skill_comp=parent_skill_comp is not None,
                             has_tool_reg=parent_tool_reg is not None,
                         )
-                child_world = World()
-                child_world_entity_id = child_world.create_entity()
-                child_world.add_component(
+                child_world, child_world_entity_id = self._assemble_child_world(
+                    world, parent_entity_id, config
+                )
+                result = await self._execute_delegation(
+                    child_world,
                     child_world_entity_id,
-                    LLMComponent(
-                        provider=config.provider,
-                        model=config.model,
-                        system_prompt=config.system_prompt,
-                    ),
+                    task,
+                    config,
                 )
-                child_world.add_component(
-                    child_world_entity_id,
-                    ConversationComponent(
-                        messages=[Message(role="user", content=task)]
-                    ),
-                )
-                child_world.add_component(
-                    child_world_entity_id, OwnerComponent(owner_id=parent_entity_id)
-                )
-                child_world.register_system(ReasoningSystem(priority=0), priority=0)
-                child_world.register_system(MemorySystem(), priority=10)
-                child_world.register_system(
-                    ErrorHandlingSystem(priority=99), priority=99
-                )
-
-                runner = Runner()
-                await runner.run(child_world, max_ticks=config.max_ticks)
 
                 child_conv = child_world.get_component(
-                    child_world_entity_id, ConversationComponent
+                    child_world_entity_id,
+                    ConversationComponent,
                 )
-                result = "Error: No conversation found"
-                if child_conv is not None:
-                    parent_child_conv = world.get_component(
-                        child_entity_id, ConversationComponent
-                    )
-                    if parent_child_conv is not None:
-                        parent_child_conv.messages = list(child_conv.messages)
-
-                    # Find the last assistant message
-                    for message in reversed(child_conv.messages):
-                        if message.role == "assistant":
-                            result = message.content
-                            break
-                    else:
-                        result = (
-                            "Error: No assistant message found in subagent conversation"
-                        )
-
+                parent_child_conv = world.get_component(
+                    child_entity_id,
+                    ConversationComponent,
+                )
+                if child_conv is not None and parent_child_conv is not None:
+                    parent_child_conv.messages = list(child_conv.messages)
 
                 logger.info(
                     "delegation_completed",
@@ -328,18 +323,15 @@ class SubagentSystem:
                     result_length=len(result),
                 )
 
-
-                # Publish DelegationCompletedEvent
-                await world.event_bus.publish(
-                    DelegationCompletedEvent(
-                        entity_id=parent_entity_id,
-                        subagent_name=subagent_name,
-                        result=result,
-                        success=True,
-                        error=None,
-                        correlation_id=correlation_id,
-                        traceparent=traceparent,
-                    )
+                await self._publish_delegation_events(
+                    world,
+                    parent_entity_id,
+                    subagent_name,
+                    correlation_id=correlation_id,
+                    traceparent=traceparent,
+                    result=result,
+                    success=True,
+                    error=None,
                 )
 
                 return result
@@ -353,16 +345,15 @@ class SubagentSystem:
                     correlation_id=correlation_id,
                     exception=str(exc),
                 )
-                await world.event_bus.publish(
-                    DelegationCompletedEvent(
-                        entity_id=parent_entity_id,
-                        subagent_name=subagent_name,
-                        result=error_msg,
-                        success=False,
-                        error=error_msg,
-                        correlation_id=correlation_id,
-                        traceparent=traceparent,
-                    )
+                await self._publish_delegation_events(
+                    world,
+                    parent_entity_id,
+                    subagent_name,
+                    correlation_id=correlation_id,
+                    traceparent=traceparent,
+                    result=error_msg,
+                    success=False,
+                    error=error_msg,
                 )
                 return error_msg
 
@@ -374,18 +365,131 @@ class SubagentSystem:
                     subagent_name=subagent_name,
                     exception=str(exc),
                 )
-                await world.event_bus.publish(
-                    DelegationCompletedEvent(
-                        entity_id=parent_entity_id,
-                        subagent_name=subagent_name,
-                        result=error_msg,
-                        success=False,
-                        error=error_msg,
-                        correlation_id=correlation_id,
-                        traceparent=traceparent,
-                    )
+                await self._publish_delegation_events(
+                    world,
+                    parent_entity_id,
+                    subagent_name,
+                    correlation_id=correlation_id,
+                    traceparent=traceparent,
+                    result=error_msg,
+                    success=False,
+                    error=error_msg,
                 )
                 return error_msg
 
         return delegate_handler
 
+    def _resolve_subagent_config(
+        self,
+        registry: SubagentRegistryComponent,
+        subagent_name: str,
+    ) -> SubagentConfig:
+        """Resolve and validate subagent configuration from registry."""
+        config = registry.subagents.get(subagent_name)
+        if config is None:
+            raise ValueError(
+                f"Error: Unknown subagent '{subagent_name}'. Available subagents: {list(registry.subagents.keys())}"
+            )
+        return config
+
+    def _assemble_child_world(
+        self,
+        parent_world: World,
+        parent_entity: EntityId,
+        config: SubagentConfig,
+    ) -> tuple[World, EntityId]:
+        """Assemble isolated child world and runnable child entity."""
+        _ = parent_world
+
+        child_world = World()
+        child_world_entity_id = child_world.create_entity()
+        child_world.add_component(
+            child_world_entity_id,
+            LLMComponent(
+                provider=config.provider,
+                model=config.model,
+                system_prompt=config.system_prompt,
+            ),
+        )
+        child_world.add_component(
+            child_world_entity_id,
+            ConversationComponent(messages=[]),
+        )
+        child_world.add_component(
+            child_world_entity_id,
+            OwnerComponent(owner_id=parent_entity),
+        )
+        child_world.register_system(ReasoningSystem(priority=0), priority=0)
+        child_world.register_system(MemorySystem(), priority=10)
+        child_world.register_system(
+            ErrorHandlingSystem(priority=99),
+            priority=99,
+        )
+        return child_world, child_world_entity_id
+
+    async def _execute_delegation(
+        self,
+        child_world: World,
+        child_entity: EntityId,
+        task: str,
+        config: SubagentConfig,
+    ) -> str:
+        """Execute child world delegation run and return extracted result."""
+        child_world.add_component(
+            child_entity,
+            ConversationComponent(messages=[Message(role="user", content=task)]),
+        )
+        runner = Runner()
+        await runner.run(child_world, max_ticks=config.max_ticks)
+        return self._extract_delegation_result(child_world, child_entity)
+
+    def _extract_delegation_result(
+        self, child_world: World, child_entity: EntityId
+    ) -> str:
+        """Extract terminal delegation result from child conversation."""
+        child_conv = child_world.get_component(child_entity, ConversationComponent)
+        if child_conv is None:
+            return "Error: No conversation found"
+
+        for message in reversed(child_conv.messages):
+            if message.role == "assistant":
+                return message.content
+        return "Error: No assistant message found in subagent conversation"
+
+    async def _publish_delegation_events(
+        self,
+        world: World,
+        parent_entity_id: EntityId,
+        subagent_name: str,
+        *,
+        correlation_id: str,
+        traceparent: str,
+        task: str | None = None,
+        result: str | None = None,
+        success: bool | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Publish start/completion delegation events via one wrapper API."""
+        if task is not None:
+            await world.event_bus.publish(
+                DelegationStartedEvent(
+                    entity_id=parent_entity_id,
+                    subagent_name=subagent_name,
+                    task=task,
+                    correlation_id=correlation_id,
+                    traceparent=traceparent,
+                )
+            )
+
+        if result is not None and success is not None:
+            await world.event_bus.publish(
+                DelegationCompletedEvent(
+                    entity_id=parent_entity_id,
+                    subagent_name=subagent_name,
+                    result=result,
+                    success=success,
+                    error=error,
+                    correlation_id=correlation_id,
+                    traceparent=traceparent,
+                )
+            )
