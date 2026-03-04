@@ -1,5 +1,7 @@
 # Subagent Delegation
 
+The `SubagentSystem` enables parent agents to spawn child agents for subtask execution via the `delegate` tool. The system supports explicit registration via an installer API and backward-compatible auto-registration. Child agents run in isolated environments with optional skill and configuration inheritance.
+
 The `SubagentSystem` enables parent agents to spawn child agents for subtask execution via the `delegate` tool. The system auto-registers this tool, manages isolated child execution, and returns results to the parent.
 
 ## Overview
@@ -7,7 +9,10 @@ The `SubagentSystem` enables parent agents to spawn child agents for subtask exe
 Subagent delegation provides:
 - **Named Subagent Registry**: Pre-configure subagent profiles with specific capabilities
 - **Isolated Execution**: Each subagent runs in its own `World` with independent state
-- **Automatic Result Aggregation**: Results flow back to parent via tool result messages
+- **Automatic Result Aggregation**: Results flow back to parent via tool result messages.
+- **Event Tracking**: Monitor delegation lifecycle with `DelegationStartedEvent` and `DelegationCompletedEvent`.
+- **Skill Inheritance**: Subagents can inherit specific skills, system prompts, and tools from their parent agent via `InheritancePolicy`.
+- **Explicit Control**: Install the delegation tool manually with custom names using the `install_delegate_tool` API.
 - **Event Tracking**: Monitor delegation lifecycle with `DelegationStartedEvent` and `DelegationCompletedEvent`
 - **Skill Inheritance**: Subagents can inherit specific skills from their parent agent
 
@@ -35,7 +40,9 @@ researcher_config = SubagentConfig(
     max_ticks=10,
     skills=["web_search", "file_tools"],  # List of skill names to inherit from parent
 )
-    skills=[],  # Optional: list of skill names to load
+    skills=[],  # Optional: list of skill names to load from the environment
+    inheritance_policy=InheritancePolicy(inherit_system_prompt=True)  # Optional configuration
+)
 )
 ```
 
@@ -60,6 +67,28 @@ world.add_component(
 
 The system handles delegation and auto-registers the `delegate` tool. It supports both manual registration and backward-compatible auto-discovery for entities with the required components.
 
+### Explicit Installer API
+
+For fine-grained control, use the `install_delegate_tool` method. This allows you to customize the tool name or override existing registrations.
+
+```python
+subagent_system = SubagentSystem()
+world.register_system(subagent_system)
+
+# Install tool with custom name and override policy
+subagent_system.install_delegate_tool(
+    world, 1, tool_name="ask_subagent", override=True
+)
+```
+
+### Auto-Registration Semantics (Backward Compatibility)
+
+The `SubagentSystem` automatically registers the `delegate` tool for any entity that has both:
+1. `SubagentRegistryComponent`
+2. `ToolRegistryComponent`
+
+If the `delegate` tool is already registered in the `ToolRegistryComponent`, the system skips registration for that entity to avoid overwriting custom implementations unless the installer API is used with `override=True`.
+
 ### Registration
 
 Register the `SubagentSystem` during world setup:
@@ -79,7 +108,22 @@ The `SubagentSystem` automatically registers the `delegate` tool for any entity 
 
 If the `delegate` tool is already registered in the `ToolRegistryComponent`, the system skips registration for that entity to avoid overwriting custom implementations.
 
-## Skill Inheritance Policy
+## Inheritance Policy
+
+The `InheritancePolicy` class defines how subagents receive state and capabilities from their parents. It is configured on the `SubagentConfig`.
+
+| Field | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `enabled` | `bool` | `True` | Master toggle for inheritance. |
+| `inherit_system_prompt` | `bool` | `True` | Prepend parent system prompt to child prompt. |
+| `inherit_tools` | `list[str]` | `[]` | Whitelist of tool names to copy from parent. |
+| `inherit_permissions` | `bool` | `False` | Copy parent permission component. |
+| `allow_delegate_tool` | `bool` | `True` | Allow child to use its own `delegate` tool. |
+| `tool_conflict_policy` | `str` | `"skip"` | Conflict resolution: `skip`, `error`, or `override`. |
+| `missing_skill_policy` | `str` | `"warn"` | Missing skill behavior: `warn` or `error`. |
+
+### Tool Conflict Semantics
+,
 
 When a parent delegates to a subagent, it can specify a list of skills to inherit. The `SubagentSystem` will:
 1. Check if the parent entity has the requested skill installed.

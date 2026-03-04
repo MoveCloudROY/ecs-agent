@@ -17,6 +17,10 @@ import os
 from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
+    OwnerComponent,
+    SubagentRegistryComponent,
+    ToolRegistryComponent,
+    LLMComponent,
     SubagentRegistryComponent,
     ToolRegistryComponent,
     OwnerComponent,
@@ -29,7 +33,13 @@ from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
-from ecs_agent.types import CompletionResult, Message, SubagentConfig, ToolCall
+from ecs_agent.types import (
+    CompletionResult,
+    InheritancePolicy,
+    Message,
+    SubagentConfig,
+    ToolCall,
+)
 
 
 async def main() -> None:
@@ -157,7 +167,32 @@ async def main() -> None:
         ),
     )
 
-    # Configure subagent registry (SubagentSystem will auto-register delegate tool)
+    # Configure subagent registry with explicit inheritance policy
+    world.add_component(
+        manager_id,
+        SubagentRegistryComponent(
+            subagents={
+                "researcher": SubagentConfig(
+                    name="researcher",
+                    provider=subagent_provider,
+                    model=model if api_key else "fake-researcher",
+                    system_prompt=(
+                        "You are a research sub-agent. Investigate the given topic "
+                        "thoroughly and report your findings back to the manager."
+                    ),
+                    max_ticks=10,
+                    inheritance_policy=InheritancePolicy(
+                        inherit_system_prompt=True,  # Child will see manager's system prompt too
+                        inherit_tools=[],  # No parent tools inherited in this example
+                        allow_delegate_tool=True,  # Default, allows child to have its own delegate tool
+                    ),
+                )
+            }
+        ),
+    )
+
+    # ToolRegistryComponent required for delegate tool registration
+    world.add_component(manager_id, ToolRegistryComponent(tools={}, handlers={}))
     world.add_component(
         manager_id,
         SubagentRegistryComponent(
@@ -199,6 +234,12 @@ async def main() -> None:
     world.add_component(manager_id, ToolRegistryComponent(tools={}, handlers={}))
 
     # ── Systems Registration ────────────────────────────────────────
+    subagent_system = SubagentSystem(priority=-1)
+    world.register_system(subagent_system, priority=-1)
+
+    # Explicitly install delegate tool (demonstrates installer API)
+    # Note: SubagentSystem would also auto-register this if we skipped this call.
+    subagent_system.install_delegate_tool(world, manager_id, tool_name="delegate")
     # SubagentSystem priority=-1 ensures delegate tool registered BEFORE ReasoningSystem runs
     world.register_system(SubagentSystem(priority=-1), priority=-1)
     world.register_system(ReasoningSystem(priority=0), priority=0)
