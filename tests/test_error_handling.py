@@ -1,5 +1,6 @@
 """Tests for ErrorHandlingSystem."""
 
+import json
 import time
 
 import pytest
@@ -8,6 +9,19 @@ from ecs_agent.components.definitions import ErrorComponent
 from ecs_agent.core.world import World
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.types import ErrorOccurredEvent
+
+
+def _json_events(output: str) -> list[dict[str, object]]:
+    """Parse JSON events from logging output."""
+    events: list[dict[str, object]] = []
+    for line in output.strip().split("\n"):
+        if line.strip():
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                # Skip non-JSON lines
+                continue
+    return events
 
 
 class TestErrorHandlingSystem:
@@ -22,7 +36,6 @@ class TestErrorHandlingSystem:
     def system(self) -> ErrorHandlingSystem:
         """Create ErrorHandlingSystem instance."""
         return ErrorHandlingSystem()
-
     def test_constructor_default_priority(self) -> None:
         """Test ErrorHandlingSystem has default priority of 99."""
         system = ErrorHandlingSystem()
@@ -168,8 +181,13 @@ class TestErrorHandlingSystem:
         await system.process(world)
 
         captured = capsys.readouterr()
-        # JSON format from global conftest configuration
-        assert "entity_error" in captured.out
-        assert '"entity_id": 1' in captured.out or '"entity_id":1' in captured.out
-        assert "CriticalSystem" in captured.out
-        assert "Critical failure" in captured.out
+        events = _json_events(captured.out)
+        
+        # Find entity_error event
+        error_events = [e for e in events if e.get("event") == "entity_error"]
+        assert len(error_events) > 0, "No entity_error event found"
+        
+        event = error_events[0]
+        assert event.get("entity_id") == entity_id
+        assert event.get("system_name") == "CriticalSystem"
+        assert event.get("error") == "Critical failure"

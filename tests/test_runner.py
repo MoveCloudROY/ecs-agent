@@ -149,3 +149,156 @@ class TestRunner:
         await runner.run(world, max_ticks=7)
 
         assert counter.run_count == 7
+
+
+class TestRunnerLogging:
+    """Test Runner lifecycle logging."""
+
+
+    @pytest.mark.asyncio
+    async def test_runner_emits_run_start_event(self, capsys) -> None:
+        """Test that runner emits run_start event at beginning."""
+        import json
+        import sys
+        from ecs_agent.logging import configure_logging, STANDARD_EVENT_NAMES
+
+        configure_logging(json_output=True, level="INFO")
+
+        # Force reimport to pick up new logger config
+        for mod in ["ecs_agent.core.runner", "ecs_agent.core.world", "ecs_agent.core.system"]:
+            sys.modules.pop(mod, None)
+
+        from ecs_agent.core.world import World
+        from ecs_agent.core.runner import Runner
+
+        world = World()
+        runner = Runner()
+        counter = CounterSystem()
+        world.register_system(counter, priority=0)
+        await runner.run(world, max_ticks=1)
+
+        captured = capsys.readouterr()
+        # Parse only JSON lines (filter out console-formatted debug lines from pre-configured modules)
+        events = []
+        for line in captured.out.strip().split("\n"):
+            if line.strip() and line.strip().startswith("{"):
+                events.append(json.loads(line))
+        run_start_events = [e for e in events if e.get("event") == STANDARD_EVENT_NAMES["RUN_START"]]
+
+        assert len(run_start_events) >= 1
+        event = run_start_events[0]
+        assert "max_ticks" in event
+        assert event["max_ticks"] == 1
+
+    @pytest.mark.asyncio
+    async def test_runner_emits_run_complete_event(self, capsys) -> None:
+        """Test that runner emits run_complete event at end."""
+        import json
+        import sys
+        from ecs_agent.logging import configure_logging, STANDARD_EVENT_NAMES
+
+        configure_logging(json_output=True, level="INFO")
+
+        # Force reimport to pick up new logger config
+        for mod in ["ecs_agent.core.runner", "ecs_agent.core.world", "ecs_agent.core.system"]:
+            sys.modules.pop(mod, None)
+
+        from ecs_agent.core.world import World
+        from ecs_agent.core.runner import Runner
+
+        world = World()
+        runner = Runner()
+        counter = CounterSystem()
+        world.register_system(counter, priority=0)
+
+        await runner.run(world, max_ticks=2)
+
+        captured = capsys.readouterr()
+        # Parse only JSON lines
+        events = []
+        for line in captured.out.strip().split("\n"):
+            if line.strip() and line.strip().startswith("{"):
+                events.append(json.loads(line))
+        run_complete_events = [e for e in events if e.get("event") == STANDARD_EVENT_NAMES["RUN_COMPLETE"]]
+
+        assert len(run_complete_events) >= 1
+        event = run_complete_events[0]
+        assert "reason" in event
+
+    @pytest.mark.asyncio
+    async def test_runner_emits_tick_start_and_complete_events(self, capsys) -> None:
+        """Test that runner emits tick_start and tick_complete for each tick."""
+        import json
+        import sys
+        from ecs_agent.logging import configure_logging, STANDARD_EVENT_NAMES
+
+        configure_logging(json_output=True, level="DEBUG")
+
+        # Force reimport to pick up new logger config
+        for mod in ["ecs_agent.core.runner", "ecs_agent.core.world", "ecs_agent.core.system"]:
+            sys.modules.pop(mod, None)
+
+        from ecs_agent.core.world import World
+        from ecs_agent.core.runner import Runner
+
+        world = World()
+        runner = Runner()
+        counter = CounterSystem()
+        world.register_system(counter, priority=0)
+
+        await runner.run(world, max_ticks=3)
+
+        captured = capsys.readouterr()
+        # Parse only JSON lines
+        events = []
+        for line in captured.out.strip().split("\n"):
+            if line.strip() and line.strip().startswith("{"):
+                events.append(json.loads(line))
+        tick_start_events = [e for e in events if e.get("event") == STANDARD_EVENT_NAMES["TICK_START"]]
+        tick_complete_events = [e for e in events if e.get("event") == STANDARD_EVENT_NAMES["TICK_COMPLETE"]]
+
+        # Should have 3 tick_start and 3 tick_complete events
+        assert len(tick_start_events) == 3
+        assert len(tick_complete_events) == 3
+
+        # Verify tick numbers are sequential
+        for i, event in enumerate(tick_start_events):
+            assert "tick" in event
+            assert event["tick"] == i
+
+    @pytest.mark.asyncio
+    async def test_runner_tick_complete_includes_duration_ms(self, capsys) -> None:
+        """Test that tick_complete events include duration_ms field."""
+        import json
+        import sys
+        from ecs_agent.logging import configure_logging, STANDARD_EVENT_NAMES
+
+        configure_logging(json_output=True, level="DEBUG")
+
+        # Force reimport to pick up new logger config
+        for mod in ["ecs_agent.core.runner", "ecs_agent.core.world", "ecs_agent.core.system"]:
+            sys.modules.pop(mod, None)
+
+        from ecs_agent.core.world import World
+        from ecs_agent.core.runner import Runner
+
+        world = World()
+        runner = Runner()
+        counter = CounterSystem()
+        world.register_system(counter, priority=0)
+
+        await runner.run(world, max_ticks=1)
+
+        captured = capsys.readouterr()
+        # Parse only JSON lines
+        events = []
+        for line in captured.out.strip().split("\n"):
+            if line.strip() and line.strip().startswith("{"):
+                events.append(json.loads(line))
+        tick_complete_events = [e for e in events if e.get("event") == STANDARD_EVENT_NAMES["TICK_COMPLETE"]]
+
+        assert len(tick_complete_events) >= 1
+        event = tick_complete_events[0]
+        assert "duration_ms" in event
+        assert isinstance(event["duration_ms"], (int, float))
+        assert event["duration_ms"] >= 0

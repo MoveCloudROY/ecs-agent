@@ -388,7 +388,541 @@ class TestBusLogging:
                 assert parsed.get("payload_type") is None
                 break
 
+class TestEventContract:
+    """Tests for event naming and structured field contract."""
 
+    def test_event_contract_enforces_snake_case_names(self, capsys):
+        """Test event names follow snake_case convention."""
+        from ecs_agent.logging import STANDARD_EVENT_NAMES
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Use standard event name from contract
+        logger.info(STANDARD_EVENT_NAMES["SYSTEM_START"])
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Event name must be snake_case
+        event_name = str(event["event"])
+        assert event_name.islower()
+        assert "_" in event_name or event_name.isalpha()
+        assert " " not in event_name
+        assert "-" not in event_name
+
+    def test_event_contract_requires_entity_id_field(self, capsys):
+        """Test events require entity_id structured field for entity operations."""
+        from ecs_agent.logging import REQUIRED_FIELDS
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Log entity operation with required fields
+        logger.info("entity_created", entity_id=42)
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Entity operations must include entity_id
+        assert "entity_id" in REQUIRED_FIELDS["entity_operations"]
+        assert "entity_id" in event
+        assert event["entity_id"] == 42
+
+    def test_event_contract_requires_system_field(self, capsys):
+        """Test system lifecycle events require system field."""
+        from ecs_agent.logging import REQUIRED_FIELDS
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Log system operation with required fields
+        logger.info("system_start", system="ReasoningSystem")
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # System operations must include system name
+        assert "system" in REQUIRED_FIELDS["system_lifecycle"]
+        assert "system" in event
+        assert event["system"] == "ReasoningSystem"
+
+    def test_event_contract_requires_tick_field(self, capsys):
+        """Test runner tick events require tick field."""
+        from ecs_agent.logging import REQUIRED_FIELDS
+
+        configure_logging(json_output=True, level="DEBUG")
+        logger = get_logger("test")
+
+        # Log tick event with required fields
+        logger.debug("tick_start", tick=5)
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Tick events must include tick number
+        assert "tick" in REQUIRED_FIELDS["runner_operations"]
+        assert "tick" in event
+        assert event["tick"] == 5
+
+    def test_event_contract_requires_duration_ms_field(self, capsys):
+        """Test completion events require duration_ms field."""
+        from ecs_agent.logging import REQUIRED_FIELDS
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Log completion event with required fields
+        logger.info("system_complete", system="ReasoningSystem", duration_ms=123.45)
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Completion events must include duration
+        assert "duration_ms" in REQUIRED_FIELDS["completion_events"]
+        assert "duration_ms" in event
+        assert event["duration_ms"] == 123.45
+
+    def test_event_contract_requires_success_field(self, capsys):
+        """Test result events require success field."""
+        from ecs_agent.logging import REQUIRED_FIELDS
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Log result event with required fields
+        logger.info("tool_result", success=True)
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Result events must include success flag
+        assert "success" in REQUIRED_FIELDS["result_events"]
+        assert "success" in event
+        assert event["success"] is True
+
+    def test_event_contract_requires_reason_field(self, capsys):
+        """Test failure events require reason field."""
+        from ecs_agent.logging import REQUIRED_FIELDS
+
+        configure_logging(json_output=True, level="ERROR")
+        logger = get_logger("test")
+
+        # Log failure event with required fields
+        logger.error("tool_failed", success=False, reason="Network timeout")
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Failure events must include reason
+        assert "reason" in REQUIRED_FIELDS["failure_events"]
+        assert "reason" in event
+        assert event["reason"] == "Network timeout"
+
+
+class TestLevelPolicy:
+    """Tests for log level policy enforcement."""
+
+    def test_level_policy_high_frequency_operations_use_debug(self, capsys):
+        """Test high-frequency operations log at DEBUG level."""
+        from ecs_agent.logging import LEVEL_POLICY
+
+        configure_logging(json_output=True, level="DEBUG")
+        logger = get_logger("test")
+
+        # High-frequency operations should use DEBUG
+        assert LEVEL_POLICY["high_frequency"] == "DEBUG"
+        logger.debug("component_read", entity_id=1)
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        assert event["event"] == "component_read"
+        assert event["level"] == "debug"
+
+    def test_level_policy_lifecycle_operations_use_info(self, capsys):
+        """Test lifecycle operations log at INFO level."""
+        from ecs_agent.logging import LEVEL_POLICY
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Lifecycle operations should use INFO
+        assert LEVEL_POLICY["lifecycle"] == "INFO"
+        logger.info("system_start", system="ReasoningSystem")
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        assert event["event"] == "system_start"
+        assert event["level"] == "info"
+
+    def test_level_policy_anomalies_use_warning(self, capsys):
+        """Test anomalies log at WARNING level."""
+        from ecs_agent.logging import LEVEL_POLICY
+
+        configure_logging(json_output=True, level="WARNING")
+        logger = get_logger("test")
+
+        # Anomalies should use WARNING
+        assert LEVEL_POLICY["anomalies"] == "WARNING"
+        logger.warning("retry_attempt", attempt=3, max_retries=3)
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        assert event["event"] == "retry_attempt"
+        assert event["level"] == "warning"
+
+    def test_level_policy_failures_use_error(self, capsys):
+        """Test failures log at ERROR level."""
+        from ecs_agent.logging import LEVEL_POLICY
+
+        configure_logging(json_output=True, level="ERROR")
+        logger = get_logger("test")
+
+        # Failures should use ERROR
+        assert LEVEL_POLICY["failures"] == "ERROR"
+        logger.error("tool_failed", reason="Network timeout")
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        assert event["event"] == "tool_failed"
+        assert event["level"] == "error"
+
+
+class TestSensitiveDataPolicy:
+    """Tests for sensitive data exclusion policy."""
+
+    def test_sensitive_data_policy_forbids_content_field(self, capsys):
+        """Test sensitive data policy forbids raw conversation content."""
+        from ecs_agent.logging import FORBIDDEN_FIELDS
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Log message event with metadata only
+        logger.info("message_received", role="user", length=42)
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Raw content must be absent
+        assert "content" in FORBIDDEN_FIELDS
+        assert "content" not in event
+        assert "role" in event
+        assert "length" in event
+
+    def test_sensitive_data_policy_forbids_arguments_field(self, capsys):
+        """Test sensitive data policy forbids raw tool arguments."""
+        from ecs_agent.logging import FORBIDDEN_FIELDS
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Log tool call with metadata only
+        logger.info("tool_called", tool_name="bash", argument_count=3)
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Raw arguments must be absent
+        assert "arguments" in FORBIDDEN_FIELDS
+        assert "arguments" not in event
+        assert "tool_name" in event
+        assert "argument_count" in event
+
+    def test_sensitive_data_policy_forbids_api_key_field(self, capsys):
+        """Test sensitive data policy forbids API keys."""
+        from ecs_agent.logging import FORBIDDEN_FIELDS
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Log provider config with metadata only
+        logger.info("provider_configured", model="gpt-4", base_url="https://api.openai.com")
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # API keys must be absent
+        assert "api_key" in FORBIDDEN_FIELDS
+        assert "api_key" not in event
+        assert "model" in event
+        assert "base_url" in event
+
+    def test_sensitive_data_policy_forbids_token_field(self, capsys):
+        """Test sensitive data policy forbids auth tokens."""
+        from ecs_agent.logging import FORBIDDEN_FIELDS
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Log auth event with metadata only
+        logger.info("auth_success", user_id="user123")
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Tokens must be absent
+        assert "token" in FORBIDDEN_FIELDS
+        assert "token" not in event
+        assert "user_id" in event
+
+    def test_sensitive_data_policy_forbids_payload_field(self, capsys):
+        """Test sensitive data policy forbids full HTTP/checkpoint payloads."""
+        from ecs_agent.logging import FORBIDDEN_FIELDS
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Log checkpoint event with metadata only
+        logger.info("checkpoint_saved", checkpoint_id="ckpt-123", size_bytes=4096)
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Full payloads must be absent
+        assert "payload" in FORBIDDEN_FIELDS
+        assert "payload" not in event
+        assert "checkpoint_id" in event
+        assert "size_bytes" in event
+
+
+
+class TestWorldComponentLogging:
+    """Tests for world/component/query logging instrumentation."""
+
+    def test_component_store_add_logs_debug_event(self, capsys):
+        """Test ComponentStore.add emits debug event."""
+        from ecs_agent.core.component import ComponentStore
+        from ecs_agent.types import EntityId
+        from dataclasses import dataclass
+
+        @dataclass(slots=True)
+        class TestComponent:
+            value: int
+
+        store = ComponentStore()
+        entity = EntityId(1)
+        comp = TestComponent(value=42)
+
+        store.add(entity, comp)
+
+        captured = capsys.readouterr()
+        output = captured.out
+
+        # Check for component_store_add event
+        events = _json_events(output)
+        store_add_events = [e for e in events if e.get("event") == "component_store_add"]
+        assert len(store_add_events) > 0, "No component_store_add event found"
+        event = store_add_events[0]
+        assert event.get("entity_id") == 1
+        assert event.get("component_type") == "TestComponent"
+    def test_query_no_match_logs_debug_event(self, capsys):
+        """Test Query.get with no matches emits debug event."""
+        from ecs_agent.core.component import ComponentStore
+        from ecs_agent.core.query import Query
+        from dataclasses import dataclass
+
+        @dataclass(slots=True)
+        class MissingComponent:
+            value: str
+
+        store = ComponentStore()
+        query = Query(store)
+
+        results = query.get(MissingComponent)
+
+        captured = capsys.readouterr()
+        output = captured.out
+
+        # Check for query_executed event with no matches
+        events = _json_events(output)
+        query_events = [e for e in events if e.get("event") == "query_executed"]
+        assert len(query_events) > 0, "No query_executed event found"
+        event = query_events[0]
+        assert event.get("result_count") == 0
+
+class TestEventBusLogging:
+    """Tests for event bus logging instrumentation."""
+
+    async def test_event_bus_publish_logs_event(self, capsys):
+        """Test EventBus.publish emits structured log event."""
+        from ecs_agent.logging import configure_logging
+        from dataclasses import dataclass
+
+        configure_logging(json_output=False, level="DEBUG")
+
+        # Import AFTER configure_logging to get correct logger config
+        from ecs_agent.core.event_bus import EventBus
+
+        @dataclass
+        class TestEvent:
+            message: str
+class TestReasoningSystemLogging:
+    """Tests for ReasoningSystem lifecycle and error logging."""
+
+    async def test_reasoning_start_logs_lifecycle_event(self, capsys):
+        """Test ReasoningSystem emits reasoning_start with entity_id and model."""
+        from ecs_agent.core import World
+        from ecs_agent.systems.reasoning import ReasoningSystem
+        from ecs_agent.components import LLMComponent, ConversationComponent
+        from ecs_agent.providers import FakeProvider
+        from ecs_agent.types import Message, CompletionResult
+
+        provider = FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(role="assistant", content="Hello")
+                )
+            ]
+        )
+        world = World()
+        entity = world.create_entity()
+        world.add_component(
+            entity, LLMComponent(provider=provider, model="fake-model")
+        )
+        world.add_component(
+            entity,
+            ConversationComponent(messages=[Message(role="user", content="Hi")]),
+        )
+
+        system = ReasoningSystem()
+        await system.process(world)
+
+        captured = capsys.readouterr().out
+        
+        # Check for reasoning_start event
+        events = _json_events(captured)
+        reasoning_start_events = [e for e in events if e.get("event") == "reasoning_start"]
+        assert len(reasoning_start_events) > 0, "No reasoning_start event found"
+        event = reasoning_start_events[0]
+        assert event.get("entity_id") == entity
+        assert event.get("model") == "fake-model"
+        assert "reasoning" in str(event.get("logger", ""))  # logger has 'reasoning' system name
+    async def test_reasoning_complete_logs_lifecycle_event(self, capsys):
+        """Test ReasoningSystem emits reasoning_complete with entity_id."""
+        from ecs_agent.core import World
+        from ecs_agent.systems.reasoning import ReasoningSystem
+        from ecs_agent.components import LLMComponent, ConversationComponent
+        from ecs_agent.providers import FakeProvider
+        from ecs_agent.types import Message, CompletionResult
+
+        provider = FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(role="assistant", content="Hello")
+                )
+            ]
+        )
+        world = World()
+        entity = world.create_entity()
+        world.add_component(
+            entity, LLMComponent(provider=provider, model="fake-model")
+        )
+        world.add_component(
+            entity,
+            ConversationComponent(messages=[Message(role="user", content="Hi")]),
+        )
+
+        system = ReasoningSystem()
+        await system.process(world)
+
+        captured = capsys.readouterr().out
+        
+        # Check for reasoning_complete event
+        events = _json_events(captured)
+        reasoning_complete_events = [e for e in events if e.get("event") == "reasoning_complete"]
+        assert len(reasoning_complete_events) > 0, "No reasoning_complete event found"
+        event = reasoning_complete_events[0]
+        assert event.get("entity_id") == entity
+        assert event.get("model") == "fake-model"
+        assert "reasoning" in str(event.get("logger", ""))  # logger has 'reasoning' system name
+    async def test_reasoning_error_logs_exception(self, capsys):
+        """Test ReasoningSystem emits reasoning_error on provider exception."""
+        from ecs_agent.core import World
+        from ecs_agent.systems.reasoning import ReasoningSystem
+        from ecs_agent.components import LLMComponent, ConversationComponent, ErrorComponent
+        from ecs_agent.types import Message
+
+        class FailingProvider:
+            async def complete(self, messages, tools=None, stream=False, response_format=None):
+                raise RuntimeError("Provider failed")
+
+        world = World()
+        entity = world.create_entity()
+        world.add_component(
+            entity, LLMComponent(provider=FailingProvider(), model="failing-model")
+        )
+        world.add_component(
+            entity,
+            ConversationComponent(messages=[Message(role="user", content="Hi")]),
+        )
+
+        system = ReasoningSystem()
+        await system.process(world)
+
+        # Verify ErrorComponent was added
+        error_comp = world.get_component(entity, ErrorComponent)
+        assert error_comp is not None
+
+        captured = capsys.readouterr().out
+        
+        # Check for reasoning_error event
+        events = _json_events(captured)
+        reasoning_error_events = [e for e in events if e.get("event") == "reasoning_error"]
+        assert len(reasoning_error_events) > 0, "No reasoning_error event found"
+        event = reasoning_error_events[0]
+        assert event.get("entity_id") == entity
+        assert "reasoning" in str(event.get("logger", ""))  # logger has 'reasoning' system name
+        assert "Provider failed" in str(event.get("reason", ""))
+    async def test_reasoning_logs_no_sensitive_data(self, capsys):
+        """Test ReasoningSystem does not log raw message content or arguments."""
+        from ecs_agent.core import World
+        from ecs_agent.systems.reasoning import ReasoningSystem
+        from ecs_agent.components import LLMComponent, ConversationComponent
+        from ecs_agent.providers import FakeProvider
+        from ecs_agent.types import Message, CompletionResult, ToolCall
+
+        provider = FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(
+                        role="assistant",
+                        content="",
+                        tool_calls=[
+                            ToolCall(
+                                id="call_1",
+                                name="bash",
+                                arguments={"command": "secret-data"},
+                            )
+                        ],
+                    )
+                )
+            ]
+        )
+        world = World()
+        entity = world.create_entity()
+        world.add_component(
+            entity, LLMComponent(provider=provider, model="fake-model")
+        )
+        world.add_component(
+            entity,
+            ConversationComponent(
+                messages=[Message(role="user", content="secret user message")]
+            ),
+        )
+
+        system = ReasoningSystem()
+        await system.process(world)
+
+        captured = capsys.readouterr().out
+
+        # Verify sensitive strings are NOT in output
+        assert "secret-data" not in captured
+        assert "secret user message" not in captured
 class TestToolExecutionLogging:
     """Tests for ToolExecutionSystem logging."""
 

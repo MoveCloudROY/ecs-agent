@@ -22,6 +22,8 @@ Usage:
 
 from __future__ import annotations
 
+import json
+
 import os
 
 import pytest
@@ -39,6 +41,7 @@ from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import CompletionResult, Message, StreamDelta, StreamDeltaEvent
+from ecs_agent.logging import STANDARD_EVENT_NAMES, FORBIDDEN_FIELDS
 
 # DashScope API configuration from environment variables
 # Tests require LLM_API_KEY to execute; other vars use sensible defaults
@@ -48,6 +51,18 @@ MODEL = os.getenv("LLM_MODEL", "qwen-plus")
 
 # Skip all tests if API key is not set (env-driven test contract)
 pytestmark = pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+
+
+def _json_events(output: str) -> list[dict[str, object]]:
+    """Parse JSON events from logging output."""
+    events: list[dict[str, object]] = []
+    for line in output.strip().split("\n"):
+        if line.strip():
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return events
 
 
 @pytest.mark.asyncio
@@ -262,13 +277,8 @@ async def test_real_multi_turn_conversation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_real_llm_logging_no_sensitive_data(capsys: pytest.CaptureFixture[str]) -> None:
-    """Verify real LLM interactions don't log sensitive data (content, API keys)."""
-    import json
-    from ecs_agent.logging import configure_logging
-
-    configure_logging(json_output=True, level="INFO")
-
+async def test_real_llm_reasoning_logging_contracts(capsys) -> None:
+    """Verify structured logging contracts when ReasoningSystem uses real LLM provider."""
     world = World()
     provider = OpenAIProvider(
         api_key=API_KEY,
@@ -281,47 +291,48 @@ async def test_real_llm_logging_no_sensitive_data(capsys: pytest.CaptureFixture[
     world.add_component(
         entity,
         ConversationComponent(
-            messages=[Message(role="user", content="Secret: my password is hunter2")]
+            messages=[Message(role="user", content="Say hello in 3 words")]
         ),
     )
 
-    # Register systems
+    # Register ReasoningSystem
     world.register_system(ReasoningSystem(priority=0), priority=0)
 
-    # Run one tick
-    runner = Runner()
-    await runner.run(world, max_ticks=1)
+    # Execute: Process one tick to trigger LLM call
+    await world.process()
 
+    # Capture logging output
     captured = capsys.readouterr()
+    events = _json_events(captured.out)
 
-    # Parse JSON log lines
-    events = []
-    for line in captured.out.strip().split("\n"):
-        if line.strip():
-            try:
-                events.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
+    # Assert: reasoning_start event exists with required metadata
+    reasoning_start_events = [e for e in events if e.get("event") == "reasoning_start"]
+    assert len(reasoning_start_events) > 0, "Expected at least one reasoning_start event"
 
-    # Verify: No API key in logs
+    start_event = reasoning_start_events[0]
+    assert "entity_id" in start_event, "reasoning_start must include entity_id"
+    assert "model" in start_event, "reasoning_start must include model"
+    assert start_event["model"] == MODEL
+
+    # Assert: reasoning_complete event exists with duration_ms
+    reasoning_complete_events = [e for e in events if e.get("event") == "reasoning_complete"]
+    assert len(reasoning_complete_events) > 0, "Expected at least one reasoning_complete event"
+
+    complete_event = reasoning_complete_events[0]
+    assert "entity_id" in complete_event, "reasoning_complete must include entity_id"
+    assert "duration_ms" in complete_event, "reasoning_complete must include duration_ms"
+    assert isinstance(complete_event["duration_ms"], (int, float))
+    assert complete_event["duration_ms"] >= 0
+
+    # Assert: No forbidden fields in any log event
     for event in events:
-        event_str = json.dumps(event)
-        assert API_KEY not in event_str, f"Found API key in log: {event}"
-
-    # Verify: No secret message content in logs
-    for event in events:
-        event_str = json.dumps(event).lower()
-        assert "hunter2" not in event_str, f"Found secret content in log: {event}"
+        for forbidden in FORBIDDEN_FIELDS:
+            assert forbidden not in event, f"Forbidden field '{forbidden}' found in log event: {event.get('event')}"
 
 
 @pytest.mark.asyncio
-async def test_real_llm_logging_structured_metadata(capsys: pytest.CaptureFixture[str]) -> None:
-    """Verify real LLM logging includes structured metadata (model, entity_id, system)."""
-    import json
-    from ecs_agent.logging import configure_logging
-
-    configure_logging(json_output=True, level="INFO")
-
+async def test_real_llm_streaming_logging_metadata(capsys) -> None:
+    """Verify streaming mode logs contain correct metadata fields."""
     world = World()
     provider = OpenAIProvider(
         api_key=API_KEY,
@@ -334,35 +345,81 @@ async def test_real_llm_logging_structured_metadata(capsys: pytest.CaptureFixtur
     world.add_component(
         entity,
         ConversationComponent(
-            messages=[Message(role="user", content="Say hello")]
+            messages=[Message(role="user", content="Count to three")]
+        ),
+    )
+    world.add_component(entity, StreamingComponent(enabled=True))
+
+    world.register_system(ReasoningSystem(priority=0), priority=0)
+
+    # Execute
+    await world.process()
+
+    # Capture and parse logs
+    captured = capsys.readouterr()
+    events = _json_events(captured.out)
+
+    # Assert: reasoning_start includes streaming metadata
+    reasoning_start_events = [e for e in events if e.get("event") == "reasoning_start"]
+    assert len(reasoning_start_events) > 0
+
+    start_event = reasoning_start_events[0]
+    assert "streaming" in start_event, "reasoning_start must include 'streaming' field in streaming mode"
+    assert start_event["streaming"] is True
+
+    # Assert: reasoning_complete includes chunk count or streaming completion metadata
+    reasoning_complete_events = [e for e in events if e.get("event") == "reasoning_complete"]
+    if reasoning_complete_events:
+        complete_event = reasoning_complete_events[0]
+        # Should have duration_ms at minimum
+        assert "duration_ms" in complete_event
+
+    # Assert: No sensitive conversation content in logs
+    for event in events:
+        assert "content" not in event, "Raw conversation content must not appear in logs"
+        assert "arguments" not in event, "Raw tool arguments must not appear in logs"
+
+
+@pytest.mark.asyncio
+async def test_real_llm_error_logging_contracts(capsys) -> None:
+    """Verify error logging when LLM provider fails (bad API key)."""
+    world = World()
+    # Use invalid API key to trigger error
+    provider = OpenAIProvider(
+        api_key="sk-invalid-key-for-testing",
+        base_url=BASE_URL,
+        model=MODEL,
+    )
+
+    entity = world.create_entity()
+    world.add_component(entity, LLMComponent(provider=provider, model=MODEL))
+    world.add_component(
+        entity,
+        ConversationComponent(
+            messages=[Message(role="user", content="Hello")]
         ),
     )
 
-    # Register systems
     world.register_system(ReasoningSystem(priority=0), priority=0)
+    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
-    # Run one tick
-    runner = Runner()
-    await runner.run(world, max_ticks=1)
+    # Execute (should fail)
+    await world.process()
 
+    # Capture logs
     captured = capsys.readouterr()
+    events = _json_events(captured.out)
 
-    # Parse JSON log lines
-    events = []
-    for line in captured.out.strip().split("\n"):
-        if line.strip():
-            try:
-                events.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
+    # Assert: reasoning_error event exists
+    error_events = [e for e in events if e.get("event") == "reasoning_error"]
+    assert len(error_events) > 0, "Expected at least one reasoning_error event"
 
-    # Find reasoning events
-    reasoning_events = [e for e in events if "reasoning" in str(e.get("event", ""))]
-    assert len(reasoning_events) > 0, "Expected reasoning events in logs"
+    error_event = error_events[0]
+    assert "entity_id" in error_event, "reasoning_error must include entity_id"
+    assert "reason" in error_event or "exception" in error_event, "reasoning_error must include failure reason"
 
-    # Verify structured fields in reasoning events
-    for event in reasoning_events:
-        assert "entity_id" in event, f"Missing entity_id in event: {event}"
-        assert "model" in event or "event" in event, f"Missing model/event in event: {event}"
-        assert "level" in event, f"Missing level in event: {event}"
-        assert event.get("level") in ["info", "debug", "error"], f"Invalid level in event: {event}"
+    # Assert: No API key leaked in error logs
+    for event in events:
+        event_str = json.dumps(event)
+        assert "sk-invalid-key-for-testing" not in event_str, "API key must not appear in logs"
+        assert "api_key" not in event, "api_key field must not appear in logs"

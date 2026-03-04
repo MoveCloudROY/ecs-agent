@@ -12,11 +12,13 @@ from structlog.processors import (
 )
 from structlog.contextvars import merge_contextvars
 
+
 # Minimal processors for test environment
 def _ensure_exc_info_minimal(logger, method_name, event_dict):
     if method_name == "exception" and "exc_info" not in event_dict:
         event_dict["exc_info"] = True
     return event_dict
+
 
 # Configure JSON logging BEFORE any ecs_agent imports
 shared_processors = [

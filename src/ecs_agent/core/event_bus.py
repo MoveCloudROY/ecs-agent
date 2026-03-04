@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from typing import Any, Awaitable, Callable, TypeVar, cast
 
 T = TypeVar("T")
 Handler = Callable[[Any], Awaitable[None]]
 
 
+from ecs_agent.logging import get_logger, log_bus_deliver, log_bus_publish
+
+logger = get_logger(__name__)
 class EventBus:
     def __init__(self) -> None:
         self._handlers: dict[type, list[Handler]] = {}
@@ -36,6 +40,31 @@ class EventBus:
         handlers = list(self._handlers.get(type(event), []))
         if not handlers:
             return
+
+        # Generate trace context for this publish operation
+        trace_id = str(uuid.uuid4())
+        correlation_id = str(uuid.uuid4())
+        topic = type(event).__name__
+
+        # Log publish event
+        log_bus_publish(
+            logger=logger,
+            topic=topic,
+            trace_id=trace_id,
+            correlation_id=correlation_id,
+            payload_type=type(event).__name__,
+        )
+
+        # Deliver to all handlers
+        for idx, handler in enumerate(handlers):
+            subscriber_id = getattr(handler, "__name__", f"handler_{idx}")
+            log_bus_deliver(
+                logger=logger,
+                topic=topic,
+                subscriber_id=subscriber_id,
+                trace_id=trace_id,
+                correlation_id=correlation_id,
+            )
 
         await asyncio.gather(
             *(handler(event) for handler in handlers), return_exceptions=True
