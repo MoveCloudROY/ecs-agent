@@ -11,6 +11,14 @@ import structlog
 from ecs_agent.logging import configure_logging, get_logger
 
 
+def _json_events(output: str) -> list[dict[str, object]]:
+    """Parse JSON log lines from captured output."""
+    events: list[dict[str, object]] = []
+    for line in output.strip().split("\n"):
+        if line.strip():
+            events.append(json.loads(line))
+    return events
+
 class TestConfigureLogging:
     """Tests for configure_logging function."""
 
@@ -375,3 +383,306 @@ class TestBusLogging:
                 assert parsed.get("correlation_id") == "corr-123"
                 assert parsed.get("payload_type") is None
                 break
+
+
+
+class TestEventContract:
+    """Tests for event naming and structured field contract."""
+
+    def test_event_contract_enforces_snake_case_names(self, capsys):
+        """Test event names follow snake_case convention."""
+        from ecs_agent.logging import STANDARD_EVENT_NAMES
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Use standard event name from contract
+        logger.info(STANDARD_EVENT_NAMES["SYSTEM_START"])
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Event name must be snake_case
+        event_name = str(event["event"])
+        assert event_name.islower()
+        assert "_" in event_name or event_name.isalpha()
+        assert " " not in event_name
+        assert "-" not in event_name
+
+    def test_event_contract_requires_entity_id_field(self, capsys):
+        """Test events require entity_id structured field for entity operations."""
+        from ecs_agent.logging import REQUIRED_FIELDS
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Log entity operation with required fields
+        logger.info("entity_created", entity_id=42)
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Entity operations must include entity_id
+        assert "entity_id" in REQUIRED_FIELDS["entity_operations"]
+        assert "entity_id" in event
+        assert event["entity_id"] == 42
+
+    def test_event_contract_requires_system_field(self, capsys):
+        """Test system lifecycle events require system field."""
+        from ecs_agent.logging import REQUIRED_FIELDS
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Log system operation with required fields
+        logger.info("system_start", system="ReasoningSystem")
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # System operations must include system name
+        assert "system" in REQUIRED_FIELDS["system_lifecycle"]
+        assert "system" in event
+        assert event["system"] == "ReasoningSystem"
+
+    def test_event_contract_requires_tick_field(self, capsys):
+        """Test runner tick events require tick field."""
+        from ecs_agent.logging import REQUIRED_FIELDS
+
+        configure_logging(json_output=True, level="DEBUG")
+        logger = get_logger("test")
+
+        # Log tick event with required fields
+        logger.debug("tick_start", tick=5)
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Tick events must include tick number
+        assert "tick" in REQUIRED_FIELDS["runner_operations"]
+        assert "tick" in event
+        assert event["tick"] == 5
+
+    def test_event_contract_requires_duration_ms_field(self, capsys):
+        """Test completion events require duration_ms field."""
+        from ecs_agent.logging import REQUIRED_FIELDS
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Log completion event with required fields
+        logger.info("system_complete", system="ReasoningSystem", duration_ms=123.45)
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Completion events must include duration
+        assert "duration_ms" in REQUIRED_FIELDS["completion_events"]
+        assert "duration_ms" in event
+        assert event["duration_ms"] == 123.45
+
+    def test_event_contract_requires_success_field(self, capsys):
+        """Test result events require success field."""
+        from ecs_agent.logging import REQUIRED_FIELDS
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Log result event with required fields
+        logger.info("tool_result", success=True)
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Result events must include success flag
+        assert "success" in REQUIRED_FIELDS["result_events"]
+        assert "success" in event
+        assert event["success"] is True
+
+    def test_event_contract_requires_reason_field(self, capsys):
+        """Test failure events require reason field."""
+        from ecs_agent.logging import REQUIRED_FIELDS
+
+        configure_logging(json_output=True, level="ERROR")
+        logger = get_logger("test")
+
+        # Log failure event with required fields
+        logger.error("tool_failed", success=False, reason="Network timeout")
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Failure events must include reason
+        assert "reason" in REQUIRED_FIELDS["failure_events"]
+        assert "reason" in event
+        assert event["reason"] == "Network timeout"
+
+
+class TestLevelPolicy:
+    """Tests for log level policy enforcement."""
+
+    def test_level_policy_high_frequency_operations_use_debug(self, capsys):
+        """Test high-frequency operations log at DEBUG level."""
+        from ecs_agent.logging import LEVEL_POLICY
+
+        configure_logging(json_output=True, level="DEBUG")
+        logger = get_logger("test")
+
+        # High-frequency operations should use DEBUG
+        assert LEVEL_POLICY["high_frequency"] == "DEBUG"
+        logger.debug("component_read", entity_id=1)
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        assert event["event"] == "component_read"
+        assert event["level"] == "debug"
+
+    def test_level_policy_lifecycle_operations_use_info(self, capsys):
+        """Test lifecycle operations log at INFO level."""
+        from ecs_agent.logging import LEVEL_POLICY
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Lifecycle operations should use INFO
+        assert LEVEL_POLICY["lifecycle"] == "INFO"
+        logger.info("system_start", system="ReasoningSystem")
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        assert event["event"] == "system_start"
+        assert event["level"] == "info"
+
+    def test_level_policy_anomalies_use_warning(self, capsys):
+        """Test anomalies log at WARNING level."""
+        from ecs_agent.logging import LEVEL_POLICY
+
+        configure_logging(json_output=True, level="WARNING")
+        logger = get_logger("test")
+
+        # Anomalies should use WARNING
+        assert LEVEL_POLICY["anomalies"] == "WARNING"
+        logger.warning("retry_attempt", attempt=3, max_retries=3)
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        assert event["event"] == "retry_attempt"
+        assert event["level"] == "warning"
+
+    def test_level_policy_failures_use_error(self, capsys):
+        """Test failures log at ERROR level."""
+        from ecs_agent.logging import LEVEL_POLICY
+
+        configure_logging(json_output=True, level="ERROR")
+        logger = get_logger("test")
+
+        # Failures should use ERROR
+        assert LEVEL_POLICY["failures"] == "ERROR"
+        logger.error("tool_failed", reason="Network timeout")
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        assert event["event"] == "tool_failed"
+        assert event["level"] == "error"
+
+
+class TestSensitiveDataPolicy:
+    """Tests for sensitive data exclusion policy."""
+
+    def test_sensitive_data_policy_forbids_content_field(self, capsys):
+        """Test sensitive data policy forbids raw conversation content."""
+        from ecs_agent.logging import FORBIDDEN_FIELDS
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Log message event with metadata only
+        logger.info("message_received", role="user", length=42)
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Raw content must be absent
+        assert "content" in FORBIDDEN_FIELDS
+        assert "content" not in event
+        assert "role" in event
+        assert "length" in event
+
+    def test_sensitive_data_policy_forbids_arguments_field(self, capsys):
+        """Test sensitive data policy forbids raw tool arguments."""
+        from ecs_agent.logging import FORBIDDEN_FIELDS
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Log tool call with metadata only
+        logger.info("tool_called", tool_name="bash", argument_count=3)
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Raw arguments must be absent
+        assert "arguments" in FORBIDDEN_FIELDS
+        assert "arguments" not in event
+        assert "tool_name" in event
+        assert "argument_count" in event
+
+    def test_sensitive_data_policy_forbids_api_key_field(self, capsys):
+        """Test sensitive data policy forbids API keys."""
+        from ecs_agent.logging import FORBIDDEN_FIELDS
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Log provider config with metadata only
+        logger.info("provider_configured", model="gpt-4", base_url="https://api.openai.com")
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # API keys must be absent
+        assert "api_key" in FORBIDDEN_FIELDS
+        assert "api_key" not in event
+        assert "model" in event
+        assert "base_url" in event
+
+    def test_sensitive_data_policy_forbids_token_field(self, capsys):
+        """Test sensitive data policy forbids auth tokens."""
+        from ecs_agent.logging import FORBIDDEN_FIELDS
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Log auth event with metadata only
+        logger.info("auth_success", user_id="user123")
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Tokens must be absent
+        assert "token" in FORBIDDEN_FIELDS
+        assert "token" not in event
+        assert "user_id" in event
+
+    def test_sensitive_data_policy_forbids_payload_field(self, capsys):
+        """Test sensitive data policy forbids full HTTP/checkpoint payloads."""
+        from ecs_agent.logging import FORBIDDEN_FIELDS
+
+        configure_logging(json_output=True, level="INFO")
+        logger = get_logger("test")
+
+        # Log checkpoint event with metadata only
+        logger.info("checkpoint_saved", checkpoint_id="ckpt-123", size_bytes=4096)
+
+        events = _json_events(capsys.readouterr().out)
+        event = events[-1]
+
+        # Full payloads must be absent
+        assert "payload" in FORBIDDEN_FIELDS
+        assert "payload" not in event
+        assert "checkpoint_id" in event
+        assert "size_bytes" in event

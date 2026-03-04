@@ -34,6 +34,48 @@ _METHOD_LEVEL_MAP = {
     "exception": logging.ERROR,
 }
 
+# Event Contract: Standard event names (snake_case)
+STANDARD_EVENT_NAMES: dict[str, str] = {
+    "SYSTEM_START": "system_start",
+    "SYSTEM_COMPLETE": "system_complete",
+    "TICK_START": "tick_start",
+    "TICK_COMPLETE": "tick_complete",
+    "ENTITY_CREATED": "entity_created",
+    "COMPONENT_ADDED": "component_added",
+    "TOOL_CALLED": "tool_called",
+    "TOOL_RESULT": "tool_result",
+    "TOOL_FAILED": "tool_failed",
+    "MESSAGE_RECEIVED": "message_received",
+    "CHECKPOINT_SAVED": "checkpoint_saved",
+    "PROVIDER_CONFIGURED": "provider_configured",
+}
+
+# Event Contract: Required structured fields by category
+REQUIRED_FIELDS: dict[str, list[str]] = {
+    "entity_operations": ["entity_id"],
+    "system_lifecycle": ["system"],
+    "runner_operations": ["tick"],
+    "completion_events": ["duration_ms"],
+    "result_events": ["success"],
+    "failure_events": ["reason"],
+}
+
+# Level Policy: Log level guidelines by operation category
+LEVEL_POLICY: dict[str, str] = {
+    "high_frequency": "DEBUG",  # Component reads, queries, frequent operations
+    "lifecycle": "INFO",        # System start/stop, entity creation, checkpoints
+    "anomalies": "WARNING",     # Retries, unexpected states, performance issues
+    "failures": "ERROR",        # Tool failures, system errors, exceptions
+}
+
+# Sensitive Data Policy: Forbidden fields (must NOT appear in logs)
+FORBIDDEN_FIELDS: list[str] = [
+    "content",      # Raw conversation/message content
+    "arguments",    # Raw tool call arguments
+    "api_key",      # API keys
+    "token",        # Auth tokens
+    "payload",      # Full HTTP/checkpoint payloads
+]
 
 def _add_caller_info(
     logger: Any,
