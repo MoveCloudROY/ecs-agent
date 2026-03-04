@@ -641,10 +641,17 @@ class TestCheckpointLogging:
 
     async def test_checkpoint_undo_error_logged(self, capsys):
         """Test CheckpointSystem.undo logs error on failure."""
+        import importlib
+        from ecs_agent.logging import configure_logging
+        
+        configure_logging(json_output=True, level="INFO")
+        
+        # Reload module to get fresh logger with new config
+        import ecs_agent.systems.checkpoint
+        importlib.reload(ecs_agent.systems.checkpoint)
+        
         from ecs_agent.core import World
         from ecs_agent.systems.checkpoint import CheckpointSystem
-
-
 
         world = World()
 
@@ -655,12 +662,51 @@ class TestCheckpointLogging:
             pass  # Expected
 
         captured = capsys.readouterr()
-        # CheckpointSystem.undo currently raises without logging
-        # This test will be GREEN once we add error logging to undo
         events = _json_events(captured.out)
-        error_events = [e for e in events if e.get("level") == "error"]
-        # For now, we just verify no crash
-        assert True
+        error_events = [e for e in events if e.get("event") == "checkpoint_restore_failed"]
+        
+        assert len(error_events) >= 1, "checkpoint_restore_failed event not found"
+        event = error_events[0]
+        assert "reason" in event
+        assert event["level"] == "error"
+
+    async def test_checkpoint_restored_event_emitted(self, capsys):
+        """Test CheckpointSystem.undo emits checkpoint_restored event on success."""
+        import importlib
+        from ecs_agent.logging import configure_logging
+        
+        configure_logging(json_output=True, level="INFO")
+        
+        # Reload module to get fresh logger with new config
+        import ecs_agent.systems.checkpoint
+        importlib.reload(ecs_agent.systems.checkpoint)
+        
+        from ecs_agent.core import World
+        from ecs_agent.components import CheckpointComponent
+        from ecs_agent.systems.checkpoint import CheckpointSystem
+
+        world = World()
+        entity = world.create_entity()
+        world.add_component(entity, CheckpointComponent(snapshots=[], max_snapshots=5))
+
+        # Create a checkpoint first
+        system = CheckpointSystem()
+        await system.process(world)
+
+        # Now restore it
+        await CheckpointSystem.undo(world, providers={}, tool_handlers={})
+
+        captured = capsys.readouterr()
+        events = _json_events(captured.out)
+        restored_events = [e for e in events if e.get("event") == "checkpoint_restored"]
+        
+        assert len(restored_events) >= 1, "checkpoint_restored event not found"
+        event = restored_events[0]
+        assert "success" in event
+        assert event["success"] is True
+        assert "duration_ms" in event
+        assert event["duration_ms"] >= 0
+        assert "checkpoint_id" in event
 
 
 class TestPlanningLogging:
@@ -800,3 +846,242 @@ class TestPlanningLogging:
         assert len(error_events) >= 1, "planning_error event not found"
         event = error_events[0]
         assert "exception" in event or "error" in event
+
+
+class TestSensitiveDataPolicy:
+    """Tests to ensure sensitive data is not logged."""
+
+    async def test_no_message_content_in_reasoning_logs(self, capsys):
+        """Verify ReasoningSystem does not log raw message content."""
+        from ecs_agent.core import World
+        from ecs_agent.components import LLMComponent, ConversationComponent
+        from ecs_agent.systems.reasoning import ReasoningSystem
+        from ecs_agent.providers import FakeProvider
+        from ecs_agent.types import Message, CompletionResult
+
+        world = World()
+        provider = FakeProvider(
+            responses=[CompletionResult(message=Message(role="assistant", content="Secret response"))]
+        )
+
+        entity = world.create_entity()
+        world.add_component(entity, LLMComponent(provider=provider, model="fake"))
+        world.add_component(
+            entity,
+            ConversationComponent(
+                messages=[
+                    Message(role="user", content="This is secret user input"),
+                    Message(role="assistant", content="This is secret assistant output"),
+                ]
+            ),
+        )
+
+        system = ReasoningSystem()
+        await system.process(world)
+
+        captured = capsys.readouterr()
+        events = _json_events(captured.out)
+
+        # Check that no event contains the secret message content
+        for event in events:
+            event_str = json.dumps(event)
+            assert "secret user input" not in event_str.lower(), f"Found user message content in log: {event}"
+            assert "secret assistant output" not in event_str.lower(), f"Found assistant message content in log: {event}"
+            assert "secret response" not in event_str.lower(), f"Found response content in log: {event}"
+
+    async def test_no_tool_arguments_in_tool_execution_logs(self, capsys):
+        """Verify ToolExecutionSystem does not log raw tool arguments."""
+        from ecs_agent.core import World
+        from ecs_agent.components import PendingToolCallsComponent, ToolRegistryComponent
+        from ecs_agent.systems.tool_execution import ToolExecutionSystem
+        from ecs_agent.types import ToolCall, ToolSchema
+
+        async def secret_tool(secret_param: str) -> str:
+            return f"Got {secret_param}"
+
+        world = World()
+        entity = world.create_entity()
+
+        # Register tool
+        tool_schema = ToolSchema(
+            name="secret_tool",
+            description="A tool with secret params",
+            parameters={
+                "type": "object",
+                "properties": {"secret_param": {"type": "string"}},
+                "required": ["secret_param"],
+            },
+        )
+        world.add_component(
+            entity,
+            ToolRegistryComponent(
+                tools={"secret_tool": tool_schema},
+                handlers={"secret_tool": secret_tool},
+            ),
+        )
+
+        # Add tool call with secret argument
+        world.add_component(
+            entity,
+            PendingToolCallsComponent(
+                tool_calls=[
+                    ToolCall(
+                        id="call_1",
+                        name="secret_tool",
+                        arguments={"secret_param": "API_KEY_12345_SECRET"},
+                    )
+                ]
+            ),
+        )
+
+        system = ToolExecutionSystem()
+        await system.process(world)
+
+        captured = capsys.readouterr()
+        events = _json_events(captured.out)
+
+        # Check that no event contains the secret argument value
+        for event in events:
+            event_str = json.dumps(event)
+            assert "API_KEY_12345_SECRET" not in event_str, f"Found secret tool argument in log: {event}"
+            # Arguments dict should not be in logs at all
+            assert "secret_param" not in event_str.lower() or "arguments" not in event_str.lower(), f"Found tool arguments in log: {event}"
+
+    async def test_no_api_keys_in_provider_logs(self, capsys):
+        """Verify provider logging does not expose API keys or tokens."""
+        from ecs_agent.providers.openai_provider import OpenAIProvider
+        from ecs_agent.types import Message
+
+        # Create provider with fake API key
+        provider = OpenAIProvider(
+            api_key="sk-secret-key-12345",
+            base_url="https://api.openai.com/v1",
+            model="gpt-4",
+        )
+
+        # Note: This will fail to connect, but we're checking logs not functionality
+        try:
+            await provider.complete([Message(role="user", content="test")])
+        except Exception:
+            pass  # Expected to fail without real endpoint
+
+        captured = capsys.readouterr()
+        events = _json_events(captured.out)
+
+        # Check that API key is never in logs
+        for event in events:
+            event_str = json.dumps(event)
+            assert "sk-secret-key-12345" not in event_str, f"Found API key in log: {event}"
+            assert "secret-key" not in event_str.lower(), f"Found API key fragment in log: {event}"
+
+    async def test_no_checkpoint_payload_in_logs(self, capsys):
+        """Verify CheckpointSystem does not log full world state payload."""
+        from ecs_agent.core import World
+        from ecs_agent.components import CheckpointComponent, ConversationComponent
+        from ecs_agent.systems.checkpoint import CheckpointSystem
+        from ecs_agent.types import Message
+
+        world = World()
+        entity = world.create_entity()
+        world.add_component(entity, CheckpointComponent())
+        world.add_component(
+            entity,
+            ConversationComponent(
+                messages=[Message(role="user", content="Sensitive checkpoint data")]
+            ),
+        )
+
+        system = CheckpointSystem()
+        await system.process(world)
+
+        captured = capsys.readouterr()
+        events = _json_events(captured.out)
+
+        # Check that no event contains the full serialized world state
+        for event in events:
+            event_str = json.dumps(event)
+            assert "Sensitive checkpoint data" not in event_str, f"Found checkpoint payload in log: {event}"
+            # Payload field should not exist (violates FORBIDDEN_FIELDS)
+            assert "payload" not in event or event.get("payload") == "<redacted>", f"Found payload field in log: {event}"
+
+
+class TestLoggingLevelPolicy:
+    """Tests to ensure logging levels are appropriate."""
+
+    async def test_reasoning_completion_uses_info_level(self, capsys):
+        """Verify reasoning completion events use INFO level."""
+        from ecs_agent.core import World
+        from ecs_agent.components import LLMComponent, ConversationComponent
+        from ecs_agent.systems.reasoning import ReasoningSystem
+        from ecs_agent.providers import FakeProvider
+        from ecs_agent.types import Message, CompletionResult
+
+        world = World()
+        provider = FakeProvider(
+            responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+        )
+
+        entity = world.create_entity()
+        world.add_component(entity, LLMComponent(provider=provider, model="fake"))
+        world.add_component(
+            entity, ConversationComponent(messages=[Message(role="user", content="hi")])
+        )
+
+        system = ReasoningSystem()
+        await system.process(world)
+
+        captured = capsys.readouterr()
+        events = _json_events(captured.out)
+
+        # Find reasoning completion event
+        completion_events = [e for e in events if e.get("event") == "llm_completion"]
+        assert len(completion_events) >= 1
+        assert completion_events[0].get("level") == "info"
+
+    async def test_tool_execution_error_uses_error_level(self, capsys):
+        """Verify tool execution errors use ERROR level."""
+        from ecs_agent.core import World
+        from ecs_agent.components import PendingToolCallsComponent
+        from ecs_agent.systems.tool_execution import ToolExecutionSystem
+        from ecs_agent.types import ToolCall
+
+        world = World()
+        entity = world.create_entity()
+
+        # Add tool call with no registered handler (will fail)
+        world.add_component(
+            entity,
+            PendingToolCallsComponent(
+                tool_calls=[ToolCall(id="call_1", name="missing_tool", arguments={})]
+            ),
+        )
+
+        system = ToolExecutionSystem()
+        await system.process(world)
+
+        captured = capsys.readouterr()
+        events = _json_events(captured.out)
+
+        # Find tool error event
+        error_events = [e for e in events if e.get("level") == "error" and "tool" in str(e.get("event", ""))]
+        assert len(error_events) >= 1
+
+    async def test_checkpoint_saved_uses_info_level(self, capsys):
+        """Verify checkpoint save events use INFO level."""
+        from ecs_agent.core import World
+        from ecs_agent.components import CheckpointComponent
+        from ecs_agent.systems.checkpoint import CheckpointSystem
+
+        world = World()
+        entity = world.create_entity()
+        world.add_component(entity, CheckpointComponent())
+
+        system = CheckpointSystem()
+        await system.process(world)
+
+        captured = capsys.readouterr()
+        events = _json_events(captured.out)
+
+        saved_events = [e for e in events if e.get("event") == "checkpoint_saved"]
+        assert len(saved_events) >= 1
+        assert saved_events[0].get("level") == "info"
