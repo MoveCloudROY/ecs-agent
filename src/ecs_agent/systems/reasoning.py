@@ -35,16 +35,11 @@ class ReasoningSystem:
 
     async def process(self, world: World) -> None:
         for entity_id, components in world.query(LLMComponent, ConversationComponent):
+            start_time = time.time()
             llm_component, conversation = components
             assert isinstance(llm_component, LLMComponent)
             assert isinstance(conversation, ConversationComponent)
 
-            logger.info(
-                "reasoning_start",
-                entity_id=int(entity_id),
-                model=llm_component.model,
-                system="ReasoningSystem",
-            )
             messages: list[Message] = []
 
             system_prompt = world.get_component(entity_id, SystemPromptComponent)
@@ -61,6 +56,14 @@ class ReasoningSystem:
             streaming_component = world.get_component(entity_id, StreamingComponent)
             streaming_enabled = (
                 streaming_component is not None and streaming_component.enabled
+            )
+
+            logger.info(
+                "reasoning_start",
+                entity_id=int(entity_id),
+                model=llm_component.model,
+                streaming=streaming_enabled,
+                system="ReasoningSystem",
             )
 
             try:
@@ -91,10 +94,12 @@ class ReasoningSystem:
                         PendingToolCallsComponent(tool_calls=result.message.tool_calls),
                     )
                 else:
+                    duration_ms = (time.time() - start_time) * 1000
                     logger.info(
                         "reasoning_complete",
                         entity_id=int(entity_id),
                         model=llm_component.model,
+                        duration_ms=round(duration_ms, 2),
                         system="ReasoningSystem",
                     )
                     world.add_component(
@@ -111,7 +116,7 @@ class ReasoningSystem:
                     "reasoning_error",
                     entity_id=int(entity_id),
                     system="ReasoningSystem",
-                    exception=str(exc),
+                    reason=str(exc),
                 )
                 world.add_component(
                     entity_id,
