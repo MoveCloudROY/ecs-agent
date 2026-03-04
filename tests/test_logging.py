@@ -629,9 +629,7 @@ class TestCheckpointLogging:
         await system.process(world)
 
         captured = capsys.readouterr()
-        print("CAPTURED:", repr(captured.out[:500]))
         events = _json_events(captured.out)
-        print("EVENTS:", events)
         saved_events = [e for e in events if e.get("event") == "checkpoint_saved"]
 
         assert len(saved_events) >= 1, "checkpoint_saved event not found"
@@ -646,7 +644,7 @@ class TestCheckpointLogging:
         from ecs_agent.core import World
         from ecs_agent.systems.checkpoint import CheckpointSystem
 
-        configure_logging(json_output=True, level="ERROR")
+
 
         world = World()
 
@@ -680,7 +678,7 @@ class TestPlanningLogging:
         from ecs_agent.providers import FakeProvider
         from ecs_agent.types import CompletionResult, Message
 
-        configure_logging(json_output=True, level="DEBUG")
+
 
         world = World()
         provider = FakeProvider(
@@ -721,7 +719,7 @@ class TestPlanningLogging:
         from ecs_agent.providers import FakeProvider
         from ecs_agent.types import CompletionResult, Message
 
-        configure_logging(json_output=True, level="INFO")
+
 
         world = World()
         provider = FakeProvider(
@@ -763,13 +761,23 @@ class TestPlanningLogging:
             ErrorComponent,
         )
         from ecs_agent.systems.planning import PlanningSystem
-        from ecs_agent.providers import FakeProvider
-        from ecs_agent.types import Message
-        configure_logging(json_output=True, level="ERROR")
+        from ecs_agent.providers.protocol import LLMProvider
+        from ecs_agent.types import Message, ToolSchema, CompletionResult
+        from typing import AsyncIterator, Any
+
+        # Create a provider that raises a real exception (not IndexError)
+        class FailingProvider:
+            async def complete(
+                self,
+                messages: list[Message],
+                tools: list[ToolSchema] | None = None,
+                stream: bool = False,
+                response_format: dict[str, Any] | None = None,
+            ) -> CompletionResult | AsyncIterator[Any]:
+                raise RuntimeError("Provider failed!")
 
         world = World()
-        # FakeProvider with no responses will raise IndexError
-        provider = FakeProvider(responses=[])
+        provider = FailingProvider()
 
         entity = world.create_entity()
         world.add_component(entity, PlanComponent(steps=["Do task A"], current_step=0))
