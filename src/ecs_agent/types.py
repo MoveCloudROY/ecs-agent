@@ -342,6 +342,22 @@ class BranchCreatedEvent:
 
 
 @dataclass(slots=True)
+class InheritancePolicy:
+    """Policy for parent-to-child attribute inheritance in subagent delegation.
+
+    Controls which attributes are inherited from parent entity and how conflicts are resolved.
+    """
+
+    enabled: bool = True
+    inherit_system_prompt: bool = True
+    inherit_tools: list[str] = field(default_factory=list)  # whitelist of tool names
+    inherit_permissions: bool = False
+    allow_delegate_tool: bool = True
+    tool_conflict_policy: str = "skip"  # skip|error|override
+    missing_skill_policy: str = "warn"  # warn|error
+
+
+@dataclass(slots=True)
 class SubagentConfig:
     """Configuration for a named subagent."""
 
@@ -351,6 +367,7 @@ class SubagentConfig:
     system_prompt: str = ""
     skills: list[str] = field(default_factory=list)  # skill names to install
     max_ticks: int = 10
+    inheritance_policy: InheritancePolicy = field(default_factory=InheritancePolicy)
 
 
 @dataclass(slots=True)
@@ -457,6 +474,7 @@ __all__ = [
     "DelegationStartedEvent",
     "EntityId",
     "ErrorOccurredEvent",
+    "InheritancePolicy",
     "MCPConnectedEvent",
     "MCPDisconnectedEvent",
     "MCPToolCallEvent",

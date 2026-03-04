@@ -406,6 +406,17 @@ async def test_all_new_components_serializable() -> None:
     assert registry is not None
     assert "test" in registry.subagents
 
+    # Verify SubagentConfig inheritance_policy is serializable
+    restored_config = registry.subagents["test"]
+    assert restored_config.inheritance_policy is not None
+    assert restored_config.inheritance_policy.enabled is True
+    assert restored_config.inheritance_policy.inherit_system_prompt is True
+    assert restored_config.inheritance_policy.inherit_tools == []
+    assert restored_config.inheritance_policy.inherit_permissions is False
+    assert restored_config.inheritance_policy.allow_delegate_tool is True
+    assert restored_config.inheritance_policy.tool_conflict_policy == "skip"
+    assert restored_config.inheritance_policy.missing_skill_policy == "warn"
+
 
 
 def test_subagent_doc_consistency_stale_symbols() -> None:
