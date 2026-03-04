@@ -1,13 +1,13 @@
 # Subagent Delegation
 
-The `SubagentSystem` enables parent agents to spawn child agents for subtask execution, with automatic result aggregation and isolated execution contexts.
+The `SubagentSystem` enables parent agents to spawn child agents for subtask execution via the `delegate` tool. The system auto-registers this tool, manages isolated child execution, and returns results to the parent.
 
 ## Overview
 
 Subagent delegation provides:
 - **Named Subagent Registry**: Pre-configure subagent profiles with specific capabilities
 - **Isolated Execution**: Each subagent runs in its own `World` with independent state
-- **Automatic Result Aggregation**: Results flow back to parent via tool results
+- **Automatic Result Aggregation**: Results flow back to parent via tool result messages
 - **Event Tracking**: Monitor delegation lifecycle with `DelegationStartedEvent` and `DelegationCompletedEvent`
 
 ## Core Components
@@ -51,24 +51,28 @@ world.add_component(
 
 ### SubagentSystem
 
-The system handles delegation:
+The system handles delegation and auto-registers the `delegate` tool:
 
 ```python
 from ecs_agent.systems.subagent import SubagentSystem
 
-world.register_system(SubagentSystem(priority=5), priority=5)
+# SubagentSystem should be registered BEFORE ReasoningSystem
+world.register_system(SubagentSystem(priority=-1), priority=-1)
 ```
+
+**IMPORTANT**: The SubagentSystem automatically registers the `delegate` tool for entities that have both `SubagentRegistryComponent` and `ToolRegistryComponent`. You do not need to manually register the delegate tool.
 
 ## Usage
 
 ### Basic Delegation
 
-1. **Register subagents** with the parent entity
-2. **Use the `delegate` tool** to invoke a subagent
-3. **System executes** subagent and returns result
-
+1. **Register subagents** with `SubagentRegistryComponent`
+2. **Add ToolRegistryComponent** to enable delegate tool auto-registration
+3. **Register SubagentSystem** (priority -1, before ReasoningSystem)
+4. **LLM calls delegate tool** to invoke subagent
+5. **SubagentSystem executes** child and returns result
 ```python
-from ecs_agent import World
+from ecs_agent.core import World
 from ecs_agent.components import (
     LLMComponent,
     ConversationComponent,
@@ -76,6 +80,8 @@ from ecs_agent.components import (
     SubagentRegistryComponent,
 )
 from ecs_agent.systems.subagent import SubagentSystem
+from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import Message, SubagentConfig
 
 # Create parent world
@@ -92,13 +98,17 @@ researcher = SubagentConfig(
     skills=[],
 )
 
-# Register subagent and tools
-# (SubagentSystem automatically registers the 'delegate' tool schema and handler)
+# Register subagent
 world.add_component(
     parent,
     SubagentRegistryComponent(subagents={"researcher": researcher}),
 )
-world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+
+# Add empty ToolRegistryComponent (SubagentSystem will auto-register delegate tool)
+world.add_component(
+    parent,
+    ToolRegistryComponent(tools={}, handlers={}),
+)
 
 # Add LLM and conversation
 world.add_component(
@@ -114,9 +124,11 @@ world.add_component(
     ),
 )
 
-# Register systems
-world.register_system(SubagentSystem(priority=5), priority=5)
-# ... register other systems (ReasoningSystem, ToolExecutionSystem, etc.)
+# Register systems (SubagentSystem BEFORE ReasoningSystem)
+world.register_system(SubagentSystem(priority=-1), priority=-1)
+world.register_system(ReasoningSystem(priority=0), priority=0)
+world.register_system(ToolExecutionSystem(priority=5), priority=5)
+# ... register other systems (MemorySystem, ErrorHandlingSystem, etc.)
 
 # Run
 runner = Runner()
@@ -137,12 +149,13 @@ The LLM can call the `delegate` tool to invoke subagents:
 }
 ```
 
-The system will:
-1. Look up "researcher" in the registry
-2. Create a new `World` for the subagent
-3. Run the subagent with the task as a user message
-4. Extract the final assistant response
-5. Return result to parent via tool result
+The SubagentSystem will:
+1. Look up "researcher" in the `SubagentRegistryComponent`
+2. Create a new isolated `World` for the subagent
+3. Run the subagent to completion with the task as a user message
+4. Extract the final assistant response from the child conversation
+5. Return result to parent as a tool result message
+6. Parent ReasoningSystem receives the tool result and generates final response
 
 ### Multi-Subagent Workflow
 
@@ -200,7 +213,7 @@ Fired when subagent begins execution:
 ```python
 from ecs_agent.types import DelegationStartedEvent
 
-def on_delegation_started(event: DelegationStartedEvent) -> None:
+async def on_delegation_started(event: DelegationStartedEvent) -> None:
     print(f"Delegating to {event.subagent_name}: {event.task}")
 
 world.event_bus.subscribe(DelegationStartedEvent, on_delegation_started)
@@ -213,8 +226,8 @@ Fired when subagent completes:
 ```python
 from ecs_agent.types import DelegationCompletedEvent
 
-def on_delegation_completed(event: DelegationCompletedEvent) -> None:
-    print(f"Subagent {event.subagent_name} completed in {event.ticks_used} ticks")
+async def on_delegation_completed(event: DelegationCompletedEvent) -> None:
+    print(f"Subagent {event.subagent_name} completed: {event.result}")
     print(f"Result: {event.result}")
 
 world.event_bus.subscribe(DelegationCompletedEvent, on_delegation_completed)
@@ -267,7 +280,7 @@ Track subagent usage:
 ```python
 delegation_count = 0
 
-def track_delegations(event: DelegationStartedEvent) -> None:
+async def track_delegations(event: DelegationStartedEvent) -> None:
     global delegation_count
     delegation_count += 1
     if delegation_count > 10:
@@ -293,6 +306,7 @@ task="Help me with this"
 - Subagents cannot delegate to other subagents (no recursive delegation)
 - Subagent state is not persisted after execution completes
 - Tool calls from subagents are isolated (cannot access parent tools)
+- `TerminalComponent` from child world is NOT copied to parent (prevents premature runner termination)
 
 ## See Also
 

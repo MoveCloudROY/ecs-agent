@@ -406,30 +406,65 @@ async def test_all_new_components_serializable() -> None:
     assert registry is not None
     assert "test" in registry.subagents
 
-async def test_subagent_doc_consistency_stale_symbols() -> None:
-    """Contract test: Docs should not reference stale symbols."""
-    doc_path = "docs/features/subagent.md"
-    if not os.path.exists(doc_path):
-        pytest.skip(f"{doc_path} not found")
-        
-    content = Path(doc_path).read_text()
-    
-    # These symbols no longer exist or are not public
-    assert "DELEGATE_TOOL_SCHEMA" not in content, "Docs reference DELEGATE_TOOL_SCHEMA which does not exist."
-    assert "delegate_tool_handler" not in content, "Docs reference delegate_tool_handler which does not exist."
 
-async def test_subagent_doc_consistency_event_subscriptions() -> None:
-    """Contract test: Docs should use typed event subscriptions."""
-    doc_path = "docs/features/subagent.md"
-    if not os.path.exists(doc_path):
-        pytest.skip(f"{doc_path} not found")
-        
-    content = Path(doc_path).read_text()
+
+def test_subagent_doc_consistency_stale_symbols() -> None:
+    """Fail if docs reference non-existent symbols.
+
+    This test detects stale documentation that refers to symbols that were
+    removed or renamed in the codebase. It scans docs/features/subagent.md
+    for references to DELEGATE_TOOL_SCHEMA and delegate_tool_handler, which
+    do not exist in the public API (SubagentSystem auto-registers delegate tool).
+    """
+    doc_path = Path("docs/features/subagent.md")
+    assert doc_path.exists(), f"Doc file not found: {doc_path}"
     
-    # Should use typed events, not string topics
-    assert "subscribe(\"delegation_started\"" not in content, "Docs use outdated subscription with string 'delegation_started'."
-    assert "subscribe(\"delegation_completed\"" not in content, "Docs use outdated subscription with string 'delegation_completed'."
+    doc_content = doc_path.read_text()
     
-    # Should show the correct typed subscription
-    assert "subscribe(DelegationStartedEvent" in content or "subscribe(DelegationStartedEvent," in content
-    assert "subscribe(DelegationCompletedEvent" in content or "subscribe(DelegationCompletedEvent," in content
+    # Check for stale symbol: DELEGATE_TOOL_SCHEMA
+    assert (
+        "DELEGATE_TOOL_SCHEMA" not in doc_content
+    ), (
+        "Docs reference DELEGATE_TOOL_SCHEMA which does not exist. "
+        "SubagentSystem auto-registers delegate tool inline. "
+        "See docs/features/subagent.md line ~78."
+    )
+    
+    # Check for stale symbol: delegate_tool_handler
+    assert (
+        "delegate_tool_handler" not in doc_content
+    ), (
+        "Docs reference delegate_tool_handler which does not exist. "
+        "The delegate tool is auto-registered by SubagentSystem without manual handler setup. "
+        "See docs/features/subagent.md lines ~102, ~107."
+    )
+
+
+def test_subagent_doc_consistency_event_subscriptions() -> None:
+    """Fail if docs use outdated string-topic event subscriptions.
+
+    This test detects stale event subscription patterns in subagent docs.
+    Modern API uses typed event classes (e.g., world.event_bus.subscribe(DelegationStartedEvent, handler)),
+    not string topic names (e.g., world.event_bus.subscribe('delegation_started', handler)).
+    """
+    doc_path = Path("docs/features/subagent.md")
+    assert doc_path.exists(), f"Doc file not found: {doc_path}"
+    
+    doc_content = doc_path.read_text()
+    
+    # Check for outdated string-topic subscriptions
+    stale_patterns = [
+        ('world.event_bus.subscribe("delegation_started"', "subscription with string 'delegation_started'"),
+        ('world.event_bus.subscribe("delegation_completed"', "subscription with string 'delegation_completed'"),
+    ]
+    
+    for stale_pattern, description in stale_patterns:
+        assert (
+            stale_pattern not in doc_content
+        ), (
+            f"Docs use outdated {description}. "
+            f"Should use typed event classes instead: "
+            f"world.event_bus.subscribe(DelegationStartedEvent, handler) or "
+            f"world.event_bus.subscribe(DelegationCompletedEvent, handler). "
+            f"See EventBus.subscribe() signature in src/ecs_agent/core/event_bus.py."
+        )

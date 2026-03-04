@@ -10,6 +10,7 @@ import pytest
 from ecs_agent.providers.fake_provider import FakeProvider
 from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider
 from ecs_agent.types import CompletionResult, Message
+from ecs_agent.types import ToolCall
 
 DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEFAULT_MODEL = "qwen3.5-flash"
@@ -57,6 +58,49 @@ def _completion(content: str = "fake response") -> CompletionResult:
 def _fake_provider(responses: int = 20, content: str = "fake response") -> FakeProvider:
     return FakeProvider(responses=[_completion(content) for _ in range(responses)])
 
+
+def _subagent_delegation_manager_provider() -> FakeProvider:
+    """FakeProvider for manager in subagent delegation example."""
+    return FakeProvider(
+        responses=[
+            CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="I'll delegate this research to my subagent.",
+                    tool_calls=[
+                        ToolCall(
+                            id="call_001",
+                            name="delegate",
+                            arguments={
+                                "subagent_name": "researcher",
+                                "task": "Research the most promising near-term applications of quantum computing.",
+                            },
+                        )
+                    ],
+                )
+            ),
+            CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="Based on my sub-agent's research, here is the summary.",
+                )
+            ),
+        ]
+    )
+
+
+def _subagent_delegation_subagent_provider() -> FakeProvider:
+    """FakeProvider for subagent in delegation example."""
+    return FakeProvider(
+        responses=[
+            CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="Research findings on quantum computing applications.",
+                )
+            )
+        ]
+    )
 
 def _load_example(module_name: str) -> Any:
     return importlib.import_module(f"examples.{module_name}")
@@ -218,18 +262,93 @@ class TestSubagentDelegationDualMode:
     async def test_fake_mode(self) -> None:
         module = _load_example("subagent_delegation")
 
+        captured_world = None
+
+        # Patch World to capture the instance created during execution
+        original_world_init = module.World.__init__
+
+        def capture_world_init(self: Any) -> None:
+            nonlocal captured_world
+            original_world_init(self)
+            # Only capture the first World (parent), not child worlds created by SubagentSystem
+            if captured_world is None:
+                captured_world = self
+
         with patch.dict(os.environ, {}, clear=True):
             with patch(
                 "examples.subagent_delegation.FakeProvider",
-                side_effect=[_fake_provider(), _fake_provider(), _fake_provider()],
+                side_effect=[_subagent_delegation_manager_provider(), _subagent_delegation_subagent_provider()],
             ) as fake_ctor:
                 with patch(
                     "examples.subagent_delegation.OpenAIProvider", create=True
                 ) as openai_ctor:
-                    await module.main()
+                    with patch.object(module.World, "__init__", capture_world_init):
+                        await module.main()
 
-        assert fake_ctor.call_count == 3
+        assert fake_ctor.call_count == 2
         openai_ctor.assert_not_called()
+
+        # ===== SEMANTIC ASSERTIONS (delegate-tool roundtrip workflow) =====
+        # When delegate tool is used, we expect:
+        # 1. Tool call with name="delegate" in manager's conversation
+        # 2. Tool result following the tool call
+        # 3. Final assistant summary after tool execution
+
+        assert captured_world is not None, "World was not captured during execution"
+
+        # Find manager entity (has ConversationComponent with user message)
+        from ecs_agent.components import ConversationComponent, SubagentRegistryComponent
+
+        # Entity 1 is the manager (has both ConversationComponent and SubagentRegistryComponent)
+        # Entity 3 is the subagent child (has ConversationComponent but no SubagentRegistryComponent)
+        manager_entity = 1
+
+        assert manager_entity is not None, "Manager entity not found in World"
+
+        manager_conv = captured_world.get_component(manager_entity, ConversationComponent)
+        assert manager_conv is not None
+
+        messages = manager_conv.messages
+
+
+
+        # Assert: delegate tool call exists in conversation
+        delegate_tool_call_found = False
+        for msg in messages:
+            if msg.role == "assistant" and msg.tool_calls:
+                for tool_call in msg.tool_calls:
+                    if tool_call.name == "delegate":
+                        delegate_tool_call_found = True
+                        break
+
+        assert delegate_tool_call_found, (
+            "Expected delegate tool call in manager conversation, but none found. "
+            "This indicates the example is not using the delegate-tool roundtrip pattern."
+        )
+
+        # Assert: tool result message exists after tool call
+        tool_result_found = False
+        for msg in messages:
+            if msg.role == "tool" and msg.tool_call_id:
+                tool_result_found = True
+                break
+
+        assert tool_result_found, (
+            "Expected tool result message in manager conversation after delegate call, but none found."
+        )
+
+        # Assert: final assistant summary exists after tool execution cycle
+        final_assistant_message_found = False
+        for i, msg in enumerate(messages):
+            if msg.role == "tool" and i + 1 < len(messages):
+                if messages[i + 1].role == "assistant":
+                    final_assistant_message_found = True
+                    break
+
+        assert final_assistant_message_found, (
+            "Expected final assistant summary message after tool result, but none found. "
+            "The delegate-tool roundtrip should conclude with an assistant message."
+        )
 
     async def test_real_mode(self) -> None:
         module = _load_example("subagent_delegation")
@@ -243,14 +362,13 @@ class TestSubagentDelegationDualMode:
                     side_effect=[
                         _OpenAIProviderStub("manager"),
                         _OpenAIProviderStub("subagent"),
-                        _OpenAIProviderStub("summary"),
                     ],
                     create=True,
                 ) as openai_ctor:
                     await module.main()
 
         fake_ctor.assert_not_called()
-        _assert_openai_defaults(openai_ctor, expected_count=3)
+        _assert_openai_defaults(openai_ctor, expected_count=2)
 
 
 @pytest.mark.asyncio
