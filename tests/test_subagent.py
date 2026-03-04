@@ -159,6 +159,7 @@ from ecs_agent.components import (
     TerminalComponent,
     ToolRegistryComponent,
 )
+from ecs_agent.components.definitions import SkillComponent
 from ecs_agent.core.runner import Runner
 
 
@@ -1288,3 +1289,391 @@ async def test_inheritance_policy_inherit_permissions_true_copies_permission_com
     assert child_perm is not None, (
         "inherit_permissions=True should copy parent PermissionComponent to child"
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 4: SkillManager-Aligned Skill Inheritance Tests (RED)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+async def test_subagent_skills_skill_manager_inherited_tools_available() -> None:
+    """Child can execute tools from inherited skills (SkillManager semantics)."""
+    from ecs_agent.systems.subagent import SubagentSystem
+    from ecs_agent.skills.manager import SkillManager
+    from ecs_agent.skills.protocol import Skill
+
+    # Define a test skill with a tool
+    class ParentSkill(Skill):
+        name: str = "parent-skill"
+        description: str = "Skill installed on parent"
+
+        def tools(self) -> dict[str, tuple[ToolSchema, Any]]:
+            async def parent_tool() -> str:
+                return "parent_tool_result"
+
+            return {
+                "parent_tool": (
+                    ToolSchema(
+                        name="parent_tool",
+                        description="A tool from parent skill",
+                        parameters={"type": "object", "properties": {}},
+                    ),
+                    parent_tool,
+                )
+            }
+
+        def system_prompt(self) -> str:
+            return "Parent skill system prompt"
+
+        def install(self, world: World, entity_id: EntityId) -> None:
+            pass
+
+        def uninstall(self, world: World, entity_id: EntityId) -> None:
+            pass
+
+    world = World()
+    parent_entity = world.create_entity()
+
+    # Install skill on parent using SkillManager
+    skill_manager = SkillManager()
+    parent_skill = ParentSkill()
+    skill_manager.install(world, parent_entity, parent_skill)
+
+    # Configure child to inherit parent skill
+    child_provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(
+        name="child",
+        provider=child_provider,
+        model="fake",
+        inheritance_policy=InheritancePolicy(
+            enabled=True,
+            inherit_tools=["parent_tool"],  # Inherit from parent skill
+        ),
+    )
+
+    registry = SubagentRegistryComponent(subagents={"child": config})
+    world.add_component(parent_entity, registry)
+    _register_message_bus(world, parent_entity)
+
+    # Delegation logic doesn't exist yet - RED!
+    system = SubagentSystem()
+    await system.process(world)
+
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    delegate_handler = tool_registry.handlers["delegate"]
+
+    # Delegate task
+    result = await delegate_handler(subagent_name="child", task="test task")
+
+    # Find child entity
+    child_entity = _find_child_entity(world, parent_entity)
+
+    # RED TEST: Verify child has SkillComponent with parent skill
+    child_skills = world.get_component(child_entity, SkillComponent)
+    assert child_skills is not None, (
+        "Child entity should have SkillComponent after skill inheritance"
+    )
+    assert "parent-skill" in child_skills.skills, (
+        "parent-skill should be installed on child via SkillManager semantics"
+    )
+
+    # RED TEST: Verify child can call parent_tool
+    child_tools = world.get_component(child_entity, ToolRegistryComponent)
+    assert child_tools is not None
+    assert "parent_tool" in child_tools.handlers, (
+        "Child should have inherited parent_tool handler"
+    )
+    assert "parent_tool" in child_tools.tools, (
+        "Child should have inherited parent_tool schema"
+    )
+
+    # RED TEST: Verify tool is actually callable
+    tool_result = await child_tools.handlers["parent_tool"]()
+    assert tool_result == "parent_tool_result", (
+        "Inherited tool should execute and return expected result"
+    )
+
+
+async def test_subagent_skills_skill_manager_requested_tools_available() -> None:
+    """Child can execute tools from requested skills (SubagentConfig.skills)."""
+    from ecs_agent.systems.subagent import SubagentSystem
+    from ecs_agent.skills.manager import SkillManager
+    from ecs_agent.skills.protocol import Skill
+
+    # Define a skill that child requests explicitly
+    class RequestedSkill(Skill):
+        name: str = "requested-skill"
+        description: str = "Skill requested by child"
+
+        def tools(self) -> dict[str, tuple[ToolSchema, Any]]:
+            async def requested_tool() -> str:
+                return "requested_tool_result"
+
+            return {
+                "requested_tool": (
+                    ToolSchema(
+                        name="requested_tool",
+                        description="Tool from requested skill",
+                        parameters={"type": "object", "properties": {}},
+                    ),
+                    requested_tool,
+                )
+            }
+
+        def system_prompt(self) -> str:
+            return "Requested skill prompt"
+
+        def install(self, world: World, entity_id: EntityId) -> None:
+            pass
+
+        def uninstall(self, world: World, entity_id: EntityId) -> None:
+            pass
+
+    world = World()
+    parent_entity = world.create_entity()
+
+    # Install skill on parent using SkillManager
+    skill_manager = SkillManager()
+    requested_skill = RequestedSkill()
+    skill_manager.install(world, parent_entity, requested_skill)
+
+    # Configure child to request skill explicitly
+    child_provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(
+        name="child",
+        provider=child_provider,
+        model="fake",
+        skills=["requested-skill"],  # Request skill installation
+    )
+
+    registry = SubagentRegistryComponent(subagents={"child": config})
+    world.add_component(parent_entity, registry)
+    _register_message_bus(world, parent_entity)
+
+    # Delegation logic doesn't exist yet - RED!
+    system = SubagentSystem()
+    await system.process(world)
+
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    delegate_handler = tool_registry.handlers["delegate"]
+
+    # Delegate task
+    result = await delegate_handler(subagent_name="child", task="test task")
+
+    # Find child entity
+    child_entity = _find_child_entity(world, parent_entity)
+
+    # RED TEST: Verify child has SkillComponent with requested skill
+    child_skills = world.get_component(child_entity, SkillComponent)
+    assert child_skills is not None, (
+        "Child entity should have SkillComponent with requested skills"
+    )
+    assert "requested-skill" in child_skills.skills, (
+        "requested-skill should be installed on child via SkillManager.install()"
+    )
+
+    # RED TEST: Verify child can call requested_tool
+    child_tools = world.get_component(child_entity, ToolRegistryComponent)
+    assert child_tools is not None
+    assert "requested_tool" in child_tools.handlers, (
+        "Child should have requested_tool handler from SkillManager.install()"
+    )
+    assert "requested_tool" in child_tools.tools, (
+        "Child should have requested_tool schema from SkillManager.install()"
+    )
+
+    # RED TEST: Verify tool is actually callable
+    tool_result = await child_tools.handlers["requested_tool"]()
+    assert tool_result == "requested_tool_result", (
+        "Requested skill tool should execute via SkillManager lifecycle"
+    )
+
+
+async def test_subagent_skills_missing_skill_warn_policy() -> None:
+    """When missing skill + warn policy, logs warning and continues."""
+    from ecs_agent.systems.subagent import SubagentSystem
+    import logging
+    from unittest.mock import patch
+
+    world = World()
+    parent_entity = world.create_entity()
+
+    # Parent has NO skills installed
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    # Child config requests nonexistent skill with warn policy
+    child_provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(
+        name="child",
+        provider=child_provider,
+        model="fake",
+        skills=["nonexistent_skill"],  # Request missing skill
+        inheritance_policy=InheritancePolicy(
+            missing_skill_policy="warn"  # Key policy
+        ),
+    )
+
+    registry = SubagentRegistryComponent(subagents={"child": config})
+    world.add_component(parent_entity, registry)
+    _register_message_bus(world, parent_entity)
+
+    # Track warning logs
+    with patch("ecs_agent.systems.subagent.logger") as mock_logger:
+        system = SubagentSystem()
+        await system.process(world)
+
+        tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+        assert tool_registry is not None
+        delegate_handler = tool_registry.handlers["delegate"]
+
+        # RED TEST: Delegation should complete despite missing skill
+        result = await delegate_handler(subagent_name="child", task="test task")
+
+        # RED TEST: Verify delegation completed (no exception raised)
+        assert isinstance(result, str), (
+            "Delegation with warn policy should return result string, not raise"
+        )
+
+        # RED TEST: Verify warning was logged (doesn't exist yet - RED!)
+        # This assertion will fail because warning logic doesn't exist
+        mock_logger.warning.assert_called_once()
+        warning_call = mock_logger.warning.call_args
+        assert "nonexistent_skill" in str(warning_call), (
+            "Warning should mention the missing skill name"
+        )
+
+
+async def test_subagent_skills_missing_skill_error_policy() -> None:
+    """When missing skill + error policy, raises error."""
+    from ecs_agent.systems.subagent import SubagentSystem
+
+    world = World()
+    parent_entity = world.create_entity()
+
+    # Parent has NO skills installed
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    # Child config requests nonexistent skill with error policy
+    child_provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(
+        name="child",
+        provider=child_provider,
+        model="fake",
+        skills=["nonexistent_skill"],  # Request missing skill
+        inheritance_policy=InheritancePolicy(
+            missing_skill_policy="error"  # Key policy
+        ),
+    )
+
+    registry = SubagentRegistryComponent(subagents={"child": config})
+    world.add_component(parent_entity, registry)
+    _register_message_bus(world, parent_entity)
+
+    system = SubagentSystem()
+    await system.process(world)
+
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    delegate_handler = tool_registry.handlers["delegate"]
+
+    # RED TEST: Delegation should raise error for missing skill
+    # This will fail because error-raising logic doesn't exist yet - RED!
+    with pytest.raises((ValueError, KeyError), match="nonexistent_skill"):
+        await delegate_handler(subagent_name="child", task="test task")
+
+
+async def test_subagent_skills_skill_manager_install_uninstall_lifecycle() -> None:
+    """Skills installed via SkillManager.install(), not manual dict copying."""
+    from ecs_agent.systems.subagent import SubagentSystem
+    from ecs_agent.skills.manager import SkillManager
+    from ecs_agent.skills.protocol import Skill
+    from unittest.mock import patch
+
+    # Define a skill to track SkillManager.install() calls
+    class LifecycleSkill(Skill):
+        name: str = "lifecycle-skill"
+        description: str = "Skill with lifecycle tracking"
+
+        def tools(self) -> dict[str, tuple[ToolSchema, Any]]:
+            async def lifecycle_tool() -> str:
+                return "lifecycle_result"
+
+            return {
+                "lifecycle_tool": (
+                    ToolSchema(
+                        name="lifecycle_tool",
+                        description="Lifecycle tool",
+                        parameters={"type": "object", "properties": {}},
+                    ),
+                    lifecycle_tool,
+                )
+            }
+
+        def system_prompt(self) -> str:
+            return "Lifecycle prompt"
+
+        def install(self, world: World, entity_id: EntityId) -> None:
+            # Track install call
+            pass
+
+        def uninstall(self, world: World, entity_id: EntityId) -> None:
+            pass
+
+    world = World()
+    parent_entity = world.create_entity()
+
+    # Install skill on parent
+    skill_manager = SkillManager()
+    lifecycle_skill = LifecycleSkill()
+    skill_manager.install(world, parent_entity, lifecycle_skill)
+
+    # Child requests skill
+    child_provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(
+        name="child",
+        provider=child_provider,
+        model="fake",
+        skills=["lifecycle-skill"],
+    )
+
+    registry = SubagentRegistryComponent(subagents={"child": config})
+    world.add_component(parent_entity, registry)
+    _register_message_bus(world, parent_entity)
+
+    # RED TEST: Verify SkillManager.install() is called (not manual dict copy)
+    # This will fail because SkillManager integration doesn't exist - RED!
+    with patch.object(SkillManager, "install", wraps=skill_manager.install) as mock_install:
+        system = SubagentSystem()
+        await system.process(world)
+
+        tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+        assert tool_registry is not None
+        delegate_handler = tool_registry.handlers["delegate"]
+
+        await delegate_handler(subagent_name="child", task="test task")
+
+        # Verify SkillManager.install() was called for child entity
+        child_entity = _find_child_entity(world, parent_entity)
+
+        # This assertion will fail - current implementation uses dict copying
+        mock_install.assert_called()
+        install_calls = mock_install.call_args_list
+        child_install_calls = [
+            call for call in install_calls
+            if call[0][1] == child_entity  # entity_id arg
+        ]
+        assert len(child_install_calls) > 0, (
+            "SkillManager.install() should be called for child entity, not manual dict copy"
+        )
