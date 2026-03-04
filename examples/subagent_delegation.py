@@ -20,10 +20,6 @@ from ecs_agent.components import (
     OwnerComponent,
     SubagentRegistryComponent,
     ToolRegistryComponent,
-    LLMComponent,
-    SubagentRegistryComponent,
-    ToolRegistryComponent,
-    OwnerComponent,
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeProvider
@@ -193,45 +189,8 @@ async def main() -> None:
 
     # ToolRegistryComponent required for delegate tool registration
     world.add_component(manager_id, ToolRegistryComponent(tools={}, handlers={}))
-    world.add_component(
-        manager_id,
-        SubagentRegistryComponent(
-            subagents={
-                "researcher": SubagentConfig(
-                    name="researcher",
-                    provider=subagent_provider,
-                    model=model if api_key else "fake-researcher",
-                    system_prompt=(
-                        "You are a research sub-agent. Investigate the given topic "
-                        "thoroughly and report your findings back to the manager."
-                    ),
-                    max_ticks=10,
-                    skills=[],  # Could inherit skills like 'web_search' if parent had them
-                )
-            }
-        ),
-    )
-    world.add_component(
-        manager_id,
-        SubagentRegistryComponent(
-            subagents={
-                "researcher": SubagentConfig(
-                    name="researcher",
-                    provider=subagent_provider,
-                    model=model if api_key else "fake-researcher",
-                    system_prompt=(
-                        "You are a research sub-agent. Investigate the given topic "
-                        "thoroughly and report your findings back to the manager."
-                    ),
-                    max_ticks=10,
-                    skills=[],
-                )
-            }
-        ),
-    )
 
     # ToolRegistryComponent required for SubagentSystem to auto-register delegate tool
-    world.add_component(manager_id, ToolRegistryComponent(tools={}, handlers={}))
 
     # ── Systems Registration ────────────────────────────────────────
     subagent_system = SubagentSystem(priority=-1)
@@ -241,7 +200,6 @@ async def main() -> None:
     # Note: SubagentSystem would also auto-register this if we skipped this call.
     subagent_system.install_delegate_tool(world, manager_id, tool_name="delegate")
     # SubagentSystem priority=-1 ensures delegate tool registered BEFORE ReasoningSystem runs
-    world.register_system(SubagentSystem(priority=-1), priority=-1)
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
     world.register_system(MemorySystem(), priority=10)

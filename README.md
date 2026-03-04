@@ -7,7 +7,7 @@
 </div>
 
 
-****
+---
 
 Build modular, testable LLM agents by composing behavior from dataclass components, async systems, and pluggable providers. No inheritance hierarchies, just clean composition.
 
@@ -202,10 +202,7 @@ src/ecs_agent/
 │   ├── discovery.py            # File-based skill discovery
 │   └── web_search.py           # Brave Search integration
 ├── mcp/                          # MCP integration
-
-
-
-### How It Works
+```
 
 The **Runner** repeatedly ticks the **World** until a `TerminalComponent` is attached to an entity. Execution also stops if `max_ticks` is reached (default 100). Pass `max_ticks=None` for infinite execution until a `TerminalComponent` is found. Each tick follows this flow:
 
