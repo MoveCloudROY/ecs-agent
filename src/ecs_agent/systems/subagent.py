@@ -46,8 +46,54 @@ class SubagentSystem:
     def __init__(self, priority: int = -1) -> None:
         self.priority = priority
 
+    def install_delegate_tool(
+        self,
+        world: World,
+        entity_id: EntityId,
+        tool_name: str = "delegate",
+        override: bool = False,
+    ) -> None:
+        """Install delegate tool with explicit control over name and overwrite behavior.
+
+        Args:
+            world: World instance containing the entity
+            entity_id: Entity with SubagentRegistryComponent and ToolRegistryComponent
+            tool_name: Name for the delegate tool (default: "delegate")
+            override: If True, replaces existing handler; if False, skips if exists
+
+        Raises:
+            ValueError: If entity missing required components
+        """
+        # Validate entity has SubagentRegistryComponent and ToolRegistryComponent
+        registry = world.get_component(entity_id, SubagentRegistryComponent)
+        if registry is None:
+            raise ValueError(
+                f"Entity {entity_id} missing SubagentRegistryComponent"
+            )
+
+        tool_registry = world.get_component(entity_id, ToolRegistryComponent)
+        if tool_registry is None:
+            raise ValueError(f"Entity {entity_id} missing ToolRegistryComponent")
+
+        # Build schema
+        subagent_names = list(registry.subagents.keys())
+        schema_dict = self._build_delegate_tool_schema(subagent_names)
+        function_schema = schema_dict["function"]
+
+        # Install tool schema (always update schema to match tool_name)
+        tool_registry.tools[tool_name] = ToolSchema(
+            name=tool_name,
+            description=function_schema["description"],
+            parameters=function_schema["parameters"],
+        )
+
+        # Install handler (helper respects override parameter)
+        self._install_delegate_handler(world, entity_id, tool_name, override)
     async def process(self, world: World) -> None:
-        """Register delegate tool for entities with SubagentRegistryComponent."""
+        """Register delegate tool for entities with SubagentRegistryComponent.
+        
+        Backward compatible: uses public installer API with default parameters.
+        """
         for entity_id, components in world.query(
             SubagentRegistryComponent, ToolRegistryComponent
         ):
@@ -59,28 +105,14 @@ class SubagentSystem:
             if "delegate" in tool_registry.tools:
                 continue
 
-            schema_dict = self._build_delegate_tool_schema(
-                list(registry_comp.subagents.keys())
-            )
-            function_schema = schema_dict["function"]
-            tool_registry.tools["delegate"] = ToolSchema(
-                name=function_schema["name"],
-                description=function_schema["description"],
-                parameters=function_schema["parameters"],
-            )
-            self._install_delegate_handler(
-                world,
-                entity_id,
-                tool_name="delegate",
-                override=False,
-            )
+            # Use public installer API
+            self.install_delegate_tool(world, entity_id, tool_name="delegate", override=False)
 
             logger.info(
                 "delegate_tool_registered",
                 entity_id=entity_id,
                 available_subagents=list(registry_comp.subagents.keys()),
             )
-
     def _build_delegate_tool_schema(self, subagent_names: list[str]) -> dict[str, Any]:
         """Build OpenAI-style function schema for the delegate tool."""
         del subagent_names
