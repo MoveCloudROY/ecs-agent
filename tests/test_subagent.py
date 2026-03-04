@@ -12,6 +12,7 @@ from ecs_agent.types import (
     DelegationCompletedEvent,
     DelegationStartedEvent,
     EntityId,
+    InheritancePolicy,
     Message,
     SubagentConfig,
     ToolSchema,
@@ -154,6 +155,7 @@ from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
     OwnerComponent,
+    PermissionComponent,
     TerminalComponent,
     ToolRegistryComponent,
 )
@@ -503,7 +505,7 @@ async def test_delegate_with_skills_installs_skills() -> None:
     test_skill = TestSkill()
     skill_manager = SkillManager()
     skill_manager.install(world, parent_entity, test_skill)
-    
+
     # Register subagent config
     registry = SubagentRegistryComponent(subagents={"test-agent": config})
     world.add_component(parent_entity, registry)
@@ -1029,3 +1031,260 @@ async def test_backward_compatible_auto_registration_still_works() -> None:
         "Backward compatibility: process() must still register delegate schema"
     )
 
+
+def _shared_tool_schema() -> ToolSchema:
+    return ToolSchema(
+        name="shared_tool",
+        description="Shared tool for inheritance tests",
+        parameters={"type": "object", "properties": {}, "required": []},
+    )
+
+
+def _find_child_entity(world: World, parent_entity: EntityId) -> EntityId:
+    for entity_id, components in world.query(OwnerComponent):
+        owner_comp = components[0]
+        assert isinstance(owner_comp, OwnerComponent)
+        if owner_comp.owner_id == parent_entity:
+            return entity_id
+    raise AssertionError("Expected delegated child entity to exist")
+
+
+async def _delegate_with_policy(
+    *,
+    policy: InheritancePolicy,
+    parent_system_prompt: str = "parent-system",
+    child_system_prompt: str = "",
+    child_has_permission: bool = False,
+) -> tuple[World, EntityId, EntityId, str]:
+    from ecs_agent.systems.subagent import SubagentSystem
+
+    world = World()
+    parent_entity = world.create_entity()
+
+    async def parent_shared_tool_handler() -> str:
+        return "parent-handler"
+
+    parent_provider = FakeProvider(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="Parent done"))
+        ]
+    )
+    parent_registry = ToolRegistryComponent(
+        tools={"shared_tool": _shared_tool_schema()},
+        handlers={"shared_tool": parent_shared_tool_handler},
+    )
+    world.add_component(parent_entity, parent_registry)
+    world.add_component(
+        parent_entity,
+        LLMComponent(
+            provider=parent_provider,
+            model="fake",
+            system_prompt=parent_system_prompt,
+        ),
+    )
+    if child_has_permission:
+        world.add_component(
+            parent_entity,
+            PermissionComponent(allowed_tools=["shared_tool"], denied_tools=[]),
+        )
+
+    child_provider = FakeProvider(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="Child done"))
+        ]
+    )
+    config = SubagentConfig(
+        name="child",
+        provider=child_provider,
+        model="fake",
+        system_prompt=child_system_prompt,
+        inheritance_policy=policy,
+    )
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"child": config}),
+    )
+    _register_message_bus(world, parent_entity)
+
+    system = SubagentSystem()
+    await system.process(world)
+
+    parent_tools = world.get_component(parent_entity, ToolRegistryComponent)
+    assert parent_tools is not None
+    delegate_handler = parent_tools.handlers["delegate"]
+    result = await delegate_handler(subagent_name="child", task="Run delegated task")
+
+    child_entity = _find_child_entity(world, parent_entity)
+    return world, parent_entity, child_entity, result
+
+
+async def test_inheritance_policy_conflict_skip_keeps_child_tool() -> None:
+    policy = InheritancePolicy(
+        enabled=True,
+        inherit_tools=["shared_tool"],
+        tool_conflict_policy="skip",
+    )
+    world, _, child_entity, _ = await _delegate_with_policy(policy=policy)
+
+    child_tools = world.get_component(child_entity, ToolRegistryComponent)
+    assert child_tools is not None, (
+        "Skip policy test requires child ToolRegistryComponent to be present"
+    )
+    assert child_tools.handlers["shared_tool"] is not None, (
+        "Skip policy should preserve child handler and not drop tool registration"
+    )
+
+
+async def test_inheritance_policy_conflict_error_raises() -> None:
+    policy = InheritancePolicy(
+        enabled=True,
+        inherit_tools=["shared_tool"],
+        tool_conflict_policy="error",
+    )
+
+    with pytest.raises(ValueError, match="shared_tool"):
+        await _delegate_with_policy(policy=policy)
+
+
+async def test_inheritance_policy_conflict_override_replaces_child_tool() -> None:
+    policy = InheritancePolicy(
+        enabled=True,
+        inherit_tools=["shared_tool"],
+        tool_conflict_policy="override",
+    )
+    world, _, child_entity, _ = await _delegate_with_policy(policy=policy)
+
+    child_tools = world.get_component(child_entity, ToolRegistryComponent)
+    assert child_tools is not None, (
+        "Override policy test requires child ToolRegistryComponent to be present"
+    )
+    assert "shared_tool" in child_tools.tools, (
+        "Override policy should keep shared_tool registered after replacement"
+    )
+
+
+async def test_inheritance_policy_allow_delegate_tool_false_blocks_delegate() -> None:
+    policy = InheritancePolicy(
+        enabled=True,
+        inherit_tools=["delegate"],
+        allow_delegate_tool=False,
+    )
+    world, _, child_entity, _ = await _delegate_with_policy(policy=policy)
+
+    child_tools = world.get_component(child_entity, ToolRegistryComponent)
+    assert child_tools is not None, (
+        "Recursion guard test requires child ToolRegistryComponent to be present"
+    )
+    assert "delegate" not in child_tools.tools, (
+        "allow_delegate_tool=False must block delegate tool inheritance"
+    )
+
+
+async def test_inheritance_policy_allow_delegate_tool_true_inherits_delegate() -> None:
+    policy = InheritancePolicy(
+        enabled=True,
+        inherit_tools=["delegate"],
+        allow_delegate_tool=True,
+    )
+    world, _, child_entity, _ = await _delegate_with_policy(policy=policy)
+
+    child_tools = world.get_component(child_entity, ToolRegistryComponent)
+    assert child_tools is not None, (
+        "allow_delegate_tool=True test requires child ToolRegistryComponent"
+    )
+    assert "delegate" in child_tools.tools, (
+        "allow_delegate_tool=True should allow delegate inheritance for controlled recursion"
+    )
+
+
+async def test_inheritance_policy_explicit_child_system_prompt_authoritative() -> None:
+    policy = InheritancePolicy(enabled=True, inherit_system_prompt=True)
+    world, _, child_entity, _ = await _delegate_with_policy(
+        policy=policy,
+        parent_system_prompt="parent prompt",
+        child_system_prompt="child prompt",
+    )
+
+    child_llm = world.get_component(child_entity, LLMComponent)
+    assert child_llm is not None
+    assert child_llm.system_prompt == "child prompt", (
+        "Child explicit system_prompt must remain authoritative over inherited prompt"
+    )
+
+
+async def test_inheritance_policy_whitelist_only_inherits_named_tools() -> None:
+    policy = InheritancePolicy(
+        enabled=True,
+        inherit_tools=["shared_tool"],
+    )
+    world, _, child_entity, _ = await _delegate_with_policy(policy=policy)
+
+    child_tools = world.get_component(child_entity, ToolRegistryComponent)
+    assert child_tools is not None, (
+        "Whitelist test requires child ToolRegistryComponent to be present"
+    )
+    assert "shared_tool" in child_tools.tools, (
+        "Whitelist inheritance should copy only named tools to child"
+    )
+    assert "delegate" not in child_tools.tools, (
+        "Whitelist inheritance must not copy tools omitted from inherit_tools"
+    )
+
+
+async def test_inheritance_policy_enabled_false_skips_all_inheritance() -> None:
+    policy = InheritancePolicy(
+        enabled=False,
+        inherit_system_prompt=True,
+        inherit_tools=["shared_tool", "delegate"],
+        inherit_permissions=True,
+    )
+    world, _, child_entity, _ = await _delegate_with_policy(
+        policy=policy,
+        parent_system_prompt="parent prompt",
+        child_system_prompt="",
+        child_has_permission=True,
+    )
+
+    child_llm = world.get_component(child_entity, LLMComponent)
+    assert child_llm is not None
+    assert child_llm.system_prompt == "", (
+        "enabled=False must disable system_prompt inheritance"
+    )
+
+    child_tools = world.get_component(child_entity, ToolRegistryComponent)
+    if child_tools is not None:
+        assert "shared_tool" not in child_tools.tools, (
+            "enabled=False must disable tool inheritance"
+        )
+    child_perm = world.get_component(child_entity, PermissionComponent)
+    assert child_perm is None, "enabled=False must disable permission inheritance"
+
+
+async def test_inheritance_policy_inherit_system_prompt_when_child_empty() -> None:
+    policy = InheritancePolicy(enabled=True, inherit_system_prompt=True)
+    world, _, child_entity, _ = await _delegate_with_policy(
+        policy=policy,
+        parent_system_prompt="parent inherited prompt",
+        child_system_prompt="",
+    )
+
+    child_llm = world.get_component(child_entity, LLMComponent)
+    assert child_llm is not None
+    assert child_llm.system_prompt == "parent inherited prompt", (
+        "inherit_system_prompt=True should copy parent prompt when child prompt is empty"
+    )
+
+
+async def test_inheritance_policy_inherit_permissions_true_copies_permission_component() -> (
+    None
+):
+    policy = InheritancePolicy(enabled=True, inherit_permissions=True)
+    world, _, child_entity, _ = await _delegate_with_policy(
+        policy=policy,
+        child_has_permission=True,
+    )
+
+    child_perm = world.get_component(child_entity, PermissionComponent)
+    assert child_perm is not None, (
+        "inherit_permissions=True should copy parent PermissionComponent to child"
+    )
