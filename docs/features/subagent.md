@@ -143,6 +143,38 @@ world.register_system(SubagentSystem(priority=-1), priority=-1)
 
 **IMPORTANT**: The SubagentSystem automatically registers the `delegate` tool for entities that have both `SubagentRegistryComponent` and `ToolRegistryComponent`. You do not need to manually register the delegate tool.
 
+#### Explicit Installer API
+
+For advanced use cases (custom tool names, explicit override control), use the `install_delegate_tool()` method:
+
+```python
+from ecs_agent.systems.subagent import SubagentSystem
+
+subagent_system = SubagentSystem(priority=-1)
+world.register_system(subagent_system, priority=-1)
+
+# Install delegate tool with custom name
+subagent_system.install_delegate_tool(
+    world=world,
+    entity_id=parent,
+    tool_name="delegate",  # default name
+    override=False  # skip if tool already exists (default: False)
+)
+```
+
+**Parameters:**
+- `world`: World instance
+- `entity_id`: Entity to install the tool on
+- `tool_name`: Name for the delegate tool (default: `"delegate"`)
+- `override`: If `True`, replace existing tool; if `False` (default), skip if tool exists
+
+**When to use:**
+- Custom tool naming (e.g., `"spawn_subagent"` instead of `"delegate"`)
+- Explicit control over tool registration timing
+- Override protection (prevent accidental tool replacement)
+
+**Backward compatibility:** The SubagentSystem still auto-registers the `delegate` tool during `process()` for entities with both `SubagentRegistryComponent` and `ToolRegistryComponent`. The explicit API is optional for advanced scenarios.
+
 ## Usage
 
 ### Basic Delegation

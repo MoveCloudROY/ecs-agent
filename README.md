@@ -27,7 +27,7 @@ Build modular, testable LLM agents by composing behavior from dataclass componen
 - **Tool Use**, Register tool schemas and async handlers. The framework manages the LLM ↔ tool call loop automatically.
 - **Planning & ReAct**, Built-in `PlanningSystem` and `ReplanningSystem` for multi-step reasoning with dynamic plan adjustment.
 - **Multi-Agent Messaging**, Entities communicate via `MessageBusSystem` using a pub/sub or request-response pattern with CloudEvents-compatible envelopes.
-- **Subagent Delegation**, Spawn child agents for subtasks via `SubagentSystem`. Named subagent registry, isolated execution, skill and state inheritance policy, and automatic result aggregation with the `delegate` tool. Supports explicit tool installation via an installer API.
+- **Subagent Delegation**, Spawn child agents for subtasks via `SubagentSystem`. Named subagent registry, isolated execution, policy-based inheritance, explicit installer API (`install_delegate_tool()`), and automatic result aggregation with the `delegate` tool.
 - **Tree-Structured Conversations**, Branch and merge conversation history with `ConversationTreeComponent`. Navigate multiple reasoning paths, compare outcomes, and linearize for system compatibility.
 - **Structured Output**, JSON mode with Pydantic schema support for type-safe LLM responses.
 - **Serialization**, Save and restore full `World` state (entities, components, conversation history) via `WorldSerializer`.
