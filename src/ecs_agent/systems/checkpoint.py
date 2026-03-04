@@ -49,48 +49,71 @@ class CheckpointSystem:
         providers: dict[str, Any],
         tool_handlers: dict[str, Any],
     ) -> None:
-        checkpoints = world.query(CheckpointComponent)
-        if not checkpoints:
-            raise ValueError("No checkpoint snapshots available to restore")
+        start_time = time.monotonic()
+        try:
+            checkpoints = world.query(CheckpointComponent)
+            if not checkpoints:
+                logger.error("checkpoint_restore_failed", reason="No checkpoint component found")
+                raise ValueError("No checkpoint snapshots available to restore")
 
-        entity_id, components = checkpoints[0]
-        checkpoint = components[0]
-        if not checkpoint.snapshots:
-            raise ValueError("No checkpoint snapshots available to restore")
+            entity_id, components = checkpoints[0]
+            checkpoint = components[0]
+            if not checkpoint.snapshots:
+                logger.error("checkpoint_restore_failed", reason="No snapshots available")
+                raise ValueError("No checkpoint snapshots available to restore")
 
-        popped_snapshot = checkpoint.snapshots.pop()
-        snapshot = checkpoint.snapshots[-1] if checkpoint.snapshots else popped_snapshot
+            popped_snapshot = checkpoint.snapshots.pop()
+            snapshot = checkpoint.snapshots[-1] if checkpoint.snapshots else popped_snapshot
 
-        restored_world = WorldSerializer.from_dict(
-            snapshot,
-            providers=providers,
-            tool_handlers=tool_handlers,
-        )
-
-        world._entity_gen = restored_world._entity_gen
-        world._components = restored_world._components
-        world._query = Query(world._components)
-
-        restored_checkpoint = world.get_component(entity_id, CheckpointComponent)
-        if restored_checkpoint is None:
-            world.add_component(
-                entity_id,
-                CheckpointComponent(
-                    snapshots=checkpoint.snapshots,
-                    max_snapshots=checkpoint.max_snapshots,
-                ),
+            restored_world = WorldSerializer.from_dict(
+                snapshot,
+                providers=providers,
+                tool_handlers=tool_handlers,
             )
-        else:
-            restored_checkpoint.snapshots = checkpoint.snapshots
-            restored_checkpoint.max_snapshots = checkpoint.max_snapshots
 
-        await world.event_bus.publish(
-            CheckpointRestoredEvent(
-                entity_id=EntityId(entity_id),
+            world._entity_gen = restored_world._entity_gen
+            world._components = restored_world._components
+            world._query = Query(world._components)
+
+            restored_checkpoint = world.get_component(entity_id, CheckpointComponent)
+            if restored_checkpoint is None:
+                world.add_component(
+                    entity_id,
+                    CheckpointComponent(
+                        snapshots=checkpoint.snapshots,
+                        max_snapshots=checkpoint.max_snapshots,
+                    ),
+                )
+            else:
+                restored_checkpoint.snapshots = checkpoint.snapshots
+                restored_checkpoint.max_snapshots = checkpoint.max_snapshots
+
+            duration_ms = (time.monotonic() - start_time) * 1000
+            logger.info(
+                "checkpoint_restored",
+                success=True,
                 checkpoint_id=len(checkpoint.snapshots),
-                timestamp=time.time(),
+                duration_ms=duration_ms,
             )
-        )
+
+            await world.event_bus.publish(
+                CheckpointRestoredEvent(
+                    entity_id=EntityId(entity_id),
+                    checkpoint_id=len(checkpoint.snapshots),
+                    timestamp=time.time(),
+                )
+            )
+        except ValueError:
+            # Already logged above, just re-raise
+            raise
+        except Exception as exc:
+            duration_ms = (time.monotonic() - start_time) * 1000
+            logger.error(
+                "checkpoint_restore_failed",
+                reason=str(exc),
+                duration_ms=duration_ms,
+            )
+            raise
 
 
 __all__ = ["CheckpointSystem"]

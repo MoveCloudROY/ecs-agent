@@ -29,6 +29,51 @@ The system applies several standard processors to ensure every log entry is cons
 - `add_log_level`: Adds the severity level (e.g., `info`, `error`) to each entry.
 - `TimeStamper(fmt="iso")`: Adds an ISO-formatted timestamp to every log.
 
+## Instrumented Modules
+
+The following core modules and systems have structured logging instrumentation:
+
+### Core Runtime (`core/`)
+- **`runner.py`**: Run start/end, tick lifecycle, completion events with timing
+- **`system.py`**: System execution start/end, priority group execution, exceptions
+- **`world.py`**: Entity creation, component add/remove operations
+- **`event_bus.py`**: Publish, deliver, timeout, and response events with topic/subscriber metadata
+
+### Key Systems (`systems/`)
+- **`reasoning.py`**: Reasoning start/complete events with model and entity metadata
+- **`tool_execution.py`**: Tool invocation, completion (with duration), and failure events
+- **`checkpoint.py`**: Checkpoint save events with success status and duration
+- **`planning.py`**: Planning request, step completion (with step metadata and duration), and error events
+
+## Logging Levels Policy
+
+Events are logged at appropriate levels:
+- **DEBUG**: High-frequency operations, internal state transitions
+- **INFO**: Lifecycle milestones (system start, completion, checkpoint save)
+- **WARNING**: Recoverable anomalies, degraded performance
+- **ERROR**: Failures, exceptions, unrecoverable errors
+
+## Sensitive Data Policy
+
+The logging system enforces strict guardrails to prevent sensitive data leakage:
+
+**FORBIDDEN FIELDS** (never logged):
+- Raw conversation message `content` (user or assistant messages)
+- Raw tool call `arguments` (may contain secrets, credentials, or PII)
+- API keys, tokens, or authentication credentials
+- Full HTTP request/response bodies
+- Serialized world state payloads (checkpoint snapshots)
+
+**ALLOWED METADATA** (safe to log):
+- Entity IDs, system names, model names
+- Event names, log levels, timestamps
+- Duration metrics (`duration_ms`)
+- Success/failure status (`success`, `reason`)
+- Tool names (but not arguments)
+- Message counts, step indices, step descriptions
+
+All tests in `tests/test_logging.py::TestSensitiveDataPolicy` verify these guardrails are enforced.
+
 ## Usage Example
 
 You can import logging utilities from `ecs_agent.logging` or directly from `ecs_agent`.
@@ -63,6 +108,54 @@ except Exception as exc:
     # Pretty-printed traceback in output
 ```
 
+## Structured Event Examples
+
+### Reasoning System
+```json
+{"event": "reasoning_start", "entity_id": 1, "model": "gpt-4", "system": "ReasoningSystem", "level": "info", "timestamp": "2026-03-05T00:00:00Z"}
+{"event": "reasoning_complete", "entity_id": 1, "model": "gpt-4", "system": "ReasoningSystem", "level": "info", "timestamp": "2026-03-05T00:00:05Z"}
+```
+
+### Tool Execution System
+```json
+{"event": "tool_called", "tool_name": "search", "level": "info", "timestamp": "2026-03-05T00:00:00Z"}
+{"event": "tool_result", "tool_name": "search", "success": true, "duration_ms": 123.45, "level": "info", "timestamp": "2026-03-05T00:00:00Z"}
+{"event": "tool_failed", "tool_name": "missing_tool", "reason": "Error: unknown tool 'missing_tool'", "level": "error", "timestamp": "2026-03-05T00:00:00Z"}
+```
+
+### Checkpoint System
+```json
+{"event": "checkpoint_saved", "success": true, "duration_ms": 0.05, "checkpoint_id": 0, "level": "info", "timestamp": "2026-03-05T00:00:00Z"}
+```
+
+### Planning System
+```json
+{"event": "planning_request", "message_count": 2, "level": "info", "timestamp": "2026-03-05T00:00:00Z"}
+{"event": "planning_step_completed", "step_index": 0, "step_description": "Do task A", "duration_ms": 234.56, "level": "info", "timestamp": "2026-03-05T00:00:05Z"}
+{"event": "planning_error", "exception": "Provider failed!", "system_name": "PlanningSystem", "level": "error", "timestamp": "2026-03-05T00:00:05Z"}
+```
+
 ## Internal Usage
 
-All core systems (e.g., `RetryProvider`, `WorldSerializer`) use this structured logging internally. This provides a clear, unified view of system operations without needing to manually add logs to every component.
+Core systems (`Runner`, `World`, `ReasoningSystem`, `ToolExecutionSystem`, `CheckpointSystem`, `PlanningSystem`) use structured logging internally. This provides a clear, unified view of system operations without needing to manually add logs to every component.
+
+For provider-level logging, see the individual provider implementations (`OpenAIProvider`, `ClaudeProvider`, `RetryProvider`) which emit HTTP request/response metadata at DEBUG level.
+
+## Testing & Verification
+
+All logging behavior is verified through comprehensive tests:
+- `tests/test_logging.py`: 42 tests covering event contracts, sensitive data policy, and level enforcement
+- `tests/test_enhanced_logging.py`: Module-level filtering and caller info tests
+- `tests/test_real_llm_integration.py`: Real LLM logging verification (env-gated)
+
+Run logging tests:
+```bash
+# All logging tests
+uv run pytest tests/test_logging.py tests/test_enhanced_logging.py -v
+
+# Sensitive data policy tests only
+uv run pytest tests/test_logging.py::TestSensitiveDataPolicy -v
+
+# Real LLM logging (requires LLM_API_KEY)
+LLM_API_KEY=$YOUR_KEY uv run pytest tests/test_real_llm_integration.py -k "logging" -v
+```

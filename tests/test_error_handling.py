@@ -4,7 +4,6 @@ import json
 import time
 
 import pytest
-import pytest
 
 from ecs_agent.components.definitions import ErrorComponent
 from ecs_agent.core.world import World
