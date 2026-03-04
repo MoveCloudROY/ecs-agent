@@ -259,3 +259,110 @@ async def test_real_multi_turn_conversation() -> None:
     # Note: We don't assert exact content since LLM responses vary,
     # but we verify the conversation flow works correctly
     assert len(final_response) > 0, "Expected non-empty response"
+
+
+@pytest.mark.asyncio
+async def test_real_llm_logging_no_sensitive_data(capsys: pytest.CaptureFixture[str]) -> None:
+    """Verify real LLM interactions don't log sensitive data (content, API keys)."""
+    import json
+    from ecs_agent.logging import configure_logging
+
+    configure_logging(json_output=True, level="INFO")
+
+    world = World()
+    provider = OpenAIProvider(
+        api_key=API_KEY,
+        base_url=BASE_URL,
+        model=MODEL,
+    )
+
+    entity = world.create_entity()
+    world.add_component(entity, LLMComponent(provider=provider, model=MODEL))
+    world.add_component(
+        entity,
+        ConversationComponent(
+            messages=[Message(role="user", content="Secret: my password is hunter2")]
+        ),
+    )
+
+    # Register systems
+    world.register_system(ReasoningSystem(priority=0), priority=0)
+
+    # Run one tick
+    runner = Runner()
+    await runner.run(world, max_ticks=1)
+
+    captured = capsys.readouterr()
+
+    # Parse JSON log lines
+    events = []
+    for line in captured.out.strip().split("\n"):
+        if line.strip():
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+    # Verify: No API key in logs
+    for event in events:
+        event_str = json.dumps(event)
+        assert API_KEY not in event_str, f"Found API key in log: {event}"
+
+    # Verify: No secret message content in logs
+    for event in events:
+        event_str = json.dumps(event).lower()
+        assert "hunter2" not in event_str, f"Found secret content in log: {event}"
+
+
+@pytest.mark.asyncio
+async def test_real_llm_logging_structured_metadata(capsys: pytest.CaptureFixture[str]) -> None:
+    """Verify real LLM logging includes structured metadata (model, entity_id, system)."""
+    import json
+    from ecs_agent.logging import configure_logging
+
+    configure_logging(json_output=True, level="INFO")
+
+    world = World()
+    provider = OpenAIProvider(
+        api_key=API_KEY,
+        base_url=BASE_URL,
+        model=MODEL,
+    )
+
+    entity = world.create_entity()
+    world.add_component(entity, LLMComponent(provider=provider, model=MODEL))
+    world.add_component(
+        entity,
+        ConversationComponent(
+            messages=[Message(role="user", content="Say hello")]
+        ),
+    )
+
+    # Register systems
+    world.register_system(ReasoningSystem(priority=0), priority=0)
+
+    # Run one tick
+    runner = Runner()
+    await runner.run(world, max_ticks=1)
+
+    captured = capsys.readouterr()
+
+    # Parse JSON log lines
+    events = []
+    for line in captured.out.strip().split("\n"):
+        if line.strip():
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+    # Find reasoning events
+    reasoning_events = [e for e in events if "reasoning" in str(e.get("event", ""))]
+    assert len(reasoning_events) > 0, "Expected reasoning events in logs"
+
+    # Verify structured fields in reasoning events
+    for event in reasoning_events:
+        assert "entity_id" in event, f"Missing entity_id in event: {event}"
+        assert "model" in event or "event" in event, f"Missing model/event in event: {event}"
+        assert "level" in event, f"Missing level in event: {event}"
+        assert event.get("level") in ["info", "debug", "error"], f"Invalid level in event: {event}"
