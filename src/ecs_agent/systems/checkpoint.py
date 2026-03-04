@@ -8,11 +8,14 @@ from ecs_agent.core.query import Query
 from ecs_agent.core.world import World
 from ecs_agent.serialization import WorldSerializer
 from ecs_agent.types import CheckpointCreatedEvent, CheckpointRestoredEvent, EntityId
+from ecs_agent.logging import get_logger
 
+logger = get_logger(__name__)
 
 class CheckpointSystem:
     """Creates and restores tick-level World snapshots for undo functionality."""
     async def process(self, world: World) -> None:
+        start_time = time.monotonic()
         snapshot = WorldSerializer.to_dict(world)
         timestamp = time.time()
 
@@ -30,6 +33,14 @@ class CheckpointSystem:
                     checkpoint_id=len(checkpoint.snapshots) - 1,
                     timestamp=timestamp,
                 )
+            )
+            
+            duration_ms = (time.monotonic() - start_time) * 1000
+            logger.info(
+                "checkpoint_saved",
+                success=True,
+                duration_ms=duration_ms,
+                checkpoint_id=len(checkpoint.snapshots) - 1,
             )
 
     @staticmethod

@@ -4,6 +4,7 @@ import json
 import time
 from typing import Any
 
+from ecs_agent.logging import get_logger
 from ecs_agent.components import (
     ConversationComponent,
     ErrorComponent,
@@ -26,6 +27,7 @@ from ecs_agent.types import (
     ToolSchema,
 )
 
+logger = get_logger(__name__)
 
 class ReasoningSystem:
     def __init__(self, priority: int = 0) -> None:
@@ -37,6 +39,12 @@ class ReasoningSystem:
             assert isinstance(llm_component, LLMComponent)
             assert isinstance(conversation, ConversationComponent)
 
+            logger.info(
+                "reasoning_start",
+                entity_id=int(entity_id),
+                model=llm_component.model,
+                system="ReasoningSystem",
+            )
             messages: list[Message] = []
 
             system_prompt = world.get_component(entity_id, SystemPromptComponent)
@@ -83,6 +91,12 @@ class ReasoningSystem:
                         PendingToolCallsComponent(tool_calls=result.message.tool_calls),
                     )
                 else:
+                    logger.info(
+                        "reasoning_complete",
+                        entity_id=int(entity_id),
+                        model=llm_component.model,
+                        system="ReasoningSystem",
+                    )
                     world.add_component(
                         entity_id,
                         TerminalComponent(reason="reasoning_complete"),
@@ -93,6 +107,12 @@ class ReasoningSystem:
                     TerminalComponent(reason="provider_exhausted"),
                 )
             except Exception as exc:
+                logger.error(
+                    "reasoning_error",
+                    entity_id=int(entity_id),
+                    system="ReasoningSystem",
+                    exception=str(exc),
+                )
                 world.add_component(
                     entity_id,
                     ErrorComponent(
