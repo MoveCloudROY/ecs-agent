@@ -1,14 +1,20 @@
-"""Real LLM integration tests using DashScope API.
+"""Real LLM integration tests using DashScope-compatible API.
 
 These tests use real OpenAI-compatible API calls to verify streaming,
 checkpoints, and provider functionality with actual LLM responses.
 
-Environment Variables:
-    LLM_API_KEY: DashScope API key (required for tests to run)
+Environment Variables (required for tests to execute):
+    LLM_API_KEY: DashScope API key (or any OpenAI-compatible provider)
+    LLM_BASE_URL: Base URL for the LLM provider (e.g. https://dashscope.aliyuncs.com/compatible-mode/v1)
+    LLM_MODEL: Model identifier (e.g. qwen-plus, qwen3.5-plus)
+
+Test Contract:
+    - With all env vars set: Tests execute normally.
+    - Without LLM_API_KEY: All tests skip gracefully (no failures).
 
 Usage:
     # Run with API key (tests will execute)
-    LLM_API_KEY=sk-xxx uv run pytest tests/test_real_llm_integration.py -v --timeout=60
+    LLM_API_KEY=sk-xxx LLM_BASE_URL=https://... LLM_MODEL=qwen-plus uv run pytest tests/test_real_llm_integration.py -v --timeout=60
 
     # Run without API key (tests will skip)
     uv run pytest tests/test_real_llm_integration.py -v
@@ -34,13 +40,14 @@ from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import CompletionResult, Message, StreamDelta, StreamDeltaEvent
 
-# DashScope API configuration
+# DashScope API configuration from environment variables
+# Tests require LLM_API_KEY to execute; other vars use sensible defaults
 API_KEY = os.getenv("LLM_API_KEY", "")
-BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-MODEL = "qwen-plus"
+BASE_URL = os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+MODEL = os.getenv("LLM_MODEL", "qwen-plus")
 
-# Skip all tests if API key is not set
-pytestmark = pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY not set")
+# Skip all tests if API key is not set (env-driven test contract)
+pytestmark = pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
 
 
 @pytest.mark.asyncio
