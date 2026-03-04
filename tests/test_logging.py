@@ -877,7 +877,7 @@ class TestReasoningSystemLogging:
         event = reasoning_error_events[0]
         assert event.get("entity_id") == entity
         assert "reasoning" in str(event.get("logger", ""))  # logger has 'reasoning' system name
-        assert "Provider failed" in str(event.get("exception", ""))
+        assert "Provider failed" in str(event.get("reason", ""))
     async def test_reasoning_logs_no_sensitive_data(self, capsys):
         """Test ReasoningSystem does not log raw message content or arguments."""
         from ecs_agent.core import World
