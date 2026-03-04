@@ -714,10 +714,12 @@ class TestWorldComponentLogging:
         output = captured.out
 
         # Check for component_store_add event
-        assert "component_store_add" in output
-        assert "entity_id=1" in output
-        assert "component_type=TestComponent" in output
-
+        events = _json_events(output)
+        store_add_events = [e for e in events if e.get("event") == "component_store_add"]
+        assert len(store_add_events) > 0, "No component_store_add event found"
+        event = store_add_events[0]
+        assert event.get("entity_id") == 1
+        assert event.get("component_type") == "TestComponent"
     def test_query_no_match_logs_debug_event(self, capsys):
         """Test Query.get with no matches emits debug event."""
         from ecs_agent.core.component import ComponentStore
@@ -737,9 +739,11 @@ class TestWorldComponentLogging:
         output = captured.out
 
         # Check for query_executed event with no matches
-        assert "query_executed" in output
-        assert "result_count=0" in output
-
+        events = _json_events(output)
+        query_events = [e for e in events if e.get("event") == "query_executed"]
+        assert len(query_events) > 0, "No query_executed event found"
+        event = query_events[0]
+        assert event.get("result_count") == 0
 
 class TestEventBusLogging:
     """Tests for event bus logging instrumentation."""
@@ -789,13 +793,15 @@ class TestReasoningSystemLogging:
         await system.process(world)
 
         captured = capsys.readouterr().out
-
+        
         # Check for reasoning_start event
-        assert "reasoning_start" in captured
-        assert f"entity_id={entity}" in captured or f"entity_id={int(entity)}" in captured
-        assert "fake-model" in captured
-        assert "ReasoningSystem" in captured
-
+        events = _json_events(captured)
+        reasoning_start_events = [e for e in events if e.get("event") == "reasoning_start"]
+        assert len(reasoning_start_events) > 0, "No reasoning_start event found"
+        event = reasoning_start_events[0]
+        assert event.get("entity_id") == entity
+        assert event.get("model") == "fake-model"
+        assert "reasoning" in str(event.get("logger", ""))  # logger has 'reasoning' system name
     async def test_reasoning_complete_logs_lifecycle_event(self, capsys):
         """Test ReasoningSystem emits reasoning_complete with entity_id."""
         from ecs_agent.core import World
@@ -825,13 +831,15 @@ class TestReasoningSystemLogging:
         await system.process(world)
 
         captured = capsys.readouterr().out
-
+        
         # Check for reasoning_complete event
-        assert "reasoning_complete" in captured
-        assert f"entity_id={entity}" in captured or f"entity_id={int(entity)}" in captured
-        assert "fake-model" in captured
-        assert "ReasoningSystem" in captured
-
+        events = _json_events(captured)
+        reasoning_complete_events = [e for e in events if e.get("event") == "reasoning_complete"]
+        assert len(reasoning_complete_events) > 0, "No reasoning_complete event found"
+        event = reasoning_complete_events[0]
+        assert event.get("entity_id") == entity
+        assert event.get("model") == "fake-model"
+        assert "reasoning" in str(event.get("logger", ""))  # logger has 'reasoning' system name
     async def test_reasoning_error_logs_exception(self, capsys):
         """Test ReasoningSystem emits reasoning_error on provider exception."""
         from ecs_agent.core import World
@@ -861,13 +869,15 @@ class TestReasoningSystemLogging:
         assert error_comp is not None
 
         captured = capsys.readouterr().out
-
+        
         # Check for reasoning_error event
-        assert "reasoning_error" in captured
-        assert f"entity_id={entity}" in captured or f"entity_id={int(entity)}" in captured
-        assert "ReasoningSystem" in captured
-        assert "Provider failed" in captured
-
+        events = _json_events(captured)
+        reasoning_error_events = [e for e in events if e.get("event") == "reasoning_error"]
+        assert len(reasoning_error_events) > 0, "No reasoning_error event found"
+        event = reasoning_error_events[0]
+        assert event.get("entity_id") == entity
+        assert "reasoning" in str(event.get("logger", ""))  # logger has 'reasoning' system name
+        assert "Provider failed" in str(event.get("exception", ""))
     async def test_reasoning_logs_no_sensitive_data(self, capsys):
         """Test ReasoningSystem does not log raw message content or arguments."""
         from ecs_agent.core import World

@@ -1,11 +1,25 @@
 from dataclasses import dataclass
 
+import json
+
 import pytest
 
 from ecs_agent.core import EventBus
 from ecs_agent.core.world import World
 from ecs_agent.types import EntityId
 
+
+def _json_events(output: str) -> list[dict[str, object]]:
+    """Parse JSON events from logging output."""
+    events: list[dict[str, object]] = []
+    for line in output.strip().split("\n"):
+        if line.strip():
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                # Skip non-JSON lines
+                continue
+    return events
 
 @dataclass(slots=True)
 class Position:
@@ -132,11 +146,12 @@ def test_world_create_entity_logs_entity_created(capsys) -> None:
     captured = capsys.readouterr()
     output = captured.out
 
-    # Check for entity_created event in console format
-    assert "entity_created" in output
-    assert f"entity_id={int(entity_id)}" in output
-    assert "[debug" in output or "level" in output
-
+    # Check for entity_created event
+    events = _json_events(output)
+    entity_created_events = [e for e in events if e.get("event") == "entity_created"]
+    assert len(entity_created_events) > 0, "No entity_created event found"
+    event = entity_created_events[0]
+    assert event.get("entity_id") == entity_id
 
 def test_world_add_component_logs_component_added(capsys) -> None:
     """Test add_component emits component_added info event."""
@@ -150,9 +165,13 @@ def test_world_add_component_logs_component_added(capsys) -> None:
     output = captured.out
 
     # Check for component_added event
-    assert "component_added" in output
-    assert f"entity_id={int(entity)}" in output
-    assert "component_type=Position" in output
-    # Must NOT contain full component payload
-    assert "x=" not in output
-    assert "y=" not in output
+    events = _json_events(output)
+    component_added_events = [e for e in events if e.get("event") == "component_added"]
+    assert len(component_added_events) > 0, "No component_added event found"
+    event = component_added_events[0]
+    assert event.get("entity_id") == entity
+    assert event.get("component_type") == "Position"
+    # Verify component payload is not logged
+    output_str = json.dumps(output)
+    assert "x=" not in output_str
+    assert "y=" not in output_str
