@@ -1,12 +1,16 @@
 """Runner for ECS-based LLM Agent with checkpoint resume support."""
 
 import json
+import time
 from pathlib import Path
 from typing import Any
+
 from ecs_agent.components.definitions import RunnerStateComponent, TerminalComponent
 from ecs_agent.core.world import World
+from ecs_agent.logging import STANDARD_EVENT_NAMES, get_logger
 from ecs_agent.serialization import WorldSerializer
 
+logger = get_logger(__name__)
 
 class Runner:
     """Orchestrates the main execution loop."""
@@ -30,6 +34,8 @@ class Runner:
                        Pass None for unlimited execution.
             start_tick: Starting tick count for resume (default 0)
         """
+        logger.info(STANDARD_EVENT_NAMES["RUN_START"], max_ticks=max_ticks, start_tick=start_tick)
+
         # Create or update RunnerStateComponent
         runner_state_entities = list(world.query(RunnerStateComponent))
         if runner_state_entities:
@@ -44,9 +50,21 @@ class Runner:
             if max_ticks is not None and tick >= max_ticks:
                 entity_id = world.create_entity()
                 world.add_component(entity_id, TerminalComponent(reason="max_ticks"))
+                logger.info(STANDARD_EVENT_NAMES["RUN_COMPLETE"], reason="max_ticks")
                 return
 
+            logger.debug(STANDARD_EVENT_NAMES["TICK_START"], tick=tick)
+            tick_start_time = time.monotonic()
+
             await world.process()
+
+            tick_duration_ms = (time.monotonic() - tick_start_time) * 1000
+            logger.debug(
+                STANDARD_EVENT_NAMES["TICK_COMPLETE"],
+                tick=tick,
+                duration_ms=tick_duration_ms,
+            )
+
             tick += 1
             runner_state.current_tick = tick
 
@@ -59,6 +77,7 @@ class Runner:
                 for eid, _ in world.query(TerminalComponent)
             )
             if has_terminal:
+                logger.info(STANDARD_EVENT_NAMES["RUN_COMPLETE"], reason="terminal_component")
                 return
 
     def save_checkpoint(self, world: World, path: str | Path) -> None:
