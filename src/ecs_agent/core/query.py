@@ -5,6 +5,9 @@ from typing import Any
 from ecs_agent.core.component import ComponentStore
 from ecs_agent.types import EntityId
 
+from ecs_agent.logging import get_logger
+
+logger = get_logger(__name__)
 
 class Query:
     def __init__(self, component_store: ComponentStore) -> None:
@@ -14,6 +17,7 @@ class Query:
         self, *component_types: type[Any]
     ) -> list[tuple[EntityId, tuple[Any, ...]]]:
         if not component_types:
+            logger.debug("query_executed", component_count=0, result_count=0)
             return []
 
         first_component_type = component_types[0]
@@ -33,4 +37,9 @@ class Query:
             )
             results.append((entity_id, components))
 
+        logger.debug(
+            "query_executed",
+            component_count=len(component_types),
+            result_count=len(results),
+        )
         return results

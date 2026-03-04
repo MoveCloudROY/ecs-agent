@@ -36,8 +36,11 @@ _METHOD_LEVEL_MAP = {
 
 # Event Contract: Standard event names (snake_case)
 STANDARD_EVENT_NAMES: dict[str, str] = {
+    "RUN_START": "run_start",
+    "RUN_COMPLETE": "run_complete",
     "SYSTEM_START": "system_start",
     "SYSTEM_COMPLETE": "system_complete",
+    "SYSTEM_ERROR": "system_error",
     "TICK_START": "tick_start",
     "TICK_COMPLETE": "tick_complete",
     "ENTITY_CREATED": "entity_created",
@@ -219,6 +222,7 @@ def configure_logging(
 
     processors: list[Any] = [*shared_processors, renderer]
 
+    structlog.reset_defaults()  # Clear cached loggers
     structlog.configure(
         processors=processors,
         context_class=dict,

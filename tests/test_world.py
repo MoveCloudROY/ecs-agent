@@ -121,3 +121,38 @@ async def test_world_process_executes_systems_by_priority() -> None:
 
     await world.process()
     assert log == ["p0", "p1"]
+
+
+
+def test_world_create_entity_logs_entity_created(capsys) -> None:
+    """Test create_entity emits entity_created debug event."""
+    world = World()
+    entity_id = world.create_entity()
+
+    captured = capsys.readouterr()
+    output = captured.out
+
+    # Check for entity_created event in console format
+    assert "entity_created" in output
+    assert f"entity_id={int(entity_id)}" in output
+    assert "[debug" in output or "level" in output
+
+
+def test_world_add_component_logs_component_added(capsys) -> None:
+    """Test add_component emits component_added info event."""
+    world = World()
+    entity = world.create_entity()
+    position = Position(x=1.0, y=2.0)
+
+    world.add_component(entity, position)
+
+    captured = capsys.readouterr()
+    output = captured.out
+
+    # Check for component_added event
+    assert "component_added" in output
+    assert f"entity_id={int(entity)}" in output
+    assert "component_type=Position" in output
+    # Must NOT contain full component payload
+    assert "x=" not in output
+    assert "y=" not in output

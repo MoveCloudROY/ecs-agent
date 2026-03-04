@@ -4,6 +4,9 @@ from typing import Any, TypeVar, cast
 
 from ecs_agent.types import EntityId
 
+from ecs_agent.logging import get_logger
+
+logger = get_logger(__name__)
 T = TypeVar("T")
 
 
@@ -15,6 +18,11 @@ class ComponentStore:
         component_type = type(component)
         entities = self._components.setdefault(component_type, {})
         entities[entity_id] = component
+        logger.debug(
+            "component_store_add",
+            entity_id=int(entity_id),
+            component_type=component_type.__name__,
+        )
 
     def get(self, entity_id: EntityId, component_type: type[T]) -> T | None:
         entities = self._components.get(component_type)

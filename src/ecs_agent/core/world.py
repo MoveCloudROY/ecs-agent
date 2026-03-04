@@ -9,6 +9,9 @@ from ecs_agent.core.query import Query
 from ecs_agent.core.system import System, SystemExecutor
 from ecs_agent.types import EntityId
 
+from ecs_agent.logging import STANDARD_EVENT_NAMES, get_logger
+
+logger = get_logger(__name__)
 T = TypeVar("T")
 
 
@@ -25,10 +28,17 @@ class World:
         return self._event_bus
 
     def create_entity(self) -> EntityId:
-        return self._entity_gen.next()
+        entity_id = self._entity_gen.next()
+        logger.debug(STANDARD_EVENT_NAMES["ENTITY_CREATED"], entity_id=int(entity_id))
+        return entity_id
 
     def add_component(self, entity_id: EntityId, component: Any) -> None:
         self._components.add(entity_id, component)
+        logger.info(
+            STANDARD_EVENT_NAMES["COMPONENT_ADDED"],
+            entity_id=int(entity_id),
+            component_type=type(component).__name__,
+        )
 
     def get_component(self, entity_id: EntityId, component_type: type[T]) -> T | None:
         return self._components.get(entity_id, component_type)
