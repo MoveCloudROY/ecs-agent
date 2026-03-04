@@ -1034,19 +1034,23 @@ class TestLoggingLevelPolicy:
         events = _json_events(captured.out)
 
         # Find reasoning completion event
-        completion_events = [e for e in events if e.get("event") == "llm_completion"]
+        completion_events = [e for e in events if e.get("event") == "reasoning_complete"]
         assert len(completion_events) >= 1
         assert completion_events[0].get("level") == "info"
 
     async def test_tool_execution_error_uses_error_level(self, capsys):
         """Verify tool execution errors use ERROR level."""
         from ecs_agent.core import World
-        from ecs_agent.components import PendingToolCallsComponent
+        from ecs_agent.components import PendingToolCallsComponent, ToolRegistryComponent, ConversationComponent
         from ecs_agent.systems.tool_execution import ToolExecutionSystem
-        from ecs_agent.types import ToolCall
+        from ecs_agent.types import ToolCall, Message
 
         world = World()
         entity = world.create_entity()
+
+        # Add required components
+        world.add_component(entity, ToolRegistryComponent(tools={}, handlers={}))
+        world.add_component(entity, ConversationComponent(messages=[Message(role="user", content="test")]))
 
         # Add tool call with no registered handler (will fail)
         world.add_component(
@@ -1063,8 +1067,9 @@ class TestLoggingLevelPolicy:
         events = _json_events(captured.out)
 
         # Find tool error event
-        error_events = [e for e in events if e.get("level") == "error" and "tool" in str(e.get("event", ""))]
+        error_events = [e for e in events if e.get("event") == "tool_failed"]
         assert len(error_events) >= 1
+        assert error_events[0].get("level") == "error"
 
     async def test_checkpoint_saved_uses_info_level(self, capsys):
         """Verify checkpoint save events use INFO level."""

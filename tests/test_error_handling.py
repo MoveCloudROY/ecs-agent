@@ -168,7 +168,8 @@ class TestErrorHandlingSystem:
         await system.process(world)
 
         captured = capsys.readouterr()
+        # JSON format from global conftest configuration
         assert "entity_error" in captured.out
-        assert f"entity_id={entity_id}" in captured.out
-        assert "system_name=CriticalSystem" in captured.out
+        assert '"entity_id": 1' in captured.out or '"entity_id":1' in captured.out
+        assert "CriticalSystem" in captured.out
         assert "Critical failure" in captured.out
