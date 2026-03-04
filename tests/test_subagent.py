@@ -814,3 +814,218 @@ async def test_delegation_event_correlation_integrity() -> None:
     assert started_event.traceparent.startswith("00-"), (
         "traceparent MUST follow W3C Trace Context format"
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 2: Explicit Delegate Installer API Tests (RED)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+async def test_install_delegate_tool_with_default_name() -> None:
+    """Test explicit installer with default tool name 'delegate'."""
+    from ecs_agent.systems.subagent import SubagentSystem
+
+    world = World()
+    entity = world.create_entity()
+
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
+    registry = SubagentRegistryComponent(subagents={"test-agent": config})
+    world.add_component(entity, registry)
+    world.add_component(entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem()
+    # This method doesn't exist yet - RED!
+    system.install_delegate_tool(world, entity)
+
+    tool_registry = world.get_component(entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    assert "delegate" in tool_registry.handlers, (
+        "Expected 'delegate' handler registered with default tool name"
+    )
+    assert "delegate" in tool_registry.tools, (
+        "Expected 'delegate' tool schema registered with default tool name"
+    )
+
+
+async def test_install_delegate_tool_with_custom_name() -> None:
+    """Test explicit installer with custom tool name."""
+    from ecs_agent.systems.subagent import SubagentSystem
+
+    world = World()
+    entity = world.create_entity()
+
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
+    registry = SubagentRegistryComponent(subagents={"test-agent": config})
+    world.add_component(entity, registry)
+    world.add_component(entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem()
+    # This method doesn't exist yet - RED!
+    system.install_delegate_tool(world, entity, tool_name="custom_delegate")
+
+    tool_registry = world.get_component(entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    assert "custom_delegate" in tool_registry.handlers, (
+        "Expected 'custom_delegate' handler registered with custom tool name"
+    )
+    assert "custom_delegate" in tool_registry.tools, (
+        "Expected 'custom_delegate' tool schema registered with custom tool name"
+    )
+    # Ensure default name was NOT used
+    assert "delegate" not in tool_registry.handlers, (
+        "Expected 'delegate' NOT registered when custom tool name provided"
+    )
+
+
+async def test_install_delegate_tool_idempotency() -> None:
+    """Test calling install_delegate_tool twice with same params succeeds (idempotent)."""
+    from ecs_agent.systems.subagent import SubagentSystem
+
+    world = World()
+    entity = world.create_entity()
+
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
+    registry = SubagentRegistryComponent(subagents={"test-agent": config})
+    world.add_component(entity, registry)
+    world.add_component(entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem()
+    # This method doesn't exist yet - RED!
+    system.install_delegate_tool(world, entity)
+    # Call again - should not raise, should be idempotent
+    system.install_delegate_tool(world, entity)
+
+    tool_registry = world.get_component(entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    assert "delegate" in tool_registry.handlers, (
+        "Expected 'delegate' handler after idempotent install"
+    )
+
+
+async def test_install_delegate_tool_no_overwrite_by_default() -> None:
+    """Test that existing handler is NOT replaced when override=False (default)."""
+    from ecs_agent.systems.subagent import SubagentSystem
+
+    world = World()
+    entity = world.create_entity()
+
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
+    registry = SubagentRegistryComponent(subagents={"test-agent": config})
+    world.add_component(entity, registry)
+
+    # Pre-register a custom 'delegate' handler
+    async def custom_handler(subagent_name: str, task: str) -> str:
+        return "custom_result"
+
+    delegate_schema = ToolSchema(
+        name="delegate",
+        description="Custom delegate",
+        parameters={"type": "object", "properties": {}, "required": []},
+    )
+    tool_registry = ToolRegistryComponent(
+        tools={"delegate": delegate_schema}, handlers={"delegate": custom_handler}
+    )
+    world.add_component(entity, tool_registry)
+
+    system = SubagentSystem()
+    # This method doesn't exist yet - RED!
+    # Default override=False, should NOT replace existing handler
+    system.install_delegate_tool(world, entity)
+
+    tool_registry = world.get_component(entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    # Handler should still be the custom one (not replaced)
+    result = await tool_registry.handlers["delegate"](subagent_name="test", task="test")
+    assert result == "custom_result", (
+        "Expected custom handler preserved (not overwritten) when override=False"
+    )
+
+
+async def test_install_delegate_tool_overwrite_when_override_true() -> None:
+    """Test that existing handler IS replaced when override=True."""
+    from ecs_agent.systems.subagent import SubagentSystem
+
+    world = World()
+    entity = world.create_entity()
+
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
+    registry = SubagentRegistryComponent(subagents={"test-agent": config})
+    world.add_component(entity, registry)
+
+    # Pre-register a custom 'delegate' handler
+    async def custom_handler(subagent_name: str, task: str) -> str:
+        return "custom_result"
+
+    delegate_schema = ToolSchema(
+        name="delegate",
+        description="Custom delegate",
+        parameters={"type": "object", "properties": {}, "required": []},
+    )
+    tool_registry = ToolRegistryComponent(
+        tools={"delegate": delegate_schema}, handlers={"delegate": custom_handler}
+    )
+    world.add_component(entity, tool_registry)
+    _register_message_bus(world, entity)
+
+    system = SubagentSystem()
+    # This method doesn't exist yet - RED!
+    # override=True, should REPLACE existing handler
+    system.install_delegate_tool(world, entity, override=True)
+
+    tool_registry = world.get_component(entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    # Handler should be replaced with system's handler (different behavior)
+    result = await tool_registry.handlers["delegate"](
+        subagent_name="test-agent", task="test"
+    )
+    # System handler should execute delegation, not return "custom_result"
+    assert result != "custom_result", (
+        "Expected system handler replaced custom handler when override=True"
+    )
+    # Verify it's the real delegate handler by checking result format
+    assert isinstance(result, str), "Delegate handler must return string"
+
+
+async def test_backward_compatible_auto_registration_still_works() -> None:
+    """Test that existing process() auto-registration behavior is preserved."""
+    from ecs_agent.systems.subagent import SubagentSystem
+
+    world = World()
+    entity = world.create_entity()
+
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
+    registry = SubagentRegistryComponent(subagents={"test-agent": config})
+    world.add_component(entity, registry)
+    world.add_component(entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem()
+    # This is the EXISTING behavior - must still work!
+    await system.process(world)
+
+    tool_registry = world.get_component(entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    assert "delegate" in tool_registry.handlers, (
+        "Backward compatibility: process() must still auto-register delegate tool"
+    )
+    assert "delegate" in tool_registry.tools, (
+        "Backward compatibility: process() must still register delegate schema"
+    )
+
