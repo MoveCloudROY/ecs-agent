@@ -219,3 +219,4 @@ __marimo__/
 .sisyphus/
 ref/
 task-*.txt
+.evidence-task*
