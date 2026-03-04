@@ -9,13 +9,16 @@ from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
     OwnerComponent,
+    PermissionComponent,
     SubagentRegistryComponent,
     ToolRegistryComponent,
 )
-from ecs_agent.components.definitions import SkillComponent
+from ecs_agent.components.definitions import SkillComponent, SkillMetadata
 from ecs_agent.core.runner import Runner
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
+from ecs_agent.skills.manager import SkillManager
+from ecs_agent.skills.protocol import Skill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -24,12 +27,37 @@ from ecs_agent.types import (
     DelegationCompletedEvent,
     DelegationStartedEvent,
     EntityId,
+    InheritancePolicy,
     Message,
     SubagentConfig,
     ToolSchema,
 )
 
 logger = get_logger(__name__)
+
+
+class _InheritedSkill:
+    def __init__(
+        self, metadata: SkillMetadata, tools: dict[str, tuple[ToolSchema, Any]]
+    ) -> None:
+        self.name = metadata.name
+        self.description = metadata.description
+        self._tools = tools
+        self._system_prompt = (
+            "inherited skill prompt" if metadata.has_system_prompt else ""
+        )
+
+    def tools(self) -> dict[str, tuple[ToolSchema, Any]]:
+        return self._tools
+
+    def system_prompt(self) -> str:
+        return self._system_prompt
+
+    def install(self, world: World, entity_id: EntityId) -> None:
+        del world, entity_id
+
+    def uninstall(self, world: World, entity_id: EntityId) -> None:
+        del world, entity_id
 
 
 class SubagentSystem:
@@ -67,9 +95,7 @@ class SubagentSystem:
         # Validate entity has SubagentRegistryComponent and ToolRegistryComponent
         registry = world.get_component(entity_id, SubagentRegistryComponent)
         if registry is None:
-            raise ValueError(
-                f"Entity {entity_id} missing SubagentRegistryComponent"
-            )
+            raise ValueError(f"Entity {entity_id} missing SubagentRegistryComponent")
 
         tool_registry = world.get_component(entity_id, ToolRegistryComponent)
         if tool_registry is None:
@@ -89,9 +115,10 @@ class SubagentSystem:
 
         # Install handler (helper respects override parameter)
         self._install_delegate_handler(world, entity_id, tool_name, override)
+
     async def process(self, world: World) -> None:
         """Register delegate tool for entities with SubagentRegistryComponent.
-        
+
         Backward compatible: uses public installer API with default parameters.
         """
         for entity_id, components in world.query(
@@ -106,13 +133,16 @@ class SubagentSystem:
                 continue
 
             # Use public installer API
-            self.install_delegate_tool(world, entity_id, tool_name="delegate", override=False)
+            self.install_delegate_tool(
+                world, entity_id, tool_name="delegate", override=False
+            )
 
             logger.info(
                 "delegate_tool_registered",
                 entity_id=entity_id,
                 available_subagents=list(registry_comp.subagents.keys()),
             )
+
     def _build_delegate_tool_schema(self, subagent_names: list[str]) -> dict[str, Any]:
         """Build OpenAI-style function schema for the delegate tool."""
         del subagent_names
@@ -263,71 +293,11 @@ class SubagentSystem:
                     child_entity_id, OwnerComponent(owner_id=parent_entity_id)
                 )
 
-                if config.skills:
-                    parent_skill_comp = world.get_component(
-                        parent_entity_id, SkillComponent
-                    )
-                    parent_tool_reg = world.get_component(
-                        parent_entity_id, ToolRegistryComponent
-                    )
-
-                    if parent_skill_comp is not None and parent_tool_reg is not None:
-                        child_skill_comp = world.get_component(
-                            child_entity_id, SkillComponent
-                        )
-                        child_tool_reg = world.get_component(
-                            child_entity_id, ToolRegistryComponent
-                        )
-
-                        if child_skill_comp is None:
-                            child_skill_comp = SkillComponent(skills={})
-                            world.add_component(child_entity_id, child_skill_comp)
-
-                        if child_tool_reg is None:
-                            child_tool_reg = ToolRegistryComponent(
-                                tools={}, handlers={}
-                            )
-                            world.add_component(child_entity_id, child_tool_reg)
-
-                        for skill_name in config.skills:
-                            if skill_name in parent_skill_comp.skills:
-                                child_skill_comp.skills[skill_name] = (
-                                    parent_skill_comp.skills[skill_name]
-                                )
-
-                                metadata = parent_skill_comp.skills[skill_name]
-                                for tool_name in metadata.tool_names:
-                                    if tool_name in parent_tool_reg.tools:
-                                        child_tool_reg.tools[tool_name] = (
-                                            parent_tool_reg.tools[tool_name]
-                                        )
-                                    if tool_name in parent_tool_reg.handlers:
-                                        child_tool_reg.handlers[tool_name] = (
-                                            parent_tool_reg.handlers[tool_name]
-                                        )
-
-                                logger.info(
-                                    "skill_copied_to_child",
-                                    parent_entity=parent_entity_id,
-                                    child_entity=child_entity_id,
-                                    skill_name=skill_name,
-                                )
-                            else:
-                                logger.warning(
-                                    "skill_not_found_on_parent",
-                                    parent_entity=parent_entity_id,
-                                    child_entity=child_entity_id,
-                                    skill_name=skill_name,
-                                )
-                    else:
-                        logger.warning(
-                            "parent_missing_skill_components",
-                            parent_entity=parent_entity_id,
-                            has_skill_comp=parent_skill_comp is not None,
-                            has_tool_reg=parent_tool_reg is not None,
-                        )
                 child_world, child_world_entity_id = self._assemble_child_world(
-                    world, parent_entity_id, config
+                    world,
+                    parent_entity_id,
+                    config,
+                    parent_child_entity=child_entity_id,
                 )
                 result = await self._execute_delegation(
                     child_world,
@@ -389,6 +359,26 @@ class SubagentSystem:
                 )
                 return error_msg
 
+            except ValueError as exc:
+                error_msg = str(exc)
+                logger.error(
+                    "delegation_exception",
+                    parent_entity=parent_entity_id,
+                    subagent_name=subagent_name,
+                    exception=error_msg,
+                )
+                await self._publish_delegation_events(
+                    world,
+                    parent_entity_id,
+                    subagent_name,
+                    correlation_id=correlation_id,
+                    traceparent=traceparent,
+                    result=error_msg,
+                    success=False,
+                    error=error_msg,
+                )
+                raise
+
             except Exception as exc:
                 error_msg = f"Error during delegation: {exc}"
                 logger.error(
@@ -429,9 +419,25 @@ class SubagentSystem:
         parent_world: World,
         parent_entity: EntityId,
         config: SubagentConfig,
+        parent_child_entity: EntityId | None = None,
     ) -> tuple[World, EntityId]:
         """Assemble isolated child world and runnable child entity."""
-        _ = parent_world
+        policy = config.inheritance_policy
+        parent_llm = parent_world.get_component(parent_entity, LLMComponent)
+        parent_tools = parent_world.get_component(parent_entity, ToolRegistryComponent)
+        parent_permissions = parent_world.get_component(
+            parent_entity, PermissionComponent
+        )
+        parent_skills = parent_world.get_component(parent_entity, SkillComponent)
+
+        effective_system_prompt = config.system_prompt
+        if (
+            policy.enabled
+            and policy.inherit_system_prompt
+            and not effective_system_prompt
+            and parent_llm is not None
+        ):
+            effective_system_prompt = parent_llm.system_prompt
 
         child_world = World()
         child_world_entity_id = child_world.create_entity()
@@ -440,7 +446,7 @@ class SubagentSystem:
             LLMComponent(
                 provider=config.provider,
                 model=config.model,
-                system_prompt=config.system_prompt,
+                system_prompt=effective_system_prompt,
             ),
         )
         child_world.add_component(
@@ -451,6 +457,82 @@ class SubagentSystem:
             child_world_entity_id,
             OwnerComponent(owner_id=parent_entity),
         )
+
+        if parent_child_entity is not None:
+            parent_world.add_component(
+                parent_child_entity,
+                LLMComponent(
+                    provider=config.provider,
+                    model=config.model,
+                    system_prompt=effective_system_prompt,
+                ),
+            )
+
+        target_entities: list[tuple[World, EntityId]] = [
+            (child_world, child_world_entity_id)
+        ]
+        if parent_child_entity is not None:
+            target_entities.append((parent_world, parent_child_entity))
+
+        if policy.enabled and policy.inherit_tools:
+            for target_world, target_entity in target_entities:
+                existing_registry = target_world.get_component(
+                    target_entity, ToolRegistryComponent
+                )
+                if existing_registry is None:
+                    target_world.add_component(
+                        target_entity,
+                        ToolRegistryComponent(tools={}, handlers={}),
+                    )
+
+        skill_manager = SkillManager()
+        explicit_skills = list(dict.fromkeys(config.skills))
+        inherited_tool_names = self._effective_inherited_tool_names(policy)
+        inherited_skills = self._skills_for_inherited_tools(
+            inherited_tool_names,
+            parent_skills,
+        )
+        required_skills = list(dict.fromkeys(explicit_skills + inherited_skills))
+
+        resolved_skills: list[Skill] = []
+        for skill_name in required_skills:
+            skill = self._resolve_parent_skill(
+                parent_entity,
+                skill_name,
+                parent_skills,
+                parent_tools,
+                policy,
+            )
+            if skill is not None:
+                resolved_skills.append(skill)
+
+        for target_world, target_entity in target_entities:
+            for skill in resolved_skills:
+                skill_manager.install(target_world, target_entity, skill)
+
+        if policy.enabled and parent_tools is not None:
+            for tool_name in inherited_tool_names:
+                self._inherit_tool_to_target_entities(
+                    tool_name,
+                    parent_tools,
+                    target_entities,
+                    policy,
+                )
+
+        if (
+            policy.enabled
+            and policy.inherit_permissions
+            and parent_permissions is not None
+        ):
+            for target_world, target_entity in target_entities:
+                target_world.add_component(
+                    target_entity,
+                    PermissionComponent(
+                        allowed_tools=list(parent_permissions.allowed_tools),
+                        denied_tools=list(parent_permissions.denied_tools),
+                    ),
+                )
+
         child_world.register_system(ReasoningSystem(priority=0), priority=0)
         child_world.register_system(MemorySystem(), priority=10)
         child_world.register_system(
@@ -458,6 +540,113 @@ class SubagentSystem:
             priority=99,
         )
         return child_world, child_world_entity_id
+
+    def _effective_inherited_tool_names(self, policy: InheritancePolicy) -> list[str]:
+        if not policy.enabled:
+            return []
+
+        if policy.allow_delegate_tool:
+            return list(policy.inherit_tools)
+
+        return [
+            tool_name for tool_name in policy.inherit_tools if tool_name != "delegate"
+        ]
+
+    def _skills_for_inherited_tools(
+        self,
+        inherited_tool_names: list[str],
+        parent_skills: SkillComponent | None,
+    ) -> list[str]:
+        if parent_skills is None or not inherited_tool_names:
+            return []
+
+        inherited_tool_set = set(inherited_tool_names)
+        inherited_skill_names: list[str] = []
+        for metadata in parent_skills.skills.values():
+            if any(
+                tool_name in inherited_tool_set for tool_name in metadata.tool_names
+            ):
+                inherited_skill_names.append(metadata.name)
+        return inherited_skill_names
+
+    def _resolve_parent_skill(
+        self,
+        parent_entity: EntityId,
+        skill_name: str,
+        parent_skills: SkillComponent | None,
+        parent_tools: ToolRegistryComponent | None,
+        policy: InheritancePolicy,
+    ) -> Skill | None:
+        if parent_skills is None or parent_tools is None:
+            return self._handle_missing_skill(parent_entity, skill_name, policy)
+
+        metadata = parent_skills.skills.get(skill_name)
+        if metadata is None:
+            return self._handle_missing_skill(parent_entity, skill_name, policy)
+
+        tools: dict[str, tuple[ToolSchema, Any]] = {}
+        for tool_name in metadata.tool_names:
+            schema = parent_tools.tools.get(tool_name)
+            handler = parent_tools.handlers.get(tool_name)
+            if schema is None or handler is None:
+                return self._handle_missing_skill(parent_entity, skill_name, policy)
+            tools[tool_name] = (schema, handler)
+        return _InheritedSkill(metadata, tools)
+
+    def _handle_missing_skill(
+        self,
+        parent_entity: EntityId,
+        skill_name: str,
+        policy: InheritancePolicy,
+    ) -> Skill | None:
+        message = f"Missing skill '{skill_name}' on parent entity {parent_entity} during subagent delegation"
+        if policy.missing_skill_policy == "error":
+            raise ValueError(message)
+        if policy.missing_skill_policy == "warn":
+            logger.warning(
+                "subagent_missing_skill",
+                parent_entity=parent_entity,
+                skill_name=skill_name,
+                message=message,
+            )
+            return None
+        raise ValueError(
+            f"Invalid missing_skill_policy '{policy.missing_skill_policy}' for subagent inheritance"
+        )
+
+    def _inherit_tool_to_target_entities(
+        self,
+        tool_name: str,
+        parent_tools: ToolRegistryComponent,
+        target_entities: list[tuple[World, EntityId]],
+        policy: InheritancePolicy,
+    ) -> None:
+        schema = parent_tools.tools.get(tool_name)
+        handler = parent_tools.handlers.get(tool_name)
+        if schema is None or handler is None:
+            return
+
+        for target_world, target_entity in target_entities:
+            registry = target_world.get_component(target_entity, ToolRegistryComponent)
+            if registry is None:
+                registry = ToolRegistryComponent(tools={}, handlers={})
+                target_world.add_component(target_entity, registry)
+
+            has_conflict = tool_name in registry.tools or tool_name in registry.handlers
+            if has_conflict:
+                if policy.tool_conflict_policy == "skip":
+                    continue
+                if policy.tool_conflict_policy == "error":
+                    raise ValueError(f"Tool inheritance conflict for '{tool_name}'")
+                if policy.tool_conflict_policy != "override":
+                    raise ValueError(
+                        f"Invalid tool_conflict_policy '{policy.tool_conflict_policy}'"
+                    )
+            elif policy.tool_conflict_policy == "error":
+                raise ValueError(f"Tool inheritance conflict for '{tool_name}'")
+
+            registry.tools[tool_name] = schema
+            registry.handlers[tool_name] = handler
 
     async def _execute_delegation(
         self,
