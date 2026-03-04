@@ -247,6 +247,42 @@ class WorldSerializer:
                 for msg in normalized_data.get("messages", [])
             ]
 
+        # SubagentRegistryComponent: reconstruct SubagentConfig and InheritancePolicy
+        if component_name == SubagentRegistryComponent.__name__:
+            from ecs_agent.types import SubagentConfig, InheritancePolicy
+            subagents_dict = {}
+            for name, config_data in normalized_data.get("subagents", {}).items():
+                # Reconstruct InheritancePolicy from dict
+                policy_data = config_data.get("inheritance_policy", {})
+                inheritance_policy = InheritancePolicy(**policy_data)
+                
+                # Reconstruct SubagentConfig with InheritancePolicy
+                # Provider needs to be resolved (currently dict or placeholder)
+                provider_value = config_data.get("provider")
+                if provider_value == NON_SERIALIZABLE_PLACEHOLDER:
+                    # Try to get provider from providers dict
+                    model = config_data.get("model")
+                    model_str = model if isinstance(model, str) else "default"
+                    provider = providers.get(model_str, providers.get("default"))
+                    if provider is None:
+                        raise ValueError(
+                            f"No provider configured for subagent '{name}' model '{model}'"
+                        )
+                else:
+                    provider = provider_value
+                
+                subagent_config = SubagentConfig(
+                    name=config_data["name"],
+                    provider=provider,
+                    model=config_data["model"],
+                    system_prompt=config_data.get("system_prompt", ""),
+                    skills=config_data.get("skills", []),
+                    max_ticks=config_data.get("max_ticks", 10),
+                    inheritance_policy=inheritance_policy,
+                )
+                subagents_dict[name] = subagent_config
+            normalized_data["subagents"] = subagents_dict
+
         return normalized_data
 
     @staticmethod

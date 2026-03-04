@@ -406,6 +406,16 @@ async def test_all_new_components_serializable() -> None:
     assert registry is not None
     assert "test" in registry.subagents
 
+    # Verify SubagentConfig inheritance_policy is serializable
+    restored_config = registry.subagents["test"]
+    assert restored_config.inheritance_policy is not None
+    assert restored_config.inheritance_policy.enabled is True
+    assert restored_config.inheritance_policy.inherit_system_prompt is True
+    assert restored_config.inheritance_policy.inherit_tools == []
+    assert restored_config.inheritance_policy.inherit_permissions is False
+    assert restored_config.inheritance_policy.allow_delegate_tool is True
+    assert restored_config.inheritance_policy.tool_conflict_policy == "skip"
+    assert restored_config.inheritance_policy.missing_skill_policy == "warn"
 
 
 def test_subagent_doc_consistency_stale_symbols() -> None:
@@ -418,22 +428,18 @@ def test_subagent_doc_consistency_stale_symbols() -> None:
     """
     doc_path = Path("docs/features/subagent.md")
     assert doc_path.exists(), f"Doc file not found: {doc_path}"
-    
+
     doc_content = doc_path.read_text()
-    
+
     # Check for stale symbol: DELEGATE_TOOL_SCHEMA
-    assert (
-        "DELEGATE_TOOL_SCHEMA" not in doc_content
-    ), (
+    assert "DELEGATE_TOOL_SCHEMA" not in doc_content, (
         "Docs reference DELEGATE_TOOL_SCHEMA which does not exist. "
         "SubagentSystem auto-registers delegate tool inline. "
         "See docs/features/subagent.md line ~78."
     )
-    
+
     # Check for stale symbol: delegate_tool_handler
-    assert (
-        "delegate_tool_handler" not in doc_content
-    ), (
+    assert "delegate_tool_handler" not in doc_content, (
         "Docs reference delegate_tool_handler which does not exist. "
         "The delegate tool is auto-registered by SubagentSystem without manual handler setup. "
         "See docs/features/subagent.md lines ~102, ~107."
@@ -449,22 +455,109 @@ def test_subagent_doc_consistency_event_subscriptions() -> None:
     """
     doc_path = Path("docs/features/subagent.md")
     assert doc_path.exists(), f"Doc file not found: {doc_path}"
-    
+
     doc_content = doc_path.read_text()
-    
+
     # Check for outdated string-topic subscriptions
     stale_patterns = [
-        ('world.event_bus.subscribe("delegation_started"', "subscription with string 'delegation_started'"),
-        ('world.event_bus.subscribe("delegation_completed"', "subscription with string 'delegation_completed'"),
+        (
+            'world.event_bus.subscribe("delegation_started"',
+            "subscription with string 'delegation_started'",
+        ),
+        (
+            'world.event_bus.subscribe("delegation_completed"',
+            "subscription with string 'delegation_completed'",
+        ),
     ]
-    
+
     for stale_pattern, description in stale_patterns:
-        assert (
-            stale_pattern not in doc_content
-        ), (
+        assert stale_pattern not in doc_content, (
             f"Docs use outdated {description}. "
             f"Should use typed event classes instead: "
             f"world.event_bus.subscribe(DelegationStartedEvent, handler) or "
             f"world.event_bus.subscribe(DelegationCompletedEvent, handler). "
             f"See EventBus.subscribe() signature in src/ecs_agent/core/event_bus.py."
         )
+
+
+def test_subagent_doc_consistency_installer_api() -> None:
+    """Fail if docs do not mention explicit delegate tool installer API.
+
+    This test verifies that documentation explains the automatic delegate tool
+    registration by SubagentSystem, and ideally mentions backward-compatible
+    behavior where tools are auto-registered without manual setup.
+    """
+    doc_path = Path("docs/features/subagent.md")
+    if not doc_path.exists():
+        pytest.skip(f"Subagent docs not found at {doc_path}")
+
+    doc_content = doc_path.read_text()
+    doc_content_lower = doc_content.lower()
+
+    # Check for delegate tool auto-registration mention (flexible substring check)
+    has_delegate_mention = "delegate" in doc_content
+    has_auto_mention = "auto" in doc_content_lower or "automatic" in doc_content_lower
+    has_register_mention = "register" in doc_content_lower
+
+    assert has_delegate_mention and (has_auto_mention or has_register_mention), (
+        "Docs should clearly mention the delegate tool and its automatic registration. "
+        "Expected to find 'delegate' (tool name) and either 'auto' or 'register' (mechanism). "
+        "SubagentSystem auto-registers the delegate tool for entities with both "
+        "SubagentRegistryComponent and ToolRegistryComponent."
+    )
+
+    # Check for backward compatibility mention (auto-registration without manual setup)
+    has_backward_compat = (
+        ("auto" in doc_content_lower or "automatic" in doc_content_lower)
+        and "register" in doc_content_lower
+    ) or "without manual" in doc_content_lower
+
+    assert has_backward_compat, (
+        "Docs should mention backward-compatible automatic delegate tool registration. "
+        "Users should not need to manually register the delegate tool via ToolRegistryComponent. "
+        "SubagentSystem handles this automatically."
+    )
+
+
+def test_subagent_doc_consistency_inheritance_policy() -> None:
+    """Fail if docs do not explain InheritancePolicy configuration.
+
+    This test verifies that documentation explains the InheritancePolicy fields
+    and behaviors, including enabled flag, inheritance toggles, tool conflict handling,
+    and skill-level policies.
+    """
+    doc_path = Path("docs/features/subagent.md")
+    if not doc_path.exists():
+        pytest.skip(f"Subagent docs not found at {doc_path}")
+
+    doc_content = doc_path.read_text()
+    doc_content_lower = doc_content.lower()
+
+    # Check for inheritance policy mention
+    assert "inherit" in doc_content_lower or "policy" in doc_content_lower, (
+        "Docs should mention InheritancePolicy or inheritance behavior. "
+        "SubagentConfig includes an inheritance_policy field that controls what parent "
+        "capabilities are inherited by child agents."
+    )
+
+    # Check for inherit_tools or tool inheritance mention
+    has_tool_inheritance = "inherit_tool" in doc_content_lower or (
+        "tool" in doc_content_lower and "inherit" in doc_content_lower
+    )
+
+    assert has_tool_inheritance, (
+        "Docs should explain tool inheritance. "
+        "InheritancePolicy.inherit_tools field controls which parent tools are inherited by child."
+    )
+
+    # Check for conflict resolution mention
+    has_conflict_mention = (
+        "conflict" in doc_content_lower
+        or "override" in doc_content_lower
+        or "skip" in doc_content_lower
+    )
+
+    assert has_conflict_mention, (
+        "Docs should explain conflict resolution for tool inheritance. "
+        "InheritancePolicy.tool_conflict_policy controls resolution (skip/error/override)."
+    )

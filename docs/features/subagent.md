@@ -281,6 +281,188 @@ result = "Error: Subagent 'researcher' failed: <error details>"
 
 The parent can handle this via normal tool result processing.
 
+## Inheritance Policy
+
+The `InheritancePolicy` controls which capabilities are inherited from parent to child agents during delegation. This enables parent-to-child capability sharing while maintaining isolation.
+
+### Configuration
+
+```python
+from ecs_agent.types import InheritancePolicy, SubagentConfig
+
+policy = InheritancePolicy(
+    enabled=True,                      # Master toggle for inheritance
+    inherit_system_prompt=True,        # Append parent system prompt to child
+    inherit_tools=["search", "read"],  # Whitelist of tool names to inherit
+    inherit_permissions=False,         # Inherit parent permission restrictions
+    allow_delegate_tool=True,          # Enable delegate tool on child
+    tool_conflict_policy="skip",       # How to handle tool name conflicts: skip|error|override
+    missing_skill_policy="warn",       # How to handle missing inherited skills: warn|error
+)
+
+config = SubagentConfig(
+    name="researcher",
+    provider=provider,
+    model="gpt-4o",
+    system_prompt="You are a research assistant.",
+    inheritance_policy=policy,  # Attach policy to config
+)
+```
+
+### Policy Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `bool` | `True` | Master toggle. If `False`, all inheritance is disabled. |
+| `inherit_system_prompt` | `bool` | `True` | Append parent's system prompt to child's. Merged with `\n\n` separator. |
+| `inherit_tools` | `list[str]` | `[]` | Whitelist of tool names to inherit from parent. Empty list = no tools inherited. |
+| `inherit_permissions` | `bool` | `False` | Copy parent's `PermissionComponent` to child (tool whitelist/blacklist). |
+| `allow_delegate_tool` | `bool` | `True` | Enable `delegate` tool on child (allows recursive delegation). |
+| `tool_conflict_policy` | `str` | `"skip"` | How to resolve tool name conflicts: `"skip"` (ignore duplicate), `"error"` (raise), `"override"` (replace). |
+| `missing_skill_policy` | `str` | `"warn"` | How to handle missing parent skills: `"warn"` (log warning), `"error"` (raise). |
+
+### Inheritance Behavior
+
+#### System Prompt Inheritance
+
+When `inherit_system_prompt=True`, the parent's system prompt is **appended** to the child's:
+
+```python
+# Parent system prompt
+parent_prompt = "You are a collaborative agent. Always verify sources."
+
+# Child config
+child_prompt = "You are a research specialist."
+
+# Effective child prompt (merged)
+effective_prompt = "You are a research specialist.\n\nYou are a collaborative agent. Always verify sources."
+```
+
+#### Tool Inheritance
+
+Only tools explicitly listed in `inherit_tools` are copied from parent to child:
+
+```python
+# Parent has tools: ["search", "read", "write", "calculate"]
+
+policy = InheritancePolicy(
+    enabled=True,
+    inherit_tools=["search", "read"],  # Only these two are inherited
+)
+
+# Child will receive: ["search", "read"]
+# Child will NOT receive: ["write", "calculate"]
+```
+
+**Tool Conflict Resolution:**
+
+- `skip` (default): If child already has a tool with the same name, parent's tool is ignored
+- `error`: Raise `ValueError` if conflict detected
+- `override`: Parent's tool replaces child's tool
+
+#### Permission Inheritance
+
+When `inherit_permissions=True`, the parent's `PermissionComponent` is copied to the child:
+
+```python
+# Parent has PermissionComponent with whitelist=["search", "read"]
+
+policy = InheritancePolicy(
+    enabled=True,
+    inherit_permissions=True,
+)
+
+# Child receives identical PermissionComponent
+# Child can only use tools in ["search", "read"]
+```
+
+#### Skill-Based Inheritance
+
+If inherited tools come from skills, the SubagentSystem attempts to install those skills on the child:
+
+```python
+# Parent has SkillComponent with "web-search" skill (provides "search" tool)
+
+policy = InheritancePolicy(
+    enabled=True,
+    inherit_tools=["search"],  # Tool from "web-search" skill
+)
+
+# SubagentSystem will:
+# 1. Detect "search" tool comes from "web-search" skill
+# 2. Attempt to install "web-search" skill on child
+# 3. If skill is missing from parent, handle per missing_skill_policy
+```
+
+**Missing Skill Handling:**
+
+- `warn` (default): Log warning and continue (tool will not be available on child)
+- `error`: Raise `ValueError` and fail delegation
+
+### Usage Examples
+
+#### Example 1: Inherit Search Tool Only
+
+```python
+policy = InheritancePolicy(
+    enabled=True,
+    inherit_tools=["search"],  # Only search tool
+    inherit_system_prompt=False,  # No prompt inheritance
+)
+
+config = SubagentConfig(
+    name="researcher",
+    provider=provider,
+    model="gpt-4o",
+    system_prompt="You are a research assistant.",
+    inheritance_policy=policy,
+)
+```
+
+#### Example 2: Full Capability Sharing
+
+```python
+policy = InheritancePolicy(
+    enabled=True,
+    inherit_system_prompt=True,
+    inherit_tools=["search", "read", "write", "calculate"],
+    inherit_permissions=True,
+    tool_conflict_policy="override",
+)
+
+config = SubagentConfig(
+    name="worker",
+    provider=provider,
+    model="gpt-4o",
+    system_prompt="You are a worker agent.",
+    inheritance_policy=policy,
+)
+```
+
+#### Example 3: Isolated Child (No Inheritance)
+
+```python
+policy = InheritancePolicy(
+    enabled=False,  # Disable all inheritance
+)
+
+config = SubagentConfig(
+    name="isolated-agent",
+    provider=provider,
+    model="gpt-4o",
+    system_prompt="You are isolated.",
+    inheritance_policy=policy,
+)
+```
+
+### Best Practices
+
+1. **Whitelist Tools Explicitly**: Only inherit tools the child actually needs. Avoid inheriting all parent tools.
+2. **Use `skip` for Conflict Policy**: Prevents accidental tool overwrites. Use `override` only when intentional.
+3. **Test Missing Skills**: Ensure parent has required skills installed before delegation if using `inherit_tools`.
+4. **Disable Recursive Delegation**: Set `allow_delegate_tool=False` to prevent children from spawning sub-children.
+
+
 ## Best Practices
 
 ### 1. Limit Subagent max_ticks
