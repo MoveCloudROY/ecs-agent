@@ -7,7 +7,7 @@ from ecs_agent.core.entity import EntityIdGenerator
 from ecs_agent.core.event_bus import EventBus
 from ecs_agent.core.query import Query
 from ecs_agent.core.system import System, SystemExecutor
-from ecs_agent.types import EntityId
+from ecs_agent.types import EntityId, SystemHandle
 
 from ecs_agent.logging import STANDARD_EVENT_NAMES, get_logger
 
@@ -52,10 +52,22 @@ class World:
     def delete_entity(self, entity_id: EntityId) -> None:
         self._components.delete_entity(entity_id)
 
-    def register_system(self, system: System, priority: int) -> None:
-        self._systems.register(system, priority)
+    def register_system(self, system: System, priority: int) -> SystemHandle:
+        return self._systems.register(system, priority)
+
+    def remove_system(self, handle: SystemHandle) -> None:
+        self._systems.remove(handle)
+
+    def replace_system(
+        self, handle: SystemHandle, system: System, priority: int | None = None
+    ) -> None:
+        self._systems.replace(handle, system, priority)
+
+    def apply_pending_system_operations(self) -> None:
+        self._systems.apply_queued_operations()
 
     async def process(self) -> None:
+        self.apply_pending_system_operations()
         await self._systems.execute(self)
 
     def query(

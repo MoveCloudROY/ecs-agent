@@ -12,10 +12,13 @@ from ecs_agent.serialization import WorldSerializer
 
 logger = get_logger(__name__)
 
+
 class Runner:
     """Orchestrates the main execution loop."""
 
-    async def run(self, world: World, max_ticks: int | None = 100, start_tick: int = 0) -> None:
+    async def run(
+        self, world: World, max_ticks: int | None = 100, start_tick: int = 0
+    ) -> None:
         """Run the main execution loop until terminal condition.
 
         Executes world.process() repeatedly until either:
@@ -34,7 +37,11 @@ class Runner:
                        Pass None for unlimited execution.
             start_tick: Starting tick count for resume (default 0)
         """
-        logger.info(STANDARD_EVENT_NAMES["RUN_START"], max_ticks=max_ticks, start_tick=start_tick)
+        logger.info(
+            STANDARD_EVENT_NAMES["RUN_START"],
+            max_ticks=max_ticks,
+            start_tick=start_tick,
+        )
 
         # Create or update RunnerStateComponent
         runner_state_entities = list(world.query(RunnerStateComponent))
@@ -57,6 +64,7 @@ class Runner:
             tick_start_time = time.monotonic()
 
             await world.process()
+            world.apply_pending_system_operations()
 
             tick_duration_ms = (time.monotonic() - tick_start_time) * 1000
             logger.debug(
@@ -77,7 +85,9 @@ class Runner:
                 for eid, _ in world.query(TerminalComponent)
             )
             if has_terminal:
-                logger.info(STANDARD_EVENT_NAMES["RUN_COMPLETE"], reason="terminal_component")
+                logger.info(
+                    STANDARD_EVENT_NAMES["RUN_COMPLETE"], reason="terminal_component"
+                )
                 return
 
     def save_checkpoint(self, world: World, path: str | Path) -> None:

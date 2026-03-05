@@ -2,10 +2,10 @@
 
 import pytest
 
-from ecs_agent.components.definitions import TerminalComponent
+from ecs_agent.components.definitions import RunnerStateComponent, TerminalComponent
 from ecs_agent.core.runner import Runner
-from ecs_agent.core.system import System
 from ecs_agent.core.world import World
+from ecs_agent.types import SystemHandle
 
 
 class CounterSystem:
@@ -32,6 +32,46 @@ class TerminateAtTickSystem:
         if self.tick_count >= self.terminate_at_tick:
             entity_id = world.create_entity()
             world.add_component(entity_id, TerminalComponent(reason="test_termination"))
+
+
+class TickAwareLoggingSystem:
+    def __init__(self, name: str, log: list[str]) -> None:
+        self._name = name
+        self._log = log
+
+    async def process(self, world: World) -> None:
+        runner_state_entities = list(world.query(RunnerStateComponent))
+        _, (runner_state,) = runner_state_entities[0]
+        self._log.append(f"{self._name}:{runner_state.current_tick}")
+
+
+class ReplaceTargetSystem:
+    def __init__(self, target: SystemHandle, replacement_log: list[str]) -> None:
+        self._target = target
+        self._replacement_log = replacement_log
+        self._has_replaced = False
+
+    async def process(self, world: World) -> None:
+        if self._has_replaced:
+            return
+        world.replace_system(
+            self._target,
+            TickAwareLoggingSystem(name="new", log=self._replacement_log),
+            priority=1,
+        )
+        self._has_replaced = True
+
+
+class RemoveTargetSystem:
+    def __init__(self, target: SystemHandle) -> None:
+        self._target = target
+        self._has_removed = False
+
+    async def process(self, world: World) -> None:
+        if self._has_removed:
+            return
+        world.remove_system(self._target)
+        self._has_removed = True
 
 
 class TestRunner:
@@ -80,7 +120,7 @@ class TestRunner:
         counter = CounterSystem()
         world.register_system(counter, priority=0)
 
-        entity_id = world.create_entity()
+        world.create_entity()
 
         await runner.run(world, max_ticks=10)
 
@@ -99,7 +139,7 @@ class TestRunner:
         counter = CounterSystem()
         world.register_system(counter, priority=0)
 
-        entity_id = world.create_entity()
+        world.create_entity()
 
         await runner.run(world, max_ticks=5)
 
@@ -114,7 +154,7 @@ class TestRunner:
         counter = CounterSystem()
         world.register_system(counter, priority=0)
 
-        entity_id = world.create_entity()
+        world.create_entity()
 
         await runner.run(world)
 
@@ -144,16 +184,47 @@ class TestRunner:
         counter = CounterSystem()
         world.register_system(counter, priority=0)
 
-        entity_id = world.create_entity()
+        world.create_entity()
 
         await runner.run(world, max_ticks=7)
 
         assert counter.run_count == 7
 
+    @pytest.mark.asyncio
+    async def test_tick_boundary_system_replace_does_not_mutate_current_tick(
+        self, world: World, runner: Runner
+    ) -> None:
+        log: list[str] = []
+
+        replaced_handle = world.register_system(
+            TickAwareLoggingSystem(name="old", log=log), priority=1
+        )
+        world.register_system(
+            ReplaceTargetSystem(target=replaced_handle, replacement_log=log), priority=0
+        )
+
+        await runner.run(world, max_ticks=2)
+
+        assert log == ["old:0", "new:1"]
+
+    @pytest.mark.asyncio
+    async def test_tick_boundary_system_remove_applies_on_next_tick(
+        self, world: World, runner: Runner
+    ) -> None:
+        log: list[str] = []
+
+        removed_handle = world.register_system(
+            TickAwareLoggingSystem(name="victim", log=log), priority=1
+        )
+        world.register_system(RemoveTargetSystem(target=removed_handle), priority=0)
+
+        await runner.run(world, max_ticks=2)
+
+        assert log == ["victim:0"]
+
 
 class TestRunnerLogging:
     """Test Runner lifecycle logging."""
-
 
     @pytest.mark.asyncio
     async def test_runner_emits_run_start_event(self, capsys) -> None:
@@ -165,7 +236,11 @@ class TestRunnerLogging:
         configure_logging(json_output=True, level="INFO")
 
         # Force reimport to pick up new logger config
-        for mod in ["ecs_agent.core.runner", "ecs_agent.core.world", "ecs_agent.core.system"]:
+        for mod in [
+            "ecs_agent.core.runner",
+            "ecs_agent.core.world",
+            "ecs_agent.core.system",
+        ]:
             sys.modules.pop(mod, None)
 
         from ecs_agent.core.world import World
@@ -183,7 +258,9 @@ class TestRunnerLogging:
         for line in captured.out.strip().split("\n"):
             if line.strip() and line.strip().startswith("{"):
                 events.append(json.loads(line))
-        run_start_events = [e for e in events if e.get("event") == STANDARD_EVENT_NAMES["RUN_START"]]
+        run_start_events = [
+            e for e in events if e.get("event") == STANDARD_EVENT_NAMES["RUN_START"]
+        ]
 
         assert len(run_start_events) >= 1
         event = run_start_events[0]
@@ -200,7 +277,11 @@ class TestRunnerLogging:
         configure_logging(json_output=True, level="INFO")
 
         # Force reimport to pick up new logger config
-        for mod in ["ecs_agent.core.runner", "ecs_agent.core.world", "ecs_agent.core.system"]:
+        for mod in [
+            "ecs_agent.core.runner",
+            "ecs_agent.core.world",
+            "ecs_agent.core.system",
+        ]:
             sys.modules.pop(mod, None)
 
         from ecs_agent.core.world import World
@@ -219,7 +300,9 @@ class TestRunnerLogging:
         for line in captured.out.strip().split("\n"):
             if line.strip() and line.strip().startswith("{"):
                 events.append(json.loads(line))
-        run_complete_events = [e for e in events if e.get("event") == STANDARD_EVENT_NAMES["RUN_COMPLETE"]]
+        run_complete_events = [
+            e for e in events if e.get("event") == STANDARD_EVENT_NAMES["RUN_COMPLETE"]
+        ]
 
         assert len(run_complete_events) >= 1
         event = run_complete_events[0]
@@ -235,7 +318,11 @@ class TestRunnerLogging:
         configure_logging(json_output=True, level="DEBUG")
 
         # Force reimport to pick up new logger config
-        for mod in ["ecs_agent.core.runner", "ecs_agent.core.world", "ecs_agent.core.system"]:
+        for mod in [
+            "ecs_agent.core.runner",
+            "ecs_agent.core.world",
+            "ecs_agent.core.system",
+        ]:
             sys.modules.pop(mod, None)
 
         from ecs_agent.core.world import World
@@ -254,8 +341,12 @@ class TestRunnerLogging:
         for line in captured.out.strip().split("\n"):
             if line.strip() and line.strip().startswith("{"):
                 events.append(json.loads(line))
-        tick_start_events = [e for e in events if e.get("event") == STANDARD_EVENT_NAMES["TICK_START"]]
-        tick_complete_events = [e for e in events if e.get("event") == STANDARD_EVENT_NAMES["TICK_COMPLETE"]]
+        tick_start_events = [
+            e for e in events if e.get("event") == STANDARD_EVENT_NAMES["TICK_START"]
+        ]
+        tick_complete_events = [
+            e for e in events if e.get("event") == STANDARD_EVENT_NAMES["TICK_COMPLETE"]
+        ]
 
         # Should have 3 tick_start and 3 tick_complete events
         assert len(tick_start_events) == 3
@@ -276,7 +367,11 @@ class TestRunnerLogging:
         configure_logging(json_output=True, level="DEBUG")
 
         # Force reimport to pick up new logger config
-        for mod in ["ecs_agent.core.runner", "ecs_agent.core.world", "ecs_agent.core.system"]:
+        for mod in [
+            "ecs_agent.core.runner",
+            "ecs_agent.core.world",
+            "ecs_agent.core.system",
+        ]:
             sys.modules.pop(mod, None)
 
         from ecs_agent.core.world import World
@@ -295,7 +390,9 @@ class TestRunnerLogging:
         for line in captured.out.strip().split("\n"):
             if line.strip() and line.strip().startswith("{"):
                 events.append(json.loads(line))
-        tick_complete_events = [e for e in events if e.get("event") == STANDARD_EVENT_NAMES["TICK_COMPLETE"]]
+        tick_complete_events = [
+            e for e in events if e.get("event") == STANDARD_EVENT_NAMES["TICK_COMPLETE"]
+        ]
 
         assert len(tick_complete_events) >= 1
         event = tick_complete_events[0]
