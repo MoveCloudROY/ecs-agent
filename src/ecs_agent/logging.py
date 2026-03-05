@@ -66,19 +66,20 @@ REQUIRED_FIELDS: dict[str, list[str]] = {
 # Level Policy: Log level guidelines by operation category
 LEVEL_POLICY: dict[str, str] = {
     "high_frequency": "DEBUG",  # Component reads, queries, frequent operations
-    "lifecycle": "INFO",        # System start/stop, entity creation, checkpoints
-    "anomalies": "WARNING",     # Retries, unexpected states, performance issues
-    "failures": "ERROR",        # Tool failures, system errors, exceptions
+    "lifecycle": "INFO",  # System start/stop, entity creation, checkpoints
+    "anomalies": "WARNING",  # Retries, unexpected states, performance issues
+    "failures": "ERROR",  # Tool failures, system errors, exceptions
 }
 
 # Sensitive Data Policy: Forbidden fields (must NOT appear in logs)
 FORBIDDEN_FIELDS: list[str] = [
-    "content",      # Raw conversation/message content
-    "arguments",    # Raw tool call arguments
-    "api_key",      # API keys
-    "token",        # Auth tokens
-    "payload",      # Full HTTP/checkpoint payloads
+    "content",  # Raw conversation/message content
+    "arguments",  # Raw tool call arguments
+    "api_key",  # API keys
+    "token",  # Auth tokens
+    "payload",  # Full HTTP/checkpoint payloads
 ]
+
 
 def _add_caller_info(
     logger: Any,
@@ -231,6 +232,25 @@ def configure_logging(
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
     )
+
+    _refresh_module_loggers()
+
+
+def _refresh_module_loggers() -> None:
+    for module in list(sys.modules.values()):
+        if module is None:
+            continue
+        module_name = getattr(module, "__name__", None)
+        if not isinstance(module_name, str):
+            continue
+        if not module_name.startswith("ecs_agent"):
+            continue
+        module_logger = getattr(module, "logger", None)
+        if module_logger is None:
+            continue
+        if not hasattr(module_logger, "bind"):
+            continue
+        setattr(module, "logger", get_logger(module_name))
 
 
 def get_logger(name: str) -> Any:

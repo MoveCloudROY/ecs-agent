@@ -6,6 +6,7 @@ import time
 import pytest
 
 from ecs_agent.components.definitions import ErrorComponent
+from ecs_agent.logging import configure_logging
 from ecs_agent.core.world import World
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.types import ErrorOccurredEvent
@@ -36,6 +37,7 @@ class TestErrorHandlingSystem:
     def system(self) -> ErrorHandlingSystem:
         """Create ErrorHandlingSystem instance."""
         return ErrorHandlingSystem()
+
     def test_constructor_default_priority(self) -> None:
         """Test ErrorHandlingSystem has default priority of 99."""
         system = ErrorHandlingSystem()
@@ -170,6 +172,8 @@ class TestErrorHandlingSystem:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Test that process prints error log to stdout."""
+        configure_logging(json_output=True, level="ERROR")
+
         entity_id = world.create_entity()
         error = ErrorComponent(
             error="Critical failure",
@@ -182,11 +186,11 @@ class TestErrorHandlingSystem:
 
         captured = capsys.readouterr()
         events = _json_events(captured.out)
-        
+
         # Find entity_error event
         error_events = [e for e in events if e.get("event") == "entity_error"]
         assert len(error_events) > 0, "No entity_error event found"
-        
+
         event = error_events[0]
         assert event.get("entity_id") == entity_id
         assert event.get("system_name") == "CriticalSystem"

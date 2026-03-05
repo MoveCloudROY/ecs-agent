@@ -23,6 +23,7 @@ def _json_events(output: str) -> list[dict[str, object]]:
                 continue
     return events
 
+
 class TestConfigureLogging:
     """Tests for configure_logging function."""
 
@@ -78,6 +79,17 @@ class TestConfigureLogging:
 
         captured = capsys.readouterr()
         assert "warning_msg" in captured.out
+
+    def test_configure_logging_refreshes_existing_module_loggers(self, capsys):
+        import ecs_agent.core.world as world_module
+
+        configure_logging(json_output=True, level="ERROR")
+        world_module.logger.debug("debug_should_not_appear")
+        world_module.logger.error("error_should_appear")
+
+        events = _json_events(capsys.readouterr().out)
+        assert any(e.get("event") == "error_should_appear" for e in events)
+        assert not any(e.get("event") == "debug_should_not_appear" for e in events)
 
 
 class TestGetLogger:
@@ -388,6 +400,7 @@ class TestBusLogging:
                 assert parsed.get("payload_type") is None
                 break
 
+
 class TestEventContract:
     """Tests for event naming and structured field contract."""
 
@@ -641,7 +654,9 @@ class TestSensitiveDataPolicy:
         logger = get_logger("test")
 
         # Log provider config with metadata only
-        logger.info("provider_configured", model="gpt-4", base_url="https://api.openai.com")
+        logger.info(
+            "provider_configured", model="gpt-4", base_url="https://api.openai.com"
+        )
 
         events = _json_events(capsys.readouterr().out)
         event = events[-1]
@@ -690,12 +705,13 @@ class TestSensitiveDataPolicy:
         assert "size_bytes" in event
 
 
-
 class TestWorldComponentLogging:
     """Tests for world/component/query logging instrumentation."""
 
     def test_component_store_add_logs_debug_event(self, capsys):
         """Test ComponentStore.add emits debug event."""
+        configure_logging(json_output=True, level="DEBUG")
+
         from ecs_agent.core.component import ComponentStore
         from ecs_agent.types import EntityId
         from dataclasses import dataclass
@@ -715,13 +731,18 @@ class TestWorldComponentLogging:
 
         # Check for component_store_add event
         events = _json_events(output)
-        store_add_events = [e for e in events if e.get("event") == "component_store_add"]
+        store_add_events = [
+            e for e in events if e.get("event") == "component_store_add"
+        ]
         assert len(store_add_events) > 0, "No component_store_add event found"
         event = store_add_events[0]
         assert event.get("entity_id") == 1
         assert event.get("component_type") == "TestComponent"
+
     def test_query_no_match_logs_debug_event(self, capsys):
         """Test Query.get with no matches emits debug event."""
+        configure_logging(json_output=True, level="DEBUG")
+
         from ecs_agent.core.component import ComponentStore
         from ecs_agent.core.query import Query
         from dataclasses import dataclass
@@ -745,6 +766,7 @@ class TestWorldComponentLogging:
         event = query_events[0]
         assert event.get("result_count") == 0
 
+
 class TestEventBusLogging:
     """Tests for event bus logging instrumentation."""
 
@@ -761,11 +783,15 @@ class TestEventBusLogging:
         @dataclass
         class TestEvent:
             message: str
+
+
 class TestReasoningSystemLogging:
     """Tests for ReasoningSystem lifecycle and error logging."""
 
     async def test_reasoning_start_logs_lifecycle_event(self, capsys):
         """Test ReasoningSystem emits reasoning_start with entity_id and model."""
+        configure_logging(json_output=True, level="INFO")
+
         from ecs_agent.core import World
         from ecs_agent.systems.reasoning import ReasoningSystem
         from ecs_agent.components import LLMComponent, ConversationComponent
@@ -774,16 +800,12 @@ class TestReasoningSystemLogging:
 
         provider = FakeProvider(
             responses=[
-                CompletionResult(
-                    message=Message(role="assistant", content="Hello")
-                )
+                CompletionResult(message=Message(role="assistant", content="Hello"))
             ]
         )
         world = World()
         entity = world.create_entity()
-        world.add_component(
-            entity, LLMComponent(provider=provider, model="fake-model")
-        )
+        world.add_component(entity, LLMComponent(provider=provider, model="fake-model"))
         world.add_component(
             entity,
             ConversationComponent(messages=[Message(role="user", content="Hi")]),
@@ -793,17 +815,24 @@ class TestReasoningSystemLogging:
         await system.process(world)
 
         captured = capsys.readouterr().out
-        
+
         # Check for reasoning_start event
         events = _json_events(captured)
-        reasoning_start_events = [e for e in events if e.get("event") == "reasoning_start"]
+        reasoning_start_events = [
+            e for e in events if e.get("event") == "reasoning_start"
+        ]
         assert len(reasoning_start_events) > 0, "No reasoning_start event found"
         event = reasoning_start_events[0]
         assert event.get("entity_id") == entity
         assert event.get("model") == "fake-model"
-        assert "reasoning" in str(event.get("logger", ""))  # logger has 'reasoning' system name
+        assert "reasoning" in str(
+            event.get("logger", "")
+        )  # logger has 'reasoning' system name
+
     async def test_reasoning_complete_logs_lifecycle_event(self, capsys):
         """Test ReasoningSystem emits reasoning_complete with entity_id."""
+        configure_logging(json_output=True, level="INFO")
+
         from ecs_agent.core import World
         from ecs_agent.systems.reasoning import ReasoningSystem
         from ecs_agent.components import LLMComponent, ConversationComponent
@@ -812,16 +841,12 @@ class TestReasoningSystemLogging:
 
         provider = FakeProvider(
             responses=[
-                CompletionResult(
-                    message=Message(role="assistant", content="Hello")
-                )
+                CompletionResult(message=Message(role="assistant", content="Hello"))
             ]
         )
         world = World()
         entity = world.create_entity()
-        world.add_component(
-            entity, LLMComponent(provider=provider, model="fake-model")
-        )
+        world.add_component(entity, LLMComponent(provider=provider, model="fake-model"))
         world.add_component(
             entity,
             ConversationComponent(messages=[Message(role="user", content="Hi")]),
@@ -831,24 +856,37 @@ class TestReasoningSystemLogging:
         await system.process(world)
 
         captured = capsys.readouterr().out
-        
+
         # Check for reasoning_complete event
         events = _json_events(captured)
-        reasoning_complete_events = [e for e in events if e.get("event") == "reasoning_complete"]
+        reasoning_complete_events = [
+            e for e in events if e.get("event") == "reasoning_complete"
+        ]
         assert len(reasoning_complete_events) > 0, "No reasoning_complete event found"
         event = reasoning_complete_events[0]
         assert event.get("entity_id") == entity
         assert event.get("model") == "fake-model"
-        assert "reasoning" in str(event.get("logger", ""))  # logger has 'reasoning' system name
+        assert "reasoning" in str(
+            event.get("logger", "")
+        )  # logger has 'reasoning' system name
+
     async def test_reasoning_error_logs_exception(self, capsys):
         """Test ReasoningSystem emits reasoning_error on provider exception."""
+        configure_logging(json_output=True, level="INFO")
+
         from ecs_agent.core import World
         from ecs_agent.systems.reasoning import ReasoningSystem
-        from ecs_agent.components import LLMComponent, ConversationComponent, ErrorComponent
+        from ecs_agent.components import (
+            LLMComponent,
+            ConversationComponent,
+            ErrorComponent,
+        )
         from ecs_agent.types import Message
 
         class FailingProvider:
-            async def complete(self, messages, tools=None, stream=False, response_format=None):
+            async def complete(
+                self, messages, tools=None, stream=False, response_format=None
+            ):
                 raise RuntimeError("Provider failed")
 
         world = World()
@@ -869,15 +907,20 @@ class TestReasoningSystemLogging:
         assert error_comp is not None
 
         captured = capsys.readouterr().out
-        
+
         # Check for reasoning_error event
         events = _json_events(captured)
-        reasoning_error_events = [e for e in events if e.get("event") == "reasoning_error"]
+        reasoning_error_events = [
+            e for e in events if e.get("event") == "reasoning_error"
+        ]
         assert len(reasoning_error_events) > 0, "No reasoning_error event found"
         event = reasoning_error_events[0]
         assert event.get("entity_id") == entity
-        assert "reasoning" in str(event.get("logger", ""))  # logger has 'reasoning' system name
+        assert "reasoning" in str(
+            event.get("logger", "")
+        )  # logger has 'reasoning' system name
         assert "Provider failed" in str(event.get("reason", ""))
+
     async def test_reasoning_logs_no_sensitive_data(self, capsys):
         """Test ReasoningSystem does not log raw message content or arguments."""
         from ecs_agent.core import World
@@ -905,9 +948,7 @@ class TestReasoningSystemLogging:
         )
         world = World()
         entity = world.create_entity()
-        world.add_component(
-            entity, LLMComponent(provider=provider, model="fake-model")
-        )
+        world.add_component(entity, LLMComponent(provider=provider, model="fake-model"))
         world.add_component(
             entity,
             ConversationComponent(
@@ -923,6 +964,8 @@ class TestReasoningSystemLogging:
         # Verify sensitive strings are NOT in output
         assert "secret-data" not in captured
         assert "secret user message" not in captured
+
+
 class TestToolExecutionLogging:
     """Tests for ToolExecutionSystem logging."""
 
@@ -935,6 +978,7 @@ class TestToolExecutionLogging:
 
         # Reload module to get fresh logger with new config
         import ecs_agent.systems.tool_execution
+
         importlib.reload(ecs_agent.systems.tool_execution)
 
         from ecs_agent.core import World
@@ -945,6 +989,7 @@ class TestToolExecutionLogging:
         )
         from ecs_agent.systems.tool_execution import ToolExecutionSystem
         from ecs_agent.types import ToolCall, Message
+
         world = World()
         entity = world.create_entity()
 
@@ -989,6 +1034,7 @@ class TestToolExecutionLogging:
 
         # Reload module to get fresh logger with new config
         import ecs_agent.systems.tool_execution
+
         importlib.reload(ecs_agent.systems.tool_execution)
 
         from ecs_agent.core import World
@@ -999,6 +1045,7 @@ class TestToolExecutionLogging:
         )
         from ecs_agent.systems.tool_execution import ToolExecutionSystem
         from ecs_agent.types import ToolCall, Message
+
         world = World()
         entity = world.create_entity()
 
@@ -1047,6 +1094,7 @@ class TestToolExecutionLogging:
 
         # Reload module to get fresh logger with new config
         import ecs_agent.systems.tool_execution
+
         importlib.reload(ecs_agent.systems.tool_execution)
 
         from ecs_agent.core import World
@@ -1057,6 +1105,7 @@ class TestToolExecutionLogging:
         )
         from ecs_agent.systems.tool_execution import ToolExecutionSystem
         from ecs_agent.types import ToolCall, Message
+
         world = World()
         entity = world.create_entity()
 
@@ -1103,6 +1152,7 @@ class TestToolExecutionLogging:
 
         # Reload module to get fresh logger with new config
         import ecs_agent.systems.tool_execution
+
         importlib.reload(ecs_agent.systems.tool_execution)
 
         from ecs_agent.core import World
@@ -1113,6 +1163,7 @@ class TestToolExecutionLogging:
         )
         from ecs_agent.systems.tool_execution import ToolExecutionSystem
         from ecs_agent.types import ToolCall, Message
+
         world = World()
         entity = world.create_entity()
 
@@ -1150,10 +1201,11 @@ class TestCheckpointLogging:
 
     async def test_checkpoint_saved_event_emitted(self, capsys):
         """Test CheckpointSystem emits checkpoint_saved event on success."""
+        configure_logging(json_output=True, level="INFO")
+
         from ecs_agent.core import World
         from ecs_agent.components import CheckpointComponent
         from ecs_agent.systems.checkpoint import CheckpointSystem
-
 
         world = World()
         entity = world.create_entity()
@@ -1177,13 +1229,14 @@ class TestCheckpointLogging:
         """Test CheckpointSystem.undo logs error on failure."""
         import importlib
         from ecs_agent.logging import configure_logging
-        
+
         configure_logging(json_output=True, level="INFO")
-        
+
         # Reload module to get fresh logger with new config
         import ecs_agent.systems.checkpoint
+
         importlib.reload(ecs_agent.systems.checkpoint)
-        
+
         from ecs_agent.core import World
         from ecs_agent.systems.checkpoint import CheckpointSystem
 
@@ -1197,8 +1250,10 @@ class TestCheckpointLogging:
 
         captured = capsys.readouterr()
         events = _json_events(captured.out)
-        error_events = [e for e in events if e.get("event") == "checkpoint_restore_failed"]
-        
+        error_events = [
+            e for e in events if e.get("event") == "checkpoint_restore_failed"
+        ]
+
         assert len(error_events) >= 1, "checkpoint_restore_failed event not found"
         event = error_events[0]
         assert "reason" in event
@@ -1208,13 +1263,14 @@ class TestCheckpointLogging:
         """Test CheckpointSystem.undo emits checkpoint_restored event on success."""
         import importlib
         from ecs_agent.logging import configure_logging
-        
+
         configure_logging(json_output=True, level="INFO")
-        
+
         # Reload module to get fresh logger with new config
         import ecs_agent.systems.checkpoint
+
         importlib.reload(ecs_agent.systems.checkpoint)
-        
+
         from ecs_agent.core import World
         from ecs_agent.components import CheckpointComponent
         from ecs_agent.systems.checkpoint import CheckpointSystem
@@ -1233,7 +1289,7 @@ class TestCheckpointLogging:
         captured = capsys.readouterr()
         events = _json_events(captured.out)
         restored_events = [e for e in events if e.get("event") == "checkpoint_restored"]
-        
+
         assert len(restored_events) >= 1, "checkpoint_restored event not found"
         event = restored_events[0]
         assert "success" in event
@@ -1257,8 +1313,6 @@ class TestPlanningLogging:
         from ecs_agent.systems.planning import PlanningSystem
         from ecs_agent.providers import FakeProvider
         from ecs_agent.types import CompletionResult, Message
-
-
 
         world = World()
         provider = FakeProvider(
@@ -1299,8 +1353,6 @@ class TestPlanningLogging:
         from ecs_agent.providers import FakeProvider
         from ecs_agent.types import CompletionResult, Message
 
-
-
         world = World()
         provider = FakeProvider(
             responses=[
@@ -1322,7 +1374,9 @@ class TestPlanningLogging:
 
         captured = capsys.readouterr()
         events = _json_events(captured.out)
-        completed_events = [e for e in events if e.get("event") == "planning_step_completed"]
+        completed_events = [
+            e for e in events if e.get("event") == "planning_step_completed"
+        ]
 
         assert len(completed_events) >= 1, "planning_step_completed event not found"
         event = completed_events[0]
@@ -1395,7 +1449,11 @@ class TestSensitiveDataPolicy:
 
         world = World()
         provider = FakeProvider(
-            responses=[CompletionResult(message=Message(role="assistant", content="Secret response"))]
+            responses=[
+                CompletionResult(
+                    message=Message(role="assistant", content="Secret response")
+                )
+            ]
         )
 
         entity = world.create_entity()
@@ -1405,7 +1463,9 @@ class TestSensitiveDataPolicy:
             ConversationComponent(
                 messages=[
                     Message(role="user", content="This is secret user input"),
-                    Message(role="assistant", content="This is secret assistant output"),
+                    Message(
+                        role="assistant", content="This is secret assistant output"
+                    ),
                 ]
             ),
         )
@@ -1419,14 +1479,23 @@ class TestSensitiveDataPolicy:
         # Check that no event contains the secret message content
         for event in events:
             event_str = json.dumps(event)
-            assert "secret user input" not in event_str.lower(), f"Found user message content in log: {event}"
-            assert "secret assistant output" not in event_str.lower(), f"Found assistant message content in log: {event}"
-            assert "secret response" not in event_str.lower(), f"Found response content in log: {event}"
+            assert "secret user input" not in event_str.lower(), (
+                f"Found user message content in log: {event}"
+            )
+            assert "secret assistant output" not in event_str.lower(), (
+                f"Found assistant message content in log: {event}"
+            )
+            assert "secret response" not in event_str.lower(), (
+                f"Found response content in log: {event}"
+            )
 
     async def test_no_tool_arguments_in_tool_execution_logs(self, capsys):
         """Verify ToolExecutionSystem does not log raw tool arguments."""
         from ecs_agent.core import World
-        from ecs_agent.components import PendingToolCallsComponent, ToolRegistryComponent
+        from ecs_agent.components import (
+            PendingToolCallsComponent,
+            ToolRegistryComponent,
+        )
         from ecs_agent.systems.tool_execution import ToolExecutionSystem
         from ecs_agent.types import ToolCall, ToolSchema
 
@@ -1477,9 +1546,14 @@ class TestSensitiveDataPolicy:
         # Check that no event contains the secret argument value
         for event in events:
             event_str = json.dumps(event)
-            assert "API_KEY_12345_SECRET" not in event_str, f"Found secret tool argument in log: {event}"
+            assert "API_KEY_12345_SECRET" not in event_str, (
+                f"Found secret tool argument in log: {event}"
+            )
             # Arguments dict should not be in logs at all
-            assert "secret_param" not in event_str.lower() or "arguments" not in event_str.lower(), f"Found tool arguments in log: {event}"
+            assert (
+                "secret_param" not in event_str.lower()
+                or "arguments" not in event_str.lower()
+            ), f"Found tool arguments in log: {event}"
 
     async def test_no_api_keys_in_provider_logs(self, capsys):
         """Verify provider logging does not expose API keys or tokens."""
@@ -1505,8 +1579,12 @@ class TestSensitiveDataPolicy:
         # Check that API key is never in logs
         for event in events:
             event_str = json.dumps(event)
-            assert "sk-secret-key-12345" not in event_str, f"Found API key in log: {event}"
-            assert "secret-key" not in event_str.lower(), f"Found API key fragment in log: {event}"
+            assert "sk-secret-key-12345" not in event_str, (
+                f"Found API key in log: {event}"
+            )
+            assert "secret-key" not in event_str.lower(), (
+                f"Found API key fragment in log: {event}"
+            )
 
     async def test_no_checkpoint_payload_in_logs(self, capsys):
         """Verify CheckpointSystem does not log full world state payload."""
@@ -1534,9 +1612,13 @@ class TestSensitiveDataPolicy:
         # Check that no event contains the full serialized world state
         for event in events:
             event_str = json.dumps(event)
-            assert "Sensitive checkpoint data" not in event_str, f"Found checkpoint payload in log: {event}"
+            assert "Sensitive checkpoint data" not in event_str, (
+                f"Found checkpoint payload in log: {event}"
+            )
             # Payload field should not exist (violates FORBIDDEN_FIELDS)
-            assert "payload" not in event or event.get("payload") == "<redacted>", f"Found payload field in log: {event}"
+            assert "payload" not in event or event.get("payload") == "<redacted>", (
+                f"Found payload field in log: {event}"
+            )
 
 
 class TestLoggingLevelPolicy:
@@ -1552,7 +1634,9 @@ class TestLoggingLevelPolicy:
 
         world = World()
         provider = FakeProvider(
-            responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+            responses=[
+                CompletionResult(message=Message(role="assistant", content="Done"))
+            ]
         )
 
         entity = world.create_entity()
@@ -1568,14 +1652,20 @@ class TestLoggingLevelPolicy:
         events = _json_events(captured.out)
 
         # Find reasoning completion event
-        completion_events = [e for e in events if e.get("event") == "reasoning_complete"]
+        completion_events = [
+            e for e in events if e.get("event") == "reasoning_complete"
+        ]
         assert len(completion_events) >= 1
         assert completion_events[0].get("level") == "info"
 
     async def test_tool_execution_error_uses_error_level(self, capsys):
         """Verify tool execution errors use ERROR level."""
         from ecs_agent.core import World
-        from ecs_agent.components import PendingToolCallsComponent, ToolRegistryComponent, ConversationComponent
+        from ecs_agent.components import (
+            PendingToolCallsComponent,
+            ToolRegistryComponent,
+            ConversationComponent,
+        )
         from ecs_agent.systems.tool_execution import ToolExecutionSystem
         from ecs_agent.types import ToolCall, Message
 
@@ -1584,7 +1674,10 @@ class TestLoggingLevelPolicy:
 
         # Add required components
         world.add_component(entity, ToolRegistryComponent(tools={}, handlers={}))
-        world.add_component(entity, ConversationComponent(messages=[Message(role="user", content="test")]))
+        world.add_component(
+            entity,
+            ConversationComponent(messages=[Message(role="user", content="test")]),
+        )
 
         # Add tool call with no registered handler (will fail)
         world.add_component(

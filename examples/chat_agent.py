@@ -16,6 +16,7 @@ import os
 
 from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.core import Runner, World
+from ecs_agent.logging import configure_logging
 from ecs_agent.providers import FakeProvider, OpenAIProvider
 from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
@@ -26,6 +27,8 @@ from ecs_agent.types import CompletionResult, Message
 
 async def main() -> None:
     """Run a simple chat agent example."""
+    configure_logging(json_output=False)
+
     # Create World
     world = World()
 

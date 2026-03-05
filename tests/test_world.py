@@ -6,6 +6,7 @@ import pytest
 
 from ecs_agent.core import EventBus
 from ecs_agent.core.world import World
+from ecs_agent.logging import configure_logging
 from ecs_agent.types import EntityId
 
 
@@ -20,6 +21,7 @@ def _json_events(output: str) -> list[dict[str, object]]:
                 # Skip non-JSON lines
                 continue
     return events
+
 
 @dataclass(slots=True)
 class Position:
@@ -137,9 +139,10 @@ async def test_world_process_executes_systems_by_priority() -> None:
     assert log == ["p0", "p1"]
 
 
-
 def test_world_create_entity_logs_entity_created(capsys) -> None:
     """Test create_entity emits entity_created debug event."""
+    configure_logging(json_output=True, level="DEBUG")
+
     world = World()
     entity_id = world.create_entity()
 
@@ -153,8 +156,11 @@ def test_world_create_entity_logs_entity_created(capsys) -> None:
     event = entity_created_events[0]
     assert event.get("entity_id") == entity_id
 
+
 def test_world_add_component_logs_component_added(capsys) -> None:
     """Test add_component emits component_added info event."""
+    configure_logging(json_output=True, level="INFO")
+
     world = World()
     entity = world.create_entity()
     position = Position(x=1.0, y=2.0)
