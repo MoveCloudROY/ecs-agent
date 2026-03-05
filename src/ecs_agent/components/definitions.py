@@ -4,12 +4,14 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 import asyncio
+import time
 
 from ecs_agent.types import (
     ApprovalPolicy,
     ConversationBranch,
     ConversationMessage,
     EntityId,
+    InterruptionReason,
     Message,
     SubagentConfig,
     ToolCall,
@@ -291,3 +293,22 @@ class SubagentRegistryComponent:
     """Registry of named subagents available for delegation."""
 
     subagents: dict[str, SubagentConfig] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class EntityRegistryComponent:
+    """Entity registry metadata for runtime naming and tagging."""
+
+    entity_id: EntityId
+    name: str
+    tags: set[str] = field(default_factory=set)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class InterruptionComponent:
+    """Marks an entity as interrupted with reason."""
+
+    reason: InterruptionReason
+    message: str = ""
+    timestamp: float = field(default_factory=time.time)

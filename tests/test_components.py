@@ -410,3 +410,108 @@ class TestComponentsExportedInInit:
 
         for name in component_names:
             assert hasattr(components, name), f"{name} not exported"
+
+
+class TestEntityRegistryComponent:
+    """Test EntityRegistryComponent for runtime entity naming and tagging."""
+
+    def test_instantiation_with_name_only(self):
+        """Test EntityRegistryComponent with name only."""
+        from ecs_agent.components import EntityRegistryComponent
+        entity_id = EntityId(42)
+        comp = EntityRegistryComponent(entity_id=entity_id, name="agent_main")
+        assert comp.entity_id == entity_id
+        assert comp.name == "agent_main"
+        assert comp.tags == set()
+        assert comp.metadata == {}
+
+    def test_instantiation_with_tags(self):
+        """Test EntityRegistryComponent with tags."""
+        from ecs_agent.components import EntityRegistryComponent
+        entity_id = EntityId(99)
+        comp = EntityRegistryComponent(
+            entity_id=entity_id,
+            name="worker_1",
+            tags={"worker", "async"},
+        )
+        assert comp.entity_id == entity_id
+        assert comp.name == "worker_1"
+        assert comp.tags == {"worker", "async"}
+        assert comp.metadata == {}
+
+    def test_instantiation_with_metadata(self):
+        """Test EntityRegistryComponent with arbitrary metadata."""
+        from ecs_agent.components import EntityRegistryComponent
+        entity_id = EntityId(123)
+        metadata = {"priority": "high", "retries": 3}
+        comp = EntityRegistryComponent(
+            entity_id=entity_id,
+            name="task_processor",
+            tags={"processor"},
+            metadata=metadata,
+        )
+        assert comp.entity_id == entity_id
+        assert comp.name == "task_processor"
+        assert comp.tags == {"processor"}
+        assert comp.metadata == metadata
+
+    def test_mutable_default_independence_tags(self):
+        """Test that tag sets are independent instances."""
+        from ecs_agent.components import EntityRegistryComponent
+        comp1 = EntityRegistryComponent(entity_id=EntityId(1), name="a")
+        comp2 = EntityRegistryComponent(entity_id=EntityId(2), name="b")
+        comp1.tags.add("test")
+        assert "test" not in comp2.tags
+
+    def test_mutable_default_independence_metadata(self):
+        """Test that metadata dicts are independent instances."""
+        from ecs_agent.components import EntityRegistryComponent
+        comp1 = EntityRegistryComponent(entity_id=EntityId(1), name="a")
+        comp2 = EntityRegistryComponent(entity_id=EntityId(2), name="b")
+        comp1.metadata["key"] = "value"
+        assert "key" not in comp2.metadata
+
+    def test_dataclass_slots(self):
+        """Test EntityRegistryComponent uses slots."""
+        from ecs_agent.components import EntityRegistryComponent
+        assert hasattr(EntityRegistryComponent, "__slots__")
+
+
+
+class TestInterruptionComponent:
+    """Test InterruptionComponent for graceful agent pause."""
+
+    def test_instantiation_with_reason(self):
+        """Test InterruptionComponent with interruption reason."""
+        from ecs_agent.components import InterruptionComponent
+        from ecs_agent.types import InterruptionReason
+        comp = InterruptionComponent(
+            reason=InterruptionReason.USER_REQUESTED,
+            message="User pressed pause button",
+        )
+        assert comp.reason == InterruptionReason.USER_REQUESTED
+        assert comp.message == "User pressed pause button"
+        assert comp.timestamp > 0.0
+
+    def test_instantiation_system_pause(self):
+        """Test InterruptionComponent for system-initiated pause."""
+        from ecs_agent.components import InterruptionComponent
+        from ecs_agent.types import InterruptionReason
+        comp = InterruptionComponent(
+            reason=InterruptionReason.SYSTEM_PAUSE,
+            message="Awaiting user approval",
+        )
+        assert comp.reason == InterruptionReason.SYSTEM_PAUSE
+        assert comp.message == "Awaiting user approval"
+
+    def test_empty_message_default(self):
+        """Test that message defaults to empty string."""
+        from ecs_agent.components import InterruptionComponent
+        from ecs_agent.types import InterruptionReason
+        comp = InterruptionComponent(reason=InterruptionReason.USER_REQUESTED)
+        assert comp.message == ""
+
+    def test_dataclass_slots(self):
+        """Test InterruptionComponent uses slots."""
+        from ecs_agent.components import InterruptionComponent
+        assert hasattr(InterruptionComponent, "__slots__")
