@@ -6,7 +6,7 @@ The framework uses `structlog` for structured logging, allowing for easy parsing
 
 The primary way to interact with the logging system is through `configure_logging()` and `get_logger()`.
 
-- `configure_logging(json_output: bool = False, level: str = "INFO", module_levels: dict[str, str] | None = None, colors: bool = True)`: Initializes the global logging configuration with per-module filtering, caller info, and exception formatting.
+- `configure_logging(json_output: bool = False, level: str | None = None, module_levels: dict[str, str] | None = None, colors: bool = True)`: Initializes the global logging configuration. If `level` is `None`, it reads from the `ECS_AGENT_LOG_LEVEL` environment variable (defaults to `INFO`). Supports per-module filtering, caller info, and exception formatting.
 - `get_logger(name: str)`: Returns a structured logger instance for the given name.
 
 ### JSON vs. Console Output
@@ -15,6 +15,7 @@ The primary way to interact with the logging system is through `configure_loggin
 
 ### Enhanced Features
 
+- **Environment Variable Control**: Set `ECS_AGENT_LOG_LEVEL` to configure log level without code changes
 - **Caller Information**: Automatically captures file, function, and line number for each log entry
 - **Exception Formatting**: Pretty-prints exceptions with full tracebacks
 - **Per-Module Log Levels**: Fine-grained control over logging verbosity per module
@@ -76,15 +77,35 @@ All tests in `tests/test_logging.py::TestSensitiveDataPolicy` verify these guard
 
 ## Usage Example
 
-You can import logging utilities from `ecs_agent.logging` or directly from `ecs_agent`.
+### Environment Variable Configuration
+
+The simplest way to control log level is via the `ECS_AGENT_LOG_LEVEL` environment variable:
+
+```bash
+# Set log level to DEBUG for verbose output
+export ECS_AGENT_LOG_LEVEL=DEBUG
+python your_agent.py
+
+# Set log level to ERROR for production (quiet)
+export ECS_AGENT_LOG_LEVEL=ERROR
+python your_agent.py
+```
+
+Supported values (case-insensitive): `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
+
+If not set, defaults to `INFO`.
+
+### Programmatic Configuration
+
+You can also configure logging explicitly in your code. Explicit parameters override environment variables.
 
 ```python
 from ecs_agent.logging import configure_logging, get_logger
 
-# Configure with per-module levels
+# Configure with per-module levels and explicit base level
 configure_logging(
     json_output=False,
-    level="INFO",
+    level="INFO",  # Overrides ECS_AGENT_LOG_LEVEL if set
     module_levels={
         "ecs_agent.providers.openai_provider": "DEBUG",
         "ecs_agent.systems.reasoning": "DEBUG",
