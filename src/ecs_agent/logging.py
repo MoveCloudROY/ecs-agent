@@ -16,7 +16,7 @@ from structlog.processors import (
 )
 from structlog.dev import ConsoleRenderer
 
-_log_level = "INFO"
+_log_level = os.getenv("ECS_AGENT_LOG_LEVEL", "INFO").upper()
 _module_levels: dict[str, int] = {}
 _LEVEL_MAP = {
     "DEBUG": logging.DEBUG,
@@ -166,7 +166,7 @@ def _filter_by_level(
 
 def configure_logging(
     json_output: bool = False,
-    level: str = "INFO",
+    level: str | None = None,
     module_levels: dict[str, str] | None = None,
     colors: bool = True,
 ) -> None:
@@ -174,12 +174,14 @@ def configure_logging(
 
     Args:
         json_output: If True, output JSON format (production). If False, use console format (development).
-        level: Logging level as string ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL").
+        level: Logging level as string ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"). If None, reads from ECS_AGENT_LOG_LEVEL environment variable (default "INFO").
         module_levels: Optional module-specific level map. Keys are logger/module prefixes and values are levels.
         colors: Whether to use colored output in console mode.
     """
     global _log_level
     global _module_levels
+    if level is None:
+        level = os.getenv("ECS_AGENT_LOG_LEVEL", "INFO").upper()
     _log_level = level
     _module_levels = {
         module_name: _LEVEL_MAP.get(module_level.upper(), logging.INFO)
