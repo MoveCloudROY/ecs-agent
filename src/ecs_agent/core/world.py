@@ -22,7 +22,8 @@ class World:
         self._systems = SystemExecutor()
         self._event_bus = EventBus()
         self._query = Query(self._components)
-
+        self._entity_registry: dict[str, EntityId] = {}
+        self._entity_tags: dict[str, set[EntityId]] = {}
     @property
     def event_bus(self) -> EventBus:
         return self._event_bus
@@ -50,8 +51,74 @@ class World:
         return self._components.has(entity_id, component_type)
 
     def delete_entity(self, entity_id: EntityId) -> None:
+        self.unregister_entity(entity_id)
         self._components.delete_entity(entity_id)
 
+    def register_entity(
+        self, entity_id: EntityId, name: str, tags: set[str] | None = None
+    ) -> None:
+        """Register entity with unique name and optional tags.
+        
+        Args:
+            entity_id: Entity to register
+            name: Unique name for entity lookup
+            tags: Optional set of tags for entity grouping
+            
+        Raises:
+            ValueError: If name already registered
+        """
+        if name in self._entity_registry:
+            raise ValueError(f"Entity name '{name}' already registered")
+        
+        self._entity_registry[name] = entity_id
+        
+        if tags:
+            for tag in tags:
+                if tag not in self._entity_tags:
+                    self._entity_tags[tag] = set()
+                self._entity_tags[tag].add(entity_id)
+
+    def resolve_entity(self, name: str) -> EntityId | None:
+        """Lookup entity by registered name.
+        
+        Args:
+            name: Registered entity name
+            
+        Returns:
+            EntityId if found, None otherwise
+        """
+        return self._entity_registry.get(name)
+
+    def list_entities_by_tag(self, tag: str) -> list[EntityId]:
+        """Find all entities with given tag.
+        
+        Args:
+            tag: Tag to search for
+            
+        Returns:
+            List of entity IDs with the tag (empty if tag not found)
+        """
+        return list(self._entity_tags.get(tag, set()))
+
+    def unregister_entity(self, entity_id: EntityId) -> None:
+        """Remove entity from registry and tag indexes.
+        
+        Args:
+            entity_id: Entity to unregister
+        """
+        # Find and remove from name registry
+        name_to_remove = None
+        for name, eid in self._entity_registry.items():
+            if eid == entity_id:
+                name_to_remove = name
+                break
+        
+        if name_to_remove:
+            del self._entity_registry[name_to_remove]
+        
+        # Remove from all tag indexes
+        for tag_set in self._entity_tags.values():
+            tag_set.discard(entity_id)
     def register_system(self, system: System, priority: int) -> SystemHandle:
         return self._systems.register(system, priority)
 

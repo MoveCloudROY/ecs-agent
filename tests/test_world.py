@@ -181,3 +181,106 @@ def test_world_add_component_logs_component_added(capsys) -> None:
     output_str = json.dumps(output)
     assert "x=" not in output_str
     assert "y=" not in output_str
+
+
+# =======================
+# Entity Registry Tests
+# =======================
+
+
+def test_world_register_entity_adds_to_registry() -> None:
+    """Test register_entity adds entity to internal registry."""
+    world = World()
+    entity = world.create_entity()
+    
+    world.register_entity(entity, "player", None)
+    
+    resolved = world.resolve_entity("player")
+    assert resolved == entity
+
+
+def test_world_resolve_entity_returns_correct_id() -> None:
+    """Test resolve_entity returns correct entity ID for registered name."""
+    world = World()
+    entity = world.create_entity()
+    
+    world.register_entity(entity, "agent_1", None)
+    
+    assert world.resolve_entity("agent_1") == entity
+
+
+def test_world_resolve_entity_returns_none_for_missing() -> None:
+    """Test resolve_entity returns None for unregistered name."""
+    world = World()
+    
+    assert world.resolve_entity("nonexistent") is None
+
+
+def test_world_register_entity_duplicate_name_raises_error() -> None:
+    """Test register_entity raises ValueError for duplicate names."""
+    world = World()
+    entity1 = world.create_entity()
+    entity2 = world.create_entity()
+    
+    world.register_entity(entity1, "duplicate", None)
+    
+    with pytest.raises(ValueError, match="Entity name 'duplicate' already registered"):
+        world.register_entity(entity2, "duplicate", None)
+
+
+def test_world_list_entities_by_tag_returns_matching_ids() -> None:
+    """Test list_entities_by_tag returns all entities with specified tag."""
+    world = World()
+    agent1 = world.create_entity()
+    agent2 = world.create_entity()
+    npc = world.create_entity()
+    
+    world.register_entity(agent1, "agent_1", {"ai", "friendly"})
+    world.register_entity(agent2, "agent_2", {"ai", "hostile"})
+    world.register_entity(npc, "npc_1", {"npc"})
+    
+    ai_entities = world.list_entities_by_tag("ai")
+    assert set(ai_entities) == {agent1, agent2}
+
+
+def test_world_list_entities_by_tag_returns_empty_for_missing_tag() -> None:
+    """Test list_entities_by_tag returns empty list for missing tag."""
+    world = World()
+    entity = world.create_entity()
+    
+    world.register_entity(entity, "agent", {"ai"})
+    
+    result = world.list_entities_by_tag("nonexistent")
+    assert result == []
+
+
+def test_world_delete_entity_removes_from_registry() -> None:
+    """Test delete_entity automatically removes entity from registry."""
+    world = World()
+    entity = world.create_entity()
+    
+    world.register_entity(entity, "to_delete", {"temp"})
+    assert world.resolve_entity("to_delete") == entity
+    
+    world.delete_entity(entity)
+    
+    assert world.resolve_entity("to_delete") is None
+    assert entity not in world.list_entities_by_tag("temp")
+
+
+def test_world_unregister_entity_cleans_up_tags() -> None:
+    """Test unregister_entity removes entity from all tag indexes."""
+    world = World()
+    entity = world.create_entity()
+    
+    world.register_entity(entity, "multi_tag", {"tag1", "tag2", "tag3"})
+    assert entity in world.list_entities_by_tag("tag1")
+    assert entity in world.list_entities_by_tag("tag2")
+    assert entity in world.list_entities_by_tag("tag3")
+    
+    world.unregister_entity(entity)
+    
+    assert entity not in world.list_entities_by_tag("tag1")
+    assert entity not in world.list_entities_by_tag("tag2")
+    assert entity not in world.list_entities_by_tag("tag3")
+    assert world.resolve_entity("multi_tag") is None
