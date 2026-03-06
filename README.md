@@ -19,7 +19,7 @@ Build modular, testable LLM agents by composing behavior from dataclass componen
 - **Streaming**, First-class SSE streaming with `AsyncIterator[StreamDelta]` for real-time token delivery.
 - **OpenAI Responses API**, Native support for `/v1/responses` endpoint with automatic Chat Completions fallback, streaming, and enhanced metadata tracking.
 - **Streaming Output (System-Level)**, `StreamingComponent` enables system-level streaming with `StreamStartEvent`, `StreamDeltaEvent`, `StreamEndEvent`.
-- **Context Management**, Checkpoint-based undo (`CheckpointSystem`), LLM-powered conversation compaction (`CompactionSystem`), and resume from checkpoint.
+- **Context Management**, Checkpoint-based undo (`CheckpointSystem`), LLM-powered conversation compaction (`CompactionSystem`), resume from checkpoint, and conversation tree revert (`revert_to_message`).
 - **Claude Provider**, Native Anthropic API provider with SSE streaming support.
 - **LiteLLM Provider**, Access 100+ LLM providers through a single unified interface via litellm.
 - **User Input System**, Async human-in-the-loop input with `UserInputSystem`, supports infinite wait (`timeout=None`).
@@ -42,7 +42,7 @@ Build modular, testable LLM agents by composing behavior from dataclass componen
 - **Enhanced Logging**, Structured logging with `structlog` featuring caller info, exception formatting, per-module log level filtering, and stdlib logging bridge.
 - **MCP Integration**, Connect to external tool servers via the Model Context Protocol (stdio, SSE, HTTP).
 - **Built-in Tools**, High-quality file manipulation (read/write/hash-anchored edit) and bash execution tools.
-- **Runtime Dynamic Control**, Register entities by name/tag, dynamically add/remove/replace systems at tick boundaries, switch models per-entity, gracefully interrupt generation, and revert conversation tree branches.
+- **Runtime Dynamic Control**, Register entities by name/tag, dynamically add/remove/replace systems at tick boundaries, switch models per-entity, and gracefully interrupt generation.
 
 ## Installation
 

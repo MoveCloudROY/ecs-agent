@@ -1,6 +1,6 @@
 # Runtime Dynamic Control
 
-The ECS Agent framework provides five runtime control capabilities for dynamic agent reconfiguration without restarting: **Entity Registry** (named entity resolution), **System Lifecycle** (dynamic system removal/replacement), **Model Switching** (per-entity provider updates), **Graceful Interruption** (component-driven stopping), and **Conversation Revert** (tree-based history navigation).
+The ECS Agent framework provides four runtime control capabilities for dynamic agent reconfiguration without restarting: **Entity Registry** (named entity resolution), **System Lifecycle** (dynamic system removal/replacement), **Model Switching** (per-entity provider updates), and **Graceful Interruption** (component-driven stopping).
 
 ## Entity Registry
 
@@ -183,79 +183,16 @@ if conv and conv.messages:
 - Partial content preserved **before** re-raise
 - Interruption state not overwritten if already present (metadata enriched instead)
 
-## Conversation Tree Revert
-
-Non-destructive navigation to historical conversation states in tree-structured dialogues.
-
-### Function
-
-**`revert_to_message(tree: ConversationTreeComponent, target_message_id: str) -> str`**
-
-Moves the active branch pointer to a target message without deleting historical nodes.
-
-### Behavior
-
-- Updates `current_branch.leaf_message_id` to `target_message_id`
-- Returns target message ID for verification
-- Next `ReasoningSystem.process()` call uses linearized history from reverted leaf
-- All historical siblings and descendants remain in tree (non-destructive)
-
-### Errors
-
-- Raises `ValueError("No active branch to revert")` if `tree.current_branch_id is None`
-- Raises `KeyError(f"Target message not found: {target_message_id}")` if target not in `tree.messages`
-
-### Example
-
-```python
-from ecs_agent.conversation_tree import (
-    ConversationTreeComponent,
-    add_message,
-    create_branch,
-    switch_branch,
-    revert_to_message,
-    get_active_leaf,
-)
-
-tree = ConversationTreeComponent()
-
-# Build conversation tree
-msg1 = add_message(tree, role="user", content="What is 2+2?")
-msg2 = add_message(tree, role="assistant", content="4", parent_id=msg1.id)
-msg3 = add_message(tree, role="user", content="What is 3+3?", parent_id=msg2.id)
-
-# Create and activate branch
-create_branch(tree, "main", msg3.id)
-switch_branch(tree, "main")
-
-# ... agent generates response to "What is 3+3?" ...
-
-# Revert to msg2 (before "What is 3+3?" question)
-revert_to_message(tree, msg2.id)
-
-# Next reasoning uses linearized history: [msg1, msg2] only
-# (msg3 and subsequent responses still exist but not active)
-```
-
-### Integration with Reasoning
-
-`ReasoningSystem` automatically checks for `ConversationTreeComponent` and uses the active branch:
-
-1. `get_active_leaf(tree)` → current leaf message ID
-2. `linearize(tree, leaf_id)` → chronological message list from root to leaf
-3. Revert changes leaf pointer → next linearize() uses new path
-
 ## Constraints
 
 - **Entity Registry**: Names must be unique (ValueError on duplicate), tags and metadata are optional
 - **System Lifecycle**: Operations queued until tick boundary, applied in FIFO order
 - **Model Switching**: Takes effect at next request start, sampled values stable for entire request
 - **Graceful Interruption**: CancelledError must be re-raised after partial content preservation
-- **Conversation Revert**: Requires active branch, target must exist in tree
 
 ## See Also
 
-- [Conversation Trees](tree-conversation.md) — Tree structure, branching, linearization
-- [Context Management](context-management.md) — Checkpoint, undo, compaction
+- [Context Management](context-management.md) — Checkpoint, undo, compaction, conversation revert
+- [Tree-Structured Conversations](tree-conversation.md) — Tree structure, branching, linearization
 - [Systems](../systems.md) — System execution order and lifecycle
 - [API Reference](../api-reference.md) — Complete method signatures

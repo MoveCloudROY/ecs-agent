@@ -1,6 +1,6 @@
 # Context Management
 
-The ECS Agent framework provides three mechanisms for managing conversation context: **Checkpoint** (undo/restore), **Compaction** (summarization), and **Resume** (continue from saved state).
+The ECS Agent framework provides four mechanisms for managing conversation context: **Checkpoint** (undo/restore world state), **Compaction** (summarization), **Resume** (continue from saved state), and **Conversation Tree Revert** (navigate to historical conversation states).
 
 ## Checkpoint System
 
@@ -102,6 +102,104 @@ await runner.run(world, max_ticks=100, start_tick=start_tick)
 ```
 
 The checkpoint includes the full world state plus `RunnerStateComponent` for tracking the tick position. When loading, `TerminalComponent` is excluded so execution can continue.
+
+## Conversation Tree Revert
+
+Non-destructive navigation to historical conversation states in tree-structured dialogues.
+
+### Function
+
+**`revert_to_message(tree: ConversationTreeComponent, target_message_id: str) -> str`**
+
+Moves the active branch pointer to a target message without deleting historical nodes.
+
+### Behavior
+
+- Updates `current_branch.leaf_message_id` to `target_message_id`
+- Returns target message ID for verification
+- Next `ReasoningSystem.process()` call uses linearized history from reverted leaf
+- All historical siblings and descendants remain in tree (non-destructive)
+
+### Errors
+
+- Raises `ValueError("No active branch to revert")` if `tree.current_branch_id is None`
+- Raises `KeyError(f"Target message not found: {target_message_id}")` if target not in `tree.messages`
+
+### Example
+
+```python
+from ecs_agent.conversation_tree import (
+    ConversationTreeComponent,
+    add_message,
+    create_branch,
+    switch_branch,
+    revert_to_message,
+    get_active_leaf,
+)
+
+tree = ConversationTreeComponent()
+
+# Build conversation tree
+msg1 = add_message(tree, role="user", content="What is 2+2?")
+msg2 = add_message(tree, role="assistant", content="4", parent_id=msg1.id)
+msg3 = add_message(tree, role="user", content="What is 3+3?", parent_id=msg2.id)
+
+# Create and activate branch
+create_branch(tree, "main", msg3.id)
+switch_branch(tree, "main")
+
+# ... agent generates response to "What is 3+3?" ...
+
+# Revert to msg2 (before "What is 3+3?" question)
+revert_to_message(tree, msg2.id)
+
+# Next reasoning uses linearized history: [msg1, msg2] only
+# (msg3 and subsequent responses still exist but not active)
+```
+
+### Integration with Reasoning
+
+`ReasoningSystem` automatically checks for `ConversationTreeComponent` and uses the active branch:
+
+1. `get_active_leaf(tree)` → current leaf message ID
+2. `linearize(tree, leaf_id)` → chronological message list from root to leaf
+3. Revert changes leaf pointer → next linearize() uses new path
+
+### Use Cases
+
+**Undo User Input**: Navigate back before a user message and try a different question:
+
+```python
+# User asked something, got response, wants to ask differently
+conv = world.get_component(agent, ConversationTreeComponent)
+if conv:
+    # Find the message before user's last question
+    target_msg_id = conv.messages["msg_before_question"].id
+    revert_to_message(conv, target_msg_id)
+    # Now add a different user question
+```
+
+**Compare Alternate Paths**: Save checkpoint, explore one branch, revert, explore another:
+
+```python
+# Checkpoint at decision point
+decision_point = get_active_leaf(tree)
+
+# Explore approach A
+# ... generate responses ...
+results_a = linearize(tree, get_active_leaf(tree))
+
+# Revert and explore approach B
+revert_to_message(tree, decision_point)
+# ... generate different responses ...
+results_b = linearize(tree, get_active_leaf(tree))
+```
+
+## See Also
+
+- [Tree-Structured Conversations](tree-conversation.md) — Tree structure, branching, linearization
+- [Runtime Control](runtime-control.md) — Entity registry, system lifecycle, model switching, interruption
+- [Systems](../systems.md) — System execution order and lifecycle
 
 ## Complete Example
 
