@@ -148,6 +148,15 @@ class ApprovalPolicy(Enum):
     REQUIRE_APPROVAL = "require_approval"
 
 
+
+class InterruptionReason(Enum):
+    """Reason for runtime interruption."""
+
+    USER_REQUEST = "user_request"
+    ERROR = "error"
+    TIMEOUT = "timeout"
+    POLICY_VIOLATION = "policy_violation"
+
 @dataclass(slots=True)
 class ToolApprovalRequestedEvent:
     """Event emitted when a tool call requires approval."""
@@ -475,6 +484,8 @@ __all__ = [
     "EntityId",
     "ErrorOccurredEvent",
     "InheritancePolicy",
+    "InterruptionReason",
+
     "MCPConnectedEvent",
     "MCPDisconnectedEvent",
     "MCPToolCallEvent",

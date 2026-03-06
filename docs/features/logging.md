@@ -6,7 +6,7 @@ The framework uses `structlog` for structured logging, allowing for easy parsing
 
 The primary way to interact with the logging system is through `configure_logging()` and `get_logger()`.
 
-- `configure_logging(json_output: bool = False, level: str | None = None, module_levels: dict[str, str] | None = None, colors: bool = True)`: Initializes the global logging configuration. If `level` is `None`, it reads from the `ECS_AGENT_LOG_LEVEL` environment variable (defaults to `INFO`). Supports per-module filtering, caller info, and exception formatting.
+- `configure_logging(json_output: bool = False, level: str | None = None, module_levels: dict[str, str] | None = None, colors: bool = True)`: Initializes the global logging configuration. If `level` is `None`, it reads from the `ECS_AGENT_LOG_LEVEL` environment variable (defaults to `WARNING`). Supports per-module filtering, caller info, and exception formatting.
 - `get_logger(name: str)`: Returns a structured logger instance for the given name.
 
 ### JSON vs. Console Output
@@ -93,7 +93,7 @@ python your_agent.py
 
 Supported values (case-insensitive): `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
 
-If not set, defaults to `INFO`.
+If not set, defaults to `WARNING`.
 
 ### Programmatic Configuration
 

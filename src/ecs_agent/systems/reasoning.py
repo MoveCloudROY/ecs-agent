@@ -8,6 +8,7 @@ from ecs_agent.logging import get_logger
 from ecs_agent.components import (
     ConversationComponent,
     ErrorComponent,
+    InterruptionComponent,
     LLMComponent,
     PendingToolCallsComponent,
     StreamingComponent,
@@ -29,6 +30,7 @@ from ecs_agent.types import (
 
 logger = get_logger(__name__)
 
+
 class ReasoningSystem:
     def __init__(self, priority: int = 0) -> None:
         self.priority = priority
@@ -39,6 +41,16 @@ class ReasoningSystem:
             llm_component, conversation = components
             assert isinstance(llm_component, LLMComponent)
             assert isinstance(conversation, ConversationComponent)
+
+            # Check for interruption
+            if world.has_component(entity_id, InterruptionComponent):
+                logger.info("reasoning_interrupted", entity_id=int(entity_id))
+                continue
+
+            # Handle model switching
+            if hasattr(llm_component, "pending_model") and llm_component.pending_model:
+                llm_component.model = llm_component.pending_model
+                llm_component.pending_model = None
 
             messages: list[Message] = []
 

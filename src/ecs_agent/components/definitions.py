@@ -14,6 +14,7 @@ from ecs_agent.types import (
     SubagentConfig,
     ToolCall,
     ToolSchema,
+    InterruptionReason,
 )
 
 try:
@@ -30,6 +31,8 @@ class LLMComponent:
     provider: LLMProvider
     model: str
     system_prompt: str = ""
+    pending_model: str | None = None
+    pending_provider: LLMProvider | None = None
 
 
 @dataclass(slots=True)
@@ -291,3 +294,19 @@ class SubagentRegistryComponent:
     """Registry of named subagents available for delegation."""
 
     subagents: dict[str, SubagentConfig] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class EntityRegistryComponent:
+    """Registry for named entities."""
+
+    names: dict[str, EntityId] = field(default_factory=dict)
+    tags: dict[str, set[EntityId]] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class InterruptionComponent:
+    """Flags an entity for runtime interruption."""
+
+    reason: InterruptionReason
+    metadata: dict[str, Any] = field(default_factory=dict)

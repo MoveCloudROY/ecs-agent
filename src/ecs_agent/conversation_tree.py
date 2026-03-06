@@ -203,8 +203,39 @@ def get_active_leaf(tree: ConversationTreeComponent) -> str | None:
     Returns:
         Leaf message ID of current branch, or None if no branch is active
     """
-    if tree.current_branch_id is None:
-        return None
+    if tree.current_branch_id is not None:
+        branch = tree.branches[tree.current_branch_id]
+        return branch.leaf_message_id
 
-    branch = tree.branches[tree.current_branch_id]
-    return branch.leaf_message_id
+    if tree.messages:
+        # Find messages that are not parents of any other message
+        all_ids = set(tree.messages.keys())
+        parent_ids = {
+            m.parent_message_id for m in tree.messages.values() if m.parent_message_id
+        }
+        leaves = all_ids - parent_ids
+        if leaves:
+            # Sort by timestamp to get the most recent leaf
+            return sorted(
+                list(leaves), key=lambda i: tree.messages[i].created_at, reverse=True
+            )[0]
+
+    return None
+
+
+def revert_to_message(tree: ConversationTreeComponent, message_id: str) -> None:
+    """Revert the conversation to a specific message by creating a new branch.
+
+    Args:
+        tree: ConversationTreeComponent to modify
+        message_id: ID of the message to revert to
+
+    Raises:
+        KeyError: If message_id doesn't exist in tree.messages
+    """
+    if message_id not in tree.messages:
+        raise KeyError(f"Message not found: {message_id}")
+
+    branch_id = f"revert-{message_id[:8]}-{uuid.uuid4().hex[:8]}"
+    create_branch(tree, branch_id, message_id)
+    switch_branch(tree, branch_id)

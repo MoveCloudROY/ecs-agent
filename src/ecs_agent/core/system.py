@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol
 
 from ecs_agent.logging import STANDARD_EVENT_NAMES, get_logger
@@ -11,23 +13,49 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+
 class System(Protocol):
     async def process(self, world: World) -> None: ...
 
 
 class SystemExecutor:
     def __init__(self) -> None:
-        self._systems: list[tuple[System, int]] = []
+        self._systems: list[tuple[System, int, str]] = []
+        self._pending_ops: list[Callable[[], None]] = []
 
-    def register(self, system: System, priority: int) -> None:
-        self._systems.append((system, priority))
+    def register(self, system: System, priority: int, handle: str | None = None) -> str:
+        actual_handle = handle or str(uuid.uuid4())
+        self._pending_ops.append(
+            lambda: self._systems.append((system, priority, actual_handle))
+        )
+        return actual_handle
+
+    def remove(self, handle: str) -> None:
+        self._pending_ops.append(lambda: self._remove_by_handle(handle))
+
+    def replace(self, handle: str, new_system: System) -> None:
+        self._pending_ops.append(lambda: self._replace_by_handle(handle, new_system))
+
+    def _remove_by_handle(self, handle: str) -> None:
+        self._systems = [s for s in self._systems if s[2] != handle]
+
+    def _replace_by_handle(self, handle: str, new_system: System) -> None:
+        for i, (system, priority, h) in enumerate(self._systems):
+            if h == handle:
+                self._systems[i] = (new_system, priority, handle)
+                break
+
+    def apply_pending(self) -> None:
+        for op in self._pending_ops:
+            op()
+        self._pending_ops.clear()
 
     async def execute(self, world: World) -> None:
         if not self._systems:
             return
 
         systems_by_priority: dict[int, list[System]] = {}
-        for system, priority in self._systems:
+        for system, priority, _ in self._systems:
             priority_systems = systems_by_priority.setdefault(priority, [])
             priority_systems.append(system)
 

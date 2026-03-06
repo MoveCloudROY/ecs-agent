@@ -109,7 +109,7 @@ class TestGetLogger:
 
     def test_get_logger_with_name(self, capsys):
         """Test get_logger includes name in context."""
-        configure_logging(json_output=False)
+        configure_logging(json_output=False, level="INFO")
 
         logger = get_logger("my_module")
         logger.info("test_event")
