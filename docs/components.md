@@ -12,6 +12,13 @@ Links an agent to an LLM provider for reasoning and planning.
 | `provider` | `LLMProvider` | (none) | The LLM provider instance |
 | `model` | `str` | (none) | The specific model identifier |
 | `system_prompt` | `str` | `""` | Optional system prompt override |
+| `pending_model` | `str | None` | `None` | Optional next model to switch to |
+| `pending_provider`| `LLMProvider | None`| `None` | Optional next provider to switch to |
+
+| :--- | :--- | :--- | :--- |
+| `provider` | `LLMProvider` | (none) | The LLM provider instance |
+| `model` | `str` | (none) | The specific model identifier |
+| `system_prompt` | `str` | `""` | Optional system prompt override |
 
 **Used by:** `ReasoningSystem`, `PlanningSystem`, `ReplanningSystem`
 
@@ -531,3 +538,36 @@ world.add_component(
     SubagentRegistryComponent(subagents={"researcher": researcher}),
 )
 ```
+### EntityRegistryComponent
+Registry for named entities and tags. Maintained by the `World`.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `names` | `dict[str, EntityId]` | `{}` | Mapping from unique names to entity IDs |
+| `tags` | `dict[str, set[EntityId]]` | `{}` | Mapping from tags to sets of entity IDs |
+
+**Used by:** `World` (internal registry)
+
+**Usage:**
+```python
+from ecs_agent.components.definitions import EntityRegistryComponent
+# Normally internal, accessed via world.register_entity()
+```
+
+### InterruptionComponent
+Flags an entity for graceful runtime interruption.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `reason` | `InterruptionReason` | (none) | Reason for the interruption |
+| `metadata` | `dict[str, Any]` | `{}` | Optional diagnostic metadata |
+
+**Used by:** `Runner`, `ReasoningSystem`
+
+**Usage:**
+```python
+from ecs_agent.components.definitions import InterruptionComponent
+from ecs_agent.types import InterruptionReason
+world.add_component(agent, InterruptionComponent(reason=InterruptionReason.USER_REQUEST))
+```
+

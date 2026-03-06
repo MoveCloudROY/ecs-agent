@@ -4,6 +4,17 @@ This document provides a comprehensive guide to the fourteen built-in systems av
 
 ## Recommended System Priority Order
 
+The table below summarizes the recommended priorities for each system. Priority values determine the execution order within each world tick, where lower numbers run first. Systems at the same priority level run concurrently.
+
+### System Lifecycle and Queue Semantics
+
+The `World` provides methods to dynamically manage systems: `register_system`, `remove_system`, and `replace_system`. 
+
+- **Queued Operations**: Removal and replacement operations are queued.
+- **Tick Boundaries**: Operations are applied only when `apply_pending_system_operations()` is called. The `Runner` automatically calls this at the start of each tick.
+- **Handles**: Each system is assigned a unique string handle upon registration, which must be used for removal or replacement.
+
+
 The table below summarizes the recommended priorities for each system. Priority values determine the execution order within each world tick, where lower numbers run first.
 
 | System | Recommended Priority | Purpose |

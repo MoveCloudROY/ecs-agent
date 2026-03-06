@@ -10,7 +10,7 @@ __version__: str = "0.1.0"
 
 The following types and classes are re-exported for convenience:
 
-- `Message`, `CompletionResult`, `ToolSchema`, `EntityId`, `StreamDelta`, `RetryConfig`, `ApprovalPolicy`, `ToolTimeoutError`, `MessageBusEnvelope` from `ecs_agent.types`
+- `Message`, `CompletionResult`, `ToolSchema`, `EntityId`, `StreamDelta`, `RetryConfig`, `ApprovalPolicy`, `ToolTimeoutError`, `MessageBusEnvelope`, `InterruptionReason` from `ecs_agent.types`
 - `RetryProvider` from `ecs_agent.providers.retry_provider`
 - `WorldSerializer` from `ecs_agent.serialization`
 - `configure_logging`, `get_logger` from `ecs_agent.logging`
@@ -21,6 +21,7 @@ The following types and classes are re-exported for convenience:
 - `MessageBusSystem`, `RAGSystem`, `TreeSearchSystem`, `ToolApprovalSystem`, `CheckpointSystem`, `CompactionSystem`, `UserInputSystem`, `SubagentSystem` from `ecs_agent.systems`
 - `StreamStartEvent`, `StreamDeltaEvent`, `StreamEndEvent`, `CheckpointCreatedEvent`, `CheckpointRestoredEvent`, `CompactionCompleteEvent`, `ToolApprovalRequestedEvent`, `ToolApprovedEvent`, `ToolDeniedEvent`, `RAGRetrievalCompletedEvent`, `UserInputRequestedEvent`, `MCTSNodeScoredEvent`, `MessageBusPublishedEvent`, `MessageBusDeliveredEvent`, `MessageBusResponseEvent`, `MessageBusTimeoutEvent` from `ecs_agent.types`
 - `scan_module`, `sandboxed_execute`, `tool` from `ecs_agent.tools`
+- `revert_to_message`, `linearize` from `ecs_agent.conversation_tree`
 
 ---
 
@@ -217,7 +218,14 @@ class World:
     def remove_component(self, entity_id: EntityId, component_type: type) -> None: ...
     def has_component(self, entity_id: EntityId, component_type: type) -> bool: ...
     def delete_entity(self, entity_id: EntityId) -> None: ...
-    def register_system(self, system: System, priority: int = 0) -> None: ...
+    def register_system(self, system: System, priority: int = 0) -> str: ...
+    def remove_system(self, handle: str) -> None: ...
+    def replace_system(self, handle: str, new_system: System) -> None: ...
+    def apply_pending_system_operations(self) -> None: ...
+    def register_entity(self, entity_id: EntityId, name: str, tags: set[str] | None = None) -> None: ...
+    def resolve_entity(self, name: str) -> EntityId: ...
+    def list_entities_by_tag(self, tag: str) -> list[EntityId]: ...
+    def unregister_entity(self, entity_id: EntityId) -> None: ...
     async def process(self) -> None: ...
     def query(self, *component_types: type) -> Query: ...
 ```
@@ -522,3 +530,39 @@ def scan_module(module: ModuleType) -> tuple[dict[str, ToolSchema], dict[str, Ca
 async def sandboxed_execute(func: Callable[..., Awaitable[str]], args: dict[str, Any], timeout: float = 30.0, max_output_size: int = 10000) -> str: ...
 def tool(name: str, description: str, parameters: dict[str, Any]) -> Callable: ...
 ```
+
+---
+
+## ecs_agent.conversation_tree
+
+### `revert_to_message(tree: ConversationTreeComponent, message_id: str) -> None`
+
+Revert the conversation to a specific message by creating a new branch.
+
+**Parameters:**
+- `tree` — ConversationTreeComponent to modify
+- `message_id` — ID of the message to revert to
+
+**Raises:**
+- `KeyError` — If message_id doesn't exist in tree.messages
+
+**Example:**
+```python
+from ecs_agent.conversation_tree import revert_to_message
+revert_to_message(tree_component, "msg_123")
+```
+
+### `linearize(tree: ConversationTreeComponent, leaf_message_id: str) -> list[Message]`
+
+Convert tree branch to flat message list for LLM consumption.
+
+**Parameters:**
+- `tree` — ConversationTreeComponent to traverse
+- `leaf_message_id` — ID of leaf message to start from
+
+**Returns:**
+List of Messages from root to leaf in chronological order.
+
+**Raises:**
+- `KeyError` — If leaf_message_id doesn't exist in tree.messages
+
