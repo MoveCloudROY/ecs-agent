@@ -8,20 +8,23 @@ from ecs_agent.components import (
     LLMComponent,
     PendingToolCallsComponent,
     PlanComponent,
+    ScratchbookIndexComponent,
     SystemPromptComponent,
     TerminalComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.types import CompletionResult, Message, PlanStepCompletedEvent
+from ecs_agent.scratchbook import ScratchbookService
 from ecs_agent.logging import get_logger
 
 logger = get_logger(__name__)
 
 
 class PlanningSystem:
-    def __init__(self, priority: int = 0) -> None:
+    def __init__(self, priority: int = 0, service: ScratchbookService | None = None) -> None:
         self.priority = priority
+        self.service = service
 
     async def process(self, world: World) -> None:
         for entity_id, components in world.query(
@@ -75,6 +78,23 @@ class PlanningSystem:
 
                 plan.current_step += 1
                 completed_step_index = plan.current_step - 1
+                
+                if self.service is not None:
+                    scratchbook_index = world.get_component(
+                        entity_id, ScratchbookIndexComponent
+                    )
+                    if scratchbook_index is not None:
+                        artifact_id = f"plan-snapshot-{entity_id}-step-{completed_step_index}"
+                        snapshot_data = {
+                            "entity_id": entity_id,
+                            "step_index": completed_step_index,
+                            "step_description": plan.steps[completed_step_index],
+                            "current_step": plan.current_step,
+                            "completed": plan.completed,
+                        }
+                        self.service.write_artifact(
+                            artifact_id, category="planning", data=snapshot_data
+                        )
                 
                 duration_ms = (time.monotonic() - start_time) * 1000
                 logger.info(

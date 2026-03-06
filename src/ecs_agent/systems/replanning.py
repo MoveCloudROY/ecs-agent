@@ -12,10 +12,12 @@ from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
     PlanComponent,
+    ScratchbookIndexComponent,
     SystemPromptComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.types import CompletionResult, EntityId, Message, PlanRevisedEvent
+from ecs_agent.scratchbook import ScratchbookService
 
 
 class ReplanningSystem:
@@ -33,9 +35,10 @@ class ReplanningSystem:
     after tools have executed but before memory truncation.
     """
 
-    def __init__(self, priority: int = 7) -> None:
+    def __init__(self, priority: int = 7, service: ScratchbookService | None = None) -> None:
         self.priority = priority
         self._last_replanned: dict[EntityId, int] = {}
+        self.service = service
 
     async def process(self, world: World) -> None:
         """Check each plan entity and replan if a new step was completed."""
@@ -73,13 +76,28 @@ class ReplanningSystem:
                     )
                 revised = self._parse_revised_steps(result.message.content)
 
-
                 if revised is not None:
                     old_steps = list(plan.steps)
                     plan.steps = plan.steps[: plan.current_step] + revised
                     new_steps = list(plan.steps)
 
                     if old_steps != new_steps:
+                        if self.service is not None:
+                            scratchbook_index = world.get_component(
+                                entity_id, ScratchbookIndexComponent
+                            )
+                            if scratchbook_index is not None:
+                                artifact_id = f"replan-delta-{entity_id}-step-{plan.current_step}"
+                                delta_data = {
+                                    "entity_id": entity_id,
+                                    "replanned_at_step": plan.current_step,
+                                    "old_steps": old_steps,
+                                    "new_steps": new_steps,
+                                }
+                                self.service.write_artifact(
+                                    artifact_id, category="replanning", data=delta_data
+                                )
+                        
                         await world.event_bus.publish(
                             PlanRevisedEvent(
                                 entity_id=entity_id,
