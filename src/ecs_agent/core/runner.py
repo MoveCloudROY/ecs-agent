@@ -72,6 +72,7 @@ class Runner:
             )
 
             try:
+                world.apply_pending_system_operations()
                 await world.process()
             except asyncio.CancelledError:
                 interrupted_after_cancellation = self._has_top_level_component(
@@ -85,7 +86,6 @@ class Runner:
                     return
                 raise
 
-            world.apply_pending_system_operations()
             interrupted_after_tick = self._has_top_level_component(
                 world, InterruptionComponent
             )

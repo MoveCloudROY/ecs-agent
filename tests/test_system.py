@@ -6,6 +6,7 @@ import pytest
 
 from ecs_agent.core.system import SystemExecutor
 from ecs_agent.core.world import World
+from ecs_agent.types import SystemHandle
 
 
 @dataclass(slots=True)
@@ -284,3 +285,71 @@ async def test_system_executor_handle_queue_applies_in_deterministic_order() -> 
     await executor.execute(world)
 
     assert log == ["first_replaced", "third"]
+
+
+@pytest.mark.asyncio
+async def test_system_executor_queued_ops_register_remove_replace_deterministic_order() -> (
+    None
+):
+    executor = SystemExecutor()
+    world = World()
+    log: list[str] = []
+
+    first = executor.register(LoggingSystem(name="first", log=log), priority=0)
+    second = executor.register(LoggingSystem(name="second", log=log), priority=0)
+    await executor.execute(world)
+    assert log == ["first", "second"]
+
+    log.clear()
+    executor.register(LoggingSystem(name="third", log=log), priority=0)
+    executor.remove(second)
+    executor.replace(first, LoggingSystem(name="first_replaced", log=log), priority=0)
+    await executor.execute(world)
+
+    assert log == ["first_replaced", "third"]
+
+
+@pytest.mark.asyncio
+async def test_system_executor_tick_boundary_replace_queued_ops_apply_next_execute() -> (
+    None
+):
+    class QueueReplaceOnceSystem:
+        def __init__(
+            self,
+            executor: SystemExecutor,
+            target_handle: SystemHandle,
+            log: list[str],
+        ) -> None:
+            self._executor = executor
+            self._target_handle = target_handle
+            self._log = log
+            self._did_queue = False
+
+        async def process(self, world: World) -> None:
+            self._log.append("mutator")
+            if self._did_queue:
+                return
+
+            self._executor.replace(
+                self._target_handle,
+                LoggingSystem(name="new", log=self._log),
+                priority=1,
+            )
+            self._did_queue = True
+
+    executor = SystemExecutor()
+    world = World()
+    log: list[str] = []
+
+    target = executor.register(LoggingSystem(name="old", log=log), priority=1)
+    executor.register(
+        QueueReplaceOnceSystem(executor=executor, target_handle=target, log=log),
+        priority=0,
+    )
+
+    await executor.execute(world)
+    assert log == ["mutator", "old"]
+
+    log.clear()
+    await executor.execute(world)
+    assert log == ["mutator", "new"]

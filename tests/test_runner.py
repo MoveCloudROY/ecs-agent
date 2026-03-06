@@ -288,6 +288,30 @@ class TestRunner:
         assert log == ["victim:0"]
 
     @pytest.mark.asyncio
+    async def test_runner_system_replace_next_tick_applies_pending_pre_tick(
+        self, runner: Runner
+    ) -> None:
+        class OrderedApplyWorld(World):
+            def __init__(self) -> None:
+                super().__init__()
+                self.call_order: list[str] = []
+
+            def apply_pending_system_operations(self) -> None:
+                self.call_order.append("apply_pending")
+                super().apply_pending_system_operations()
+
+            async def process(self) -> None:
+                self.call_order.append("process")
+                terminal_entity = self.create_entity()
+                self.add_component(terminal_entity, TerminalComponent(reason="done"))
+
+        world = OrderedApplyWorld()
+
+        await runner.run(world, max_ticks=2)
+
+        assert world.call_order == ["apply_pending", "process"]
+
+    @pytest.mark.asyncio
     async def test_runner_graceful_interrupt_preserves_partial(
         self, world: World, runner: Runner
     ) -> None:
