@@ -16,6 +16,8 @@ from ecs_agent.types import (
     SubagentConfig,
     ToolCall,
     ToolSchema,
+    TaskStatus,
+    ScratchbookRef,
 )
 
 try:
@@ -315,3 +317,41 @@ class InterruptionComponent:
     message: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)
+
+
+@dataclass(slots=True)
+class TaskComponent:
+    """Task orchestration component."""
+
+    # REQUIRED (user-confirmed mandatory fields)
+    description: str
+    expected_output: str
+    assigned_agent: EntityId | str | None
+    tools: list[str]
+    context_dependencies: list[str]
+
+    # RUNTIME (state machine metadata)
+    task_id: str
+    status: TaskStatus
+    priority: int = 0
+
+    # OPTIONAL (advanced features)
+    output_schema: dict[str, Any] | None = None
+    max_retries: int = 0
+
+
+@dataclass(slots=True)
+class ScratchbookRefComponent:
+    """Reference to a scratchbook artifact."""
+
+    artifact_id: str
+    category: str
+    content_hash: str
+    timestamp: str
+
+
+@dataclass(slots=True)
+class ScratchbookIndexComponent:
+    """Index of scratchbook artifacts."""
+
+    artifacts: dict[str, ScratchbookRef] = field(default_factory=dict)

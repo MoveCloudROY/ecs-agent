@@ -360,7 +360,7 @@ class TestComponentCount:
     """Test component count limit."""
 
     def test_component_count_limit(self):
-        """Test that component count does not exceed 35."""
+        """Test that component count does not exceed 40."""
         import ecs_agent.components.definitions as d
 
         count = sum(
@@ -370,7 +370,7 @@ class TestComponentCount:
             and dataclasses.is_dataclass(getattr(d, name, None))
             and getattr(d, name).__module__ == "ecs_agent.components.definitions"
         )
-        assert count <= 35, f"Component count {count} exceeds limit of 35"
+        assert count <= 40, f"Component count {count} exceeds limit of 40"
 
 
 class TestComponentsExportedInInit:
@@ -515,3 +515,162 @@ class TestInterruptionComponent:
         """Test InterruptionComponent uses slots."""
         from ecs_agent.components import InterruptionComponent
         assert hasattr(InterruptionComponent, "__slots__")
+
+
+class TestTaskComponent:
+    """Test TaskComponent for task orchestration."""
+
+    def test_instantiation_with_required_fields(self):
+        """Test TaskComponent with all required fields."""
+        from ecs_agent.components import TaskComponent
+        from ecs_agent.types import TaskStatus
+        comp = TaskComponent(
+            description="Write unit tests",
+            expected_output="All tests passing",
+            assigned_agent=None,
+            tools=["pytest", "mypy"],
+            context_dependencies=["src/module.py"],
+            task_id="task-123",
+            status=TaskStatus.PENDING,
+        )
+        assert comp.description == "Write unit tests"
+        assert comp.expected_output == "All tests passing"
+        assert comp.assigned_agent is None
+        assert comp.tools == ["pytest", "mypy"]
+        assert comp.context_dependencies == ["src/module.py"]
+        assert comp.task_id == "task-123"
+        assert comp.status == TaskStatus.PENDING
+        assert comp.priority == 0
+        assert comp.output_schema is None
+        assert comp.max_retries == 0
+
+    def test_with_entity_assigned_agent(self):
+        """Test TaskComponent with EntityId assigned agent."""
+        from ecs_agent.components import TaskComponent
+        from ecs_agent.types import TaskStatus
+        agent_id = EntityId(42)
+        comp = TaskComponent(
+            description="Task",
+            expected_output="Done",
+            assigned_agent=agent_id,
+            tools=[],
+            context_dependencies=[],
+            task_id="t1",
+            status=TaskStatus.READY,
+        )
+        assert comp.assigned_agent == agent_id
+
+    def test_with_string_assigned_agent(self):
+        """Test TaskComponent with string assigned agent name."""
+        from ecs_agent.components import TaskComponent
+        from ecs_agent.types import TaskStatus
+        comp = TaskComponent(
+            description="Task",
+            expected_output="Done",
+            assigned_agent="subagent_researcher",
+            tools=[],
+            context_dependencies=[],
+            task_id="t2",
+            status=TaskStatus.RUNNING,
+        )
+        assert comp.assigned_agent == "subagent_researcher"
+
+    def test_with_optional_fields(self):
+        """Test TaskComponent with optional fields set."""
+        from ecs_agent.components import TaskComponent
+        from ecs_agent.types import TaskStatus
+        schema = {"type": "object", "properties": {"result": {"type": "string"}}}
+        comp = TaskComponent(
+            description="Task",
+            expected_output="Done",
+            assigned_agent=None,
+            tools=[],
+            context_dependencies=[],
+            task_id="t3",
+            status=TaskStatus.COMPLETED,
+            priority=5,
+            output_schema=schema,
+            max_retries=3,
+        )
+        assert comp.priority == 5
+        assert comp.output_schema == schema
+        assert comp.max_retries == 3
+
+    def test_dataclass_slots(self):
+        """Test TaskComponent uses slots."""
+        from ecs_agent.components import TaskComponent
+        assert hasattr(TaskComponent, "__slots__")
+
+
+class TestScratchbookRefComponent:
+    """Test ScratchbookRefComponent for artifact references."""
+
+    def test_instantiation(self):
+        """Test ScratchbookRefComponent with artifact metadata."""
+        from ecs_agent.components import ScratchbookRefComponent
+        comp = ScratchbookRefComponent(
+            artifact_id="art-456",
+            category="plan",
+            content_hash="sha256:abc123",
+            timestamp="2026-03-07T10:00:00Z",
+        )
+        assert comp.artifact_id == "art-456"
+        assert comp.category == "plan"
+        assert comp.content_hash == "sha256:abc123"
+        assert comp.timestamp == "2026-03-07T10:00:00Z"
+
+    def test_dataclass_slots(self):
+        """Test ScratchbookRefComponent uses slots."""
+        from ecs_agent.components import ScratchbookRefComponent
+        assert hasattr(ScratchbookRefComponent, "__slots__")
+
+
+class TestScratchbookIndexComponent:
+    """Test ScratchbookIndexComponent for scratchbook index tracking."""
+
+    def test_instantiation_with_empty_index(self):
+        """Test ScratchbookIndexComponent with empty artifact index."""
+        from ecs_agent.components import ScratchbookIndexComponent
+        comp = ScratchbookIndexComponent()
+        assert comp.artifacts == {}
+
+    def test_instantiation_with_artifacts(self):
+        """Test ScratchbookIndexComponent with artifact entries."""
+        from ecs_agent.components import ScratchbookIndexComponent
+        from ecs_agent.types import ScratchbookRef
+        ref1 = ScratchbookRef(
+            artifact_id="a1",
+            category="plan",
+            content_hash="hash1",
+            timestamp="2026-03-07T10:00:00Z",
+        )
+        ref2 = ScratchbookRef(
+            artifact_id="a2",
+            category="output",
+            content_hash="hash2",
+            timestamp="2026-03-07T11:00:00Z",
+        )
+        comp = ScratchbookIndexComponent(artifacts={"a1": ref1, "a2": ref2})
+        assert len(comp.artifacts) == 2
+        assert comp.artifacts["a1"] == ref1
+        assert comp.artifacts["a2"] == ref2
+
+    def test_mutable_default_independence(self):
+        """Test that artifact dicts are independent instances."""
+        from ecs_agent.components import ScratchbookIndexComponent
+        from ecs_agent.types import ScratchbookRef
+        comp1 = ScratchbookIndexComponent()
+        comp2 = ScratchbookIndexComponent()
+        ref = ScratchbookRef(
+            artifact_id="test",
+            category="temp",
+            content_hash="h1",
+            timestamp="2026-03-07T12:00:00Z",
+        )
+        comp1.artifacts["test"] = ref
+        assert "test" not in comp2.artifacts
+
+    def test_dataclass_slots(self):
+        """Test ScratchbookIndexComponent uses slots."""
+        from ecs_agent.components import ScratchbookIndexComponent
+        assert hasattr(ScratchbookIndexComponent, "__slots__")

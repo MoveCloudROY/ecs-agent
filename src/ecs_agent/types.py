@@ -158,6 +158,25 @@ class InterruptionReason(Enum):
     COMPLETION = "completion"
 
 
+class TaskStatus(Enum):
+    """Task execution status."""
+
+    PENDING = "pending"
+    READY = "ready"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    BLOCKED = "blocked"
+
+
+@dataclass(slots=True)
+class ScratchbookRef:
+    """Reference to a scratchbook artifact."""
+
+    artifact_id: str
+    category: str
+    content_hash: str
+    timestamp: str
 @dataclass(slots=True)
 class ToolApprovalRequestedEvent:
     """Event emitted when a tool call requires approval."""
@@ -405,6 +424,54 @@ class DelegationCompletedEvent:
 
 
 @dataclass(slots=True)
+class TaskCreatedEvent:
+    """Event emitted when a task is created."""
+
+    entity_id: EntityId
+    task_id: str
+    description: str
+
+
+@dataclass(slots=True)
+class TaskStateChangedEvent:
+    """Event emitted when task status changes."""
+
+    entity_id: EntityId
+    task_id: str
+    old_status: "TaskStatus"
+    new_status: "TaskStatus"
+
+
+@dataclass(slots=True)
+class TaskBlockedEvent:
+    """Event emitted when a task becomes blocked."""
+
+    entity_id: EntityId
+    task_id: str
+    reason: str
+    blocked_on: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class TaskCompletedEvent:
+    """Event emitted when a task completes successfully."""
+
+    entity_id: EntityId
+    task_id: str
+    result: str
+
+
+@dataclass(slots=True)
+class TaskFailedEvent:
+    """Event emitted when a task fails."""
+
+    entity_id: EntityId
+    task_id: str
+    error: str
+    retry_count: int = 0
+
+
+@dataclass(slots=True)
 class MessageBusEnvelope:
     """CloudEvents-aligned message bus envelope with correlation and tracing extensions.
 
@@ -522,6 +589,7 @@ __all__ = [
     "RetryConfig",
     "RevertRequest",
     "RevertResult",
+    "ScratchbookRef",
     "SkillDiscoveryEvent",
     "SkillInstalledEvent",
     "SkillUninstalledEvent",
@@ -531,6 +599,12 @@ __all__ = [
     "StreamStartEvent",
     "SubagentConfig",
     "SystemHandle",
+    "TaskBlockedEvent",
+    "TaskCompletedEvent",
+    "TaskCreatedEvent",
+    "TaskFailedEvent",
+    "TaskStateChangedEvent",
+    "TaskStatus",
     "ToolApprovalRequestedEvent",
     "ToolApprovedEvent",
     "ToolCall",
