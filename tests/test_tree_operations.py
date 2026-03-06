@@ -282,3 +282,118 @@ def test_get_active_leaf_returns_none_when_no_branch() -> None:
     leaf = get_active_leaf(tree)
 
     assert leaf is None
+
+
+def test_revert_to_message_moves_active_branch_pointer() -> None:
+    """revert_to_message updates current branch's leaf to target message."""
+    from ecs_agent.conversation_tree import revert_to_message
+
+    tree = ConversationTreeComponent()
+
+    # Build linear conversation: root -> msg2 -> msg3
+    root = add_message(tree, role="user", content="root", parent_id=None)
+    msg2 = add_message(tree, role="assistant", content="msg2", parent_id=root.id)
+    msg3 = add_message(tree, role="user", content="msg3", parent_id=msg2.id)
+
+    # Create branch pointing to msg3
+    create_branch(tree, branch_id="main", leaf_message_id=msg3.id)
+    switch_branch(tree, "main")
+
+    # Revert to msg2 (prior assistant message)
+    result = revert_to_message(tree, msg2.id)
+
+    # Verify active branch now points to msg2
+    assert tree.branches["main"].leaf_message_id == msg2.id
+    assert result == msg2.id
+    # Verify msg3 still exists (non-destructive)
+    assert msg3.id in tree.messages
+
+
+def test_revert_to_message_preserves_sibling_branches() -> None:
+    """revert_to_message does not delete historical sibling nodes."""
+    from ecs_agent.conversation_tree import revert_to_message
+
+    tree = ConversationTreeComponent()
+
+    root = add_message(tree, role="user", content="root", parent_id=None)
+    branch_a = add_message(tree, role="assistant", content="branch A", parent_id=root.id)
+    branch_b = add_message(tree, role="assistant", content="branch B", parent_id=root.id)
+    leaf_b = add_message(tree, role="user", content="leaf B", parent_id=branch_b.id)
+
+    create_branch(tree, branch_id="main", leaf_message_id=leaf_b.id)
+    switch_branch(tree, "main")
+
+    # Revert to root
+    revert_to_message(tree, root.id)
+
+    # Verify siblings remain reachable
+    assert branch_a.id in tree.messages
+    assert branch_b.id in tree.messages
+    assert leaf_b.id in tree.messages
+    assert tree.branches["main"].leaf_message_id == root.id
+
+
+def test_revert_to_message_raises_keyerror_for_missing_target() -> None:
+    """revert_to_message raises KeyError if target message doesn't exist."""
+    from ecs_agent.conversation_tree import revert_to_message
+
+    tree = ConversationTreeComponent()
+
+    msg = add_message(tree, role="user", content="test", parent_id=None)
+    create_branch(tree, branch_id="main", leaf_message_id=msg.id)
+    switch_branch(tree, "main")
+
+    with pytest.raises(KeyError, match="nonexistent"):
+        revert_to_message(tree, "nonexistent")
+
+
+def test_revert_to_message_raises_valueerror_if_no_active_branch() -> None:
+    """revert_to_message raises ValueError if current_branch_id is None."""
+    from ecs_agent.conversation_tree import revert_to_message
+
+    tree = ConversationTreeComponent()
+
+    msg = add_message(tree, role="user", content="test", parent_id=None)
+
+    with pytest.raises(ValueError, match="No active branch"):
+        revert_to_message(tree, msg.id)
+
+
+def test_revert_to_message_preserves_tree_invariants() -> None:
+    """revert_to_message does not corrupt parent/child links."""
+    from ecs_agent.conversation_tree import revert_to_message
+
+    tree = ConversationTreeComponent()
+
+    root = add_message(tree, role="user", content="root", parent_id=None)
+    msg2 = add_message(tree, role="assistant", content="msg2", parent_id=root.id)
+    msg3 = add_message(tree, role="user", content="msg3", parent_id=msg2.id)
+
+    create_branch(tree, branch_id="main", leaf_message_id=msg3.id)
+    switch_branch(tree, "main")
+
+    revert_to_message(tree, root.id)
+
+    # Verify all parent links intact
+    assert tree.messages[root.id].parent_message_id is None
+    assert tree.messages[msg2.id].parent_message_id == root.id
+    assert tree.messages[msg3.id].parent_message_id == msg2.id
+
+
+def test_revert_to_user_message() -> None:
+    """revert_to_message works for user role messages."""
+    from ecs_agent.conversation_tree import revert_to_message
+
+    tree = ConversationTreeComponent()
+
+    user1 = add_message(tree, role="user", content="user1", parent_id=None)
+    asst = add_message(tree, role="assistant", content="asst", parent_id=user1.id)
+    user2 = add_message(tree, role="user", content="user2", parent_id=asst.id)
+
+    create_branch(tree, branch_id="main", leaf_message_id=user2.id)
+    switch_branch(tree, "main")
+
+    result = revert_to_message(tree, user1.id)
+
+    assert result == user1.id
+    assert tree.branches["main"].leaf_message_id == user1.id

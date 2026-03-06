@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import time
-import uuid
-from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 from ecs_agent.logging import STANDARD_EVENT_NAMES, get_logger
+from ecs_agent.types import SystemHandle
 
 if TYPE_CHECKING:
     from ecs_agent.core.world import World
@@ -18,46 +18,107 @@ class System(Protocol):
     async def process(self, world: World) -> None: ...
 
 
+@dataclass(slots=True)
+class _SystemEntry:
+    handle: SystemHandle
+    system: System
+    priority: int
+    order: int
+
+
+@dataclass(slots=True)
+class _RegisterOperation:
+    handle: SystemHandle
+    system: System
+    priority: int
+
+
+@dataclass(slots=True)
+class _RemoveOperation:
+    handle: SystemHandle
+
+
+@dataclass(slots=True)
+class _ReplaceOperation:
+    handle: SystemHandle
+    system: System
+    priority: int | None
+
+
 class SystemExecutor:
     def __init__(self) -> None:
-        self._systems: list[tuple[System, int, str]] = []
-        self._pending_ops: list[Callable[[], None]] = []
+        self._systems: list[_SystemEntry] = []
+        self._pending_operations: list[
+            _RegisterOperation | _RemoveOperation | _ReplaceOperation
+        ] = []
+        self._next_handle_id = 1
+        self._next_order = 0
 
-    def register(self, system: System, priority: int, handle: str | None = None) -> str:
-        actual_handle = handle or str(uuid.uuid4())
-        self._pending_ops.append(
-            lambda: self._systems.append((system, priority, actual_handle))
+    def register(self, system: System, priority: int) -> SystemHandle:
+        handle = SystemHandle(f"system_{self._next_handle_id}")
+        self._next_handle_id += 1
+        self._pending_operations.append(
+            _RegisterOperation(handle=handle, system=system, priority=priority)
         )
-        return actual_handle
+        return handle
 
-    def remove(self, handle: str) -> None:
-        self._pending_ops.append(lambda: self._remove_by_handle(handle))
+    def remove(self, handle: SystemHandle) -> None:
+        self._pending_operations.append(_RemoveOperation(handle=handle))
 
-    def replace(self, handle: str, new_system: System) -> None:
-        self._pending_ops.append(lambda: self._replace_by_handle(handle, new_system))
+    def replace(
+        self, handle: SystemHandle, system: System, priority: int | None = None
+    ) -> None:
+        self._pending_operations.append(
+            _ReplaceOperation(handle=handle, system=system, priority=priority)
+        )
 
-    def _remove_by_handle(self, handle: str) -> None:
-        self._systems = [s for s in self._systems if s[2] != handle]
+    def apply_queued_operations(self) -> None:
+        for operation in self._pending_operations:
+            if isinstance(operation, _RegisterOperation):
+                self._systems.append(
+                    _SystemEntry(
+                        handle=operation.handle,
+                        system=operation.system,
+                        priority=operation.priority,
+                        order=self._next_order,
+                    )
+                )
+                self._next_order += 1
+            elif isinstance(operation, _RemoveOperation):
+                self._systems = [
+                    entry for entry in self._systems if entry.handle != operation.handle
+                ]
+            else:
+                for index, entry in enumerate(self._systems):
+                    if entry.handle == operation.handle:
+                        replacement_priority = (
+                            operation.priority
+                            if operation.priority is not None
+                            else entry.priority
+                        )
+                        self._systems[index] = _SystemEntry(
+                            handle=entry.handle,
+                            system=operation.system,
+                            priority=replacement_priority,
+                            order=entry.order,
+                        )
+                        break
 
-    def _replace_by_handle(self, handle: str, new_system: System) -> None:
-        for i, (system, priority, h) in enumerate(self._systems):
-            if h == handle:
-                self._systems[i] = (new_system, priority, handle)
-                break
-
-    def apply_pending(self) -> None:
-        for op in self._pending_ops:
-            op()
-        self._pending_ops.clear()
+        self._pending_operations.clear()
 
     async def execute(self, world: World) -> None:
+        self.apply_queued_operations()
+
         if not self._systems:
             return
 
         systems_by_priority: dict[int, list[System]] = {}
-        for system, priority, _ in self._systems:
-            priority_systems = systems_by_priority.setdefault(priority, [])
-            priority_systems.append(system)
+        ordered_systems = sorted(
+            self._systems, key=lambda entry: (entry.priority, entry.order)
+        )
+        for entry in ordered_systems:
+            priority_systems = systems_by_priority.setdefault(entry.priority, [])
+            priority_systems.append(entry.system)
 
         for priority in sorted(systems_by_priority):
             async with asyncio.TaskGroup() as task_group:

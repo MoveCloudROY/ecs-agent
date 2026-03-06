@@ -1,134 +1,261 @@
 # Runtime Dynamic Control
 
-The ECS Agent framework provides a set of runtime control capabilities that allow for dynamic management of entities, systems, and agent behavior during execution. These features enable high-level orchestration, graceful interruption, and flexible conversation management.
+The ECS Agent framework provides five runtime control capabilities for dynamic agent reconfiguration without restarting: **Entity Registry** (named entity resolution), **System Lifecycle** (dynamic system removal/replacement), **Model Switching** (per-entity provider updates), **Graceful Interruption** (component-driven stopping), and **Conversation Revert** (tree-based history navigation).
 
-## Introduction
+## Entity Registry
 
-Runtime Dynamic Control encompasses five core capabilities:
-1. **Entity Registry**: Named access and tagging for entity management.
-2. **System Lifecycle**: Queued registration, removal, and replacement of systems.
-3. **Model Switching**: Per-entity model and provider updates with isolated scope.
-4. **Graceful Interruption**: Controlled stoppage of agent execution with state preservation.
-5. **Conversation Revert**: Non-destructive navigation to historical conversation states.
+Named entity resolution and tagging for managing multiple agents in a world.
 
-## Capabilities
+### Methods
 
-### 1. Entity Registry
+- `world.register_entity(entity_id, name, tags=None)` — Register entity with unique name and optional tags
+- `world.resolve_entity(name)` — Look up entity by registered name (returns `EntityId | None`)
+- `world.list_entities_by_tag(tag)` — Find all entities with given tag (returns `list[EntityId]`)
+- `world.unregister_entity(entity_id)` — Remove from registry (called automatically by `delete_entity`)
 
-The Entity Registry provides a central mechanism for resolving entities by name or tag. This is useful for multi-agent coordination where entities need to find each other.
-
-- **Named Resolution**: Assign a unique name to an entity for global lookup.
-- **Tagging**: Group entities with semantic tags (e.g., "worker", "researcher").
-- **Automatic Lifecycle**: `delete_entity()` automatically unregisters the entity from the registry.
-
-#### Usage
+### Example
 
 ```python
-# Register an agent with a name and tags
-world.register_entity(agent_id, name="primary-agent", tags={"worker", "active"})
+from ecs_agent.core import World
 
-# Resolve entity ID by name
-eid = world.resolve_entity("primary-agent")
+world = World()
+agent1 = world.create_entity()
+agent2 = world.create_entity()
 
-# List all entities with a specific tag
-workers = world.list_entities_by_tag("worker")
+# Register with names and tags
+world.register_entity(agent1, "coordinator", tags={"manager", "primary"})
+world.register_entity(agent2, "worker", tags={"worker", "secondary"})
 
-# Unregister an entity
-world.unregister_entity(agent_id)
+# Resolve by name
+coordinator_id = world.resolve_entity("coordinator")  # Returns agent1
+
+# Find by tag
+workers = world.list_entities_by_tag("worker")  # Returns [agent2]
+managers = world.list_entities_by_tag("manager")  # Returns [agent1]
 ```
 
-### 2. System Lifecycle
+### Constraints
 
-Systems can be dynamically registered, removed, or replaced at runtime. Operations are queued and applied at tick boundaries to ensure deterministic execution.
+- Entity names must be unique within a world
+- `register_entity` raises `ValueError` if name already registered
+- `resolve_entity` returns `None` for missing names
+- `list_entities_by_tag` returns empty list `[]` for missing tags
+- `unregister_entity` is a no-op for missing entity IDs
 
-- **Queued Operations**: `remove_system()` and `replace_system()` are deferred until `apply_pending_system_operations()` is called.
-- **System Handles**: `register_system()` returns a unique handle used for subsequent lifecycle operations.
-- **Priority Preservation**: `replace_system()` preserves the original priority of the system being replaced.
+## System Lifecycle Management
 
-#### Usage
+Dynamic system removal and replacement with queue-based tick-boundary semantics.
+
+### Methods
+
+- `handle = world.register_system(system, priority)` — Register system, returns `SystemHandle`
+- `world.remove_system(handle)` — Queue system for removal at next tick boundary
+- `world.replace_system(handle, new_system, priority=None)` — Queue system replacement at next tick boundary
+- `world.apply_pending_system_operations()` — Apply queued operations (called automatically by `Runner`)
+
+### Queue Semantics
+
+- All lifecycle operations (remove/replace) are **queued**, not applied immediately
+- Operations execute in FIFO order at the **pre-tick boundary** (before `world.process()`)
+- Runner automatically calls `apply_pending_system_operations()` before each tick
+- Mid-tick replacement requests wait until the next tick starts
+
+### Example
 
 ```python
-# Register a system and get its handle
-handle = world.register_system(ReasoningSystem(priority=0), priority=0)
+from ecs_agent.core import World, Runner
+from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.planning import PlanningSystem
 
-# Replace the system with a different implementation
-new_system = AdvancedReasoningSystem()
-world.replace_system(handle, new_system)
+world = World()
+runner = Runner()
 
-# Remove a system by handle
-world.remove_system(handle)
+# Register initial systems
+reasoning_handle = world.register_system(ReasoningSystem(priority=0), priority=0)
+planning_handle = world.register_system(PlanningSystem(), priority=0)
 
-# Apply pending operations (typically called by Runner before tick starts)
-world.apply_pending_system_operations()
+# Run first tick with both systems
+await runner.run(world, max_ticks=1)
+
+# Queue planning system for removal
+world.remove_system(planning_handle)
+
+# Removal takes effect at pre-tick boundary of next tick
+await runner.run(world, max_ticks=1, start_tick=1)
+
+# Replace reasoning system
+new_reasoning = ReasoningSystem(priority=0)
+world.replace_system(reasoning_handle, new_reasoning, priority=5)
+
+# Replacement takes effect at next tick
+await runner.run(world, max_ticks=1, start_tick=2)
 ```
 
-### 3. Model Switching
+## Per-Entity Model Switching
 
-The `LLMComponent` supports updating the model or provider dynamically. These changes are isolated to the specific entity and do not affect others.
+Dynamic provider and model updates for individual entities with in-flight request stability.
 
-- **Pending Fields**: Use `pending_model` and `pending_provider` to stage updates.
-- **Request-Start Sampling**: Systems sample the active model at the start of a request to ensure stability for in-flight completions.
-- **Cross-Entity Isolation**: Updates to Entity A's configuration never impact Entity B.
+### Fields
 
-#### Usage
+- `LLMComponent.pending_model: str | None` — Queued model switch (applied at next request start)
+- `LLMComponent.pending_provider: LLMProvider | None` — Queued provider switch (applied at next request start)
+
+### Behavior
+
+- Pending fields are **sampled at request start** and used for the entire request
+- In-flight requests use the sampled values, ignoring further updates
+- Cross-entity isolation: Entity A's switch does not affect Entity B
+
+### Example
 
 ```python
-llm = world.get_component(agent_id, LLMComponent)
+from ecs_agent.components import LLMComponent
+from ecs_agent.providers import OpenAIProvider
 
-# Switch model for the next request
-llm.pending_model = "gpt-4-turbo"
+world = World()
+agent = world.create_entity()
 
-# Switch provider (e.g., fallback to local model)
-llm.pending_provider = local_provider
+provider = OpenAIProvider(api_key="...", base_url="...", model="gpt-4")
+llm = LLMComponent(provider=provider, model="gpt-4")
+world.add_component(agent, llm)
+
+# ... agent generates with gpt-4 ...
+
+# Queue model switch
+llm.pending_model = "gpt-3.5-turbo"
+
+# Next generation uses gpt-3.5-turbo
+# (sampled at reasoning start, stable for entire request)
+await world.process()
 ```
 
-### 4. Graceful Interruption
+## Graceful Interruption
 
-The `InterruptionComponent` allows for signaling that an entity's execution should stop. Unlike a hard cancellation, this mechanism allows systems to preserve partial state.
+Component-driven agent stopping with partial content preservation.
 
-- **Interruption Reasons**: Supported reasons include `USER_REQUEST`, `ERROR`, `TIMEOUT`, and `POLICY_VIOLATION`.
-- **State Preservation**: Systems check for interruption during long-running tasks (like streaming) and ensure partial content is saved to the conversation history before stopping.
-- **Runner Detection**: The `Runner` detects `InterruptionComponent` and raises a `CancelledError` after ensuring tick consistency.
+### Component
 
-#### Usage
+**`InterruptionComponent`**: Signals agent should stop gracefully.
+
+- `reason: InterruptionReason` — Enum: `USER_REQUESTED`, `SYSTEM_PAUSE`, `ERROR`, `COMPLETION`
+- `message: str` — Human-readable reason
+- `metadata: dict[str, Any]` — Structured context (e.g., `{"partial_chunks": 5}`)
+- `timestamp: float` — Auto-generated via `time.time()`
+
+### Behavior
+
+- `Runner` detects `InterruptionComponent` and raises `asyncio.CancelledError`
+- `ReasoningSystem` catches `CancelledError`, preserves **partial content** in conversation, then re-raises
+- Streaming: in-loop checks before/after delta processing for mid-generation interruption
+- Metadata enriched with partial stream telemetry: `partial_content`, `partial_chunks`, `partial_content_length`
+
+### Example
 
 ```python
-from ecs_agent.types import InterruptionReason
+from ecs_agent.components import LLMComponent, ConversationComponent
+from ecs_agent.components.definitions import InterruptionComponent
+from ecs_agent.types import InterruptionReason, Message
 
-# Signal interruption
-world.add_component(agent_id, InterruptionComponent(
-    reason=InterruptionReason.USER_REQUEST,
-    metadata={"partial_allowed": True}
+world = World()
+agent = world.create_entity()
+
+# ... add LLMComponent, ConversationComponent, start reasoning ...
+
+# Interrupt during generation
+world.add_component(agent, InterruptionComponent(
+    reason=InterruptionReason.USER_REQUESTED,
+    message="User clicked stop button",
+    metadata={"source": "web_ui"}
 ))
+
+# Next tick: Runner raises CancelledError, ReasoningSystem saves partial response
+await runner.run(world, max_ticks=1)
+
+# Check partial content
+conv = world.get_component(agent, ConversationComponent)
+if conv and conv.messages:
+    partial_response = conv.messages[-1].content  # Preserved even though interrupted
 ```
 
-### 5. Conversation-Tree Revert
+### Constraints
 
-For entities using `ConversationTreeComponent`, the `revert_to_message()` utility provides a way to backtrack to a previous point in the conversation history without deleting subsequent nodes.
+- `CancelledError` **must be re-raised** after cleanup (or task won't be marked as cancelled)
+- Partial content preserved **before** re-raise
+- Interruption state not overwritten if already present (metadata enriched instead)
 
-- **Non-Destructive**: Historical nodes are preserved; a new branch is created from the target message.
-- **Branch Navigation**: Automatically switches the active branch to the newly created revert path.
-- **Failure Semantics**: Raises `KeyError` if the target message ID is not found in the tree.
+## Conversation Tree Revert
 
-#### Usage
+Non-destructive navigation to historical conversation states in tree-structured dialogues.
+
+### Function
+
+**`revert_to_message(tree: ConversationTreeComponent, target_message_id: str) -> str`**
+
+Moves the active branch pointer to a target message without deleting historical nodes.
+
+### Behavior
+
+- Updates `current_branch.leaf_message_id` to `target_message_id`
+- Returns target message ID for verification
+- Next `ReasoningSystem.process()` call uses linearized history from reverted leaf
+- All historical siblings and descendants remain in tree (non-destructive)
+
+### Errors
+
+- Raises `ValueError("No active branch to revert")` if `tree.current_branch_id is None`
+- Raises `KeyError(f"Target message not found: {target_message_id}")` if target not in `tree.messages`
+
+### Example
 
 ```python
-from ecs_agent.conversation_tree import revert_to_message
+from ecs_agent.conversation_tree import (
+    ConversationTreeComponent,
+    add_message,
+    create_branch,
+    switch_branch,
+    revert_to_message,
+    get_active_leaf,
+)
 
-# Revert conversation to a specific historical message
-revert_to_message(tree_component, "msg_historical_id")
+tree = ConversationTreeComponent()
 
-# The next ReasoningSystem tick will linearize from this point
+# Build conversation tree
+msg1 = add_message(tree, role="user", content="What is 2+2?")
+msg2 = add_message(tree, role="assistant", content="4", parent_id=msg1.id)
+msg3 = add_message(tree, role="user", content="What is 3+3?", parent_id=msg2.id)
+
+# Create and activate branch
+create_branch(tree, "main", msg3.id)
+switch_branch(tree, "main")
+
+# ... agent generates response to "What is 3+3?" ...
+
+# Revert to msg2 (before "What is 3+3?" question)
+revert_to_message(tree, msg2.id)
+
+# Next reasoning uses linearized history: [msg1, msg2] only
+# (msg3 and subsequent responses still exist but not active)
 ```
+
+### Integration with Reasoning
+
+`ReasoningSystem` automatically checks for `ConversationTreeComponent` and uses the active branch:
+
+1. `get_active_leaf(tree)` → current leaf message ID
+2. `linearize(tree, leaf_id)` → chronological message list from root to leaf
+3. Revert changes leaf pointer → next linearize() uses new path
 
 ## Constraints
 
-- **Tick Boundaries**: System lifecycle operations (`remove`, `replace`) only take effect after `apply_pending_system_operations()` is called. Calling these mid-tick will not affect the currently executing tick.
-- **Registry Names**: `register_entity()` will overwrite existing entries if the same name is used for a different entity ID.
-- **Tree Revert**: Only works with `ConversationTreeComponent`. Does not support flat `ConversationComponent` history.
-- **Interruption Scope**: Interruption is per-entity. One entity being interrupted does not stop other entities in the world.
+- **Entity Registry**: Names must be unique (ValueError on duplicate), tags and metadata are optional
+- **System Lifecycle**: Operations queued until tick boundary, applied in FIFO order
+- **Model Switching**: Takes effect at next request start, sampled values stable for entire request
+- **Graceful Interruption**: CancelledError must be re-raised after partial content preservation
+- **Conversation Revert**: Requires active branch, target must exist in tree
 
 ## See Also
-- [World API Reference](../api-reference.md#world)
-- [Conversation Tree Guide](./tree-conversation.md)
-- [Runner API Reference](../api-reference.md#runner)
+
+- [Conversation Trees](tree-conversation.md) — Tree structure, branching, linearization
+- [Context Management](context-management.md) — Checkpoint, undo, compaction
+- [Systems](../systems.md) — System execution order and lifecycle
+- [API Reference](../api-reference.md) — Complete method signatures

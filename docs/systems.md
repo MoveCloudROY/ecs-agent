@@ -36,6 +36,49 @@ The table below summarizes the recommended priorities for each system. Priority 
 
 ---
 
+
+## System Lifecycle Management
+
+Systems can be dynamically registered, removed, and replaced at runtime using queue-based operations.
+
+### Registration
+
+Systems are registered with `world.register_system(system, priority)` which returns a `SystemHandle` for later reference:
+
+```python
+from ecs_agent.systems.reasoning import ReasoningSystem
+
+handle = world.register_system(ReasoningSystem(priority=0), priority=0)
+```
+
+### Dynamic Removal and Replacement
+
+Systems can be removed or replaced at runtime using queue-based operations:
+
+- `world.remove_system(handle)` — Queue system for removal
+- `world.replace_system(handle, new_system, priority)` — Queue system replacement
+- `world.apply_pending_system_operations()` — Apply queued operations (called automatically by Runner)
+
+**Queue Semantics:**
+
+- All lifecycle operations are **queued**, not applied immediately
+- Operations execute in **FIFO order** at the **pre-tick boundary** (before `world.process()`)
+- Runner automatically calls `apply_pending_system_operations()` before each tick
+- Mid-tick replacement requests wait until the next tick starts
+
+```python
+# Queue removal
+world.remove_system(handle)
+# Removal takes effect at next tick boundary
+
+# Queue replacement
+world.replace_system(handle, NewSystem(), priority=5)
+# Replacement takes effect at next tick boundary
+```
+
+This ensures deterministic system execution and prevents mid-tick mutations.
+
+---
 ## 1. ReasoningSystem
 
 The ReasoningSystem serves as the primary cognitive engine for an entity. It coordinates with an LLM provider to generate text responses and identify necessary tool interactions.

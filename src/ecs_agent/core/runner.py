@@ -1,21 +1,29 @@
 """Runner for ECS-based LLM Agent with checkpoint resume support."""
 
+import asyncio
 import json
 import time
 from pathlib import Path
 from typing import Any
 
-from ecs_agent.components.definitions import RunnerStateComponent, TerminalComponent
+from ecs_agent.components.definitions import (
+    InterruptionComponent,
+    RunnerStateComponent,
+    TerminalComponent,
+)
 from ecs_agent.core.world import World
 from ecs_agent.logging import STANDARD_EVENT_NAMES, get_logger
 from ecs_agent.serialization import WorldSerializer
 
 logger = get_logger(__name__)
 
+
 class Runner:
     """Orchestrates the main execution loop."""
 
-    async def run(self, world: World, max_ticks: int | None = 100, start_tick: int = 0) -> None:
+    async def run(
+        self, world: World, max_ticks: int | None = 100, start_tick: int = 0
+    ) -> None:
         """Run the main execution loop until terminal condition.
 
         Executes world.process() repeatedly until either:
@@ -34,7 +42,11 @@ class Runner:
                        Pass None for unlimited execution.
             start_tick: Starting tick count for resume (default 0)
         """
-        logger.info(STANDARD_EVENT_NAMES["RUN_START"], max_ticks=max_ticks, start_tick=start_tick)
+        logger.info(
+            STANDARD_EVENT_NAMES["RUN_START"],
+            max_ticks=max_ticks,
+            start_tick=start_tick,
+        )
 
         # Create or update RunnerStateComponent
         runner_state_entities = list(world.query(RunnerStateComponent))
@@ -55,8 +67,30 @@ class Runner:
 
             logger.debug(STANDARD_EVENT_NAMES["TICK_START"], tick=tick)
             tick_start_time = time.monotonic()
+            interrupted_before_tick = self._has_top_level_component(
+                world, InterruptionComponent
+            )
 
-            await world.process()
+            try:
+                world.apply_pending_system_operations()
+                await world.process()
+            except asyncio.CancelledError:
+                interrupted_after_cancellation = self._has_top_level_component(
+                    world, InterruptionComponent
+                )
+                if interrupted_before_tick or interrupted_after_cancellation:
+                    logger.info(
+                        STANDARD_EVENT_NAMES["RUN_COMPLETE"],
+                        reason="interruption_component",
+                    )
+                    return
+                raise
+
+            interrupted_after_tick = self._has_top_level_component(
+                world, InterruptionComponent
+            )
+            if interrupted_after_tick and not interrupted_before_tick:
+                logger.debug("interruption_detected", tick=tick)
 
             tick_duration_ms = (time.monotonic() - tick_start_time) * 1000
             logger.debug(
@@ -68,17 +102,25 @@ class Runner:
             tick += 1
             runner_state.current_tick = tick
 
-            # Check for TerminalComponent on top-level entities only (ignore child entities)
-            from ecs_agent.components import OwnerComponent
-
-            has_terminal = any(
-                world.has_component(eid, TerminalComponent)
-                and not world.has_component(eid, OwnerComponent)
-                for eid, _ in world.query(TerminalComponent)
-            )
+            has_terminal = self._has_top_level_component(world, TerminalComponent)
             if has_terminal:
-                logger.info(STANDARD_EVENT_NAMES["RUN_COMPLETE"], reason="terminal_component")
+                logger.info(
+                    STANDARD_EVENT_NAMES["RUN_COMPLETE"], reason="terminal_component"
+                )
                 return
+
+    def _has_top_level_component(
+        self,
+        world: World,
+        component_type: type[TerminalComponent] | type[InterruptionComponent],
+    ) -> bool:
+        from ecs_agent.components import OwnerComponent
+
+        return any(
+            world.has_component(eid, component_type)
+            and not world.has_component(eid, OwnerComponent)
+            for eid, _ in world.query(component_type)
+        )
 
     def save_checkpoint(self, world: World, path: str | Path) -> None:
         """Save world state and runner state to checkpoint file.

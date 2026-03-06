@@ -887,3 +887,102 @@ def test_message_bus_mixed_roundtrip() -> None:
     assert conversation.entity_id == EntityId(99)
     assert len(conversation.messages) == 2
     assert conversation.max_messages == 50
+
+
+def test_serialization_roundtrip_entity_registry() -> None:
+    """Test that entity registry (_entity_registry, _entity_tags) roundtrips correctly."""
+    world = World()
+    entity1 = world.create_entity()
+    entity2 = world.create_entity()
+    
+    # Register entities with names and tags
+    world.register_entity(entity1, "agent-main", {"agent", "primary"})
+    world.register_entity(entity2, "agent-helper", {"agent", "secondary"})
+    
+    # Add some component to make entities visible
+    world.add_component(entity1, ConversationComponent(messages=[]))
+    world.add_component(entity2, ConversationComponent(messages=[]))
+    
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+    
+    # Verify names are preserved
+    assert restored.resolve_entity("agent-main") == entity1
+    assert restored.resolve_entity("agent-helper") == entity2
+    
+    # Verify tags are preserved
+    agent_entities = set(restored.list_entities_by_tag("agent"))
+    assert agent_entities == {entity1, entity2}
+    assert restored.list_entities_by_tag("primary") == [entity1]
+    assert restored.list_entities_by_tag("secondary") == [entity2]
+
+
+def test_serialization_backward_compatibility_no_registry_fields() -> None:
+    """Test that snapshots without registry fields load successfully with safe defaults."""
+    # Old serialized data without _entity_registry or _entity_tags
+    old_data = {
+        "next_entity_id": 2,
+        "entities": {
+            "1": {
+                "ConversationComponent": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "test",
+                            "tool_calls": None,
+                            "tool_call_id": None,
+                        }
+                    ],
+                    "max_messages": 100,
+                }
+            }
+        },
+        # Note: _entity_registry and _entity_tags are missing
+    }
+    
+    # Should not raise KeyError or other errors
+    restored = WorldSerializer.from_dict(old_data, providers={}, tool_handlers={})
+    assert restored is not None
+    
+    # Verify registry defaults to empty
+    assert restored.resolve_entity("any-name") is None
+    assert restored.list_entities_by_tag("any-tag") == []
+    
+    # Verify existing components still work
+    conv = restored.get_component(EntityId(1), ConversationComponent)
+    assert conv is not None
+    assert conv.messages[0].content == "test"
+
+
+def test_checkpoint_preserves_entity_registry_through_undo() -> None:
+    """Test that entity registry survives checkpoint save and restore."""
+    # This test verifies CheckpointSystem automatically handles registry
+    # through WorldSerializer.to_dict/from_dict
+    world = World()
+    entity = world.create_entity()
+    
+    # Register with name and tags
+    world.register_entity(entity, "agent-1", {"test", "main"})
+    
+    # Add checkpoint component and create snapshot
+    world.add_component(entity, CheckpointComponent())
+    world.add_component(entity, ConversationComponent(messages=[]))
+    
+    # Take snapshot (will use WorldSerializer.to_dict)
+    import asyncio
+    from ecs_agent.systems.checkpoint import CheckpointSystem
+    
+    asyncio.run(CheckpointSystem().process(world))
+    
+    # Modify registry state
+    entity2 = world.create_entity()
+    world.register_entity(entity2, "agent-2", {"test"})
+    
+    # Restore (will use WorldSerializer.from_dict)
+    asyncio.run(CheckpointSystem.undo(world, providers={}, tool_handlers={}))
+    
+    # Verify registry state was restored
+    assert world.resolve_entity("agent-1") == entity
+    assert world.resolve_entity("agent-2") is None  # Should not exist after undo
+    assert set(world.list_entities_by_tag("test")) == {entity}
+    assert world.list_entities_by_tag("main") == [entity]

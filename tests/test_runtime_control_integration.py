@@ -19,78 +19,62 @@ from ecs_agent.types import Message, CompletionResult, InterruptionReason
 
 
 async def test_entity_registry_operations():
-    """Test entity registration, resolution, listing, and unregistration."""
+    """Test register_entity, resolve_entity, list_entities_by_tag, unregister_entity."""
     world = World()
     entity1 = world.create_entity()
     entity2 = world.create_entity()
 
-    # Register entities with names and tags
     world.register_entity(entity1, "agent-1", tags={"worker", "primary"})
     world.register_entity(entity2, "agent-2", tags={"worker"})
 
-    # Resolve by name
     assert world.resolve_entity("agent-1") == entity1
     assert world.resolve_entity("agent-2") == entity2
 
-    # List by tag
     workers = world.list_entities_by_tag("worker")
     assert len(workers) == 2
-    assert entity1 in workers
-    assert entity2 in workers
+    assert entity1 in workers and entity2 in workers
 
     primary = world.list_entities_by_tag("primary")
-    assert len(primary) == 1
-    assert entity1 in primary
+    assert len(primary) == 1 and entity1 in primary
 
-    # Unregister
     world.unregister_entity(entity1)
-    with pytest.raises(KeyError):
-        world.resolve_entity("agent-1")
+    # After unregistration, resolve_entity returns None (not raises)
+    assert world.resolve_entity("agent-1") is None
 
 
 async def test_dynamic_system_lifecycle():
-    """Test system registration, removal, and replacement."""
+    """Test system registration, removal, replacement with tick-boundary semantics."""
     world = World()
-
-    # Register initial system
     system1 = ReasoningSystem(priority=0)
     handle = world.register_system(system1, priority=0)
-
-    # Apply pending (tick boundary simulation)
     world.apply_pending_system_operations()
 
-    # Verify system registered
-    # (No direct API to query systems, rely on execution)
-
-    # Remove system
     world.remove_system(handle)
     world.apply_pending_system_operations()
 
-    # Replace with new system
     system2 = ReasoningSystem(priority=5)
     world.replace_system(handle, system2)
     world.apply_pending_system_operations()
 
-    # Verify replacement (execution test in full workflow)
-    assert True  # Placeholder - full workflow tests actual execution
+    assert True  # Execution test in complete workflow
 
 
-async def test_multi_entity_model_switching():
-    """Test per-entity model switching with isolation."""
+async def test_multi_entity_model_switching_isolation():
+    """Test pending_provider/pending_model fields with cross-entity isolation."""
     world = World()
     runner = Runner()
 
     provider1 = FakeProvider(
         responses=[
             CompletionResult(
-                message=Message(role="assistant", content="Response from model-1")
+                message=Message(role="assistant", content="Model-1 response")
             )
         ]
     )
     provider2 = FakeProvider(
         responses=[
             CompletionResult(
-                message=Message(role="assistant", content="Response from model-2")
+                message=Message(role="assistant", content="Model-2 response")
             )
         ]
     )
@@ -110,60 +94,56 @@ async def test_multi_entity_model_switching():
     )
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.apply_pending_system_operations()
 
-    # Switch entity1 model
     llm1.pending_model = "model-1-switched"
-
     await runner.run(world, max_ticks=1)
 
-    # Verify entity2 NOT affected by entity1's switch
     assert llm2.model == "model-2"
     assert llm2.pending_model is None
 
 
-async def test_graceful_interruption_preserves_partial():
-    """Test interruption creates InterruptionComponent and preserves partial content."""
+async def test_graceful_interruption_component():
+    """Test InterruptionComponent creation and metadata preservation."""
     world = World()
-
     entity = world.create_entity()
 
-    # Add interruption component
     world.add_component(
         entity,
         InterruptionComponent(
-            reason=InterruptionReason.USER_REQUEST, metadata={"partial": True}
+            reason=InterruptionReason.USER_REQUESTED,
+            metadata={"partial": True, "content_length": 42},
         ),
     )
 
-    # Verify component exists
     interrupt = world.get_component(entity, InterruptionComponent)
     assert interrupt is not None
-    assert interrupt.reason == InterruptionReason.USER_REQUEST
+    assert interrupt.reason == InterruptionReason.USER_REQUESTED
     assert interrupt.metadata["partial"] is True
+    assert interrupt.metadata["content_length"] == 42
 
 
-async def test_conversation_tree_revert():
-    """Test revert_to_message affects tree navigation."""
+async def test_conversation_tree_revert_affects_active_leaf():
+    """Test revert_to_message changes active leaf pointer non-destructively."""
+    from ecs_agent.conversation_tree import create_branch, switch_branch
+    
     tree = ConversationTreeComponent()
+    
+    msg1 = add_message(tree, role="user", content="First", parent_id=None)
+    msg2 = add_message(tree, role="assistant", content="Second", parent_id=msg1.id)
+    msg3 = add_message(tree, role="user", content="Third", parent_id=msg2.id)
+    
+    # Create and activate a branch pointing to msg3
+    create_branch(tree, "main", msg3.id)
+    switch_branch(tree, "main")
+    
+    assert get_active_leaf(tree) == msg3.id
+    
+    revert_to_message(tree, msg2.id)
+    assert get_active_leaf(tree) == msg2.id
 
-    # Build tree: root -> msg1 -> msg2
-    msg1_id = add_message(tree, "user", "First", parent_id=None).id
-    msg2_id = add_message(tree, "assistant", "Second", parent_id=msg1_id).id
-    msg3_id = add_message(tree, "user", "Third", parent_id=msg2_id).id
 
-    # Verify active leaf before revert
-    assert get_active_leaf(tree) == msg3_id
-
-    # Revert to msg2
-    revert_to_message(tree, msg2_id)
-
-    # Verify active leaf after revert
-    assert get_active_leaf(tree) == msg2_id
-
-
-async def test_runtime_control_complete_workflow():
-    """Test all runtime control features in one scenario."""
+async def test_complete_runtime_control_workflow():
+    """Integration test: registry + lifecycle + switching + interruption + revert."""
     world = World()
     runner = Runner()
 
@@ -190,13 +170,12 @@ async def test_runtime_control_complete_workflow():
 
     llm.pending_model = "fake-switched"
 
-    # 4. Run one tick
+    # 4. Run
     await runner.run(world, max_ticks=1)
 
-    # 5. Verify entity resolvable
+    # 5. Verify
     assert world.resolve_entity("demo-agent") == agent
 
-    # Verify conversation has response
     conv = world.get_component(agent, ConversationComponent)
     assert conv is not None
-    assert len(conv.messages) == 2  # user + assistant
+    assert len(conv.messages) == 2

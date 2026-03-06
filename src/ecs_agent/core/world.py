@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import uuid
 from typing import Any, TypeVar
 
-from ecs_agent.components.definitions import EntityRegistryComponent
 from ecs_agent.core.component import ComponentStore
 from ecs_agent.core.entity import EntityIdGenerator
 from ecs_agent.core.event_bus import EventBus
 from ecs_agent.core.query import Query
 from ecs_agent.core.system import System, SystemExecutor
-from ecs_agent.types import EntityId
+from ecs_agent.types import EntityId, SystemHandle
+
 from ecs_agent.logging import STANDARD_EVENT_NAMES, get_logger
 
 logger = get_logger(__name__)
@@ -23,9 +22,8 @@ class World:
         self._systems = SystemExecutor()
         self._event_bus = EventBus()
         self._query = Query(self._components)
-        self._registry_entity = EntityId(1)
-        self.add_component(self._registry_entity, EntityRegistryComponent())
-
+        self._entity_registry: dict[str, EntityId] = {}
+        self._entity_tags: dict[str, set[EntityId]] = {}
     @property
     def event_bus(self) -> EventBus:
         return self._event_bus
@@ -53,66 +51,90 @@ class World:
         return self._components.has(entity_id, component_type)
 
     def delete_entity(self, entity_id: EntityId) -> None:
+        self.unregister_entity(entity_id)
         self._components.delete_entity(entity_id)
 
     def register_entity(
         self, entity_id: EntityId, name: str, tags: set[str] | None = None
     ) -> None:
-        registry = self.get_component(self._registry_entity, EntityRegistryComponent)
-        if registry:
-            registry.names[name] = entity_id
-            if tags:
-                for tag in tags:
-                    registry.tags.setdefault(tag, set()).add(entity_id)
-            logger.info(
-                "entity_registered",
-                entity_id=int(entity_id),
-                name=name,
-                tags=list(tags or []),
-            )
+        """Register entity with unique name and optional tags.
+        
+        Args:
+            entity_id: Entity to register
+            name: Unique name for entity lookup
+            tags: Optional set of tags for entity grouping
+            
+        Raises:
+            ValueError: If name already registered
+        """
+        if name in self._entity_registry:
+            raise ValueError(f"Entity name '{name}' already registered")
+        
+        self._entity_registry[name] = entity_id
+        
+        if tags:
+            for tag in tags:
+                if tag not in self._entity_tags:
+                    self._entity_tags[tag] = set()
+                self._entity_tags[tag].add(entity_id)
 
-    def resolve_entity(self, name: str) -> EntityId:
-        registry = self.get_component(self._registry_entity, EntityRegistryComponent)
-        if registry and name in registry.names:
-            return registry.names[name]
-        raise KeyError(f"Entity name not found: {name}")
+    def resolve_entity(self, name: str) -> EntityId | None:
+        """Lookup entity by registered name.
+        
+        Args:
+            name: Registered entity name
+            
+        Returns:
+            EntityId if found, None otherwise
+        """
+        return self._entity_registry.get(name)
 
     def list_entities_by_tag(self, tag: str) -> list[EntityId]:
-        registry = self.get_component(self._registry_entity, EntityRegistryComponent)
-        if registry and tag in registry.tags:
-            return list(registry.tags[tag])
-        return []
+        """Find all entities with given tag.
+        
+        Args:
+            tag: Tag to search for
+            
+        Returns:
+            List of entity IDs with the tag (empty if tag not found)
+        """
+        return list(self._entity_tags.get(tag, set()))
 
     def unregister_entity(self, entity_id: EntityId) -> None:
-        registry = self.get_component(self._registry_entity, EntityRegistryComponent)
-        if registry:
-            # Remove from names
-            names_to_remove = [
-                n for n, eid in registry.names.items() if eid == entity_id
-            ]
-            for name in names_to_remove:
-                del registry.names[name]
-            # Remove from tags
-            for tag_entities in registry.tags.values():
-                if entity_id in tag_entities:
-                    tag_entities.remove(entity_id)
-            logger.info("entity_unregistered", entity_id=int(entity_id))
+        """Remove entity from registry and tag indexes.
+        
+        Args:
+            entity_id: Entity to unregister
+        """
+        # Find and remove from name registry
+        name_to_remove = None
+        for name, eid in self._entity_registry.items():
+            if eid == entity_id:
+                name_to_remove = name
+                break
+        
+        if name_to_remove:
+            del self._entity_registry[name_to_remove]
+        
+        # Remove from all tag indexes
+        for tag_set in self._entity_tags.values():
+            tag_set.discard(entity_id)
+    def register_system(self, system: System, priority: int) -> SystemHandle:
+        return self._systems.register(system, priority)
 
-    def register_system(self, system: System, priority: int) -> str:
-        handle = str(uuid.uuid4())
-        self._systems.register(system, priority, handle)
-        return handle
-
-    def remove_system(self, handle: str) -> None:
+    def remove_system(self, handle: SystemHandle) -> None:
         self._systems.remove(handle)
 
-    def replace_system(self, handle: str, new_system: System) -> None:
-        self._systems.replace(handle, new_system)
+    def replace_system(
+        self, handle: SystemHandle, system: System, priority: int | None = None
+    ) -> None:
+        self._systems.replace(handle, system, priority)
 
     def apply_pending_system_operations(self) -> None:
-        self._systems.apply_pending()
+        self._systems.apply_queued_operations()
 
     async def process(self) -> None:
+        self.apply_pending_system_operations()
         await self._systems.execute(self)
 
     def query(

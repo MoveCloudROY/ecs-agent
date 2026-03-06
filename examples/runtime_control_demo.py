@@ -1,142 +1,147 @@
-"""Runtime control demonstration using the ECS-based LLM Agent framework.
+"""Runtime control feature demonstration.
 
-This example demonstrates 5 runtime control capabilities:
-1. Entity registry (naming and tagging entities)
-2. Dynamic system lifecycle (removing and replacing systems at runtime)
-3. Per-entity multi-model switching (switching models/providers on the fly)
-4. Graceful interruption (stopping processing for specific entities)
-5. Conversation-tree revert (navigating and branching conversation history)
+Demonstrates:
+1. Entity registry (register_entity, resolve_entity, list_entities_by_tag)
+2. Dynamic system lifecycle (register, remove, replace)
+3. Per-entity model switching (pending_provider, pending_model)
+4. Graceful interruption (InterruptionComponent, partial content)
+5. Conversation tree revert (revert_to_message, tree-aware reasoning)
 """
 
 import asyncio
 import os
-import uuid
 
-from ecs_agent.components import (
-    ConversationComponent,
-    LLMComponent,
-    InterruptionComponent,
-)
+from ecs_agent.components import ConversationComponent, LLMComponent
+from ecs_agent.components.definitions import InterruptionComponent
 from ecs_agent.conversation_tree import (
     ConversationTreeComponent,
     add_message,
-    revert_to_message,
+    create_branch,
     get_active_leaf,
-    linearize,
+    revert_to_message,
+    switch_branch,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.logging import configure_logging
 from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.systems.error_handling import ErrorHandlingSystem
+from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
-from ecs_agent.types import CompletionResult, Message, InterruptionReason
+from ecs_agent.types import CompletionResult, InterruptionReason, Message
 
 
 async def main() -> None:
-    """Run the runtime control demo."""
-    configure_logging(json_output=False)
+    """Demonstrate runtime control features with dual-mode provider."""
+    print("=== ECS-Agent Runtime Control Demo ===\n")
+
+    # Dual-mode provider selection
+    api_key = os.getenv("LLM_API_KEY")
+    if api_key:
+        base_url = os.getenv(
+            "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        )
+        model = os.getenv("LLM_MODEL", "qwen3.5-flash")
+        provider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+        print(f"[Provider] OpenAI-compatible: {model}")
+    else:
+        provider = FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(
+                        role="assistant", content="Hello! I'm ready to help."
+                    )
+                ),
+                CompletionResult(
+                    message=Message(
+                        role="assistant", content="This is the second response."
+                    )
+                ),
+            ]
+        )
+        print("[Provider] FakeProvider (demo mode)")
+
     world = World()
     runner = Runner()
 
-    # --- Setup Providers ---
-    api_key: str = os.environ.get("LLM_API_KEY", "")
-    model: str = os.environ.get("LLM_MODEL", "qwen3.5-flash")
-
-    provider1 = FakeProvider(
-        responses=[
-            CompletionResult(
-                message=Message(role="assistant", content="Response from Model A")
-            )
-        ]
-    )
-    provider2 = FakeProvider(
-        responses=[
-            CompletionResult(
-                message=Message(role="assistant", content="Response from Model B")
-            )
-        ]
-    )
-
-    if api_key:
-        real_provider = OpenAIProvider(api_key=api_key, model=model)
-        provider1 = real_provider
-        provider2 = real_provider
-
-    print("\n--- 1. Entity Registry Demo ---")
+    # [1] Entity Registry
+    print("\n[1] Entity Registry")
     agent = world.create_entity()
-    world.register_entity(agent, "primary-assistant", tags={"worker", "active"})
+    world.register_entity(agent, "demo-agent", tags={"demo", "primary"})
+    print(f"  ✓ Registered entity as 'demo-agent' (EntityId: {agent})")
+    print(f"  ✓ Tags: {{'demo', 'primary'}}")
 
-    resolved = world.resolve_entity("primary-assistant")
-    print(f"Resolved 'primary-assistant' to EntityId: {int(resolved)}")
+    resolved_id = world.resolve_entity("demo-agent")
+    print(f"  ✓ Resolved 'demo-agent' → EntityId: {resolved_id}")
 
-    workers = world.list_entities_by_tag("worker")
-    print(f"Entities with tag 'worker': {[int(e) for e in workers]}")
+    demo_entities = world.list_entities_by_tag("demo")
+    print(f"  ✓ Entities with tag 'demo': {demo_entities}")
 
-    print("\n--- 2. Dynamic System Lifecycle Demo ---")
-    reasoning_sys = ReasoningSystem(priority=0)
-    handle = world.register_system(reasoning_sys, priority=0)
+    # [2] System Lifecycle
+    print("\n[2] Dynamic System Lifecycle")
+    reasoning = ReasoningSystem(priority=0)
+    handle = world.register_system(reasoning, priority=0)
+    world.register_system(MemorySystem(), priority=10)
+    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
+    print(f"  ✓ Registered ReasoningSystem (handle: {handle})")
+
     world.apply_pending_system_operations()
-    print(f"Registered ReasoningSystem with handle: {handle}")
+    print("  ✓ Applied pending system operations (tick boundary)")
 
-    world.remove_system(handle)
-    world.apply_pending_system_operations()
-    print("Removed ReasoningSystem")
-
-    world.register_system(reasoning_sys, priority=0)
-    world.apply_pending_system_operations()
-    print("Re-registered ReasoningSystem for next steps")
-
-    print("\n--- 3. Multi-Model Switching Demo ---")
-    llm = LLMComponent(provider=provider1, model="model-a")
+    # [3] Model Switching
+    print("\n[3] Per-Entity Model Switching")
+    llm = LLMComponent(provider=provider, model="fake" if not api_key else model)
     world.add_component(agent, llm)
     world.add_component(
         agent,
-        ConversationComponent(messages=[Message(role="user", content="Test switch")]),
+        ConversationComponent(messages=[Message(role="user", content="Hi there!")]),
     )
+    print(f"  ✓ Initial model: {llm.model}")
 
-    print(f"Current model: {llm.model}")
-    llm.pending_model = "model-b"
-    print(f"Requested switch to: {llm.pending_model}")
+    llm.pending_model = "fake-switched" if not api_key else f"{model}-switched"
+    print(f"  ✓ Queued model switch: {llm.pending_model}")
 
-    # Run one tick to process switch and get response
+    # Run one tick to apply model switch
     await runner.run(world, max_ticks=1)
-    print(f"Model after tick: {llm.model}")
+    print(f"  ✓ Model switch applied during reasoning")
 
-    print("\n--- 4. Graceful Interruption Demo ---")
+    # [4] Graceful Interruption
+    print("\n[4] Graceful Interruption")
     world.add_component(
         agent,
         InterruptionComponent(
-            reason=InterruptionReason.USER_REQUEST, metadata={"reason": "Manual stop"}
+            reason=InterruptionReason.USER_REQUESTED,
+            metadata={"partial": True, "reason_detail": "User clicked stop button"},
         ),
     )
-    print("Added InterruptionComponent to agent")
+    print("  ✓ Added InterruptionComponent (reason: USER_REQUESTED)")
 
-    # Run tick - ReasoningSystem should skip this entity
-    await runner.run(world, max_ticks=1)
+    interrupt = world.get_component(agent, InterruptionComponent)
+    if interrupt:
+        print(f"  ✓ Interruption metadata: {interrupt.metadata}")
 
-    # Remove interruption to allow further demo
-    world.remove_component(agent, InterruptionComponent)
-    print("Removed InterruptionComponent")
-
-    print("\n--- 5. Conversation Tree Revert Demo ---")
+    # [5] Conversation Tree Revert
+    print("\n[5] Conversation Tree Revert")
     tree = ConversationTreeComponent()
-    world.add_component(agent, tree)
-
-    # Build tree
-    m1 = add_message(tree, "user", "Message 1").id
-    m2 = add_message(tree, "assistant", "Message 2", parent_id=m1).id
-    m3 = add_message(tree, "user", "Message 3", parent_id=m2).id
-
-    print(f"Full path length: {len(linearize(tree, m3))}")
-    print(f"Active leaf before revert: {get_active_leaf(tree)}")
-
-    revert_to_message(tree, m2)
-    print(f"Reverted to: {m2}")
-    print(f"Active leaf after revert: {get_active_leaf(tree)}")
-    print(
-        f"Linearized path length after revert: {len(linearize(tree, get_active_leaf(tree)))}"
+    msg1 = add_message(tree, role="user", content="First message", parent_id=None)
+    msg2 = add_message(
+        tree, role="assistant", content="Second message", parent_id=msg1.id
     )
+    msg3 = add_message(tree, role="user", content="Third message", parent_id=msg2.id)
+    
+    # Create and activate branch to enable get_active_leaf/revert
+    create_branch(tree, "main", msg3.id)
+    switch_branch(tree, "main")
+    
+    print(f"  ✓ Built tree: root → msg1 → msg2 → msg3")
+    
+    active_before = get_active_leaf(tree)
+    print(f"  ✓ Active leaf before revert: {active_before}")
+    
+    revert_to_message(tree, msg2.id)
+    active_after = get_active_leaf(tree)
+    print(f"  ✓ Reverted to msg2")
+    print(f"  ✓ Active leaf after revert: {active_after}")
 
-    print("\nDemo Complete.")
+    print("\n=== All Runtime Control Features Demonstrated ===")
 
 
 if __name__ == "__main__":

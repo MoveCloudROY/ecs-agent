@@ -1,11 +1,30 @@
 import json
+import asyncio
 from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
 
+from ecs_agent.components import (
+    ConversationComponent,
+    ErrorComponent,
+    InterruptionComponent,
+    LLMComponent,
+    StreamingComponent,
+)
+from ecs_agent.core import World
+from ecs_agent.providers import FakeProvider
 from ecs_agent.providers.openai_provider import OpenAIProvider
-from ecs_agent.types import CompletionResult, Message, StreamDelta
+from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.types import (
+    CompletionResult,
+    InterruptionReason,
+    Message,
+    StreamDelta,
+    StreamDeltaEvent,
+    StreamEndEvent,
+    StreamStartEvent,
+)
 
 
 class _MockStreamResponse:
@@ -356,3 +375,179 @@ async def test_fake_provider_streaming_empty_content() -> None:
     assert len(deltas) == 1
     assert deltas[0].finish_reason == "stop"
     assert deltas[0].usage == usage
+
+
+class _CancelledStreamingFakeProvider(FakeProvider):
+    async def _stream_complete(self, result: CompletionResult):
+        _ = result
+        yield StreamDelta(content="partial")
+        raise asyncio.CancelledError()
+
+
+class _ChunkedStreamingFakeProvider(FakeProvider):
+    def __init__(self, responses: list[CompletionResult], chunks: list[str]) -> None:
+        super().__init__(responses=responses)
+        self._chunks = chunks
+
+    async def _stream_complete(self, result: CompletionResult):
+        _ = result
+        for chunk in self._chunks:
+            yield StreamDelta(content=chunk)
+        yield StreamDelta(finish_reason="stop")
+
+
+@pytest.mark.asyncio
+async def test_streaming_partial_content_persisted_on_interrupt_cancel() -> None:
+    world = World()
+    provider = _CancelledStreamingFakeProvider(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="ignored"))
+        ]
+    )
+
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="hello")]),
+    )
+    world.add_component(entity_id, StreamingComponent(enabled=True))
+
+    with pytest.raises(asyncio.CancelledError):
+        await ReasoningSystem().process(world)
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    interruption = world.get_component(entity_id, InterruptionComponent)
+    error = world.get_component(entity_id, ErrorComponent)
+
+    assert conversation is not None
+    assert conversation.messages[-1] == Message(role="assistant", content="partial")
+    assert interruption is not None
+    assert interruption.reason == InterruptionReason.USER_REQUESTED
+    assert error is None
+
+
+@pytest.mark.asyncio
+async def test_streaming_partial_reraises_cancelled_after_interrupt_cleanup() -> None:
+    world = World()
+    provider = _CancelledStreamingFakeProvider(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="ignored"))
+        ]
+    )
+
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="hello")]),
+    )
+    world.add_component(entity_id, StreamingComponent(enabled=True))
+
+    with pytest.raises(asyncio.CancelledError):
+        await ReasoningSystem().process(world)
+
+    interruption = world.get_component(entity_id, InterruptionComponent)
+    assert interruption is not None
+
+
+@pytest.mark.asyncio
+async def test_streaming_interrupt_mid_generation_preserves_partial_and_emits_stream_end() -> (
+    None
+):
+    world = World()
+    provider = _ChunkedStreamingFakeProvider(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="ignored"))
+        ],
+        chunks=["A", "B", "C"],
+    )
+
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="hello")]),
+    )
+    world.add_component(entity_id, StreamingComponent(enabled=True))
+
+    seen_events: list[str] = []
+
+    async def on_start(event: StreamStartEvent) -> None:
+        _ = event
+        seen_events.append("start")
+
+    async def on_delta(event: StreamDeltaEvent) -> None:
+        seen_events.append(f"delta:{event.delta}")
+        if event.entity_id == entity_id and event.delta == "A":
+            world.add_component(
+                entity_id,
+                InterruptionComponent(
+                    reason=InterruptionReason.SYSTEM_PAUSE,
+                    message="pause requested",
+                ),
+            )
+
+    async def on_end(event: StreamEndEvent) -> None:
+        _ = event
+        seen_events.append("end")
+
+    world.event_bus.subscribe(StreamStartEvent, on_start)
+    world.event_bus.subscribe(StreamDeltaEvent, on_delta)
+    world.event_bus.subscribe(StreamEndEvent, on_end)
+
+    with pytest.raises(asyncio.CancelledError):
+        await ReasoningSystem().process(world)
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    interruption = world.get_component(entity_id, InterruptionComponent)
+    error = world.get_component(entity_id, ErrorComponent)
+
+    assert conversation is not None
+    assert conversation.messages[-1] == Message(role="assistant", content="A")
+    assert interruption is not None
+    assert interruption.reason == InterruptionReason.SYSTEM_PAUSE
+    assert error is None
+    assert seen_events == ["start", "delta:A", "end"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_interrupt_component_preexisting_skips_streaming_safely() -> (
+    None
+):
+    world = World()
+    provider = _ChunkedStreamingFakeProvider(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="ignored"))
+        ],
+        chunks=["A", "B"],
+    )
+
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="hello")]),
+    )
+    world.add_component(entity_id, StreamingComponent(enabled=True))
+    world.add_component(
+        entity_id,
+        InterruptionComponent(
+            reason=InterruptionReason.SYSTEM_PAUSE, message="already idle"
+        ),
+    )
+
+    seen_events: list[str] = []
+
+    async def on_start(event: StreamStartEvent) -> None:
+        _ = event
+        seen_events.append("start")
+
+    world.event_bus.subscribe(StreamStartEvent, on_start)
+
+    await ReasoningSystem().process(world)
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages == [Message(role="user", content="hello")]
+    assert seen_events == []

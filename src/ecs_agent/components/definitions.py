@@ -4,17 +4,18 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 import asyncio
+import time
 
 from ecs_agent.types import (
     ApprovalPolicy,
     ConversationBranch,
     ConversationMessage,
     EntityId,
+    InterruptionReason,
     Message,
     SubagentConfig,
     ToolCall,
     ToolSchema,
-    InterruptionReason,
 )
 
 try:
@@ -31,8 +32,8 @@ class LLMComponent:
     provider: LLMProvider
     model: str
     system_prompt: str = ""
-    pending_model: str | None = None
     pending_provider: LLMProvider | None = None
+    pending_model: str | None = None
 
 
 @dataclass(slots=True)
@@ -298,15 +299,19 @@ class SubagentRegistryComponent:
 
 @dataclass(slots=True)
 class EntityRegistryComponent:
-    """Registry for named entities."""
+    """Entity registry metadata for runtime naming and tagging."""
 
-    names: dict[str, EntityId] = field(default_factory=dict)
-    tags: dict[str, set[EntityId]] = field(default_factory=dict)
+    entity_id: EntityId
+    name: str
+    tags: set[str] = field(default_factory=set)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class InterruptionComponent:
-    """Flags an entity for runtime interruption."""
+    """Marks an entity as interrupted with reason."""
 
     reason: InterruptionReason
+    message: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    timestamp: float = field(default_factory=time.time)

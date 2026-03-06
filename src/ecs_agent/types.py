@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, NewType
 
 EntityId = NewType("EntityId", int)
+SystemHandle = NewType("SystemHandle", str)
 
 
 @dataclass(slots=True)
@@ -148,14 +149,14 @@ class ApprovalPolicy(Enum):
     REQUIRE_APPROVAL = "require_approval"
 
 
-
 class InterruptionReason(Enum):
-    """Reason for runtime interruption."""
+    """Reason for agent interruption."""
 
-    USER_REQUEST = "user_request"
+    USER_REQUESTED = "user_requested"
+    SYSTEM_PAUSE = "system_pause"
     ERROR = "error"
-    TIMEOUT = "timeout"
-    POLICY_VIOLATION = "policy_violation"
+    COMPLETION = "completion"
+
 
 @dataclass(slots=True)
 class ToolApprovalRequestedEvent:
@@ -469,6 +470,24 @@ class MessageBusResponseEvent:
     envelope: MessageBusEnvelope
 
 
+@dataclass(slots=True)
+class RevertRequest:
+    """Request to revert conversation to a specific branch."""
+
+    entity_id: EntityId
+    target_branch_id: str
+
+
+@dataclass(slots=True)
+class RevertResult:
+    """Result of a conversation revert operation."""
+
+    entity_id: EntityId
+    success: bool
+    new_branch_id: str | None = None
+    message: str = ""
+
+
 __all__ = [
     "ApprovalPolicy",
     "BranchCreatedEvent",
@@ -485,7 +504,6 @@ __all__ = [
     "ErrorOccurredEvent",
     "InheritancePolicy",
     "InterruptionReason",
-
     "MCPConnectedEvent",
     "MCPDisconnectedEvent",
     "MCPToolCallEvent",
@@ -502,6 +520,8 @@ __all__ = [
     "RAGRetrievalCompletedEvent",
     "ResponsesAPICallEvent",
     "RetryConfig",
+    "RevertRequest",
+    "RevertResult",
     "SkillDiscoveryEvent",
     "SkillInstalledEvent",
     "SkillUninstalledEvent",
@@ -510,6 +530,7 @@ __all__ = [
     "StreamEndEvent",
     "StreamStartEvent",
     "SubagentConfig",
+    "SystemHandle",
     "ToolApprovalRequestedEvent",
     "ToolApprovedEvent",
     "ToolCall",

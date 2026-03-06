@@ -238,3 +238,120 @@ class TestRetryConfig:
         assert config.min_wait == 1.0
         assert config.max_wait == 30.0
         assert config.retry_status_codes == (408, 429, 500)
+
+
+class TestSystemHandle:
+    """Test SystemHandle type for stable system identity."""
+
+    def test_systemhandle_is_newtype(self) -> None:
+        """Test that SystemHandle is a valid NewType."""
+        from ecs_agent.types import SystemHandle
+        handle = SystemHandle("reasoning_system_1")
+        assert handle == "reasoning_system_1"
+
+    def test_systemhandle_with_various_values(self) -> None:
+        """Test SystemHandle with different string values."""
+        from ecs_agent.types import SystemHandle
+        h1 = SystemHandle("sys_001")
+        h2 = SystemHandle("planning_v2")
+        h3 = SystemHandle("tool_exec_primary")
+        assert h1 == "sys_001"
+        assert h2 == "planning_v2"
+        assert h3 == "tool_exec_primary"
+
+    def test_systemhandle_type_hint_compatibility(self) -> None:
+        """Test that SystemHandle works as a type hint."""
+        from ecs_agent.types import SystemHandle
+
+        def register_system(handle: SystemHandle) -> str:
+            return handle
+
+        result = register_system(SystemHandle("test_system"))
+        assert result == "test_system"
+
+
+class TestInterruptionReason:
+    """Test InterruptionReason enum for interruption categorization."""
+
+    def test_interruption_reason_user_requested(self) -> None:
+        """Test USER_REQUESTED enum value."""
+        from ecs_agent.types import InterruptionReason
+        assert InterruptionReason.USER_REQUESTED.value == "user_requested"
+
+    def test_interruption_reason_system_pause(self) -> None:
+        """Test SYSTEM_PAUSE enum value."""
+        from ecs_agent.types import InterruptionReason
+        assert InterruptionReason.SYSTEM_PAUSE.value == "system_pause"
+
+    def test_interruption_reason_error(self) -> None:
+        """Test ERROR enum value."""
+        from ecs_agent.types import InterruptionReason
+        assert InterruptionReason.ERROR.value == "error"
+
+    def test_interruption_reason_completion(self) -> None:
+        """Test COMPLETION enum value."""
+        from ecs_agent.types import InterruptionReason
+        assert InterruptionReason.COMPLETION.value == "completion"
+
+
+class TestRevertRequest:
+    """Test RevertRequest for conversation tree revert operations."""
+
+    def test_revert_request_basic(self) -> None:
+        """Test RevertRequest with target branch."""
+        from ecs_agent.types import RevertRequest, EntityId
+        req = RevertRequest(
+            entity_id=EntityId(42),
+            target_branch_id="branch_v1",
+        )
+        assert req.entity_id == EntityId(42)
+        assert req.target_branch_id == "branch_v1"
+
+    def test_revert_request_slots(self) -> None:
+        """Test RevertRequest uses slots."""
+        from ecs_agent.types import RevertRequest, EntityId
+        req = RevertRequest(entity_id=EntityId(1), target_branch_id="main")
+        assert hasattr(type(req), "__slots__")
+
+
+class TestRevertResult:
+    """Test RevertResult for revert operation outcomes."""
+
+    def test_revert_result_success(self) -> None:
+        """Test RevertResult for successful revert."""
+        from ecs_agent.types import RevertResult, EntityId
+        result = RevertResult(
+            entity_id=EntityId(99),
+            success=True,
+            new_branch_id="branch_v2",
+            message="Reverted to branch_v2",
+        )
+        assert result.entity_id == EntityId(99)
+        assert result.success is True
+        assert result.new_branch_id == "branch_v2"
+        assert result.message == "Reverted to branch_v2"
+
+    def test_revert_result_failure(self) -> None:
+        """Test RevertResult for failed revert."""
+        from ecs_agent.types import RevertResult, EntityId
+        result = RevertResult(
+            entity_id=EntityId(10),
+            success=False,
+            message="Branch not found",
+        )
+        assert result.entity_id == EntityId(10)
+        assert result.success is False
+        assert result.new_branch_id is None
+        assert result.message == "Branch not found"
+
+    def test_revert_result_default_message(self) -> None:
+        """Test RevertResult with default empty message."""
+        from ecs_agent.types import RevertResult, EntityId
+        result = RevertResult(entity_id=EntityId(1), success=True)
+        assert result.message == ""
+
+    def test_revert_result_slots(self) -> None:
+        """Test RevertResult uses slots."""
+        from ecs_agent.types import RevertResult, EntityId
+        result = RevertResult(entity_id=EntityId(1), success=True)
+        assert hasattr(type(result), "__slots__")

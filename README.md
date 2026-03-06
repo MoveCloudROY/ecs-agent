@@ -42,6 +42,7 @@ Build modular, testable LLM agents by composing behavior from dataclass componen
 - **Enhanced Logging**, Structured logging with `structlog` featuring caller info, exception formatting, per-module log level filtering, and stdlib logging bridge.
 - **MCP Integration**, Connect to external tool servers via the Model Context Protocol (stdio, SSE, HTTP).
 - **Built-in Tools**, High-quality file manipulation (read/write/hash-anchored edit) and bash execution tools.
+- **Runtime Dynamic Control**, Register entities by name/tag, dynamically add/remove/replace systems at tick boundaries, switch models per-entity, gracefully interrupt generation, and revert conversation tree branches.
 
 ## Installation
 
@@ -366,6 +367,7 @@ See [`docs/`](docs/) for detailed guides:
 - [Built-in Tools](docs/features/builtin-tools.md), File manipulation and shell execution
 - [Web Search](docs/features/web-search.md), Brave Search API integration
 - [Permissions](docs/features/permissions.md), Tool filtering and bwrap sandboxing
+- [Runtime Control](docs/features/runtime-control.md), Entity registry, system lifecycle, model switching, interruption, revert
 
 ## License
 

@@ -94,9 +94,21 @@ class WorldSerializer:
             entities[str(int(entity_id))] = serialized_components
 
         next_entity_id = world._entity_gen._counter + 1
+        
+        # Serialize entity registry
+        entity_registry = {
+            name: int(entity_id) for name, entity_id in world._entity_registry.items()
+        }
+        entity_tags = {
+            tag: sorted([int(eid) for eid in entity_ids])
+            for tag, entity_ids in world._entity_tags.items()
+        }
+        
         return {
             "next_entity_id": next_entity_id,
             "entities": entities,
+            "_entity_registry": entity_registry,
+            "_entity_tags": entity_tags,
         }
 
     @staticmethod
@@ -125,6 +137,19 @@ class WorldSerializer:
 
         next_entity_id = int(data.get("next_entity_id", 1))
         world._entity_gen._counter = max(0, next_entity_id - 1)
+        
+        # Restore entity registry (backward compatible)
+        entity_registry_data = data.get("_entity_registry", {})
+        world._entity_registry = {
+            name: EntityId(int(eid)) for name, eid in entity_registry_data.items()
+        }
+        
+        entity_tags_data = data.get("_entity_tags", {})
+        world._entity_tags = {
+            tag: set(EntityId(int(eid)) for eid in eids)
+            for tag, eids in entity_tags_data.items()
+        }
+        
         return world
 
     @staticmethod

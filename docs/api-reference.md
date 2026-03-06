@@ -10,7 +10,7 @@ __version__: str = "0.1.0"
 
 The following types and classes are re-exported for convenience:
 
-- `Message`, `CompletionResult`, `ToolSchema`, `EntityId`, `StreamDelta`, `RetryConfig`, `ApprovalPolicy`, `ToolTimeoutError`, `MessageBusEnvelope`, `InterruptionReason` from `ecs_agent.types`
+- `Message`, `CompletionResult`, `ToolSchema`, `EntityId`, `StreamDelta`, `RetryConfig`, `ApprovalPolicy`, `ToolTimeoutError`, `MessageBusEnvelope` from `ecs_agent.types`
 - `RetryProvider` from `ecs_agent.providers.retry_provider`
 - `WorldSerializer` from `ecs_agent.serialization`
 - `configure_logging`, `get_logger` from `ecs_agent.logging`
@@ -21,7 +21,6 @@ The following types and classes are re-exported for convenience:
 - `MessageBusSystem`, `RAGSystem`, `TreeSearchSystem`, `ToolApprovalSystem`, `CheckpointSystem`, `CompactionSystem`, `UserInputSystem`, `SubagentSystem` from `ecs_agent.systems`
 - `StreamStartEvent`, `StreamDeltaEvent`, `StreamEndEvent`, `CheckpointCreatedEvent`, `CheckpointRestoredEvent`, `CompactionCompleteEvent`, `ToolApprovalRequestedEvent`, `ToolApprovedEvent`, `ToolDeniedEvent`, `RAGRetrievalCompletedEvent`, `UserInputRequestedEvent`, `MCTSNodeScoredEvent`, `MessageBusPublishedEvent`, `MessageBusDeliveredEvent`, `MessageBusResponseEvent`, `MessageBusTimeoutEvent` from `ecs_agent.types`
 - `scan_module`, `sandboxed_execute`, `tool` from `ecs_agent.tools`
-- `revert_to_message`, `linearize` from `ecs_agent.conversation_tree`
 
 ---
 
@@ -218,16 +217,110 @@ class World:
     def remove_component(self, entity_id: EntityId, component_type: type) -> None: ...
     def has_component(self, entity_id: EntityId, component_type: type) -> bool: ...
     def delete_entity(self, entity_id: EntityId) -> None: ...
-    def register_system(self, system: System, priority: int = 0) -> str: ...
-    def remove_system(self, handle: str) -> None: ...
-    def replace_system(self, handle: str, new_system: System) -> None: ...
-    def apply_pending_system_operations(self) -> None: ...
-    def register_entity(self, entity_id: EntityId, name: str, tags: set[str] | None = None) -> None: ...
-    def resolve_entity(self, name: str) -> EntityId: ...
-    def list_entities_by_tag(self, tag: str) -> list[EntityId]: ...
-    def unregister_entity(self, entity_id: EntityId) -> None: ...
+    def register_system(self, system: System, priority: int = 0) -> None: ...
     async def process(self) -> None: ...
     def query(self, *component_types: type) -> Query: ...
+```
+
+### `register_entity(entity_id: EntityId, name: str, tags: set[str] | None = None) -> None`
+
+Register entity with unique name and optional tags.
+
+**Parameters:**
+- `entity_id` — Entity to register
+- `name` — Unique name for entity lookup
+- `tags` — Optional set of tags for entity grouping
+
+**Raises:**
+- `ValueError` — If name already registered
+
+**Example:**
+```python
+agent = world.create_entity()
+world.register_entity(agent, "coordinator", tags={"manager", "primary"})
+```
+
+### `resolve_entity(name: str) -> EntityId | None`
+
+Look up entity by registered name.
+
+**Parameters:**
+- `name` — Registered entity name
+
+**Returns:**
+EntityId if found, None otherwise
+
+**Example:**
+```python
+coordinator_id = world.resolve_entity("coordinator")
+if coordinator_id:
+    print(f"Found entity: {coordinator_id}")
+```
+
+### `list_entities_by_tag(tag: str) -> list[EntityId]`
+
+Find all entities with given tag.
+
+**Parameters:**
+- `tag` — Tag string to search
+
+**Returns:**
+List of entity IDs with tag (empty list if tag not found)
+
+**Example:**
+```python
+workers = world.list_entities_by_tag("worker")
+for worker_id in workers:
+    print(f"Worker: {worker_id}")
+```
+
+### `unregister_entity(entity_id: EntityId) -> None`
+
+Remove entity from registry and tag indexes (no-op if not found).
+
+**Parameters:**
+- `entity_id` — Entity to unregister
+
+**Example:**
+```python
+world.unregister_entity(agent)  # Remove from registry
+```
+
+### `remove_system(handle: SystemHandle) -> None`
+
+Queue system for removal at next tick boundary.
+
+**Parameters:**
+- `handle` — System handle from register_system
+
+**Example:**
+```python
+handle = world.register_system(MySystem(), priority=0)
+world.remove_system(handle)  # Queued, applied at pre-tick
+```
+
+### `replace_system(handle: SystemHandle, system: System, priority: int | None = None) -> None`
+
+Queue system replacement at next tick boundary.
+
+**Parameters:**
+- `handle` — System handle to replace
+- `system` — New system instance
+- `priority` — Optional new priority (defaults to original)
+
+**Example:**
+```python
+world.replace_system(handle, NewReasoningSystem(), priority=5)
+```
+
+### `apply_pending_system_operations() -> None`
+
+Apply queued system operations (called automatically by Runner at pre-tick).
+
+**Example:**
+```python
+# Manual application (normally not needed)
+world.apply_pending_system_operations()
 ```
 
 ### Runner
@@ -535,34 +628,25 @@ def tool(name: str, description: str, parameters: dict[str, Any]) -> Callable: .
 
 ## ecs_agent.conversation_tree
 
-### `revert_to_message(tree: ConversationTreeComponent, message_id: str) -> None`
+### `revert_to_message(tree: ConversationTreeComponent, target_message_id: str) -> str`
 
-Revert the conversation to a specific message by creating a new branch.
+Move active branch pointer to target message (non-destructive).
 
 **Parameters:**
-- `tree` — ConversationTreeComponent to modify
-- `message_id` — ID of the message to revert to
+- `tree` — Conversation tree component
+- `target_message_id` — Message ID to revert to
+
+**Returns:**
+Target message ID (for verification)
 
 **Raises:**
-- `KeyError` — If message_id doesn't exist in tree.messages
+- `ValueError` — If no active branch (current_branch_id is None)
+- `KeyError` — If target message not found in tree.messages
 
 **Example:**
 ```python
 from ecs_agent.conversation_tree import revert_to_message
-revert_to_message(tree_component, "msg_123")
+
+# Revert to earlier message
+revert_to_message(tree, msg2.id)  # Move active branch leaf to msg2
 ```
-
-### `linearize(tree: ConversationTreeComponent, leaf_message_id: str) -> list[Message]`
-
-Convert tree branch to flat message list for LLM consumption.
-
-**Parameters:**
-- `tree` — ConversationTreeComponent to traverse
-- `leaf_message_id` — ID of leaf message to start from
-
-**Returns:**
-List of Messages from root to leaf in chronological order.
-
-**Raises:**
-- `KeyError` — If leaf_message_id doesn't exist in tree.messages
-

@@ -48,6 +48,7 @@ __all__ = [
     "ErrorComponent",
     "InterruptionComponent",
     "KVStoreComponent",
+    "InterruptionComponent",
     "LLMComponent",
     "MessageBusConfigComponent",
     "MessageBusConversationComponent",
