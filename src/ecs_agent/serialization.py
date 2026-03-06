@@ -26,9 +26,12 @@ from ecs_agent.components import (
     RunnerStateComponent,
     ResponsesAPIStateComponent,
     SandboxConfigComponent,
+    ScratchbookIndexComponent,
+    ScratchbookRefComponent,
     StreamingComponent,
     SystemPromptComponent,
     SubagentRegistryComponent,
+    TaskComponent,
     TerminalComponent,
     ToolApprovalComponent,
     ToolRegistryComponent,
@@ -69,6 +72,9 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     MessageBusConfigComponent.__name__: MessageBusConfigComponent,
     MessageBusSubscriptionComponent.__name__: MessageBusSubscriptionComponent,
     MessageBusConversationComponent.__name__: MessageBusConversationComponent,
+    ScratchbookIndexComponent.__name__: ScratchbookIndexComponent,
+    ScratchbookRefComponent.__name__: ScratchbookRefComponent,
+    TaskComponent.__name__: TaskComponent,
 }
 
 
@@ -203,6 +209,32 @@ class WorldSerializer:
         if isinstance(component, MessageBusConversationComponent):
             serialized["entity_id"] = int(serialized["entity_id"])
 
+        # TaskComponent: convert EntityId assigned_agent to int for JSON serialization
+        if isinstance(component, TaskComponent):
+            # Convert assigned_agent if it's an EntityId (which is an int at runtime)
+            assigned_agent = serialized.get("assigned_agent")
+            if assigned_agent is not None and isinstance(assigned_agent, int) and not isinstance(assigned_agent, bool):
+                # It's an EntityId (NewType over int), keep as int for JSON
+                pass
+            # If string or None, leave as-is (JSON-serializable)
+            
+            # Convert TaskStatus enum to string
+            status = serialized.get("status")
+            if status is not None and hasattr(status, "value"):  # Enum
+                serialized["status"] = status.value
+
+        # ScratchbookIndexComponent: convert ScratchbookRef objects to dicts
+        if isinstance(component, ScratchbookIndexComponent):
+            artifacts_dict = {}
+            for artifact_id, artifact_ref in serialized.get("artifacts", {}).items():
+                # If it's a ScratchbookRef dataclass, convert to dict
+                if hasattr(artifact_ref, "__dataclass_fields__"):
+                    artifacts_dict[artifact_id] = asdict(artifact_ref)
+                else:
+                    # Already a dict
+                    artifacts_dict[artifact_id] = artifact_ref
+            serialized["artifacts"] = artifacts_dict
+
         return serialized
 
     @staticmethod
@@ -307,6 +339,36 @@ class WorldSerializer:
                 )
                 subagents_dict[name] = subagent_config
             normalized_data["subagents"] = subagents_dict
+
+        # TaskComponent: convert assigned_agent int to EntityId if needed
+        if component_name == TaskComponent.__name__:
+            assigned_agent_value = normalized_data.get("assigned_agent")
+            if isinstance(assigned_agent_value, int):
+                # EntityId stored as int, reconstruct it
+                normalized_data["assigned_agent"] = EntityId(assigned_agent_value)
+            # If string or None, leave as-is
+            
+            # Convert status string to TaskStatus enum if needed
+            status_value = normalized_data.get("status")
+            if isinstance(status_value, str):
+                from ecs_agent.types import TaskStatus
+                normalized_data["status"] = TaskStatus(status_value)
+
+        # ScratchbookRefComponent: no special handling needed (all fields are primitives)
+        # ScratchbookRefComponent fields (artifact_id, category, content_hash, timestamp) are all strings
+
+        # ScratchbookIndexComponent: reconstruct ScratchbookRef objects in artifacts dict
+        if component_name == ScratchbookIndexComponent.__name__:
+            from ecs_agent.types import ScratchbookRef
+            artifacts_dict = {}
+            for artifact_id, artifact_data in normalized_data.get("artifacts", {}).items():
+                # If artifact_data is a dict, reconstruct it as ScratchbookRef
+                if isinstance(artifact_data, dict):
+                    artifacts_dict[artifact_id] = ScratchbookRef(**artifact_data)
+                else:
+                    # Already a ScratchbookRef object
+                    artifacts_dict[artifact_id] = artifact_data
+            normalized_data["artifacts"] = artifacts_dict
 
         return normalized_data
 
