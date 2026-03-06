@@ -8,6 +8,7 @@ from typing import Any
 from ecs_agent.logging import get_logger
 from ecs_agent.components import (
     ConversationComponent,
+    ConversationTreeComponent,
     ErrorComponent,
     InterruptionComponent,
     LLMComponent,
@@ -18,6 +19,7 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
+from ecs_agent.conversation_tree import get_active_leaf, linearize
 from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.types import (
     CompletionResult,
@@ -39,14 +41,12 @@ class ReasoningSystem:
         self.priority = priority
 
     async def process(self, world: World) -> None:
-        for entity_id, components in world.query(LLMComponent, ConversationComponent):
+        for entity_id, (llm_component,) in world.query(LLMComponent):
             if world.has_component(entity_id, InterruptionComponent):
                 continue
 
             start_time = time.time()
-            llm_component, conversation = components
             assert isinstance(llm_component, LLMComponent)
-            assert isinstance(conversation, ConversationComponent)
 
             # Sample provider and model at request start for in-flight stability
             active_provider = llm_component.pending_provider or llm_component.provider
@@ -58,7 +58,22 @@ class ReasoningSystem:
             if system_prompt is not None:
                 messages.append(Message(role="system", content=system_prompt.content))
 
-            messages.extend(conversation.messages)
+            # Check for tree first, fallback to flat conversation
+            tree = world.get_component(entity_id, ConversationTreeComponent)
+            conversation = world.get_component(entity_id, ConversationComponent)
+
+            if tree is not None:
+                # Use tree-based conversation if available
+                active_leaf_id = get_active_leaf(tree)
+                if active_leaf_id is not None:
+                    tree_messages = linearize(tree, active_leaf_id)
+                    messages.extend(tree_messages)
+            elif conversation is not None:
+                # Fallback to flat conversation (backward compatibility)
+                messages.extend(conversation.messages)
+            else:
+                # Skip entities without either tree or flat conversation
+                continue
 
             tools: list[ToolSchema] | None = None
             tool_registry = world.get_component(entity_id, ToolRegistryComponent)
@@ -99,7 +114,9 @@ class ReasoningSystem:
                         )
                     result = non_stream_result
 
-                conversation.messages.append(result.message)
+                # Append result to conversation (tree not yet supported for writing)
+                if conversation is not None:
+                    conversation.messages.append(result.message)
 
                 if result.message.tool_calls:
                     world.add_component(
@@ -157,7 +174,7 @@ class ReasoningSystem:
         entity_id: EntityId,
         active_provider: LLMProvider,
         active_model: str,
-        conversation: ConversationComponent,
+        conversation: ConversationComponent | None,
         messages: list[Message],
         tools: list[ToolSchema] | None,
     ) -> CompletionResult:
@@ -203,7 +220,8 @@ class ReasoningSystem:
                 tool_calls=self._finalize_tool_calls(tool_call_buffers),
             )
             if partial_message.content or partial_message.tool_calls:
-                conversation.messages.append(partial_message)
+                if conversation is not None:
+                    conversation.messages.append(partial_message)
 
             interruption = world.get_component(entity_id, InterruptionComponent)
             partial_metadata = {
@@ -231,7 +249,8 @@ class ReasoningSystem:
                 tool_calls=self._finalize_tool_calls(tool_call_buffers),
             )
             if partial_message.content or partial_message.tool_calls:
-                conversation.messages.append(partial_message)
+                if conversation is not None:
+                    conversation.messages.append(partial_message)
             raise
         finally:
             await world.event_bus.publish(
