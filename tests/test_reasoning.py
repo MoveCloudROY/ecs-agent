@@ -298,7 +298,9 @@ async def test_entity_scoped_model_switching() -> None:
     entity_a = world.create_entity()
     entity_b = world.create_entity()
 
-    world.add_component(entity_a, LLMComponent(provider=provider_alpha, model="model-a"))
+    world.add_component(
+        entity_a, LLMComponent(provider=provider_alpha, model="model-a")
+    )
     world.add_component(
         entity_a,
         ConversationComponent(messages=[Message(role="user", content="hi")]),
@@ -331,7 +333,9 @@ async def test_entity_scoped_provider_switch() -> None:
         responses=[CompletionResult(message=Message(role="assistant", content="main"))]
     )
     provider_override = RecordingFakeProvider(
-        responses=[CompletionResult(message=Message(role="assistant", content="override"))]
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="override"))
+        ]
     )
 
     entity_a = world.create_entity()
@@ -363,11 +367,67 @@ async def test_entity_scoped_provider_switch() -> None:
 
 
 @pytest.mark.asyncio
+async def test_multi_entity_model_switch_isolation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded_models: dict[int, str] = {}
+
+    class _RecordingLogger:
+        def info(self, event_name: str, **kwargs: object) -> None:
+            if event_name != "reasoning_start":
+                return
+            entity_id = kwargs.get("entity_id")
+            model = kwargs.get("model")
+            if isinstance(entity_id, int) and isinstance(model, str):
+                recorded_models[entity_id] = model
+
+        def error(self, event_name: str, **kwargs: object) -> None:
+            _ = event_name
+            _ = kwargs
+
+    monkeypatch.setattr("ecs_agent.systems.reasoning.logger", _RecordingLogger())
+
+    world = World()
+    provider_a = RecordingFakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="a"))]
+    )
+    provider_b = RecordingFakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="b"))]
+    )
+
+    entity_a = world.create_entity()
+    entity_b = world.create_entity()
+
+    world.add_component(entity_a, LLMComponent(provider=provider_a, model="model-a"))
+    world.add_component(
+        entity_a,
+        ConversationComponent(messages=[Message(role="user", content="hello a")]),
+    )
+
+    world.add_component(entity_b, LLMComponent(provider=provider_b, model="model-b"))
+    world.add_component(
+        entity_b,
+        ConversationComponent(messages=[Message(role="user", content="hello b")]),
+    )
+
+    llm_a = world.get_component(entity_a, LLMComponent)
+    assert llm_a is not None
+    llm_a.pending_model = "model-a-override"
+
+    await ReasoningSystem().process(world)
+
+    assert recorded_models[int(entity_a)] == "model-a-override"
+    assert recorded_models[int(entity_b)] == "model-b"
+
+
+@pytest.mark.asyncio
 async def test_model_switching_in_flight_stability() -> None:
     """Model should remain stable during request (sample at start)."""
     world = World()
     provider = RecordingFakeProvider(
-        responses=[CompletionResult(message=Message(role="assistant", content="stable"))]
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="stable"))
+        ]
     )
 
     entity = world.create_entity()
@@ -395,14 +455,20 @@ async def test_per_entity_model_override() -> None:
     """pending_model and pending_provider override defaults."""
     world = World()
     provider_default = RecordingFakeProvider(
-        responses=[CompletionResult(message=Message(role="assistant", content="default"))]
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="default"))
+        ]
     )
     provider_override = RecordingFakeProvider(
-        responses=[CompletionResult(message=Message(role="assistant", content="override"))]
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="override"))
+        ]
     )
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(provider=provider_default, model="default-model"))
+    world.add_component(
+        entity, LLMComponent(provider=provider_default, model="default-model")
+    )
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="hi")]),
