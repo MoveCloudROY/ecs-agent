@@ -35,6 +35,7 @@ class LLMComponent:
     pending_provider: LLMProvider | None = None
     pending_model: str | None = None
 
+
 @dataclass(slots=True)
 class ConversationComponent:
     """Conversation history."""
@@ -312,4 +313,5 @@ class InterruptionComponent:
 
     reason: InterruptionReason
     message: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)

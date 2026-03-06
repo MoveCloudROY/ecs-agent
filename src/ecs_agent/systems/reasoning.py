@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import Any
@@ -8,6 +9,7 @@ from ecs_agent.logging import get_logger
 from ecs_agent.components import (
     ConversationComponent,
     ErrorComponent,
+    InterruptionComponent,
     LLMComponent,
     PendingToolCallsComponent,
     StreamingComponent,
@@ -26,9 +28,11 @@ from ecs_agent.types import (
     EntityId,
     ToolCall,
     ToolSchema,
+    InterruptionReason,
 )
 
 logger = get_logger(__name__)
+
 
 class ReasoningSystem:
     def __init__(self, priority: int = 0) -> None:
@@ -36,6 +40,9 @@ class ReasoningSystem:
 
     async def process(self, world: World) -> None:
         for entity_id, components in world.query(LLMComponent, ConversationComponent):
+            if world.has_component(entity_id, InterruptionComponent):
+                continue
+
             start_time = time.time()
             llm_component, conversation = components
             assert isinstance(llm_component, LLMComponent)
@@ -117,6 +124,17 @@ class ReasoningSystem:
                     entity_id,
                     TerminalComponent(reason="provider_exhausted"),
                 )
+            except asyncio.CancelledError:
+                if world.get_component(entity_id, InterruptionComponent) is None:
+                    world.add_component(
+                        entity_id,
+                        InterruptionComponent(
+                            reason=InterruptionReason.USER_REQUESTED,
+                            message="reasoning_cancelled",
+                            metadata={"phase": "reasoning_process"},
+                        ),
+                    )
+                raise
             except Exception as exc:
                 logger.error(
                     "reasoning_error",
@@ -172,6 +190,27 @@ class ReasoningSystem:
 
                 if delta.usage is not None:
                     usage = delta.usage
+        except asyncio.CancelledError:
+            partial_message = Message(
+                role="assistant",
+                content="".join(content_chunks),
+                tool_calls=self._finalize_tool_calls(tool_call_buffers),
+            )
+            if partial_message.content or partial_message.tool_calls:
+                conversation.messages.append(partial_message)
+
+            world.add_component(
+                entity_id,
+                InterruptionComponent(
+                    reason=InterruptionReason.USER_REQUESTED,
+                    message="stream_cancelled",
+                    metadata={
+                        "partial_chunks": len(content_chunks),
+                        "partial_content_length": len(partial_message.content),
+                    },
+                ),
+            )
+            raise
         except Exception:
             partial_message = Message(
                 role="assistant",

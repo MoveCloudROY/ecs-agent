@@ -1,10 +1,30 @@
 """Tests for Runner."""
 
+import asyncio
+from collections.abc import AsyncIterator
+
 import pytest
 
-from ecs_agent.components.definitions import RunnerStateComponent, TerminalComponent
+from ecs_agent.components.definitions import (
+    ConversationComponent,
+    ErrorComponent,
+    InterruptionComponent,
+    LLMComponent,
+    RunnerStateComponent,
+    StreamingComponent,
+    TerminalComponent,
+)
 from ecs_agent.core.runner import Runner
 from ecs_agent.core.world import World
+from ecs_agent.providers import FakeProvider
+from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.types import (
+    CompletionResult,
+    EntityId,
+    InterruptionReason,
+    Message,
+    StreamDelta,
+)
 from ecs_agent.types import SystemHandle
 
 
@@ -72,6 +92,51 @@ class RemoveTargetSystem:
             return
         world.remove_system(self._target)
         self._has_removed = True
+
+
+class CancelledStreamingFakeProvider(FakeProvider):
+    async def _stream_complete(
+        self, result: CompletionResult
+    ) -> AsyncIterator[StreamDelta]:
+        _ = result
+        yield StreamDelta(content="partial")
+        raise asyncio.CancelledError()
+
+
+class InterruptOneEntitySystem:
+    def __init__(self, target_entity: EntityId) -> None:
+        self._target_entity = target_entity
+        self._interrupted = False
+
+    async def process(self, world: World) -> None:
+        if self._interrupted:
+            return
+        world.add_component(
+            self._target_entity,
+            InterruptionComponent(reason=InterruptionReason.SYSTEM_PAUSE),
+        )
+        self._interrupted = True
+
+
+class CountUninterruptedEntitiesSystem:
+    def __init__(self) -> None:
+        self.active_ticks = 0
+
+    async def process(self, world: World) -> None:
+        active_entities = [
+            entity_id
+            for entity_id, _ in world.query(ConversationComponent)
+            if not world.has_component(entity_id, InterruptionComponent)
+        ]
+
+        if active_entities:
+            self.active_ticks += 1
+
+        if self.active_ticks >= 3:
+            world.add_component(
+                world.create_entity(),
+                TerminalComponent(reason="uninterrupted_complete"),
+            )
 
 
 class TestRunner:
@@ -221,6 +286,105 @@ class TestRunner:
         await runner.run(world, max_ticks=2)
 
         assert log == ["victim:0"]
+
+    @pytest.mark.asyncio
+    async def test_runner_graceful_interrupt_preserves_partial(
+        self, world: World, runner: Runner
+    ) -> None:
+        provider = CancelledStreamingFakeProvider(
+            responses=[
+                CompletionResult(message=Message(role="assistant", content="ignored"))
+            ]
+        )
+        entity_id = world.create_entity()
+        world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+        world.add_component(
+            entity_id,
+            ConversationComponent(messages=[Message(role="user", content="Hello")]),
+        )
+        world.add_component(entity_id, StreamingComponent(enabled=True))
+        world.register_system(ReasoningSystem(), priority=0)
+
+        await runner.run(world, max_ticks=5)
+
+        conversation = world.get_component(entity_id, ConversationComponent)
+        interruption = world.get_component(entity_id, InterruptionComponent)
+        assert conversation is not None
+        assert conversation.messages[-1] == Message(role="assistant", content="partial")
+        assert interruption is not None
+
+    @pytest.mark.asyncio
+    async def test_runner_cancelled_error_not_misclassified(
+        self, world: World, runner: Runner
+    ) -> None:
+        provider = CancelledStreamingFakeProvider(
+            responses=[
+                CompletionResult(message=Message(role="assistant", content="ignored"))
+            ]
+        )
+        entity_id = world.create_entity()
+        world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+        world.add_component(
+            entity_id,
+            ConversationComponent(messages=[Message(role="user", content="Hello")]),
+        )
+        world.add_component(entity_id, StreamingComponent(enabled=True))
+        world.register_system(ReasoningSystem(), priority=0)
+
+        await runner.run(world, max_ticks=5)
+
+        assert world.get_component(entity_id, ErrorComponent) is None
+        assert world.get_component(entity_id, InterruptionComponent) is not None
+
+    @pytest.mark.asyncio
+    async def test_interruption_component_attached_on_graceful_stop(
+        self, world: World, runner: Runner
+    ) -> None:
+        provider = CancelledStreamingFakeProvider(
+            responses=[
+                CompletionResult(message=Message(role="assistant", content="ignored"))
+            ]
+        )
+        entity_id = world.create_entity()
+        world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+        world.add_component(
+            entity_id,
+            ConversationComponent(messages=[Message(role="user", content="Hello")]),
+        )
+        world.add_component(entity_id, StreamingComponent(enabled=True))
+        world.register_system(ReasoningSystem(), priority=0)
+
+        await runner.run(world, max_ticks=5)
+
+        interruption = world.get_component(entity_id, InterruptionComponent)
+        assert interruption is not None
+        assert interruption.reason == InterruptionReason.USER_REQUESTED
+
+    @pytest.mark.asyncio
+    async def test_runner_continues_after_entity_interrupted(
+        self, world: World, runner: Runner
+    ) -> None:
+        interrupted_entity = world.create_entity()
+        active_entity = world.create_entity()
+
+        world.add_component(
+            interrupted_entity,
+            ConversationComponent(messages=[Message(role="user", content="paused")]),
+        )
+        world.add_component(
+            active_entity,
+            ConversationComponent(messages=[Message(role="user", content="active")]),
+        )
+
+        world.register_system(
+            InterruptOneEntitySystem(target_entity=interrupted_entity), priority=0
+        )
+        counter = CountUninterruptedEntitiesSystem()
+        world.register_system(counter, priority=1)
+
+        await runner.run(world, max_ticks=10)
+
+        assert counter.active_ticks == 3
 
 
 class TestRunnerLogging:
