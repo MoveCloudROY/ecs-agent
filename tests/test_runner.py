@@ -24,8 +24,9 @@ from ecs_agent.types import (
     InterruptionReason,
     Message,
     StreamDelta,
+    StreamDeltaEvent,
+    SystemHandle,
 )
-from ecs_agent.types import SystemHandle
 
 
 class CounterSystem:
@@ -101,6 +102,20 @@ class CancelledStreamingFakeProvider(FakeProvider):
         _ = result
         yield StreamDelta(content="partial")
         raise asyncio.CancelledError()
+
+
+class ChunkedStreamingFakeProvider(FakeProvider):
+    def __init__(self, responses: list[CompletionResult], chunks: list[str]) -> None:
+        super().__init__(responses=responses)
+        self._chunks = chunks
+
+    async def _stream_complete(
+        self, result: CompletionResult
+    ) -> AsyncIterator[StreamDelta]:
+        _ = result
+        for chunk in self._chunks:
+            yield StreamDelta(content=chunk)
+        yield StreamDelta(finish_reason="stop")
 
 
 class InterruptOneEntitySystem:
@@ -409,6 +424,52 @@ class TestRunner:
         await runner.run(world, max_ticks=10)
 
         assert counter.active_ticks == 3
+
+    @pytest.mark.asyncio
+    async def test_runner_graceful_interrupt_mid_stream_component_preserves_partial(
+        self, world: World, runner: Runner
+    ) -> None:
+        provider = ChunkedStreamingFakeProvider(
+            responses=[
+                CompletionResult(message=Message(role="assistant", content="ignored"))
+            ],
+            chunks=["A", "B", "C"],
+        )
+        entity_id = world.create_entity()
+        world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+        world.add_component(
+            entity_id,
+            ConversationComponent(messages=[Message(role="user", content="Hello")]),
+        )
+        world.add_component(entity_id, StreamingComponent(enabled=True))
+
+        async def interrupt_on_first_delta(event: StreamDeltaEvent) -> None:
+            if event.entity_id != entity_id or event.delta != "A":
+                return
+            world.add_component(
+                entity_id,
+                InterruptionComponent(
+                    reason=InterruptionReason.SYSTEM_PAUSE,
+                    message="external pause",
+                ),
+            )
+
+        world.event_bus.subscribe(StreamDeltaEvent, interrupt_on_first_delta)
+        world.register_system(ReasoningSystem(), priority=0)
+
+        await runner.run(world, max_ticks=5)
+
+        conversation = world.get_component(entity_id, ConversationComponent)
+        interruption = world.get_component(entity_id, InterruptionComponent)
+        terminal = world.get_component(entity_id, TerminalComponent)
+        error = world.get_component(entity_id, ErrorComponent)
+
+        assert conversation is not None
+        assert conversation.messages[-1] == Message(role="assistant", content="A")
+        assert interruption is not None
+        assert interruption.reason == InterruptionReason.SYSTEM_PAUSE
+        assert terminal is None
+        assert error is None
 
 
 class TestRunnerLogging:

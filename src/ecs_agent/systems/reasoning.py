@@ -180,6 +180,9 @@ class ReasoningSystem:
 
         try:
             async for delta in stream:
+                if world.get_component(entity_id, InterruptionComponent) is not None:
+                    raise asyncio.CancelledError()
+
                 if delta.content is not None:
                     content_chunks.append(delta.content)
                     await world.event_bus.publish(
@@ -190,6 +193,9 @@ class ReasoningSystem:
 
                 if delta.usage is not None:
                     usage = delta.usage
+
+                if world.get_component(entity_id, InterruptionComponent) is not None:
+                    raise asyncio.CancelledError()
         except asyncio.CancelledError:
             partial_message = Message(
                 role="assistant",
@@ -199,17 +205,24 @@ class ReasoningSystem:
             if partial_message.content or partial_message.tool_calls:
                 conversation.messages.append(partial_message)
 
-            world.add_component(
-                entity_id,
-                InterruptionComponent(
-                    reason=InterruptionReason.USER_REQUESTED,
-                    message="stream_cancelled",
-                    metadata={
-                        "partial_chunks": len(content_chunks),
-                        "partial_content_length": len(partial_message.content),
-                    },
-                ),
-            )
+            interruption = world.get_component(entity_id, InterruptionComponent)
+            partial_metadata = {
+                "partial_chunks": len(content_chunks),
+                "partial_content": partial_message.content,
+                "partial_content_length": len(partial_message.content),
+            }
+
+            if interruption is None:
+                world.add_component(
+                    entity_id,
+                    InterruptionComponent(
+                        reason=InterruptionReason.USER_REQUESTED,
+                        message="stream_cancelled",
+                        metadata=partial_metadata,
+                    ),
+                )
+            else:
+                interruption.metadata.update(partial_metadata)
             raise
         except Exception:
             partial_message = Message(
