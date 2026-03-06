@@ -1,0 +1,261 @@
+# Runtime Dynamic Control
+
+The ECS Agent framework provides five runtime control capabilities for dynamic agent reconfiguration without restarting: **Entity Registry** (named entity resolution), **System Lifecycle** (dynamic system removal/replacement), **Model Switching** (per-entity provider updates), **Graceful Interruption** (component-driven stopping), and **Conversation Revert** (tree-based history navigation).
+
+## Entity Registry
+
+Named entity resolution and tagging for managing multiple agents in a world.
+
+### Methods
+
+- `world.register_entity(entity_id, name, tags=None)` — Register entity with unique name and optional tags
+- `world.resolve_entity(name)` — Look up entity by registered name (returns `EntityId | None`)
+- `world.list_entities_by_tag(tag)` — Find all entities with given tag (returns `list[EntityId]`)
+- `world.unregister_entity(entity_id)` — Remove from registry (called automatically by `delete_entity`)
+
+### Example
+
+```python
+from ecs_agent.core import World
+
+world = World()
+agent1 = world.create_entity()
+agent2 = world.create_entity()
+
+# Register with names and tags
+world.register_entity(agent1, "coordinator", tags={"manager", "primary"})
+world.register_entity(agent2, "worker", tags={"worker", "secondary"})
+
+# Resolve by name
+coordinator_id = world.resolve_entity("coordinator")  # Returns agent1
+
+# Find by tag
+workers = world.list_entities_by_tag("worker")  # Returns [agent2]
+managers = world.list_entities_by_tag("manager")  # Returns [agent1]
+```
+
+### Constraints
+
+- Entity names must be unique within a world
+- `register_entity` raises `ValueError` if name already registered
+- `resolve_entity` returns `None` for missing names
+- `list_entities_by_tag` returns empty list `[]` for missing tags
+- `unregister_entity` is a no-op for missing entity IDs
+
+## System Lifecycle Management
+
+Dynamic system removal and replacement with queue-based tick-boundary semantics.
+
+### Methods
+
+- `handle = world.register_system(system, priority)` — Register system, returns `SystemHandle`
+- `world.remove_system(handle)` — Queue system for removal at next tick boundary
+- `world.replace_system(handle, new_system, priority=None)` — Queue system replacement at next tick boundary
+- `world.apply_pending_system_operations()` — Apply queued operations (called automatically by `Runner`)
+
+### Queue Semantics
+
+- All lifecycle operations (remove/replace) are **queued**, not applied immediately
+- Operations execute in FIFO order at the **pre-tick boundary** (before `world.process()`)
+- Runner automatically calls `apply_pending_system_operations()` before each tick
+- Mid-tick replacement requests wait until the next tick starts
+
+### Example
+
+```python
+from ecs_agent.core import World, Runner
+from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.planning import PlanningSystem
+
+world = World()
+runner = Runner()
+
+# Register initial systems
+reasoning_handle = world.register_system(ReasoningSystem(priority=0), priority=0)
+planning_handle = world.register_system(PlanningSystem(), priority=0)
+
+# Run first tick with both systems
+await runner.run(world, max_ticks=1)
+
+# Queue planning system for removal
+world.remove_system(planning_handle)
+
+# Removal takes effect at pre-tick boundary of next tick
+await runner.run(world, max_ticks=1, start_tick=1)
+
+# Replace reasoning system
+new_reasoning = ReasoningSystem(priority=0)
+world.replace_system(reasoning_handle, new_reasoning, priority=5)
+
+# Replacement takes effect at next tick
+await runner.run(world, max_ticks=1, start_tick=2)
+```
+
+## Per-Entity Model Switching
+
+Dynamic provider and model updates for individual entities with in-flight request stability.
+
+### Fields
+
+- `LLMComponent.pending_model: str | None` — Queued model switch (applied at next request start)
+- `LLMComponent.pending_provider: LLMProvider | None` — Queued provider switch (applied at next request start)
+
+### Behavior
+
+- Pending fields are **sampled at request start** and used for the entire request
+- In-flight requests use the sampled values, ignoring further updates
+- Cross-entity isolation: Entity A's switch does not affect Entity B
+
+### Example
+
+```python
+from ecs_agent.components import LLMComponent
+from ecs_agent.providers import OpenAIProvider
+
+world = World()
+agent = world.create_entity()
+
+provider = OpenAIProvider(api_key="...", base_url="...", model="gpt-4")
+llm = LLMComponent(provider=provider, model="gpt-4")
+world.add_component(agent, llm)
+
+# ... agent generates with gpt-4 ...
+
+# Queue model switch
+llm.pending_model = "gpt-3.5-turbo"
+
+# Next generation uses gpt-3.5-turbo
+# (sampled at reasoning start, stable for entire request)
+await world.process()
+```
+
+## Graceful Interruption
+
+Component-driven agent stopping with partial content preservation.
+
+### Component
+
+**`InterruptionComponent`**: Signals agent should stop gracefully.
+
+- `reason: InterruptionReason` — Enum: `USER_REQUESTED`, `SYSTEM_PAUSE`, `ERROR`, `COMPLETION`
+- `message: str` — Human-readable reason
+- `metadata: dict[str, Any]` — Structured context (e.g., `{"partial_chunks": 5}`)
+- `timestamp: float` — Auto-generated via `time.time()`
+
+### Behavior
+
+- `Runner` detects `InterruptionComponent` and raises `asyncio.CancelledError`
+- `ReasoningSystem` catches `CancelledError`, preserves **partial content** in conversation, then re-raises
+- Streaming: in-loop checks before/after delta processing for mid-generation interruption
+- Metadata enriched with partial stream telemetry: `partial_content`, `partial_chunks`, `partial_content_length`
+
+### Example
+
+```python
+from ecs_agent.components import LLMComponent, ConversationComponent
+from ecs_agent.components.definitions import InterruptionComponent
+from ecs_agent.types import InterruptionReason, Message
+
+world = World()
+agent = world.create_entity()
+
+# ... add LLMComponent, ConversationComponent, start reasoning ...
+
+# Interrupt during generation
+world.add_component(agent, InterruptionComponent(
+    reason=InterruptionReason.USER_REQUESTED,
+    message="User clicked stop button",
+    metadata={"source": "web_ui"}
+))
+
+# Next tick: Runner raises CancelledError, ReasoningSystem saves partial response
+await runner.run(world, max_ticks=1)
+
+# Check partial content
+conv = world.get_component(agent, ConversationComponent)
+if conv and conv.messages:
+    partial_response = conv.messages[-1].content  # Preserved even though interrupted
+```
+
+### Constraints
+
+- `CancelledError` **must be re-raised** after cleanup (or task won't be marked as cancelled)
+- Partial content preserved **before** re-raise
+- Interruption state not overwritten if already present (metadata enriched instead)
+
+## Conversation Tree Revert
+
+Non-destructive navigation to historical conversation states in tree-structured dialogues.
+
+### Function
+
+**`revert_to_message(tree: ConversationTreeComponent, target_message_id: str) -> str`**
+
+Moves the active branch pointer to a target message without deleting historical nodes.
+
+### Behavior
+
+- Updates `current_branch.leaf_message_id` to `target_message_id`
+- Returns target message ID for verification
+- Next `ReasoningSystem.process()` call uses linearized history from reverted leaf
+- All historical siblings and descendants remain in tree (non-destructive)
+
+### Errors
+
+- Raises `ValueError("No active branch to revert")` if `tree.current_branch_id is None`
+- Raises `KeyError(f"Target message not found: {target_message_id}")` if target not in `tree.messages`
+
+### Example
+
+```python
+from ecs_agent.conversation_tree import (
+    ConversationTreeComponent,
+    add_message,
+    create_branch,
+    switch_branch,
+    revert_to_message,
+    get_active_leaf,
+)
+
+tree = ConversationTreeComponent()
+
+# Build conversation tree
+msg1 = add_message(tree, role="user", content="What is 2+2?")
+msg2 = add_message(tree, role="assistant", content="4", parent_id=msg1.id)
+msg3 = add_message(tree, role="user", content="What is 3+3?", parent_id=msg2.id)
+
+# Create and activate branch
+create_branch(tree, "main", msg3.id)
+switch_branch(tree, "main")
+
+# ... agent generates response to "What is 3+3?" ...
+
+# Revert to msg2 (before "What is 3+3?" question)
+revert_to_message(tree, msg2.id)
+
+# Next reasoning uses linearized history: [msg1, msg2] only
+# (msg3 and subsequent responses still exist but not active)
+```
+
+### Integration with Reasoning
+
+`ReasoningSystem` automatically checks for `ConversationTreeComponent` and uses the active branch:
+
+1. `get_active_leaf(tree)` → current leaf message ID
+2. `linearize(tree, leaf_id)` → chronological message list from root to leaf
+3. Revert changes leaf pointer → next linearize() uses new path
+
+## Constraints
+
+- **Entity Registry**: Names must be unique (ValueError on duplicate), tags and metadata are optional
+- **System Lifecycle**: Operations queued until tick boundary, applied in FIFO order
+- **Model Switching**: Takes effect at next request start, sampled values stable for entire request
+- **Graceful Interruption**: CancelledError must be re-raised after partial content preservation
+- **Conversation Revert**: Requires active branch, target must exist in tree
+
+## See Also
+
+- [Conversation Trees](tree-conversation.md) — Tree structure, branching, linearization
+- [Context Management](context-management.md) — Checkpoint, undo, compaction
+- [Systems](../systems.md) — System execution order and lifecycle
+- [API Reference](../api-reference.md) — Complete method signatures

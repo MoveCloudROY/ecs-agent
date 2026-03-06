@@ -222,6 +222,107 @@ class World:
     def query(self, *component_types: type) -> Query: ...
 ```
 
+### `register_entity(entity_id: EntityId, name: str, tags: set[str] | None = None) -> None`
+
+Register entity with unique name and optional tags.
+
+**Parameters:**
+- `entity_id` — Entity to register
+- `name` — Unique name for entity lookup
+- `tags` — Optional set of tags for entity grouping
+
+**Raises:**
+- `ValueError` — If name already registered
+
+**Example:**
+```python
+agent = world.create_entity()
+world.register_entity(agent, "coordinator", tags={"manager", "primary"})
+```
+
+### `resolve_entity(name: str) -> EntityId | None`
+
+Look up entity by registered name.
+
+**Parameters:**
+- `name` — Registered entity name
+
+**Returns:**
+EntityId if found, None otherwise
+
+**Example:**
+```python
+coordinator_id = world.resolve_entity("coordinator")
+if coordinator_id:
+    print(f"Found entity: {coordinator_id}")
+```
+
+### `list_entities_by_tag(tag: str) -> list[EntityId]`
+
+Find all entities with given tag.
+
+**Parameters:**
+- `tag` — Tag string to search
+
+**Returns:**
+List of entity IDs with tag (empty list if tag not found)
+
+**Example:**
+```python
+workers = world.list_entities_by_tag("worker")
+for worker_id in workers:
+    print(f"Worker: {worker_id}")
+```
+
+### `unregister_entity(entity_id: EntityId) -> None`
+
+Remove entity from registry and tag indexes (no-op if not found).
+
+**Parameters:**
+- `entity_id` — Entity to unregister
+
+**Example:**
+```python
+world.unregister_entity(agent)  # Remove from registry
+```
+
+### `remove_system(handle: SystemHandle) -> None`
+
+Queue system for removal at next tick boundary.
+
+**Parameters:**
+- `handle` — System handle from register_system
+
+**Example:**
+```python
+handle = world.register_system(MySystem(), priority=0)
+world.remove_system(handle)  # Queued, applied at pre-tick
+```
+
+### `replace_system(handle: SystemHandle, system: System, priority: int | None = None) -> None`
+
+Queue system replacement at next tick boundary.
+
+**Parameters:**
+- `handle` — System handle to replace
+- `system` — New system instance
+- `priority` — Optional new priority (defaults to original)
+
+**Example:**
+```python
+world.replace_system(handle, NewReasoningSystem(), priority=5)
+```
+
+### `apply_pending_system_operations() -> None`
+
+Apply queued system operations (called automatically by Runner at pre-tick).
+
+**Example:**
+```python
+# Manual application (normally not needed)
+world.apply_pending_system_operations()
+```
+
 ### Runner
 
 ```python
@@ -521,4 +622,31 @@ def get_logger(name: str) -> BoundLogger: ...
 def scan_module(module: ModuleType) -> tuple[dict[str, ToolSchema], dict[str, Callable[..., Awaitable[str]]]]: ...
 async def sandboxed_execute(func: Callable[..., Awaitable[str]], args: dict[str, Any], timeout: float = 30.0, max_output_size: int = 10000) -> str: ...
 def tool(name: str, description: str, parameters: dict[str, Any]) -> Callable: ...
+```
+
+---
+
+## ecs_agent.conversation_tree
+
+### `revert_to_message(tree: ConversationTreeComponent, target_message_id: str) -> str`
+
+Move active branch pointer to target message (non-destructive).
+
+**Parameters:**
+- `tree` — Conversation tree component
+- `target_message_id` — Message ID to revert to
+
+**Returns:**
+Target message ID (for verification)
+
+**Raises:**
+- `ValueError` — If no active branch (current_branch_id is None)
+- `KeyError` — If target message not found in tree.messages
+
+**Example:**
+```python
+from ecs_agent.conversation_tree import revert_to_message
+
+# Revert to earlier message
+revert_to_message(tree, msg2.id)  # Move active branch leaf to msg2
 ```

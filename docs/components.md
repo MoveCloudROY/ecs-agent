@@ -12,6 +12,8 @@ Links an agent to an LLM provider for reasoning and planning.
 | `provider` | `LLMProvider` | (none) | The LLM provider instance |
 | `model` | `str` | (none) | The specific model identifier |
 | `system_prompt` | `str` | `""` | Optional system prompt override |
+| `pending_provider` | `LLMProvider | None` | `None` | Queued provider switch (applied at next request start) |
+| `pending_model` | `str | None` | `None` | Queued model switch (applied at next request start) |
 
 **Used by:** `ReasoningSystem`, `PlanningSystem`, `ReplanningSystem`
 
@@ -20,11 +22,15 @@ Links an agent to an LLM provider for reasoning and planning.
 from ecs_agent.components import LLMComponent
 from ecs_agent.providers.openai_provider import OpenAIProvider
 
-world.add_component(agent, LLMComponent(
+llm = LLMComponent(
     provider=OpenAIProvider(api_key="..."),
     model="gpt-4o",
     system_prompt="You are a helpful assistant."
-))
+)
+world.add_component(agent, llm)
+
+# Queue model switch (takes effect at next LLM request)
+llm.pending_model = "gpt-3.5-turbo"
 ```
 
 ### ConversationComponent
@@ -56,6 +62,25 @@ Defines the base system prompt used to guide LLM behavior.
 ```python
 from ecs_agent.components import SystemPromptComponent
 world.add_component(agent, SystemPromptComponent(content="You are a specialized code reviewer."))
+```
+
+### `EntityRegistryComponent`
+
+Internal registry for named entity resolution and tagging. Usually managed by World via `register_entity()`, not directly attached to entities.
+
+**Fields:**
+- `entity_id: EntityId` — Entity being registered
+- `name: str` — Unique name for lookup
+- `tags: set[str]` — Tag set (default: empty set)
+- `metadata: dict[str, Any]` — Additional metadata (default: empty dict)
+
+**Example:**
+```python
+from ecs_agent.components import EntityRegistryComponent
+
+# Usually created via world.register_entity(), not directly
+agent = world.create_entity()
+world.register_entity(agent, "coordinator", tags={"manager", "primary"})
 ```
 
 ## Tool Components
@@ -199,6 +224,32 @@ world.add_component(agent, ErrorComponent(
     error="API key expired",
     system_name="ReasoningSystem",
     timestamp=time.time()
+))
+```
+
+### InterruptionComponent
+
+Signals agent should stop gracefully with partial content preservation.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `reason` | `InterruptionReason` | (none) | Enum: USER_REQUESTED, SYSTEM_PAUSE, ERROR, COMPLETION |
+| `message` | `str` | `""` | Human-readable reason string |
+| `metadata` | `dict[str, Any]` | `{}` | Structured context (default: empty dict) |
+| `timestamp` | `float` | (auto) | Auto-generated via time.time() |
+
+**Added by:** External code (user interruption), systems (error conditions)
+**Consumed by:** `Runner` (detects and halts execution)
+
+**Usage:**
+```python
+from ecs_agent.components import InterruptionComponent
+from ecs_agent.types import InterruptionReason
+
+world.add_component(agent, InterruptionComponent(
+    reason=InterruptionReason.USER_REQUESTED,
+    message="User clicked stop",
+    metadata={"source": "web_ui"}
 ))
 ```
 
