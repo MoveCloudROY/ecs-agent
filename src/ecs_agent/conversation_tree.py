@@ -208,3 +208,32 @@ def get_active_leaf(tree: ConversationTreeComponent) -> str | None:
 
     branch = tree.branches[tree.current_branch_id]
     return branch.leaf_message_id
+
+
+def revert_to_message(tree: ConversationTreeComponent, target_message_id: str) -> str:
+    """Revert the active branch to point to a target message (non-destructive).
+
+    Moves the active branch's leaf pointer to the target message without deleting
+    any historical nodes. All messages remain in the tree.
+
+    Args:
+        tree: ConversationTreeComponent to modify
+        target_message_id: Message ID to revert to
+
+    Returns:
+        The target message ID (new leaf of active branch)
+
+    Raises:
+        ValueError: If no active branch is set (current_branch_id is None)
+        KeyError: If target_message_id doesn't exist in tree.messages
+    """
+    if tree.current_branch_id is None:
+        raise ValueError("No active branch to revert")
+
+    if target_message_id not in tree.messages:
+        raise KeyError(f"Target message not found: {target_message_id}")
+
+    branch = tree.branches[tree.current_branch_id]
+    branch.leaf_message_id = target_message_id
+
+    return target_message_id
