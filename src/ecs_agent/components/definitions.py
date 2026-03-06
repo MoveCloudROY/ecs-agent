@@ -32,7 +32,8 @@ class LLMComponent:
     provider: LLMProvider
     model: str
     system_prompt: str = ""
-
+    pending_provider: LLMProvider | None = None
+    pending_model: str | None = None
 
 @dataclass(slots=True)
 class ConversationComponent:

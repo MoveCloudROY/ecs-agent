@@ -16,6 +16,7 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
+from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.types import (
     CompletionResult,
     Message,
@@ -40,6 +41,10 @@ class ReasoningSystem:
             assert isinstance(llm_component, LLMComponent)
             assert isinstance(conversation, ConversationComponent)
 
+            # Sample provider and model at request start for in-flight stability
+            active_provider = llm_component.pending_provider or llm_component.provider
+            active_model = llm_component.pending_model or llm_component.model
+
             messages: list[Message] = []
 
             system_prompt = world.get_component(entity_id, SystemPromptComponent)
@@ -61,7 +66,7 @@ class ReasoningSystem:
             logger.info(
                 "reasoning_start",
                 entity_id=int(entity_id),
-                model=llm_component.model,
+                model=active_model,
                 streaming=streaming_enabled,
                 system="ReasoningSystem",
             )
@@ -71,13 +76,14 @@ class ReasoningSystem:
                     result = await self._process_streaming(
                         world,
                         entity_id,
-                        llm_component,
+                        active_provider,
+                        active_model,
                         conversation,
                         messages,
                         tools,
                     )
                 else:
-                    non_stream_result = await llm_component.provider.complete(
+                    non_stream_result = await active_provider.complete(
                         messages, tools=tools
                     )
                     if not isinstance(non_stream_result, CompletionResult):
@@ -98,7 +104,7 @@ class ReasoningSystem:
                     logger.info(
                         "reasoning_complete",
                         entity_id=int(entity_id),
-                        model=llm_component.model,
+                        model=active_model,
                         duration_ms=round(duration_ms, 2),
                         system="ReasoningSystem",
                     )
@@ -131,12 +137,13 @@ class ReasoningSystem:
         self,
         world: World,
         entity_id: EntityId,
-        llm_component: LLMComponent,
+        active_provider: LLMProvider,
+        active_model: str,
         conversation: ConversationComponent,
         messages: list[Message],
         tools: list[ToolSchema] | None,
     ) -> CompletionResult:
-        stream_result = await llm_component.provider.complete(
+        stream_result = await active_provider.complete(
             messages,
             tools=tools,
             stream=True,

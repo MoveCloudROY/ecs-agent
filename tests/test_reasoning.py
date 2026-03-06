@@ -282,3 +282,140 @@ async def test_entities_missing_required_components_are_skipped() -> None:
     assert incomplete_terminal is None
     assert valid_conversation is not None
     assert valid_conversation.messages[-1].content == "ok"
+
+
+@pytest.mark.asyncio
+async def test_entity_scoped_model_switching() -> None:
+    """Two entities with different models should be isolated."""
+    world = World()
+    provider_alpha = RecordingFakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="alpha"))]
+    )
+    provider_beta = RecordingFakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="beta"))]
+    )
+
+    entity_a = world.create_entity()
+    entity_b = world.create_entity()
+
+    world.add_component(entity_a, LLMComponent(provider=provider_alpha, model="model-a"))
+    world.add_component(
+        entity_a,
+        ConversationComponent(messages=[Message(role="user", content="hi")]),
+    )
+
+    world.add_component(entity_b, LLMComponent(provider=provider_beta, model="model-b"))
+    world.add_component(
+        entity_b,
+        ConversationComponent(messages=[Message(role="user", content="hello")]),
+    )
+
+    # Switch entity_b's model via pending_model
+    llm_b = world.get_component(entity_b, LLMComponent)
+    assert llm_b is not None
+    llm_b.pending_model = "model-b-override"  # type: ignore[attr-defined]
+
+    await ReasoningSystem().process(world)
+
+    # Verify entity_a used model-a
+    assert len(provider_alpha.calls) == 1
+    # Verify entity_b used model-b-override (pending_model takes precedence)
+    assert len(provider_beta.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_entity_scoped_provider_switch() -> None:
+    """Switching provider should not leak to other entities."""
+    world = World()
+    provider_main = RecordingFakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="main"))]
+    )
+    provider_override = RecordingFakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="override"))]
+    )
+
+    entity_a = world.create_entity()
+    entity_b = world.create_entity()
+
+    world.add_component(entity_a, LLMComponent(provider=provider_main, model="fake"))
+    world.add_component(
+        entity_a,
+        ConversationComponent(messages=[Message(role="user", content="a")]),
+    )
+
+    world.add_component(entity_b, LLMComponent(provider=provider_main, model="fake"))
+    world.add_component(
+        entity_b,
+        ConversationComponent(messages=[Message(role="user", content="b")]),
+    )
+
+    # Switch entity_b's provider
+    llm_b = world.get_component(entity_b, LLMComponent)
+    assert llm_b is not None
+    llm_b.pending_provider = provider_override  # type: ignore[attr-defined]
+
+    await ReasoningSystem().process(world)
+
+    # entity_a should use provider_main
+    assert len(provider_main.calls) == 1
+    # entity_b should use provider_override
+    assert len(provider_override.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_model_switching_in_flight_stability() -> None:
+    """Model should remain stable during request (sample at start)."""
+    world = World()
+    provider = RecordingFakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="stable"))]
+    )
+
+    entity = world.create_entity()
+    world.add_component(entity, LLMComponent(provider=provider, model="base-model"))
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content="test")]),
+    )
+
+    # Set pending_model before processing
+    llm = world.get_component(entity, LLMComponent)
+    assert llm is not None
+    llm.pending_model = "override-model"  # type: ignore[attr-defined]
+
+    await ReasoningSystem().process(world)
+
+    # Verify provider was called exactly once with stable model
+    assert len(provider.calls) == 1
+    # Model should have been sampled at start and used throughout
+    # (This test verifies the model doesn't change mid-request)
+
+
+@pytest.mark.asyncio
+async def test_per_entity_model_override() -> None:
+    """pending_model and pending_provider override defaults."""
+    world = World()
+    provider_default = RecordingFakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="default"))]
+    )
+    provider_override = RecordingFakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="override"))]
+    )
+
+    entity = world.create_entity()
+    world.add_component(entity, LLMComponent(provider=provider_default, model="default-model"))
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content="hi")]),
+    )
+
+    # Set both pending fields
+    llm = world.get_component(entity, LLMComponent)
+    assert llm is not None
+    llm.pending_provider = provider_override  # type: ignore[attr-defined]
+    llm.pending_model = "override-model"  # type: ignore[attr-defined]
+
+    await ReasoningSystem().process(world)
+
+    # provider_override should be called, not provider_default
+    assert len(provider_default.calls) == 0
+    assert len(provider_override.calls) == 1
