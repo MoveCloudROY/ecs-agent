@@ -12,6 +12,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
+from ecs_agent.scratchbook import ScratchbookService, ToolResultsSink
 from ecs_agent.tools.sandbox import sandboxed_execute
 from ecs_agent.types import (
     EntityId,
@@ -23,9 +24,12 @@ from ecs_agent.types import (
 
 logger = get_logger(__name__)
 
+
 class ToolExecutionSystem:
-    def __init__(self, priority: int = 0) -> None:
+    def __init__(self, priority: int = 0, scratchbook_service: ScratchbookService | None = None) -> None:
         self.priority = priority
+        self.scratchbook_service = scratchbook_service
+        self.tool_sink = ToolResultsSink(scratchbook_service) if scratchbook_service else None
 
     async def process(self, world: World) -> None:
         for entity_id, components in world.query(
@@ -67,10 +71,25 @@ class ToolExecutionSystem:
                     )
                 )
 
-                results[tool_call.id] = result
-                conversation.messages.append(
-                    Message(role="tool", content=result, tool_call_id=tool_call.id)
-                )
+                # Persist to scratchbook and store ref
+                if self.tool_sink is not None:
+                    artifact_ref = self.tool_sink.persist_tool_result(
+                        tool_call_id=tool_call.id,
+                        tool_name=tool_call.name,
+                        result=result,
+                        arguments=tool_call.arguments,
+                    )
+                    results[tool_call.id] = artifact_ref
+                    # Add artifact ref to conversation, not full result
+                    conversation.messages.append(
+                        Message(role="tool", content=artifact_ref, tool_call_id=tool_call.id)
+                    )
+                else:
+                    # Fallback: store full result if no scratchbook service
+                    results[tool_call.id] = result
+                    conversation.messages.append(
+                        Message(role="tool", content=result, tool_call_id=tool_call.id)
+                    )
 
             world.remove_component(entity_id, PendingToolCallsComponent)
             if results:
