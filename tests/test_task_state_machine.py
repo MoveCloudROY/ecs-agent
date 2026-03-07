@@ -10,6 +10,15 @@ This module tests the task schema defined in Task 7:
 import pytest
 
 from ecs_agent.components import TaskComponent
+from ecs_agent.task import (
+    TaskState,
+    TaskStateTransitionError,
+    TransitionRequest,
+    block_task_due_to_upstream_failure,
+    manual_retry_task,
+    manual_unblock_task,
+    transition_task_state,
+)
 from ecs_agent.types import EntityId, TaskStatus
 
 
@@ -371,3 +380,138 @@ class TestTaskComponentDataclassProperties:
         # Status transitions are allowed
         comp.status = TaskStatus.RUNNING
         assert comp.status == TaskStatus.RUNNING
+
+
+class TestTaskTransitionStateMachine:
+    def test_transition_chain_pending_to_completed(self) -> None:
+        state = TaskState(task_id="task-001", status=TaskStatus.PENDING)
+
+        ready_state = transition_task_state(
+            state,
+            TransitionRequest(target_status=TaskStatus.READY),
+        )
+        running_state = transition_task_state(
+            ready_state,
+            TransitionRequest(target_status=TaskStatus.RUNNING),
+        )
+        completed_state = transition_task_state(
+            running_state,
+            TransitionRequest(target_status=TaskStatus.COMPLETED),
+        )
+
+        assert state.status is TaskStatus.PENDING
+        assert ready_state.status is TaskStatus.READY
+        assert running_state.status is TaskStatus.RUNNING
+        assert completed_state.status is TaskStatus.COMPLETED
+
+    def test_illegal_transition_rejected_and_state_unchanged(self) -> None:
+        state = TaskState(task_id="task-001", status=TaskStatus.PENDING)
+
+        with pytest.raises(
+            TaskStateTransitionError,
+            match="illegal transition for task 'task-001': pending -> running",
+        ):
+            transition_task_state(
+                state,
+                TransitionRequest(target_status=TaskStatus.RUNNING),
+            )
+
+        assert state.status is TaskStatus.PENDING
+
+    def test_illegal_transition_from_completed_is_rejected(self) -> None:
+        state = TaskState(task_id="task-001", status=TaskStatus.COMPLETED)
+
+        with pytest.raises(
+            TaskStateTransitionError,
+            match="illegal transition for task 'task-001': completed -> ready",
+        ):
+            transition_task_state(
+                state,
+                TransitionRequest(
+                    target_status=TaskStatus.READY,
+                    manual_action=True,
+                ),
+            )
+
+    def test_dependency_failure_blocks_until_manual_unblock(self) -> None:
+        state = TaskState(task_id="task-002", status=TaskStatus.READY)
+
+        blocked_state = block_task_due_to_upstream_failure(
+            state,
+            dependency_task_id="task-001",
+        )
+
+        assert blocked_state.status is TaskStatus.BLOCKED
+        assert blocked_state.blocked_until_manual is True
+        assert blocked_state.blocked_reason == "upstream dependency failed: task-001"
+
+        with pytest.raises(
+            TaskStateTransitionError,
+            match="reason=manual action required",
+        ):
+            transition_task_state(
+                blocked_state,
+                TransitionRequest(target_status=TaskStatus.READY),
+            )
+
+        ready_state = manual_unblock_task(blocked_state, reason="dependency fixed")
+        assert ready_state.status is TaskStatus.READY
+        assert ready_state.blocked_until_manual is False
+        assert ready_state.blocked_reason is None
+
+    def test_retry_hook_running_failed_then_failed_ready(self) -> None:
+        running_state = TaskState(
+            task_id="task-003",
+            status=TaskStatus.RUNNING,
+            max_retries=2,
+        )
+
+        failed_state = transition_task_state(
+            running_state,
+            TransitionRequest(
+                target_status=TaskStatus.FAILED,
+                reason="tool timeout",
+            ),
+        )
+
+        assert failed_state.status is TaskStatus.FAILED
+        assert failed_state.retry_count == 1
+
+        with pytest.raises(
+            TaskStateTransitionError,
+            match="reason=manual action required",
+        ):
+            transition_task_state(
+                failed_state,
+                TransitionRequest(target_status=TaskStatus.READY),
+            )
+
+        ready_state = manual_retry_task(failed_state)
+        assert ready_state.status is TaskStatus.READY
+        assert ready_state.retry_count == 1
+
+    def test_retry_rejected_when_retry_budget_exhausted(self) -> None:
+        failed_state = TaskState(
+            task_id="task-004",
+            status=TaskStatus.FAILED,
+            retry_count=1,
+            max_retries=1,
+        )
+
+        with pytest.raises(
+            TaskStateTransitionError,
+            match="reason=no retries remaining",
+        ):
+            manual_retry_task(failed_state)
+
+    def test_failed_transition_requires_reason(self) -> None:
+        running_state = TaskState(task_id="task-005", status=TaskStatus.RUNNING)
+
+        with pytest.raises(
+            TaskStateTransitionError,
+            match="reason=reason is required",
+        ):
+            transition_task_state(
+                running_state,
+                TransitionRequest(target_status=TaskStatus.FAILED),
+            )

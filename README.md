@@ -43,6 +43,8 @@ Build modular, testable LLM agents by composing behavior from dataclass componen
 - **MCP Integration**, Connect to external tool servers via the Model Context Protocol (stdio, SSE, HTTP).
 - **Built-in Tools**, High-quality file manipulation (read/write/hash-anchored edit) and bash execution tools.
 - **Runtime Dynamic Control**, Register entities by name/tag, dynamically add/remove/replace systems at tick boundaries, switch models per-entity, and gracefully interrupt generation.
+- **Agent Scratchbook**, Persistent filesystem-backed storage for categorized agent artifacts (tool results, plans, snapshots) with atomic index updates.
+- **Task Orchestration**, Multi-step task management with explicit state machine (READY → RUNNING → COMPLETED), dependency resolution, wave-based parallel dispatch, and mixed backend routing (local tools or subagent delegation).
 
 ## Installation
 
@@ -260,6 +262,9 @@ World
 | `ConversationTreeComponent` | Tree-structured conversation with branching and linearization |
 | `ResponsesAPIStateComponent` | Tracks OpenAI Responses API state and metadata |
 | `SubagentRegistryComponent` | Registry of named subagent configurations |
+| `TaskComponent` | Multi-step task definition and tracking |
+| `ScratchbookRefComponent` | Reference to a scratchbook artifact |
+| `ScratchbookIndexComponent` | Index of scratchbook artifacts |
 
 ## Examples
 
@@ -368,6 +373,8 @@ See [`docs/`](docs/) for detailed guides:
 - [Web Search](docs/features/web-search.md), Brave Search API integration
 - [Permissions](docs/features/permissions.md), Tool filtering and bwrap sandboxing
 - [Runtime Control](docs/features/runtime-control.md), Entity registry, system lifecycle, model switching, interruption, revert
+- [Agent Scratchbook](docs/features/scratchbook.md), Persistent filesystem-backed artifact storage and indexing
+- [Task Orchestration](docs/features/task-system.md), Multi-step task management and dependency resolution
 
 ## License
 

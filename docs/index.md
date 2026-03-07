@@ -39,6 +39,8 @@ The Entity-Component-System (ECS) pattern makes LLM agents composable and testab
 *   [Context Management](features/context-management.md)
 *   [Tool Discovery & Approval](features/tool-discovery.md)
 *   [User Input](features/user-input.md)
+*   [Agent Scratchbook](features/scratchbook.md) — Persistent artifact storage.
+*   [Task Orchestration System](features/task-system.md) — Multi-step task management and parallel dispatch.
 *   [Examples](examples.md)
 *   [API Reference](api-reference.md)
 

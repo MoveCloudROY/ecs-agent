@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from string import Template
+
 import pytest
 
 from ecs_agent.components import TaskComponent
 from ecs_agent.task.dependency_analyzer import analyze_task_dependencies
-from ecs_agent.task.wave_planner import WavePlanner
+from ecs_agent.task.fetching_unit import TaskFetchingUnit
+from ecs_agent.task.wave_planner import Wave, WavePlanResult, WavePlanner
 from ecs_agent.types import TaskStatus
 
 
@@ -302,3 +305,181 @@ class TestWavePlannerUnresolvedDependencies:
         assert result.blocked_tasks[0].task_id == "task-a"
         assert result.blocked_tasks[1].task_id == "task-b"
         assert result.blocked_tasks[2].task_id == "task-z"
+
+
+class _MutatingRenderer:
+    def __init__(self, source_snapshot: dict[str, str]) -> None:
+        self._source_snapshot = source_snapshot
+        self._calls = 0
+
+    def substitute(self, template: str, snapshot: dict[str, object]) -> str:
+        self._calls += 1
+        if self._calls == 1:
+            self._source_snapshot["name"] = "MUTATED"
+        return Template(template).substitute(snapshot)
+
+
+class TestTaskFetchingUnit:
+    def test_generate_dispatch_requests_expands_placeholders_from_ready_waves(
+        self,
+    ) -> None:
+        tasks = [
+            TaskComponent(
+                task_id="task-1",
+                description="Summarize $topic",
+                expected_output="Return brief for $topic",
+                assigned_agent="researcher",
+                tools=["web_search"],
+                context_dependencies=[],
+                status=TaskStatus.READY,
+                priority=10,
+            ),
+            TaskComponent(
+                task_id="task-2",
+                description="Draft review for $topic",
+                expected_output="Checklist for $topic",
+                assigned_agent=None,
+                tools=["lint"],
+                context_dependencies=[],
+                status=TaskStatus.READY,
+                priority=5,
+            ),
+        ]
+        unit = TaskFetchingUnit()
+
+        custom_plan = WavePlanResult(
+            waves=(Wave(wave_number=0, task_ids=("task-1", "task-2")),),
+            blocked_tasks=(),
+        )
+        requests = unit.generate_dispatch_requests(
+            wave_plan=custom_plan,
+            tasks=tasks,
+            snapshot={"topic": "release-notes"},
+            writer_id="task_fetching_unit",
+        )
+
+        assert tuple(request.task_id for request in requests) == ("task-1", "task-2")
+        assert requests[0].description == "Summarize release-notes"
+        assert requests[0].expected_output == "Return brief for release-notes"
+        assert requests[0].wave_number == 0
+        assert requests[0].sequence_number == 0
+        assert requests[1].description == "Draft review for release-notes"
+        assert requests[1].expected_output == "Checklist for release-notes"
+        assert requests[1].wave_number == 0
+        assert requests[1].sequence_number == 1
+
+    def test_generate_dispatch_requests_preserves_dependency_safe_wave_order(
+        self,
+    ) -> None:
+        tasks = [
+            TaskComponent(
+                task_id="task-a",
+                description="A",
+                expected_output="A",
+                assigned_agent=None,
+                tools=[],
+                context_dependencies=[],
+                status=TaskStatus.READY,
+                priority=1,
+            ),
+            TaskComponent(
+                task_id="task-b",
+                description="B",
+                expected_output="B",
+                assigned_agent=None,
+                tools=[],
+                context_dependencies=[],
+                status=TaskStatus.READY,
+                priority=1,
+            ),
+            TaskComponent(
+                task_id="task-c",
+                description="C",
+                expected_output="C",
+                assigned_agent=None,
+                tools=[],
+                context_dependencies=[],
+                status=TaskStatus.READY,
+                priority=1,
+            ),
+        ]
+        unit = TaskFetchingUnit()
+
+        custom_plan = WavePlanResult(
+            waves=(
+                Wave(wave_number=0, task_ids=("task-b", "task-a")),
+                Wave(wave_number=1, task_ids=("task-c",)),
+            ),
+            blocked_tasks=(),
+        )
+        requests = unit.generate_dispatch_requests(
+            wave_plan=custom_plan,
+            tasks=tasks,
+            snapshot={},
+            writer_id="task_fetching_unit",
+        )
+
+        assert tuple(request.task_id for request in requests) == (
+            "task-b",
+            "task-a",
+            "task-c",
+        )
+        assert tuple(request.sequence_number for request in requests) == (0, 1, 2)
+        assert tuple(request.wave_number for request in requests) == (0, 0, 1)
+
+    def test_single_writer_rejects_non_authoritative_state_mutation(self) -> None:
+        task = TaskComponent(
+            task_id="task-1",
+            description="Describe",
+            expected_output="Output",
+            assigned_agent=None,
+            tools=[],
+            context_dependencies=[],
+            status=TaskStatus.READY,
+        )
+        plan = WavePlanner().compute_waves(analyze_task_dependencies([task]))
+        unit = TaskFetchingUnit(state_owner="authoritative_fetcher")
+
+        with pytest.raises(ValueError, match="single writer"):
+            unit.generate_dispatch_requests(
+                wave_plan=plan,
+                tasks=[task],
+                snapshot={},
+                writer_id="other_system",
+            )
+
+    def test_frozen_snapshot_is_reused_for_all_requests_in_wave(self) -> None:
+        source_snapshot = {"name": "Alice"}
+        unit = TaskFetchingUnit(renderer=_MutatingRenderer(source_snapshot))
+        tasks = [
+            TaskComponent(
+                task_id="task-1",
+                description="$name-first",
+                expected_output="$name-first-output",
+                assigned_agent=None,
+                tools=[],
+                context_dependencies=[],
+                status=TaskStatus.READY,
+            ),
+            TaskComponent(
+                task_id="task-2",
+                description="$name-second",
+                expected_output="$name-second-output",
+                assigned_agent=None,
+                tools=[],
+                context_dependencies=[],
+                status=TaskStatus.READY,
+            ),
+        ]
+        plan = WavePlanner().compute_waves(analyze_task_dependencies(tasks))
+
+        requests = unit.generate_dispatch_requests(
+            wave_plan=plan,
+            tasks=tasks,
+            snapshot=source_snapshot,
+            writer_id="task_fetching_unit",
+        )
+
+        assert source_snapshot["name"] == "MUTATED"
+        assert requests[0].description == "Alice-first"
+        assert requests[1].description == "Alice-second"

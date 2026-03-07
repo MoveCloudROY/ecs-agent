@@ -582,3 +582,80 @@ world.add_component(
     SubagentRegistryComponent(subagents={"researcher": researcher}),
 )
 ```
+
+### TaskComponent
+The primary component for task definition and tracking in the Task Orchestration System.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `task_id` | `str` | (none) | Stable identifier for the task |
+| `description` | `str` | (none) | What the task does (supports placeholder rendering) |
+| `expected_output` | `str` | (none) | What success looks like |
+| `assigned_agent` | `EntityId \| str \| None` | (none) | EntityId (local), str (subagent name), or None |
+| `tools` | `list[str]` | (none) | List of tool names available for the task |
+| `context_dependencies` | `list[str]` | (none) | List of scratchbook refs needed for execution |
+| `status` | `TaskStatus` | (none) | Current state machine status |
+| `priority` | `int` | `0` | Execution priority (higher = earlier) |
+| `output_schema` | `dict[str, Any] \| None` | `None` | Optional Pydantic-style schema for output validation |
+| `max_retries` | `int` | `0` | Maximum number of automatic retry attempts |
+
+**Used by:** `TaskFetchingUnit`, `TaskExecutor`, `WavePlanner`, `DependencyAnalyzer`
+
+**Usage:**
+```python
+from ecs_agent.components import TaskComponent
+from ecs_agent.types import TaskStatus
+
+task = TaskComponent(
+    task_id="analyze_report",
+    description="Analyze the report at {{tool_results/report_id}}",
+    expected_output="Summary of the report",
+    assigned_agent="analyst_agent",
+    tools=["read_file", "write_file"],
+    context_dependencies=["tool_results/report_id"],
+    status=TaskStatus.PENDING,
+    priority=10
+)
+world.add_component(agent, task)
+```
+
+### ScratchbookRefComponent
+Stores a reference to a specific scratchbook artifact.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `artifact_id` | `str` | (none) | Unique identifier for the artifact file |
+| `category` | `str` | (none) | Category subfolder path |
+| `content_hash` | `str` | (none) | SHA256 hash of the artifact content |
+| `timestamp` | `str` | (none) | Creation timestamp |
+
+**Used by:** `TaskPersistenceService`, `ContextResolver`, `ScratchbookIndexer`
+
+**Usage:**
+```python
+from ecs_agent.components import ScratchbookRefComponent
+
+ref = ScratchbookRefComponent(
+    artifact_id="report_001",
+    category="tool_results",
+    content_hash="abc123...",
+    timestamp="1709827200.0"
+)
+world.add_component(agent, ref)
+```
+
+### ScratchbookIndexComponent
+Maintains an index of available artifacts for an agent.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `artifacts` | `dict[str, ScratchbookRef]` | `{}` | Mapping of artifact IDs to their metadata references |
+
+**Used by:** `ScratchbookIndexer`
+
+**Usage:**
+```python
+from ecs_agent.components import ScratchbookIndexComponent
+
+world.add_component(agent, ScratchbookIndexComponent(artifacts={}))
+```

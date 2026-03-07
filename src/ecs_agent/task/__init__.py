@@ -24,14 +24,35 @@ from ecs_agent.task.wave_planner import (
     WavePlanResult,
     WavePlanner,
 )
+from ecs_agent.task.fetching_unit import DispatchRequest, TaskFetchingUnit
+from ecs_agent.task.executor import ExecutionResult, TaskExecutor
+from ecs_agent.task.context_resolver import (
+    ContextResolver,
+    ResolvedContext,
+    ContextResolutionError,
+)
+from ecs_agent.task.persistence import (
+    TaskEventLogTamperError,
+    TaskPersistenceService,
+    compute_task_snapshot_hash,
+)
 
 __all__ = [
     "BlockedTask",
+    "ContextResolver",
+    "ContextResolutionError",
     "DependencyAnalysisResult",
     "DependencyCycleError",
+    "DispatchRequest",
+    "ExecutionResult",
     "MissingDependencyError",
+    "ResolvedContext",
     "TaskDependencyAnalysisError",
     "TaskDependencyStatus",
+    "TaskEventLogTamperError",
+    "TaskExecutor",
+    "TaskFetchingUnit",
+    "TaskPersistenceService",
     "TaskState",
     "TaskStateTransitionError",
     "TransitionRequest",
@@ -41,6 +62,7 @@ __all__ = [
     "WavePlanner",
     "analyze_task_dependencies",
     "block_task_due_to_upstream_failure",
+    "compute_task_snapshot_hash",
     "manual_retry_task",
     "manual_unblock_task",
     "transition_task_state",

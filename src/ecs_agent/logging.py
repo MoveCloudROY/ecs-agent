@@ -363,3 +363,153 @@ def log_bus_response(
         correlation_id=correlation_id,
         success=success,
     )
+
+
+def log_task_ready(
+    logger: Any,
+    task_id: str,
+    dependencies_resolved: list[str] | None = None,
+    correlation_id: str = "",
+) -> None:
+    """Log task_ready lifecycle event.
+    
+    Args:
+        logger: Structlog logger instance.
+        task_id: Task identifier.
+        dependencies_resolved: List of resolved dependency task IDs.
+        correlation_id: Correlation ID for request/response matching.
+    """
+    logger.info(
+        "task_ready",
+        task_id=task_id,
+        dependencies_resolved=dependencies_resolved or [],
+        correlation_id=correlation_id,
+    )
+
+
+def log_task_running(
+    logger: Any,
+    task_id: str,
+    backend: str,
+    assigned_agent: str | None = None,
+    correlation_id: str = "",
+) -> None:
+    """Log task_running lifecycle event.
+    
+    Args:
+        logger: Structlog logger instance.
+        task_id: Task identifier.
+        backend: Backend phase (e.g., 'fetch', 'dispatch', 'completion').
+        assigned_agent: Optional agent name or identifier.
+        correlation_id: Correlation ID for request/response matching.
+    """
+    logger.info(
+        "task_running",
+        task_id=task_id,
+        backend=backend,
+        assigned_agent=assigned_agent,
+        correlation_id=correlation_id,
+    )
+
+
+def log_task_completed(
+    logger: Any,
+    task_id: str,
+    duration_ms: float,
+    result_refs: list[str] | None = None,
+    correlation_id: str = "",
+) -> None:
+    """Log task_completed lifecycle event.
+    
+    Args:
+        logger: Structlog logger instance.
+        task_id: Task identifier.
+        duration_ms: Execution duration in milliseconds.
+        result_refs: List of result artifact IDs.
+        correlation_id: Correlation ID for request/response matching.
+    """
+    logger.info(
+        "task_completed",
+        task_id=task_id,
+        duration_ms=duration_ms,
+        result_refs=result_refs or [],
+        correlation_id=correlation_id,
+    )
+
+
+def log_task_failed(
+    logger: Any,
+    task_id: str,
+    reason: str,
+    exception: str = "",
+    backend: str | None = None,
+    correlation_id: str = "",
+) -> None:
+    """Log task_failed lifecycle event with reason and context.
+    
+    Args:
+        logger: Structlog logger instance.
+        task_id: Task identifier.
+        reason: Deterministic failure reason.
+        exception: Exception details if available.
+        backend: Optional backend phase where failure occurred.
+        correlation_id: Correlation ID for request/response matching.
+    """
+    logger.error(
+        "task_failed",
+        task_id=task_id,
+        reason=reason,
+        exception=exception,
+        backend=backend,
+        correlation_id=correlation_id,
+    )
+
+
+def log_task_blocked(
+    logger: Any,
+    task_id: str,
+    blocking_reasons: list[str] | None = None,
+    upstream_failures: list[str] | None = None,
+    correlation_id: str = "",
+) -> None:
+    """Log task_blocked lifecycle event.
+    
+    Args:
+        logger: Structlog logger instance.
+        task_id: Task identifier.
+        blocking_reasons: List of reasons why task is blocked.
+        upstream_failures: List of failed upstream task IDs.
+        correlation_id: Correlation ID for request/response matching.
+    """
+    logger.warning(
+        "task_blocked",
+        task_id=task_id,
+        blocking_reasons=blocking_reasons or [],
+        upstream_failures=upstream_failures or [],
+        correlation_id=correlation_id,
+    )
+
+
+def log_task_unblocked(
+    logger: Any,
+    task_id: str,
+    unblock_reason: str,
+    manual_override: bool = False,
+    correlation_id: str = "",
+) -> None:
+    """Log task_unblocked lifecycle event.
+    
+    Args:
+        logger: Structlog logger instance.
+        task_id: Task identifier.
+        unblock_reason: Reason for unblocking (e.g., 'dependency_resolved').
+        manual_override: Whether unblock was manual override.
+        correlation_id: Correlation ID for request/response matching.
+    """
+    logger.info(
+        "task_unblocked",
+        task_id=task_id,
+        unblock_reason=unblock_reason,
+        manual_override=manual_override,
+        correlation_id=correlation_id,
+    )
