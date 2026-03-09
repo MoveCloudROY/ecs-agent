@@ -43,7 +43,7 @@ Build modular, testable LLM agents by composing behavior from dataclass componen
 - **MCP Integration**, Connect to external tool servers via the Model Context Protocol (stdio, SSE, HTTP).
 - **Built-in Tools**, High-quality file manipulation (read/write/hash-anchored edit) and bash execution tools.
 - **Runtime Dynamic Control**, Register entities by name/tag, dynamically add/remove/replace systems at tick boundaries, switch models per-entity, and gracefully interrupt generation.
-- **Agent DSL**, Define AI agents and their hierarchies declaratively using JSON or Markdown files with secure prompt file references and permission mapping.
+- **Agent DSL**, Define AI agents declaratively using JSON or Markdown configuration files with deterministic loading and fail-fast validation.
 - **Agent Scratchbook**, Persistent filesystem-backed storage for categorized agent artifacts (tool results, plans, snapshots) with atomic index updates.
 
 - **Task Orchestration**, Multi-step task management with explicit state machine (READY → RUNNING → COMPLETED), dependency resolution, wave-based parallel dispatch, and mixed backend routing (local tools or subagent delegation).

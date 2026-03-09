@@ -199,4 +199,7 @@ Parses a Markdown file (filename becomes agent name).
 Resolves naming conflicts using a deterministic last-one-wins policy.
 
 ### `compile_agent_specs(specs: dict[str, AgentSpec], provider_factory: Callable[[str, str], LLMProvider]) -> tuple[EntityId, World]`
-Compiles resolved specs into a runnable ECS World. requires a factory function to create LLM providers.
+Compiles resolved specs into a runnable ECS World. Requires a factory function to create LLM providers.
+
+### `resolve_prompt_file(prompt_spec: str, source_dir: Path) -> str`
+Resolves `{file:path}` syntax to UTF-8 file content with security checks.

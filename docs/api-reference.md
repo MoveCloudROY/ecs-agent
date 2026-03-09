@@ -24,10 +24,9 @@ The following types and classes are re-exported for convenience:
 - `TaskStatus`, `TaskComponent`, `ScratchbookRef`, `ScratchbookRefComponent`, `ScratchbookIndexComponent` from `ecs_agent.types` and `ecs_agent.components`
 - `ScratchbookService`, `ScratchbookIndexer`, `ToolResultsSink` from `ecs_agent.scratchbook`
 - `TaskExecutor`, `StateMachine`, `TaskPersistenceService`, `ContextResolver`, `DependencyAnalyzer`, `WavePlanner`, `TaskFetchingUnit` from `ecs_agent.task`
-- `AgentSpec`, `validate_agent_spec`, `discover_agent_sources`, `load_json_agents`, `load_markdown_agent`, `resolve_agent_specs`, `compile_agent_specs` from `ecs_agent.dsl`
+- `AgentSpec`, `validate_agent_spec`, `discover_agent_sources`, `load_json_agents`, `load_markdown_agent`, `resolve_agent_specs`, `compile_agent_specs`, `resolve_prompt_file` from `ecs_agent.dsl`
 - `TaskCreatedEvent`, `TaskStatusChangedEvent`, `TaskBlockedEvent`, `TaskCompletedEvent`, `TaskFailedEvent` from `ecs_agent.types`
 
-- `TaskCreatedEvent`, `TaskStatusChangedEvent`, `TaskBlockedEvent`, `TaskCompletedEvent`, `TaskFailedEvent` from `ecs_agent.types`
 
 ---
 
@@ -709,4 +708,237 @@ class TaskPersistenceService:
 class ContextResolver:
     def __init__(self, service: ScratchbookService): ...
     def resolve_context(self, task: TaskComponent, running_task_ids: set[str] | None = None) -> ResolvedContext | ContextResolutionError: ...
+```
+
+---
+
+## ecs_agent.dsl
+
+Agent DSL configuration and compilation utilities.
+
+### AgentSpec
+
+```python
+@dataclass(slots=True)
+class AgentSpec:
+    name: str
+    mode: str
+    model: str
+    prompt: str | dict[str, str]
+    tools: dict[str, bool] | None = None
+    metadata: dict[str, Any] | None = None
+```
+
+Normalized agent specification. All loaders produce this canonical representation.
+
+**Fields:**
+- `name` — Agent identifier (derived from JSON key or Markdown filename)
+- `mode` — Execution mode (`"primary"` creates runnable entity, `"library"` for config-only templates)
+- `model` — LLM model identifier
+- `prompt` — System prompt (string or `{"file": "path/to/prompt.txt"}`)
+- `tools` — Optional tool permission mapping (`{"tool_name": true/false}`)
+- `metadata` — Optional arbitrary metadata dictionary
+
+### validate_agent_spec
+
+```python
+def validate_agent_spec(data: dict[str, Any], *, source_name: str = "") -> AgentSpec:
+    ...
+```
+
+Validate raw dictionary and convert to AgentSpec. Fail-fast on invalid/unknown fields.
+
+**Parameters:**
+- `data` — Raw agent configuration dict
+- `source_name` — Optional source identifier for error messages (e.g., filename)
+
+**Returns:**
+Validated AgentSpec instance
+
+**Raises:**
+- `ValueError` — On validation failure (missing required fields, invalid types, unknown fields)
+
+**Example:**
+```python
+from ecs_agent.dsl import validate_agent_spec
+
+spec = validate_agent_spec({
+    "name": "assistant",
+    "mode": "primary",
+    "model": "gpt-4",
+    "prompt": "You are a helpful assistant."
+})
+```
+
+### discover_agent_sources
+
+```python
+def discover_agent_sources(directory: Path | str) -> list[Path]:
+    ...
+```
+
+Find all `*.json` and `*.md` agent configuration files in a directory.
+
+**Parameters:**
+- `directory` — Directory to search (non-recursive)
+
+**Returns:**
+List of Path objects sorted deterministically (JSON first alphabetically, then Markdown alphabetically)
+
+**Example:**
+```python
+from ecs_agent.dsl import discover_agent_sources
+
+sources = discover_agent_sources("./agents")
+# [PosixPath('agents/primary.json'), PosixPath('agents/assistant.md')]
+```
+
+### load_json_agents
+
+```python
+def load_json_agents(path: Path | str) -> list[AgentSpec]:
+    ...
+```
+
+Load agent specifications from a JSON file containing `{"agents": {...}}` structure.
+
+**Parameters:**
+- `path` — Path to JSON file
+
+**Returns:**
+List of AgentSpec (one per agent in the JSON)
+
+**Raises:**
+- `ValueError` — Invalid JSON structure or missing `"agents"` key
+- File I/O errors if path doesn't exist
+
+**Example:**
+```python
+from ecs_agent.dsl import load_json_agents
+
+specs = load_json_agents("agents.json")
+for spec in specs:
+    print(f"{spec.name}: {spec.model}")
+```
+
+### load_markdown_agent
+
+```python
+def load_markdown_agent(path: Path | str) -> AgentSpec:
+    ...
+```
+
+Load single agent from Markdown file. Filename becomes agent name (without `.md`). YAML frontmatter provides configuration, body text becomes prompt.
+
+**Parameters:**
+- `path` — Path to `.md` file
+
+**Returns:**
+Single AgentSpec instance
+
+**Raises:**
+- `ValueError` — Invalid YAML frontmatter, missing required fields, or validation errors
+- File I/O errors if path doesn't exist
+
+**Example:**
+```python
+from ecs_agent.dsl import load_markdown_agent
+
+spec = load_markdown_agent("assistant.md")
+# spec.name == "assistant" (derived from filename)
+```
+
+### resolve_agent_specs
+
+```python
+def resolve_agent_specs(specs: list[AgentSpec]) -> list[AgentSpec]:
+    ...
+```
+
+Resolve name conflicts using **last-one-wins** policy. Later specs with duplicate names override earlier ones.
+
+**Parameters:**
+- `specs` — List of AgentSpec (possibly with duplicate names)
+
+**Returns:**
+Deduplicated list (preserving last occurrence of each name)
+
+**Example:**
+```python
+from ecs_agent.dsl import resolve_agent_specs
+
+specs = [
+    AgentSpec(name="bot", mode="primary", model="gpt-3.5", prompt="v1"),
+    AgentSpec(name="bot", mode="primary", model="gpt-4", prompt="v2"),
+]
+resolved = resolve_agent_specs(specs)
+# resolved[0].model == "gpt-4" (last definition wins)
+```
+
+### compile_agent_specs
+
+```python
+def compile_agent_specs(
+    specs: list[AgentSpec],
+    factory: Callable[[AgentSpec], tuple[EntityId, LLMProvider]]
+) -> World:
+    ...
+```
+
+Compile agent specifications into an ECS World. Creates entities for agents with `mode="primary"` using the provided factory function.
+
+**Parameters:**
+- `specs` — List of AgentSpec to compile
+- `factory` — Callback `(spec) -> (entity_id, provider)` that creates entity and instantiates LLM provider
+
+**Returns:**
+World instance with compiled entities and components
+
+**Raises:**
+- `ValueError` — No primary mode agent found (at least one `mode="primary"` required)
+
+**Example:**
+```python
+from ecs_agent.dsl import compile_agent_specs
+from ecs_agent.core import World
+from ecs_agent.providers import OpenAIProvider
+
+def my_factory(spec: AgentSpec):
+    world_temp = World()
+    entity = world_temp.create_entity()
+    provider = OpenAIProvider(api_key="sk-xxx", model=spec.model)
+    return entity, provider
+
+world = compile_agent_specs(specs, my_factory)
+```
+
+### resolve_prompt_file
+
+```python
+def resolve_prompt_file(prompt_ref: dict[str, str], agent_source_path: Path) -> str:
+    ...
+```
+
+Resolve `{"file": "path/to/prompt.txt"}` reference to actual file content. Security: rejects absolute paths and parent directory traversal.
+
+**Parameters:**
+- `prompt_ref` — Dictionary with `{"file": "relative/path.txt"}`
+- `agent_source_path` — Path to agent config file (used as base for relative resolution)
+
+**Returns:**
+File content as string
+
+**Raises:**
+- `ValueError` — Absolute path, parent traversal (`..`), or file not found
+
+**Example:**
+```python
+from pathlib import Path
+from ecs_agent.dsl import resolve_prompt_file
+
+content = resolve_prompt_file(
+    {"file": "prompts/assistant.txt"},
+    Path("agents/config.json")
+)
+# Reads from agents/prompts/assistant.txt
 ```
