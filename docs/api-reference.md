@@ -24,6 +24,9 @@ The following types and classes are re-exported for convenience:
 - `TaskStatus`, `TaskComponent`, `ScratchbookRef`, `ScratchbookRefComponent`, `ScratchbookIndexComponent` from `ecs_agent.types` and `ecs_agent.components`
 - `ScratchbookService`, `ScratchbookIndexer`, `ToolResultsSink` from `ecs_agent.scratchbook`
 - `TaskExecutor`, `StateMachine`, `TaskPersistenceService`, `ContextResolver`, `DependencyAnalyzer`, `WavePlanner`, `TaskFetchingUnit` from `ecs_agent.task`
+- `AgentSpec`, `validate_agent_spec`, `discover_agent_sources`, `load_json_agents`, `load_markdown_agent`, `resolve_agent_specs`, `compile_agent_specs` from `ecs_agent.dsl`
+- `TaskCreatedEvent`, `TaskStatusChangedEvent`, `TaskBlockedEvent`, `TaskCompletedEvent`, `TaskFailedEvent` from `ecs_agent.types`
+
 - `TaskCreatedEvent`, `TaskStatusChangedEvent`, `TaskBlockedEvent`, `TaskCompletedEvent`, `TaskFailedEvent` from `ecs_agent.types`
 
 ---

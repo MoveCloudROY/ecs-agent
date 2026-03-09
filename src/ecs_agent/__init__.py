@@ -64,6 +64,15 @@ from ecs_agent.systems.tool_approval import ToolApprovalSystem
 from ecs_agent.systems.tree_search import TreeSearchSystem
 from ecs_agent.systems.rag import RAGSystem
 from ecs_agent.serialization import WorldSerializer
+from ecs_agent.dsl import (
+    AgentSpec,
+    compile_agent_specs,
+    discover_agent_sources,
+    load_json_agents,
+    load_markdown_agent,
+    resolve_agent_specs,
+    validate_agent_spec,
+)
 from ecs_agent.logging import (
     configure_logging,
     get_logger,
@@ -109,6 +118,7 @@ from ecs_agent.conversation_tree import add_message, create_branch, linearize, s
 
 
 __all__ = [
+    "AgentSpec",
     "ApprovalPolicy",
     "BranchCreatedEvent",
     "BuiltinToolsSkill",
@@ -117,6 +127,7 @@ __all__ = [
     "CheckpointRestoredEvent",
     "CheckpointSystem",
     "ClaudeProvider",
+    "compile_agent_specs",
     "CompactionCompleteEvent",
     "CompactionConfigComponent",
     "CompactionSystem",
@@ -128,12 +139,15 @@ __all__ = [
     "DelegationCompletedEvent",
     "DelegationStartedEvent",
     "DiscoveryManager",
+    "discover_agent_sources",
     "DiscoveryReport",
     "EntityId",
     "extract_parent_id",
     "extract_trace_id",
     "FakeEmbeddingProvider",
     "LiteLLMProvider",
+    "load_json_agents",
+    "load_markdown_agent",
     "MCPConnectedEvent",
     "MCPDisconnectedEvent",
     "MCPToolCallEvent",
@@ -148,6 +162,7 @@ __all__ = [
     "PermissionComponent",
     "PermissionSystem",
     "RAGSystem",
+    "resolve_agent_specs",
     "ResponsesAPICallEvent",
     "ResponsesAPIStateComponent",
     "RetryConfig",
@@ -182,6 +197,7 @@ __all__ = [
     "UserInputComponent",
     "UserInputRequestedEvent",
     "UserInputSystem",
+    "validate_agent_spec",
     "WebSearchSkill",
     "WorldSerializer",
     "__version__",
