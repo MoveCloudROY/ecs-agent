@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from ecs_agent.components import LLMComponent, SubagentRegistryComponent
+from ecs_agent.components import LLMComponent, PermissionComponent, SubagentRegistryComponent
 from ecs_agent.core import World
 from ecs_agent.dsl.schema import AgentSpec
 from ecs_agent.types import SubagentConfig
@@ -160,3 +160,82 @@ def test_compile_subagent_config_maps_expected_fields() -> None:
     assert helper.system_prompt == "Helper prompt"
     assert helper.max_ticks == 10
     assert helper.skills == []
+
+
+def test_compile_tools_boolean_mapping_creates_permission_component() -> None:
+    from ecs_agent.dsl.compiler import compile_agent_specs
+
+    specs = {
+        "main": AgentSpec(
+            name="main",
+            mode="primary",
+            model="gpt-main",
+            prompt="Primary prompt",
+            tools={"bash": True, "read_file": True, "web_search": False},
+        )
+    }
+
+    primary_entity_id, world = compile_agent_specs(specs, _ProviderFactorySpy())
+
+    permission = world.get_component(primary_entity_id, PermissionComponent)
+    assert permission is not None
+    assert set(permission.allowed_tools) == {"bash", "read_file"}
+    assert permission.denied_tools == []
+
+
+def test_compile_tools_all_false_creates_empty_allowlist() -> None:
+    from ecs_agent.dsl.compiler import compile_agent_specs
+
+    specs = {
+        "main": AgentSpec(
+            name="main",
+            mode="primary",
+            model="gpt-main",
+            prompt="Primary prompt",
+            tools={"bash": False, "read_file": False},
+        )
+    }
+
+    primary_entity_id, world = compile_agent_specs(specs, _ProviderFactorySpy())
+
+    permission = world.get_component(primary_entity_id, PermissionComponent)
+    assert permission is not None
+    assert permission.allowed_tools == []
+    assert permission.denied_tools == []
+
+
+def test_compile_no_tools_no_permission_component() -> None:
+    from ecs_agent.dsl.compiler import compile_agent_specs
+
+    specs = {
+        "main": AgentSpec(
+            name="main",
+            mode="primary",
+            model="gpt-main",
+            prompt="Primary prompt",
+        )
+    }
+
+    primary_entity_id, world = compile_agent_specs(specs, _ProviderFactorySpy())
+
+    permission = world.get_component(primary_entity_id, PermissionComponent)
+    assert permission is None
+
+
+def test_compile_empty_tools_dict_no_permission_component() -> None:
+    from ecs_agent.dsl.compiler import compile_agent_specs
+
+    specs = {
+        "main": AgentSpec(
+            name="main",
+            mode="primary",
+            model="gpt-main",
+            prompt="Primary prompt",
+            tools={},
+        )
+    }
+
+    primary_entity_id, world = compile_agent_specs(specs, _ProviderFactorySpy())
+
+    permission = world.get_component(primary_entity_id, PermissionComponent)
+    assert permission is None
