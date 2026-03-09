@@ -624,3 +624,129 @@ def test_resolve_agent_specs_empty_list() -> None:
     resolved = resolve_agent_specs([])
 
     assert resolved == {}
+
+
+# Prompt file resolver tests
+
+
+def test_resolve_prompt_file_happy_path(tmp_path: Path) -> None:
+    """Test {file:...} reference resolves to file content."""
+    from ecs_agent.dsl.prompt_resolver import resolve_prompt_file
+
+    # Create prompt file
+    prompt_file = tmp_path / "system_prompt.txt"
+    prompt_file.write_text("You are a helpful assistant.", encoding="utf-8")
+
+    prompt_spec = "Prefix {file:system_prompt.txt} suffix"
+    result = resolve_prompt_file(prompt_spec, tmp_path)
+
+    assert result == "Prefix You are a helpful assistant. suffix"
+
+
+def test_resolve_prompt_file_subdirectory(tmp_path: Path) -> None:
+    """Test {file:...} reference with subdirectory."""
+    from ecs_agent.dsl.prompt_resolver import resolve_prompt_file
+
+    # Create subdirectory and file
+    subdir = tmp_path / "prompts"
+    subdir.mkdir()
+    prompt_file = subdir / "agent.txt"
+    prompt_file.write_text("Agent instructions", encoding="utf-8")
+
+    prompt_spec = "{file:prompts/agent.txt}"
+    result = resolve_prompt_file(prompt_spec, tmp_path)
+
+    assert result == "Agent instructions"
+
+
+def test_resolve_prompt_file_no_reference_returns_unchanged(tmp_path: Path) -> None:
+    """Test prompt without {file:...} returns unchanged."""
+    from ecs_agent.dsl.prompt_resolver import resolve_prompt_file
+
+    prompt_spec = "Regular prompt text"
+    result = resolve_prompt_file(prompt_spec, tmp_path)
+
+    assert result == "Regular prompt text"
+
+
+def test_resolve_prompt_file_missing_file(tmp_path: Path) -> None:
+    """Test {file:...} with missing file raises FileNotFoundError."""
+    from ecs_agent.dsl.prompt_resolver import resolve_prompt_file
+
+    prompt_spec = "{file:missing.txt}"
+
+    with pytest.raises(FileNotFoundError, match="Prompt file not found: missing.txt"):
+        resolve_prompt_file(prompt_spec, tmp_path)
+
+
+def test_resolve_prompt_file_absolute_path_rejected(tmp_path: Path) -> None:
+    """Test {file:...} with absolute path is rejected."""
+    from ecs_agent.dsl.prompt_resolver import resolve_prompt_file
+
+    prompt_spec = "{file:/etc/passwd}"
+
+    with pytest.raises(ValueError, match="Absolute paths not allowed"):
+        resolve_prompt_file(prompt_spec, tmp_path)
+
+
+def test_resolve_prompt_file_path_traversal_rejected(tmp_path: Path) -> None:
+    """Test {file:...} with path traversal is rejected."""
+    from ecs_agent.dsl.prompt_resolver import resolve_prompt_file
+
+    prompt_spec = "{file:../../../etc/passwd}"
+
+    with pytest.raises(ValueError, match="Path traversal.*not allowed"):
+        resolve_prompt_file(prompt_spec, tmp_path)
+
+
+def test_resolve_prompt_file_symlink_escape_rejected(tmp_path: Path) -> None:
+    """Test {file:...} with symlink escape is rejected."""
+    from ecs_agent.dsl.prompt_resolver import resolve_prompt_file
+
+    # Create a symlink pointing outside source_dir
+    external_dir = tmp_path.parent / "external"
+    external_dir.mkdir(exist_ok=True)
+    external_file = external_dir / "secret.txt"
+    external_file.write_text("secret data", encoding="utf-8")
+
+    symlink = tmp_path / "link.txt"
+    symlink.symlink_to(external_file)
+
+    prompt_spec = "{file:link.txt}"
+
+    with pytest.raises(ValueError, match="Path escapes source directory"):
+        resolve_prompt_file(prompt_spec, tmp_path)
+
+
+def test_resolve_prompt_file_multiple_references_rejected(tmp_path: Path) -> None:
+    """Test multiple {file:...} references are rejected."""
+    from ecs_agent.dsl.prompt_resolver import resolve_prompt_file
+
+    prompt_spec = "{file:a.txt} and {file:b.txt}"
+
+    with pytest.raises(ValueError, match="Multiple file references not allowed"):
+        resolve_prompt_file(prompt_spec, tmp_path)
+
+
+def test_resolve_prompt_file_empty_path_rejected(tmp_path: Path) -> None:
+    """Test empty path in {file:} is rejected."""
+    from ecs_agent.dsl.prompt_resolver import resolve_prompt_file
+
+    prompt_spec = "{file:}"
+
+    with pytest.raises(ValueError, match="Empty file path"):
+        resolve_prompt_file(prompt_spec, tmp_path)
+
+
+def test_resolve_prompt_file_directory_rejected(tmp_path: Path) -> None:
+    """Test {file:...} pointing to directory is rejected."""
+    from ecs_agent.dsl.prompt_resolver import resolve_prompt_file
+
+    # Create a directory
+    subdir = tmp_path / "subdir"
+    subdir.mkdir()
+
+    prompt_spec = "{file:subdir}"
+
+    with pytest.raises(ValueError, match="Prompt path is not a file"):
+        resolve_prompt_file(prompt_spec, tmp_path)
