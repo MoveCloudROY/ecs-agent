@@ -531,12 +531,125 @@ class TestDiscoverAgentSources:
             # Verify lexicographic sort with special chars
             assert names == sorted(names)
 
+    def test_discover_source_order_stable_across_ten_runs(self) -> None:
+        """Determinism guarantee: ten repeated discoveries return identical order."""
+        import tempfile
+        from ecs_agent.dsl.discovery import discover_agent_sources
 
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            for file_name in ["zeta.json", "alpha.md", "beta.json", "gamma.md"]:
+                (tmppath / file_name).touch()
+
+            baseline = [p.name for p in discover_agent_sources(tmpdir)]
+            for _ in range(9):
+                assert [p.name for p in discover_agent_sources(tmpdir)] == baseline
+
+            assert baseline == ["alpha.md", "beta.json", "gamma.md", "zeta.json"]
+
+    def test_discover_mixed_formats_numeric_sort_is_lexicographic(self) -> None:
+        """Determinism guarantee: numeric-looking names use lexicographic path ordering."""
+        import tempfile
+        from ecs_agent.dsl.discovery import discover_agent_sources
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            for file_name in ["2.json", "10.json", "1.md", "11.md"]:
+                (tmppath / file_name).touch()
+
+            names = [p.name for p in discover_agent_sources(tmpdir)]
+            assert names == ["1.md", "10.json", "11.md", "2.json"]
+
+    def test_discover_large_directory_is_stable_with_120_files(self) -> None:
+        """Determinism guarantee: large directories (100+) keep stable sorted output."""
+        import tempfile
+        from ecs_agent.dsl.discovery import discover_agent_sources
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            expected_names: list[str] = []
+
+            for idx in range(120):
+                suffix = ".json" if idx % 2 == 0 else ".md"
+                name = f"agent_{idx:03d}{suffix}"
+                (tmppath / name).touch()
+                expected_names.append(name)
+
+            expected_names.sort()
+
+            run_one = [p.name for p in discover_agent_sources(tmpdir)]
+            run_two = [p.name for p in discover_agent_sources(tmpdir)]
+            run_three = [p.name for p in discover_agent_sources(tmpdir)]
+
+            assert run_one == expected_names
+            assert run_two == expected_names
+            assert run_three == expected_names
+
+    def test_discover_concurrent_creation_still_returns_stable_order(self) -> None:
+        """Determinism guarantee: concurrent file creation cannot perturb discovery ordering."""
+        import tempfile
+        from concurrent.futures import ThreadPoolExecutor
+
+        from ecs_agent.dsl.discovery import discover_agent_sources
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            created_names = [f"parallel_{idx:03d}.json" for idx in range(60)]
+
+            def _touch(name: str) -> None:
+                (tmppath / name).touch()
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                list(executor.map(_touch, reversed(created_names)))
+
+            expected_names = sorted(created_names)
+            for _ in range(5):
+                assert [
+                    p.name for p in discover_agent_sources(tmpdir)
+                ] == expected_names
+
+    def test_discover_case_collision_behavior_is_explicit(self) -> None:
+        """Determinism guarantee: case-collision behavior is explicit across filesystems."""
+        import tempfile
+        from ecs_agent.dsl.discovery import discover_agent_sources
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            (tmppath / "Agent.json").touch()
+            (tmppath / "agent.json").touch()
+
+            names = [p.name for p in discover_agent_sources(tmpdir)]
+            if len(names) == 1:
+                pytest.skip(
+                    "Case-insensitive filesystem merges case-colliding filenames"
+                )
+
+            assert names == ["Agent.json", "agent.json"]
+
+    def test_discover_path_normalization_relative_absolute_and_trailing_slash(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Determinism guarantee: path representation variants yield identical source order."""
+        from ecs_agent.dsl.discovery import discover_agent_sources
+
+        (tmp_path / "b.json").touch()
+        (tmp_path / "a.md").touch()
+        (tmp_path / "c.json").touch()
+
+        monkeypatch.chdir(tmp_path)
+
+        rel = [p.resolve() for p in discover_agent_sources(".")]
+        absolute = [p.resolve() for p in discover_agent_sources(tmp_path.resolve())]
+        trailing = [
+            p.resolve() for p in discover_agent_sources(f"{tmp_path.resolve()}/")
+        ]
+
+        assert rel == absolute
+        assert absolute == trailing
 
 
 # Conflict resolution tests
-def test_resolve_agent_specs_last_one_wins_single_duplicate(
-) -> None:
+def test_resolve_agent_specs_last_one_wins_single_duplicate() -> None:
     """Test last-one-wins for duplicate agent names."""
     specs = [
         AgentSpec(
@@ -560,8 +673,7 @@ def test_resolve_agent_specs_last_one_wins_single_duplicate(
     assert resolved["researcher"].prompt == "Second version (winner)"
 
 
-def test_resolve_agent_specs_last_one_wins_multiple_duplicates(
-) -> None:
+def test_resolve_agent_specs_last_one_wins_multiple_duplicates() -> None:
     """Test last-one-wins with multiple duplicate names."""
     specs = [
         AgentSpec(mode="primary", model="m1", prompt="v1", name="agent_a"),
@@ -624,6 +736,159 @@ def test_resolve_agent_specs_empty_list() -> None:
     resolved = resolve_agent_specs([])
 
     assert resolved == {}
+
+
+def test_load_agent_sources_mixed_formats_last_one_wins_with_provenance(
+    tmp_path: Path,
+) -> None:
+    """Determinism guarantee: sorted mixed-format sources produce reproducible winner provenance."""
+    from ecs_agent.dsl import discover_agent_sources, load_markdown_agent
+
+    (tmp_path / "alpha.md").write_text(
+        "---\nmode: primary\nmodel: md-model\n---\nMarkdown winner candidate.",
+        encoding="utf-8",
+    )
+    (tmp_path / "z_override.json").write_text(
+        json.dumps(
+            {
+                "alpha": {
+                    "mode": "primary",
+                    "model": "json-model",
+                    "prompt": "JSON winner",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded: list[AgentSpec] = []
+    provenance: list[tuple[str, str, str]] = []
+    for source in discover_agent_sources(tmp_path):
+        if source.suffix == ".json":
+            for spec in load_json_agents(source):
+                loaded.append(spec)
+                provenance.append((spec.name, source.name, spec.model))
+        else:
+            spec = load_markdown_agent(source)
+            loaded.append(spec)
+            provenance.append((spec.name, source.name, spec.model))
+
+    resolved = resolve_agent_specs(loaded)
+
+    assert provenance == [
+        ("alpha", "alpha.md", "md-model"),
+        ("alpha", "z_override.json", "json-model"),
+    ]
+    assert resolved["alpha"].model == "json-model"
+    assert resolved["alpha"].prompt == "JSON winner"
+
+
+def test_load_agent_sources_mixed_formats_loads_non_colliding_agents(
+    tmp_path: Path,
+) -> None:
+    """Determinism guarantee: mixed-format loading keeps all unique names stable."""
+    from ecs_agent.dsl import discover_agent_sources, load_markdown_agent
+
+    (tmp_path / "beta.md").write_text(
+        "---\nmode: subagent\nmodel: md-beta\n---\nBeta prompt.",
+        encoding="utf-8",
+    )
+    (tmp_path / "alpha.json").write_text(
+        json.dumps(
+            {
+                "gamma": {
+                    "mode": "primary",
+                    "model": "json-gamma",
+                    "prompt": "Gamma prompt",
+                },
+                "alpha": {
+                    "mode": "primary",
+                    "model": "json-alpha",
+                    "prompt": "Alpha prompt",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded: list[AgentSpec] = []
+    for source in discover_agent_sources(tmp_path):
+        if source.suffix == ".json":
+            loaded.extend(load_json_agents(source))
+        else:
+            loaded.append(load_markdown_agent(source))
+
+    resolved = resolve_agent_specs(loaded)
+
+    assert list(resolved.keys()) == ["gamma", "alpha", "beta"]
+    assert resolved["gamma"].model == "json-gamma"
+    assert resolved["alpha"].model == "json-alpha"
+    assert resolved["beta"].model == "md-beta"
+
+
+def test_resolve_agent_specs_last_one_wins_with_explicit_winner_provenance() -> None:
+    """Determinism guarantee: duplicate resolution always selects the final source entry."""
+    from pathlib import PurePosixPath
+
+    specs_with_source: list[tuple[PurePosixPath, AgentSpec]] = [
+        (
+            PurePosixPath("001_base.json"),
+            AgentSpec(mode="primary", model="base", prompt="base", name="planner"),
+        ),
+        (
+            PurePosixPath("010_mid.md"),
+            AgentSpec(mode="primary", model="mid", prompt="mid", name="planner"),
+        ),
+        (
+            PurePosixPath("020_final.json"),
+            AgentSpec(mode="primary", model="final", prompt="final", name="planner"),
+        ),
+    ]
+
+    ordered_sources = [str(source) for source, _ in specs_with_source]
+    resolved = resolve_agent_specs([spec for _, spec in specs_with_source])
+
+    assert ordered_sources[-1] == "020_final.json"
+    assert resolved["planner"].model == "final"
+    assert resolved["planner"].prompt == "final"
+
+
+def test_resolve_agent_specs_collision_replaces_entire_spec_no_merging() -> None:
+    """Determinism guarantee: winner fully replaces loser without field merging."""
+    winner = AgentSpec(
+        mode="subagent",
+        model="winner-model",
+        prompt="winner prompt",
+        name="shared",
+        tools={"fresh": True},
+        metadata={"version": "2"},
+    )
+    loser = AgentSpec(
+        mode="primary",
+        model="loser-model",
+        prompt="loser prompt",
+        name="shared",
+        tools={"legacy": True},
+        metadata={"version": "1", "keep": "no"},
+    )
+
+    resolved = resolve_agent_specs([loser, winner])
+
+    assert resolved["shared"] is winner
+    assert resolved["shared"].tools == {"fresh": True}
+    assert resolved["shared"].metadata == {"version": "2"}
+    assert "legacy" not in resolved["shared"].tools
+
+
+def test_resolve_agent_specs_tie_like_duplicate_sequence_is_deterministic() -> None:
+    """Determinism guarantee: repeated duplicate chains always produce same winning value."""
+    specs = [
+        AgentSpec(mode="primary", model=f"m{idx}", prompt=f"p{idx}", name="same")
+        for idx in range(6)
+    ]
+
+    winners = [resolve_agent_specs(specs)["same"].model for _ in range(8)]
+    assert winners == ["m5"] * 8
 
 
 # Prompt file resolver tests
