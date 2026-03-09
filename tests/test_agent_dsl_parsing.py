@@ -1,7 +1,12 @@
 """Tests for Agent DSL schema validation."""
 
 import pytest
+import tempfile
+from pathlib import Path
 
+import yaml
+
+from ecs_agent.dsl.markdown_loader import load_markdown_agent
 from ecs_agent.dsl.schema import AgentSpec, validate_agent_spec
 
 
@@ -212,3 +217,147 @@ class TestAgentSpecValidation:
         assert spec.metadata["team"] == "engineering"
         assert spec.metadata["tags"] == ["production", "critical"]
         assert spec.metadata["config"]["timeout"] == 30
+
+
+class TestMarkdownAgentLoader:
+    """Test suite for Markdown agent loader."""
+
+    def test_markdown_agent_parses_frontmatter_and_body(self) -> None:
+        """load_markdown_agent extracts YAML frontmatter and markdown body."""
+        content = """---
+mode: primary
+model: gpt-4
+tools:
+  read_file: true
+  write_file: false
+metadata:
+  team: engineering
+---
+You are a helpful assistant.
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_path = Path(tmpdir) / "code_assistant.md"
+            agent_path.write_text(content)
+
+            spec = load_markdown_agent(agent_path)
+
+            assert spec.mode == "primary"
+            assert spec.model == "gpt-4"
+            assert spec.prompt == "You are a helpful assistant."
+            assert spec.tools == {"read_file": True, "write_file": False}
+            assert spec.metadata == {"team": "engineering"}
+            # Filename is authoritative for name
+            assert spec.name == "code_assistant"
+
+    def test_markdown_filename_overrides_frontmatter_name(self) -> None:
+        """Filename is authoritative agent name, frontmatter name is ignored."""
+        content = """---
+mode: primary
+model: gpt-4
+prompt: System prompt from frontmatter
+name: frontmatter_name
+---
+Body prompt (should be ignored since frontmatter has prompt)
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_path = Path(tmpdir) / "filename_wins.md"
+            agent_path.write_text(content)
+
+            spec = load_markdown_agent(agent_path)
+
+            # Filename ALWAYS wins
+            assert spec.name == "filename_wins"
+            # Frontmatter prompt is used
+            assert spec.prompt == "Body prompt (should be ignored since frontmatter has prompt)"
+
+    def test_markdown_invalid_yaml_raises_error(self) -> None:
+        """Invalid YAML frontmatter raises yaml.YAMLError with file path."""
+        content = """---
+mode: primary
+model: gpt-4
+prompt: test
+tools:
+  - this is invalid yaml structure
+    read_file: true
+---
+Body content
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_path = Path(tmpdir) / "bad_yaml.md"
+            agent_path.write_text(content)
+
+            with pytest.raises(yaml.YAMLError, match="Invalid YAML frontmatter"):
+                load_markdown_agent(agent_path)
+
+    def test_markdown_no_frontmatter_raises_validation_error(self) -> None:
+        """Markdown with no frontmatter raises validation error for missing fields."""
+        content = """You are a helpful assistant."""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_path = Path(tmpdir) / "no_frontmatter.md"
+            agent_path.write_text(content)
+
+            # Should fail validation because mode and model are missing
+            with pytest.raises(ValueError, match="Missing required field"):
+                load_markdown_agent(agent_path)
+
+    def test_markdown_malformed_frontmatter_delimiter(self) -> None:
+        """Malformed frontmatter (only opening ---) treats content as body."""
+        content = """---
+This is not valid frontmatter
+Just plain text"""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_path = Path(tmpdir) / "malformed.md"
+            agent_path.write_text(content)
+
+            # Should fail validation because mode and model are missing
+            with pytest.raises(ValueError, match="Missing required field"):
+                load_markdown_agent(agent_path)
+
+    def test_markdown_empty_body_is_valid(self) -> None:
+        """Empty markdown body is valid (prompt can be empty string)."""
+        content = """---
+mode: primary
+model: gpt-4
+prompt: System prompt
+---
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_path = Path(tmpdir) / "empty_body.md"
+            agent_path.write_text(content)
+
+            spec = load_markdown_agent(agent_path)
+
+            assert spec.mode == "primary"
+            assert spec.model == "gpt-4"
+            # Body overwrites frontmatter prompt (body is empty)
+            assert spec.prompt == ""
+            assert spec.name == "empty_body"
+
+    def test_markdown_file_not_found(self) -> None:
+        """FileNotFoundError raised for non-existent file."""
+        with pytest.raises(FileNotFoundError, match="Markdown agent file not found"):
+            load_markdown_agent("/nonexistent/path/agent.md")
+
+    def test_markdown_body_overwrites_frontmatter_prompt(self) -> None:
+        """Markdown body always becomes the prompt (frontmatter prompt is ignored)."""
+        content = """---
+mode: subagent
+model: claude-3-opus
+prompt: This prompt from frontmatter should be overwritten
+---
+# Actual Agent Prompt
+
+This is the real system prompt from the markdown body."""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_path = Path(tmpdir) / "body_wins.md"
+            agent_path.write_text(content)
+
+            spec = load_markdown_agent(agent_path)
+
+            assert spec.mode == "subagent"
+            # Body ALWAYS wins for prompt
+            assert spec.prompt == "# Actual Agent Prompt\n\nThis is the real system prompt from the markdown body."
+            assert spec.name == "body_wins"
