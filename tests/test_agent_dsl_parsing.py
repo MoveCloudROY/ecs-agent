@@ -5,8 +5,10 @@ import tempfile
 from pathlib import Path
 
 import yaml
+import json
 
 from ecs_agent.dsl.markdown_loader import load_markdown_agent
+from ecs_agent.dsl.json_loader import load_json_agents
 from ecs_agent.dsl.schema import AgentSpec, validate_agent_spec
 
 
@@ -361,3 +363,367 @@ This is the real system prompt from the markdown body."""
             # Body ALWAYS wins for prompt
             assert spec.prompt == "# Actual Agent Prompt\n\nThis is the real system prompt from the markdown body."
             assert spec.name == "body_wins"
+
+
+class TestUnicodeAndSpecialCharacters:
+    """Test suite for unicode and special character handling in agent names."""
+
+    def test_agent_name_with_chinese_characters(self) -> None:
+        """Agent name with Chinese characters validates correctly."""
+        data = {
+            "mode": "primary",
+            "model": "gpt-4",
+            "prompt": "test",
+            "name": "智能助手",
+        }
+        spec = validate_agent_spec(data)
+        assert spec.name == "智能助手"
+
+    def test_agent_name_with_japanese_emoji(self) -> None:
+        """Agent name with Japanese and emoji validates correctly."""
+        data = {
+            "mode": "subagent",
+            "model": "claude-3-opus",
+            "prompt": "test",
+            "name": "コード助手🤖",
+        }
+        spec = validate_agent_spec(data)
+        assert spec.name == "コード助手🤖"
+
+    def test_agent_name_with_special_punctuation(self) -> None:
+        """Agent name with special punctuation and spaces validates correctly."""
+        data = {
+            "mode": "primary",
+            "model": "gpt-4",
+            "prompt": "test",
+            "name": "code-assistant_v2.0 (beta)",
+        }
+        spec = validate_agent_spec(data)
+        assert spec.name == "code-assistant_v2.0 (beta)"
+
+    def test_agent_name_empty_string(self) -> None:
+        """Empty string name is valid (default value)."""
+        data = {
+            "mode": "primary",
+            "model": "gpt-4",
+            "prompt": "test",
+            "name": "",
+        }
+        spec = validate_agent_spec(data)
+        assert spec.name == ""
+
+    def test_agent_name_whitespace_only(self) -> None:
+        """Whitespace-only name is valid."""
+        data = {
+            "mode": "primary",
+            "model": "gpt-4",
+            "prompt": "test",
+            "name": "   ",
+        }
+        spec = validate_agent_spec(data)
+        assert spec.name == "   "
+
+    def test_prompt_with_unicode_and_special_chars(self) -> None:
+        """Prompt with mixed unicode and special characters validates correctly."""
+        data = {
+            "mode": "primary",
+            "model": "gpt-4",
+            "prompt": "You are a helpful assistant. 你好！🎯 Use quotes \"like this\" and newlines.\n\nMultiple paragraphs.",
+        }
+        spec = validate_agent_spec(data)
+        assert "你好" in spec.prompt
+        assert "🎯" in spec.prompt
+        assert "\"" in spec.prompt
+
+
+class TestLargePayloadAndPerformance:
+    """Test suite for large file/payload scenarios and memory safety."""
+
+    def test_prompt_with_very_long_content(self) -> None:
+        """Very long prompt (10K+ chars) validates correctly."""
+        long_prompt = "System instruction: " + "A" * 10000
+        data = {
+            "mode": "primary",
+            "model": "gpt-4",
+            "prompt": long_prompt,
+        }
+        spec = validate_agent_spec(data)
+        assert len(spec.prompt) > 10000
+        assert spec.prompt.startswith("System instruction: A")
+
+    def test_tools_with_large_number_of_entries(self) -> None:
+        """Tools dict with 100+ entries validates correctly."""
+        large_tools = {f"tool_{i}": i % 2 == 0 for i in range(150)}
+        data = {
+            "mode": "primary",
+            "model": "gpt-4",
+            "prompt": "test",
+            "tools": large_tools,
+        }
+        spec = validate_agent_spec(data)
+        assert len(spec.tools) == 150
+        assert spec.tools["tool_0"] is True
+        assert spec.tools["tool_1"] is False
+
+    def test_metadata_with_deeply_nested_structure(self) -> None:
+        """Deeply nested metadata dict validates correctly."""
+        nested_metadata = {
+            "level1": {
+                "level2": {
+                    "level3": {
+                        "level4": {
+                            "level5": {
+                                "data": "deep_value",
+                                "list": [1, 2, 3],
+                            }
+                        }
+                    }
+                }
+            },
+            "flat_key": "flat_value",
+        }
+        data = {
+            "mode": "primary",
+            "model": "gpt-4",
+            "prompt": "test",
+            "metadata": nested_metadata,
+        }
+        spec = validate_agent_spec(data)
+        assert spec.metadata["level1"]["level2"]["level3"]["level4"]["level5"]["data"] == "deep_value"
+        assert spec.metadata["flat_key"] == "flat_value"
+
+
+class TestYAMLFrontmatterEdgeCases:
+    """Test suite for additional YAML frontmatter edge cases in Markdown loader."""
+
+    def test_markdown_empty_frontmatter_block(self) -> None:
+        """Empty frontmatter block (---\n---) is parsed as empty dict."""
+        content = """---
+---
+You are a helpful assistant."""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_path = Path(tmpdir) / "empty_frontmatter.md"
+            agent_path.write_text(content)
+
+            # Should fail validation because mode and model are missing
+            with pytest.raises(ValueError, match="Missing required field"):
+                load_markdown_agent(agent_path)
+
+    def test_markdown_frontmatter_without_closing_delimiter(self) -> None:
+        """Frontmatter without closing delimiter treats entire content as body."""
+        content = """---
+mode: primary
+model: gpt-4
+This is missing closing delimiter"""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_path = Path(tmpdir) / "no_closing.md"
+            agent_path.write_text(content)
+
+            # Should fail validation (no frontmatter parsed, so no mode/model)
+            with pytest.raises(ValueError, match="Missing required field"):
+                load_markdown_agent(agent_path)
+
+    def test_markdown_frontmatter_with_tabs_raises_yaml_error(self) -> None:
+        """YAML frontmatter with literal tabs (invalid YAML) raises YAMLError."""
+        content = """---
+mode:\tprimary
+model:\tgpt-4
+---
+You are a helpful assistant."""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_path = Path(tmpdir) / "tabs.md"
+            agent_path.write_text(content)
+
+            # YAML parser rejects literal tabs in values
+            with pytest.raises(yaml.YAMLError, match="Invalid YAML frontmatter"):
+                load_markdown_agent(agent_path)
+
+    def test_markdown_frontmatter_with_nested_yaml_lists(self) -> None:
+        """Nested YAML lists in metadata validate correctly."""
+        content = """---
+mode: primary
+model: gpt-4
+metadata:
+  teams:
+    - engineering
+    - research
+  configs:
+    - name: prod
+      timeout: 30
+    - name: dev
+      timeout: 10
+---
+You are a helpful assistant."""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_path = Path(tmpdir) / "nested_lists.md"
+            agent_path.write_text(content)
+
+            spec = load_markdown_agent(agent_path)
+
+            assert spec.metadata["teams"] == ["engineering", "research"]
+            assert len(spec.metadata["configs"]) == 2
+            assert spec.metadata["configs"][0]["name"] == "prod"
+
+    def test_markdown_frontmatter_with_yaml_anchors_and_aliases(self) -> None:
+        """YAML anchors and aliases in frontmatter parse correctly."""
+        content = """---
+mode: primary
+model: gpt-4
+metadata:
+  defaults: &defaults
+    timeout: 30
+    retries: 3
+  prod:
+    <<: *defaults
+    env: production
+---
+You are a helpful assistant."""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_path = Path(tmpdir) / "yaml_anchors.md"
+            agent_path.write_text(content)
+
+            spec = load_markdown_agent(agent_path)
+
+            assert spec.metadata["prod"]["timeout"] == 30
+            assert spec.metadata["prod"]["retries"] == 3
+            assert spec.metadata["prod"]["env"] == "production"
+
+    def test_markdown_frontmatter_with_multiline_strings(self) -> None:
+        """YAML multiline strings (| and >) in frontmatter parse correctly."""
+        content = """---
+mode: primary
+model: gpt-4
+metadata:
+  description: |
+    This is a multiline
+    description that preserves
+    newlines.
+  summary: >
+    This is a folded
+    multiline string that
+    becomes a single line.
+---
+You are a helpful assistant."""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_path = Path(tmpdir) / "multiline.md"
+            agent_path.write_text(content)
+
+            spec = load_markdown_agent(agent_path)
+
+            assert "\n" in spec.metadata["description"]
+            assert "multiline" in spec.metadata["description"]
+            assert isinstance(spec.metadata["summary"], str)
+
+
+class TestJSONMalformedInputs:
+    """Test suite for JSON malformed input variations with json_loader."""
+
+    def test_json_with_trailing_commas(self) -> None:
+        """JSON with trailing commas raises JSONDecodeError."""
+        content = """
+{
+  "agent1": {
+    "mode": "primary",
+    "model": "gpt-4",
+    "prompt": "test",
+  },
+}
+"""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            json_path = Path(tmpdir) / "trailing_comma.json"
+            json_path.write_text(content)
+
+            with pytest.raises(json.JSONDecodeError):
+                load_json_agents(json_path)
+
+    def test_json_with_single_quotes(self) -> None:
+        """JSON with single quotes instead of double raises JSONDecodeError."""
+        content = """
+{
+  'agent1': {
+    'mode': 'primary',
+    'model': 'gpt-4',
+    'prompt': 'test'
+  }
+}
+"""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            json_path = Path(tmpdir) / "single_quotes.json"
+            json_path.write_text(content)
+
+            with pytest.raises(json.JSONDecodeError):
+                load_json_agents(json_path)
+
+    def test_json_with_comments(self) -> None:
+        """JSON with comments (not valid JSON) raises JSONDecodeError."""
+        content = """
+{
+  // This is a comment
+  "agent1": {
+    "mode": "primary",
+    "model": "gpt-4",
+    "prompt": "test"
+  }
+}
+"""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            json_path = Path(tmpdir) / "with_comments.json"
+            json_path.write_text(content)
+
+            with pytest.raises(json.JSONDecodeError):
+                load_json_agents(json_path)
+
+    def test_json_with_unescaped_newlines(self) -> None:
+        """JSON with unescaped newlines in strings raises JSONDecodeError."""
+        # Create content with actual unescaped newline (invalid JSON)
+        content = '{\n  "agent1": {\n    "mode": "primary",\n    "model": "gpt-4",\n    "prompt": "line1\nline2"\n  }\n}'
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            json_path = Path(tmpdir) / "unescaped_newlines.json"
+            json_path.write_text(content)
+
+            with pytest.raises(json.JSONDecodeError):
+                load_json_agents(json_path)
+
+    def test_json_root_not_dict_raises_validation_error(self) -> None:
+        """JSON root as array instead of dict raises ValueError."""
+        content = """
+[
+  {
+    "mode": "primary",
+    "model": "gpt-4",
+    "prompt": "test"
+  }
+]
+"""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            json_path = Path(tmpdir) / "array_root.json"
+            json_path.write_text(content)
+
+            with pytest.raises(ValueError, match="JSON root must be dict"):
+                load_json_agents(json_path)
+
+    def test_json_agent_config_not_dict(self) -> None:
+        """Agent config value as string instead of dict raises ValueError."""
+        content = """
+{
+  "agent1": "invalid_string_value"
+}
+"""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            json_path = Path(tmpdir) / "config_not_dict.json"
+            json_path.write_text(content)
+
+            with pytest.raises(ValueError, match="Agent 'agent1' config must be dict"):
+                load_json_agents(json_path)
