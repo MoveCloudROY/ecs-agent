@@ -71,3 +71,26 @@ def test_message_bus_system_exported_and_constructible() -> None:
 
     system = MessageBusSystem(priority=5)
     assert system.priority == 5
+
+
+def test_dsl_symbols_importable_from_ecs_agent() -> None:
+    """Verify Agent DSL symbols are exported in __init__.py."""
+    # DSL types and functions
+    from ecs_agent import (
+        AgentSpec,
+        compile_agent_specs,
+        discover_agent_sources,
+        load_json_agents,
+        load_markdown_agent,
+        resolve_agent_specs,
+        validate_agent_spec,
+    )
+
+    # Verify all imports succeeded
+    assert AgentSpec is not None
+    assert compile_agent_specs is not None
+    assert discover_agent_sources is not None
+    assert load_json_agents is not None
+    assert load_markdown_agent is not None
+    assert resolve_agent_specs is not None
+    assert validate_agent_spec is not None
