@@ -2,7 +2,6 @@
 
 import json
 from pathlib import Path
-from typing import Any
 
 from ecs_agent.dsl.schema import AgentSpec, validate_agent_spec
 from ecs_agent.logging import get_logger
