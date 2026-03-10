@@ -3,6 +3,8 @@
 from __future__ import annotations
 from typing import Any
 
+import pytest
+
 from ecs_agent.components import MessageBusConfigComponent
 from ecs_agent.components.definitions import SubagentRegistryComponent
 from ecs_agent.core.world import World
@@ -14,8 +16,11 @@ from ecs_agent.types import (
     EntityId,
     InheritancePolicy,
     Message,
+    SubagentLifecycleStatus,
+    SubagentSessionRecord,
     SubagentConfig,
     ToolSchema,
+    validate_subagent_lifecycle_transition,
 )
 from ecs_agent.systems.message_bus import MessageBusSystem
 
@@ -145,11 +150,88 @@ def test_delegation_completed_event() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("from_status", "to_status"),
+    [
+        ("Idle", "Working"),
+        ("Working", "Idle"),
+        ("Working", "Dead"),
+        ("Working", "Timeout"),
+        ("Working", "Cancelled"),
+    ],
+)
+def test_subagent_contract_and_lifecycle_valid_transition_matrix(
+    from_status: SubagentLifecycleStatus,
+    to_status: SubagentLifecycleStatus,
+) -> None:
+    validate_subagent_lifecycle_transition(from_status, to_status)
+
+
+@pytest.mark.parametrize(
+    ("from_status", "to_status"),
+    [
+        ("Idle", "Idle"),
+        ("Idle", "Dead"),
+        ("Idle", "Timeout"),
+        ("Idle", "Cancelled"),
+        ("Working", "Working"),
+        ("Dead", "Idle"),
+        ("Dead", "Working"),
+        ("Dead", "Timeout"),
+        ("Dead", "Cancelled"),
+        ("Timeout", "Idle"),
+        ("Timeout", "Working"),
+        ("Timeout", "Dead"),
+        ("Timeout", "Cancelled"),
+        ("Cancelled", "Idle"),
+        ("Cancelled", "Working"),
+        ("Cancelled", "Dead"),
+        ("Cancelled", "Timeout"),
+    ],
+)
+def test_invalid_lifecycle_transition_raises_value_error(
+    from_status: SubagentLifecycleStatus,
+    to_status: SubagentLifecycleStatus,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Invalid subagent lifecycle transition "
+            f"from '{from_status}' to '{to_status}'"
+        ),
+    ):
+        validate_subagent_lifecycle_transition(from_status, to_status)
+
+
+def test_subagent_contract_and_lifecycle_session_record_fields() -> None:
+    record = SubagentSessionRecord(
+        session_id="session-1",
+        category="research",
+        prompt="Gather context",
+        load_skills=["search", "summarize"],
+        background=False,
+        timeout=120,
+        status="Idle",
+        correlation_id="corr-123",
+        traceparent="00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+    )
+
+    assert record.session_id == "session-1"
+    assert record.category == "research"
+    assert record.prompt == "Gather context"
+    assert record.load_skills == ["search", "summarize"]
+    assert record.background is False
+    assert record.timeout == 120
+    assert record.status == "Idle"
+    assert record.correlation_id == "corr-123"
+    assert (
+        record.traceparent == "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Task 12: SubagentSystem + Delegate Tool Tests
 # ──────────────────────────────────────────────────────────────────────────────
-
-import pytest
 
 from ecs_agent.components import (
     ConversationComponent,
@@ -565,7 +647,9 @@ async def test_delegate_with_skills_installs_skills() -> None:
     assert metadata.has_system_prompt is True
 
 
-@pytest.mark.skip(reason="Timeout functionality removed in favor of synchronous delegation (commit 3bad29b)")
+@pytest.mark.skip(
+    reason="Timeout functionality removed in favor of synchronous delegation (commit 3bad29b)"
+)
 async def test_delegate_timeout_returns_deterministic_error_and_cleans_pending_requests() -> (
     None
 ):
@@ -1655,7 +1739,9 @@ async def test_subagent_skills_skill_manager_install_uninstall_lifecycle() -> No
 
     # RED TEST: Verify SkillManager.install() is called (not manual dict copy)
     # This will fail because SkillManager integration doesn't exist - RED!
-    with patch.object(SkillManager, "install", wraps=skill_manager.install) as mock_install:
+    with patch.object(
+        SkillManager, "install", wraps=skill_manager.install
+    ) as mock_install:
         system = SubagentSystem()
         await system.process(world)
 
@@ -1672,7 +1758,8 @@ async def test_subagent_skills_skill_manager_install_uninstall_lifecycle() -> No
         mock_install.assert_called()
         install_calls = mock_install.call_args_list
         child_install_calls = [
-            call for call in install_calls
+            call
+            for call in install_calls
             if call[0][1] == child_entity  # entity_id arg
         ]
         assert len(child_install_calls) > 0, (
