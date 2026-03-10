@@ -1767,3 +1767,96 @@ async def test_subagent_skills_skill_manager_install_uninstall_lifecycle() -> No
         assert len(child_install_calls) > 0, (
             "SkillManager.install() should be called for child entity, not manual dict copy"
         )
+
+
+# Runtime session manager tests
+
+
+async def test_runtime_manager_create_session_returns_unique_ids() -> None:
+    """Session IDs should be unique across multiple creations."""
+    from ecs_agent.systems.subagent_runtime import SubagentRuntimeManager
+
+    manager = SubagentRuntimeManager()
+    ids = {manager.create_session() for _ in range(100)}
+    assert len(ids) == 100, "All session IDs should be unique"
+
+
+async def test_runtime_manager_register_and_retrieve_task() -> None:
+    """Registered tasks should be retrievable by session ID."""
+    import asyncio
+    from ecs_agent.systems.subagent_runtime import SubagentRuntimeManager
+
+    manager = SubagentRuntimeManager()
+    session_id = manager.create_session()
+
+    async def dummy_task() -> None:
+        await asyncio.sleep(10)
+
+    task = asyncio.create_task(dummy_task())
+    metadata = SubagentSessionRecord(
+        session_id=session_id,
+        category="test",
+        prompt="Test prompt",
+        parent_entity_id=EntityId(1),
+        created_at="2026-03-10T14:00:00Z",
+        updated_at="2026-03-10T14:00:00Z",
+        status="Working",
+    )
+
+    await manager.register_task(session_id, task, metadata)
+    retrieved = await manager.get_session(session_id)
+
+    assert retrieved is not None
+    assert retrieved.session_id == session_id
+    assert retrieved.category == "test"
+    assert retrieved.status == "Working"
+
+    # Cleanup
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+async def test_runtime_manager_cancel_cleans_handles() -> None:
+    """Cancelled sessions should have status updated and task cancelled."""
+    import asyncio
+    from ecs_agent.systems.subagent_runtime import SubagentRuntimeManager
+
+    manager = SubagentRuntimeManager()
+    session_id = manager.create_session()
+
+    async def long_running_task() -> None:
+        await asyncio.sleep(100)
+
+    task = asyncio.create_task(long_running_task())
+    metadata = SubagentSessionRecord(
+        session_id=session_id,
+        category="test",
+        prompt="Test prompt",
+        parent_entity_id=EntityId(1),
+        created_at="2026-03-10T14:00:00Z",
+        updated_at="2026-03-10T14:00:00Z",
+        status="Working",
+    )
+
+    await manager.register_task(session_id, task, metadata)
+    await manager.cancel_session(session_id)
+
+    # Give cancel time to propagate
+    await asyncio.sleep(0.01)
+
+    # Verify status updated
+    retrieved = await manager.get_session(session_id)
+    assert retrieved is not None
+    assert retrieved.status == "Cancelled"
+
+    # Verify task was cancelled
+    assert task.cancelled()
+
+    # Cleanup
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
