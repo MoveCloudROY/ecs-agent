@@ -224,182 +224,223 @@ class SubagentSystem:
                 task=task,
             )
 
-            registry_comp = world.get_component(
-                parent_entity_id, SubagentRegistryComponent
+            # Call shared execution core
+            result, success, error = await self._execute_subagent_core(
+                world,
+                parent_entity_id,
+                subagent_name,
+                task,
+                correlation_id,
+                traceparent,
             )
-            if registry_comp is None:
-                error_msg = f"Error: SubagentRegistryComponent not found on entity {parent_entity_id}"
-                logger.error("delegation_failed", reason=error_msg)
-                await self._publish_delegation_events(
-                    world,
-                    parent_entity_id,
-                    subagent_name,
-                    correlation_id=correlation_id,
-                    traceparent=traceparent,
-                    result=error_msg,
-                    success=False,
-                    error=error_msg,
-                )
-                return error_msg
 
-            try:
-                config = self._resolve_subagent_config(registry_comp, subagent_name)
-            except ValueError as exc:
-                error_msg = str(exc)
-                logger.error(
-                    "delegation_failed",
-                    reason="unknown_subagent",
-                    subagent_name=subagent_name,
-                    available=list(registry_comp.subagents.keys()),
-                )
-                await self._publish_delegation_events(
-                    world,
-                    parent_entity_id,
-                    subagent_name,
-                    correlation_id=correlation_id,
-                    traceparent=traceparent,
-                    result=error_msg,
-                    success=False,
-                    error=error_msg,
-                )
-                return error_msg
-
-            try:
-                child_entity_id = world.create_entity()
-                logger.info(
-                    "child_entity_created",
-                    parent_entity=parent_entity_id,
-                    child_entity=child_entity_id,
-                    subagent_name=subagent_name,
-                )
-
-                world.add_component(
-                    child_entity_id,
-                    LLMComponent(
-                        provider=config.provider,
-                        model=config.model,
-                        system_prompt=config.system_prompt,
-                    ),
-                )
-
-                world.add_component(
-                    child_entity_id,
-                    ConversationComponent(
-                        messages=[Message(role="user", content=task)]
-                    ),
-                )
-
-                world.add_component(
-                    child_entity_id, OwnerComponent(owner_id=parent_entity_id)
-                )
-
-                child_world, child_world_entity_id = self._assemble_child_world(
-                    world,
-                    parent_entity_id,
-                    config,
-                    parent_child_entity=child_entity_id,
-                )
-                result = await self._execute_delegation(
-                    child_world,
-                    child_world_entity_id,
-                    task,
-                    config,
-                )
-
-                child_conv = child_world.get_component(
-                    child_world_entity_id,
-                    ConversationComponent,
-                )
-                parent_child_conv = world.get_component(
-                    child_entity_id,
-                    ConversationComponent,
-                )
-                if child_conv is not None and parent_child_conv is not None:
-                    parent_child_conv.messages = list(child_conv.messages)
-
-                logger.info(
-                    "delegation_completed",
-                    parent_entity=parent_entity_id,
-                    child_entity=child_entity_id,
-                    subagent_name=subagent_name,
-                    result_length=len(result),
-                )
-
-                await self._publish_delegation_events(
-                    world,
-                    parent_entity_id,
-                    subagent_name,
-                    correlation_id=correlation_id,
-                    traceparent=traceparent,
-                    result=result,
-                    success=True,
-                    error=None,
-                )
-
-                return result
-
-            except TimeoutError as exc:
-                error_msg = "Error: Subagent timeout"
-                logger.error(
-                    "delegation_timeout",
-                    parent_entity=parent_entity_id,
-                    subagent_name=subagent_name,
-                    correlation_id=correlation_id,
-                    exception=str(exc),
-                )
-                await self._publish_delegation_events(
-                    world,
-                    parent_entity_id,
-                    subagent_name,
-                    correlation_id=correlation_id,
-                    traceparent=traceparent,
-                    result=error_msg,
-                    success=False,
-                    error=error_msg,
-                )
-                return error_msg
-
-            except ValueError as exc:
-                error_msg = str(exc)
-                logger.error(
-                    "delegation_exception",
-                    parent_entity=parent_entity_id,
-                    subagent_name=subagent_name,
-                    exception=error_msg,
-                )
-                await self._publish_delegation_events(
-                    world,
-                    parent_entity_id,
-                    subagent_name,
-                    correlation_id=correlation_id,
-                    traceparent=traceparent,
-                    result=error_msg,
-                    success=False,
-                    error=error_msg,
-                )
-                raise
-
-            except Exception as exc:
-                error_msg = f"Error during delegation: {exc}"
-                logger.error(
-                    "delegation_exception",
-                    parent_entity=parent_entity_id,
-                    subagent_name=subagent_name,
-                    exception=str(exc),
-                )
-                await self._publish_delegation_events(
-                    world,
-                    parent_entity_id,
-                    subagent_name,
-                    correlation_id=correlation_id,
-                    traceparent=traceparent,
-                    result=error_msg,
-                    success=False,
-                    error=error_msg,
-                )
-                return error_msg
+            return result
 
         return delegate_handler
+
+
+    async def _execute_subagent_core(
+        self,
+        world: World,
+        parent_entity_id: EntityId,
+        subagent_name: str,
+        task: str,
+        correlation_id: str,
+        traceparent: str,
+    ) -> tuple[str, bool, str | None]:
+        """Shared subagent execution core for both delegate and subagent APIs.
+
+        Args:
+            world: Parent world instance
+            parent_entity_id: Parent entity delegating the task
+            subagent_name: Name of subagent to execute
+            task: Task description
+            correlation_id: CloudEvents correlation ID
+            traceparent: W3C trace context
+
+        Returns:
+            Tuple of (result, success, error):
+            - result: Result string from delegation
+            - success: True if successful, False otherwise
+            - error: Error message if failed, None otherwise
+        """
+        # Get registry component
+        registry_comp = world.get_component(
+            parent_entity_id, SubagentRegistryComponent
+        )
+        if registry_comp is None:
+            error_msg = f"Error: SubagentRegistryComponent not found on entity {parent_entity_id}"
+            logger.error("delegation_failed", reason=error_msg)
+            await self._publish_delegation_events(
+                world,
+                parent_entity_id,
+                subagent_name,
+                correlation_id=correlation_id,
+                traceparent=traceparent,
+                result=error_msg,
+                success=False,
+                error=error_msg,
+            )
+            return (error_msg, False, error_msg)
+
+        # Resolve config
+        try:
+            config = self._resolve_subagent_config(registry_comp, subagent_name)
+        except ValueError as exc:
+            error_msg = str(exc)
+            logger.error(
+                "delegation_failed",
+                reason="unknown_subagent",
+                subagent_name=subagent_name,
+                available=list(registry_comp.subagents.keys()),
+            )
+            await self._publish_delegation_events(
+                world,
+                parent_entity_id,
+                subagent_name,
+                correlation_id=correlation_id,
+                traceparent=traceparent,
+                result=error_msg,
+                success=False,
+                error=error_msg,
+            )
+            return (error_msg, False, error_msg)
+
+        # Execute delegation
+        try:
+            child_entity_id = world.create_entity()
+            logger.info(
+                "child_entity_created",
+                parent_entity=parent_entity_id,
+                child_entity=child_entity_id,
+                subagent_name=subagent_name,
+            )
+
+            world.add_component(
+                child_entity_id,
+                LLMComponent(
+                    provider=config.provider,
+                    model=config.model,
+                    system_prompt=config.system_prompt,
+                ),
+            )
+
+            world.add_component(
+                child_entity_id,
+                ConversationComponent(
+                    messages=[Message(role="user", content=task)]
+                ),
+            )
+
+            world.add_component(
+                child_entity_id, OwnerComponent(owner_id=parent_entity_id)
+            )
+
+            child_world, child_world_entity_id = self._assemble_child_world(
+                world,
+                parent_entity_id,
+                config,
+                parent_child_entity=child_entity_id,
+            )
+            result = await self._execute_delegation(
+                child_world,
+                child_world_entity_id,
+                task,
+                config,
+            )
+
+            child_conv = child_world.get_component(
+                child_world_entity_id,
+                ConversationComponent,
+            )
+            parent_child_conv = world.get_component(
+                child_entity_id,
+                ConversationComponent,
+            )
+            if child_conv is not None and parent_child_conv is not None:
+                parent_child_conv.messages = list(child_conv.messages)
+
+            logger.info(
+                "delegation_completed",
+                parent_entity=parent_entity_id,
+                child_entity=child_entity_id,
+                subagent_name=subagent_name,
+                result_length=len(result),
+            )
+
+            await self._publish_delegation_events(
+                world,
+                parent_entity_id,
+                subagent_name,
+                correlation_id=correlation_id,
+                traceparent=traceparent,
+                result=result,
+                success=True,
+                error=None,
+            )
+
+            return (result, True, None)
+
+        except TimeoutError as exc:
+            error_msg = "Error: Subagent timeout"
+            logger.error(
+                "delegation_timeout",
+                parent_entity=parent_entity_id,
+                subagent_name=subagent_name,
+                correlation_id=correlation_id,
+                exception=str(exc),
+            )
+            await self._publish_delegation_events(
+                world,
+                parent_entity_id,
+                subagent_name,
+                correlation_id=correlation_id,
+                traceparent=traceparent,
+                result=error_msg,
+                success=False,
+                error=error_msg,
+            )
+            return (error_msg, False, error_msg)
+
+        except ValueError as exc:
+            error_msg = str(exc)
+            logger.error(
+                "delegation_exception",
+                parent_entity=parent_entity_id,
+                subagent_name=subagent_name,
+                exception=error_msg,
+            )
+            await self._publish_delegation_events(
+                world,
+                parent_entity_id,
+                subagent_name,
+                correlation_id=correlation_id,
+                traceparent=traceparent,
+                result=error_msg,
+                success=False,
+                error=error_msg,
+            )
+            raise
+
+        except Exception as exc:
+            error_msg = f"Error during delegation: {exc}"
+            logger.error(
+                "delegation_exception",
+                parent_entity=parent_entity_id,
+                subagent_name=subagent_name,
+                exception=str(exc),
+            )
+            await self._publish_delegation_events(
+                world,
+                parent_entity_id,
+                subagent_name,
+                correlation_id=correlation_id,
+                traceparent=traceparent,
+                result=error_msg,
+                success=False,
+                error=error_msg,
+            )
+            return (error_msg, False, error_msg)
 
     def _resolve_subagent_config(
         self,
