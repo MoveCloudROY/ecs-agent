@@ -412,16 +412,24 @@ SubagentLifecycleStatus = Literal[
 
 @dataclass(slots=True)
 class SubagentSessionRecord:
+    """Serializable session metadata for a subagent delegation."""
+    
     session_id: str
     category: str
     prompt: str
+    parent_entity_id: EntityId
+    created_at: str  # ISO timestamp
+    updated_at: str  # ISO timestamp
     load_skills: list[str] = field(default_factory=list)
     background: bool = False
     timeout: float | None = None
     status: SubagentLifecycleStatus = "Idle"
     correlation_id: str = ""
     traceparent: str = ""
-
+    timeout_seconds: float | None = None
+    deadline_at: str | None = None  # ISO timestamp
+    result_excerpt: str | None = None
+    error: str | None = None
 
 def validate_subagent_lifecycle_transition(
     current: SubagentLifecycleStatus,
@@ -439,6 +447,37 @@ def validate_subagent_lifecycle_transition(
             f"Invalid subagent lifecycle transition from '{current}' to '{next_status}'"
         )
 
+
+def render_subagent_session_reminder_table(
+    sessions: dict[str, SubagentSessionRecord],
+) -> list[str]:
+    """Render subagent session reminder table rows sorted by updated_at desc, then session_id asc."""
+    if not sessions:
+        return []
+    
+    # Sort by updated_at descending, then session_id ascending
+    sorted_sessions = sorted(
+        sessions.items(),
+        key=lambda item: (-_iso_timestamp_to_sortable(item[1].updated_at), item[0]),
+    )
+    
+    rows = []
+    for session_id, record in sorted_sessions:
+        # Format: session_id | status | category | updated_at
+        row = f"{session_id} | {record.status} | {record.category} | {record.updated_at}"
+        rows.append(row)
+    
+    return rows
+
+
+def _iso_timestamp_to_sortable(timestamp: str) -> float:
+    """Convert ISO timestamp to sortable float (seconds since epoch)."""
+    try:
+        dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        return dt.timestamp()
+    except (ValueError, AttributeError):
+        # Invalid timestamp, return 0 so it sorts last
+        return 0.0
 
 @dataclass(slots=True)
 class DelegationStartedEvent:
@@ -773,5 +812,6 @@ __all__ = [
     "ToolTimeoutError",
     "Usage",
     "UserInputRequestedEvent",
+    "render_subagent_session_reminder_table",
     "validate_subagent_lifecycle_transition",
 ]

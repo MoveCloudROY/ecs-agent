@@ -31,6 +31,7 @@ from ecs_agent.components import (
     StreamingComponent,
     SystemPromptComponent,
     SubagentRegistryComponent,
+    SubagentSessionTableComponent,
     TaskComponent,
     TerminalComponent,
     ToolApprovalComponent,
@@ -65,6 +66,7 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     VectorStoreComponent.__name__: VectorStoreComponent,
     StreamingComponent.__name__: StreamingComponent,
     SubagentRegistryComponent.__name__: SubagentRegistryComponent,
+    SubagentSessionTableComponent.__name__: SubagentSessionTableComponent,
     CheckpointComponent.__name__: CheckpointComponent,
     CompactionConfigComponent.__name__: CompactionConfigComponent,
     ConversationArchiveComponent.__name__: ConversationArchiveComponent,
@@ -235,6 +237,22 @@ class WorldSerializer:
                     artifacts_dict[artifact_id] = artifact_ref
             serialized["artifacts"] = artifacts_dict
 
+        # SubagentSessionTableComponent: convert SubagentSessionRecord objects to dicts with EntityId → int
+        if isinstance(component, SubagentSessionTableComponent):
+            sessions_dict = {}
+            for session_id, session_record in serialized.get("sessions", {}).items():
+                # If it's a SubagentSessionRecord dataclass, convert to dict
+                if hasattr(session_record, "__dataclass_fields__"):
+                    session_dict = asdict(session_record)
+                    # Convert parent_entity_id (EntityId) to int for JSON serialization
+                    parent_entity_id = session_dict.get("parent_entity_id")
+                    if isinstance(parent_entity_id, int):
+                        session_dict["parent_entity_id"] = int(parent_entity_id)
+                    sessions_dict[session_id] = session_dict
+                else:
+                    # Already a dict
+                    sessions_dict[session_id] = session_record
+            serialized["sessions"] = sessions_dict
         return serialized
 
     @staticmethod
@@ -369,6 +387,23 @@ class WorldSerializer:
                     # Already a ScratchbookRef object
                     artifacts_dict[artifact_id] = artifact_data
             normalized_data["artifacts"] = artifacts_dict
+
+        # SubagentSessionTableComponent: reconstruct SubagentSessionRecord objects in sessions dict
+        if component_name == SubagentSessionTableComponent.__name__:
+            from ecs_agent.types import SubagentSessionRecord
+            sessions_dict = {}
+            for session_id, session_data in normalized_data.get("sessions", {}).items():
+                # If session_data is a dict, reconstruct it as SubagentSessionRecord
+                if isinstance(session_data, dict):
+                    # Convert parent_entity_id if it's an int
+                    parent_entity_id_value = session_data.get("parent_entity_id")
+                    if isinstance(parent_entity_id_value, int):
+                        session_data["parent_entity_id"] = EntityId(parent_entity_id_value)
+                    sessions_dict[session_id] = SubagentSessionRecord(**session_data)
+                else:
+                    # Already a SubagentSessionRecord object
+                    sessions_dict[session_id] = session_data
+            normalized_data["sessions"] = sessions_dict
 
         return normalized_data
 

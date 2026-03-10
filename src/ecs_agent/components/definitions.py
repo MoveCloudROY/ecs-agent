@@ -14,6 +14,7 @@ from ecs_agent.types import (
     InterruptionReason,
     Message,
     SubagentConfig,
+    SubagentSessionRecord,
     ToolCall,
     ToolSchema,
     TaskStatus,
@@ -355,3 +356,10 @@ class ScratchbookIndexComponent:
     """Index of scratchbook artifacts."""
 
     artifacts: dict[str, ScratchbookRef] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class SubagentSessionTableComponent:
+    """Table of active and recent subagent sessions."""
+    
+    sessions: dict[str, "SubagentSessionRecord"] = field(default_factory=dict)

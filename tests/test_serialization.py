@@ -986,3 +986,141 @@ def test_checkpoint_preserves_entity_registry_through_undo() -> None:
     assert world.resolve_entity("agent-2") is None  # Should not exist after undo
     assert set(world.list_entities_by_tag("test")) == {entity}
     assert world.list_entities_by_tag("main") == [entity]
+
+
+def test_subagent_session_table_component_roundtrip() -> None:
+    """Test that SubagentSessionTableComponent with SubagentSessionRecord roundtrips correctly."""
+    from ecs_agent.components import SubagentSessionTableComponent
+    from ecs_agent.types import SubagentSessionRecord, EntityId
+    
+    world = World()
+    entity = world.create_entity()
+    
+    # Create session records with all fields
+    session1 = SubagentSessionRecord(
+        session_id="sess_001",
+        category="quick",
+        prompt="Do something",
+        load_skills=["skill1"],
+        background=True,
+        timeout=30.0,
+        status="Working",
+        correlation_id="corr_123",
+        traceparent="00-trace-span-00",
+        parent_entity_id=EntityId(42),
+        created_at="2026-03-10T10:00:00Z",
+        updated_at="2026-03-10T10:05:00Z",
+        timeout_seconds=60.0,
+        deadline_at="2026-03-10T11:00:00Z",
+        result_excerpt="Success",
+        error=None,
+    )
+    session2 = SubagentSessionRecord(
+        session_id="sess_002",
+        category="artistry",
+        prompt="Create design",
+        load_skills=[],
+        background=False,
+        timeout=None,
+        status="Dead",
+        correlation_id="corr_456",
+        traceparent="00-trace-span-01",
+        parent_entity_id=EntityId(43),
+        created_at="2026-03-10T09:00:00Z",
+        updated_at="2026-03-10T09:30:00Z",
+        timeout_seconds=None,
+        deadline_at=None,
+        result_excerpt=None,
+        error="Timeout exceeded",
+    )
+    
+    world.add_component(
+        entity,
+        SubagentSessionTableComponent(
+            sessions={
+                "sess_001": session1,
+                "sess_002": session2,
+            }
+        ),
+    )
+    
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+    
+    restored_comp = restored.get_component(entity, SubagentSessionTableComponent)
+    assert restored_comp is not None
+    assert len(restored_comp.sessions) == 2
+    
+    # Verify session1
+    restored_session1 = restored_comp.sessions["sess_001"]
+    assert restored_session1.session_id == "sess_001"
+    assert restored_session1.category == "quick"
+    assert restored_session1.prompt == "Do something"
+    assert restored_session1.load_skills == ["skill1"]
+    assert restored_session1.background is True
+    assert restored_session1.timeout == 30.0
+    assert restored_session1.status == "Working"
+    assert restored_session1.correlation_id == "corr_123"
+    assert restored_session1.traceparent == "00-trace-span-00"
+    assert restored_session1.parent_entity_id == EntityId(42)
+    assert restored_session1.created_at == "2026-03-10T10:00:00Z"
+    assert restored_session1.updated_at == "2026-03-10T10:05:00Z"
+    assert restored_session1.timeout_seconds == 60.0
+    assert restored_session1.deadline_at == "2026-03-10T11:00:00Z"
+    assert restored_session1.result_excerpt == "Success"
+    assert restored_session1.error is None
+    
+    # Verify session2
+    restored_session2 = restored_comp.sessions["sess_002"]
+    assert restored_session2.session_id == "sess_002"
+    assert restored_session2.status == "Dead"
+    assert restored_session2.parent_entity_id == EntityId(43)
+    assert restored_session2.error == "Timeout exceeded"
+    assert restored_session2.result_excerpt is None
+
+
+def test_subagent_session_table_rejects_runtime_handles() -> None:
+    """Test that SubagentSessionRecord cannot store asyncio.Task or Future handles."""
+    from ecs_agent.types import SubagentSessionRecord, EntityId
+    import asyncio
+    
+    # SubagentSessionRecord should only have serializable fields
+    # This test verifies that the dataclass definition does NOT allow runtime handles
+    
+    # Create a valid session record
+    session = SubagentSessionRecord(
+        session_id="sess_003",
+        category="quick",
+        prompt="Test",
+        parent_entity_id=EntityId(1),
+        created_at="2026-03-10T10:00:00Z",
+        updated_at="2026-03-10T10:00:00Z",
+    )
+    
+    # Verify that the session record has no fields for Task or Future
+    # (this is a structural test - the field should not exist in the dataclass definition)
+    assert not hasattr(session, "task_handle")
+    assert not hasattr(session, "future_handle")
+    assert not hasattr(session, "_task")
+    assert not hasattr(session, "_future")
+    
+    # Verify serialization does not fail (would fail if non-serializable objects were present)
+    from ecs_agent.serialization import WorldSerializer
+    from ecs_agent.components import SubagentSessionTableComponent
+    
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        SubagentSessionTableComponent(sessions={"sess_003": session}),
+    )
+    
+    # This should succeed without errors
+    serialized = WorldSerializer.to_dict(world)
+    assert "SubagentSessionTableComponent" in serialized["entities"]["1"]
+    
+    # Verify roundtrip works
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+    restored_comp = restored.get_component(entity, SubagentSessionTableComponent)
+    assert restored_comp is not None
+    assert "sess_003" in restored_comp.sessions
