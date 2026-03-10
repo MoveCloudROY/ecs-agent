@@ -270,7 +270,7 @@ World
 
 ## Examples
 
-The `examples/` directory contains 22 runnable demos:
+The `examples/` directory contains 24 runnable demos:
 
 | Example | Description |
 |---------|-------------|
@@ -296,6 +296,8 @@ The `examples/` directory contains 22 runnable demos:
 | [`permission_agent.py`](examples/permission_agent.py) | Permission-restricted agent with tool filtering (dual-mode) |
 | [`markdown_skill_agent.py`](examples/markdown_skill_agent.py) | Load a SKILL.md markdown skill and install it on an agent (dual-mode) |
 | [`mcp_agent.py`](examples/mcp_agent.py) | MCP server integration and namespaced tool usage |
+| [`agent_dsl_json.py`](examples/agent_dsl_json.py) | Load multi-agent configuration from JSON file using Agent DSL (dual-mode) |
+| [`agent_dsl_markdown.py`](examples/agent_dsl_markdown.py) | Load agent from Markdown file with YAML frontmatter using Agent DSL (dual-mode) |
 
 
 Run any example:

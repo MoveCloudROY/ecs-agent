@@ -1,179 +1,543 @@
 # Agent DSL
 
-Define AI agents declaratively using JSON or Markdown configuration files. The Agent DSL (Domain-Specific Language) allows you to specify agent roles, models, system prompts, and tool permissions without writing boilerplate setup code.
+Define AI agents declaratively using JSON or Markdown configuration files with deterministic loading and fail-fast validation.
 
 ## Overview
 
-The Agent DSL provides a clean separation between agent configuration and application logic. Instead of manually creating entities and attaching components, you define your agents in structured files.
+The Agent DSL (Domain-Specific Language) allows you to define agent configurations in JSON or Markdown files instead of programmatically creating entities and components. The DSL compiler transforms these configurations into ECS entities with properly attached components.
 
-Key benefits:
-- **Declarative Configuration**: Define agents in simple JSON or Markdown.
-- **Role-Based Modeling**: Easily switch between `primary` and `subagent` roles.
-- **Reusable Prompts**: Reference external prompt files using the `{file:...}` syntax.
-- **Granular Permissions**: Map tool names to boolean flags for secure access control.
-- **Deterministic Loading**: Stable `last-one-wins` resolution for multiple configuration sources.
-- **Fail-Fast Validation**: Strict schema checking with clear error messages.
+**Key Features:**
+- **Dual Format Support**: JSON (multi-agent dict) or Markdown (YAML frontmatter + body)
+- **Deterministic Loading**: Sorted file discovery ensures reproducible conflict resolution
+- **Fail-Fast Validation**: Strict schema validation with detailed error messages
+- **Security**: Path traversal protection for prompt file references
+- **Last-One-Wins**: Predictable conflict resolution for duplicate agent names
+- **Permission Mapping**: Boolean tool dictionaries compile to `PermissionComponent` allowlists
 
 ## JSON DSL Format
 
-The JSON format is ideal for defining multiple agents in a single file or for programmatic generation.
-
 ### Schema
 
-A JSON file should contain a root dictionary where each key is an **agent name** and the value is its **configuration**.
+Agent specifications use the following schema:
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `mode` | `string` | Yes | Either `"primary"` (main agent) or `"subagent"` (delegated helper). |
-| `model` | `string` | Yes | The LLM model identifier (e.g., `"gpt-4o"`). |
-| `prompt` | `string` | Yes | The system prompt or a `{file:path}` reference. |
-| `tools` | `dict[str, bool]` | No | Mapping of tool names to enabled/disabled status. |
-| `metadata` | `dict` | No | Arbitrary key-value pairs for custom application logic. |
+```python
+@dataclass
+class AgentSpec:
+    mode: Literal["primary", "subagent"]  # Required
+    model: str                             # Required
+    prompt: str                            # Required
+    tools: dict[str, bool] = {}            # Optional
+    metadata: dict[str, Any] = {}          # Optional
+    name: str = ""                         # Optional
+```
 
-### Example: `agents.json`
+**Required Fields:**
+- `mode`: Either `"primary"` (runnable main entity) or `"subagent"` (config template)
+- `model`: LLM model identifier (e.g., `"gpt-4"`, `"claude-3-opus"`)
+- `prompt`: System prompt or instruction text
+
+**Optional Fields:**
+- `tools`: Tool permission mapping (`{tool_name: true/false}`)
+- `metadata`: Arbitrary user-defined metadata
+- `name`: Agent name (overridden by dict key in JSON)
+
+### JSON Example
 
 ```json
 {
-  "coordinator": {
+  "assistant": {
     "mode": "primary",
-    "model": "gpt-4o",
-    "prompt": "You are a coordinator agent. Delegate tasks to the researcher.",
+    "model": "gpt-4",
+    "prompt": "You are a helpful assistant.",
     "tools": {
-      "delegate": true,
-      "bash": false
+      "read_file": true,
+      "write_file": true,
+      "execute_bash": false
     }
   },
   "researcher": {
     "mode": "subagent",
-    "model": "gpt-4o-mini",
-    "prompt": "{file:prompts/researcher_system.txt}",
+    "model": "gpt-3.5-turbo",
+    "prompt": "You are a research specialist."
+  }
+}
+```
+
+**Key Points:**
+- Root must be `dict[str, dict]` (agent_name → config)
+- Dictionary key becomes the agent's `name` field
+- Multiple agents allowed, but exactly ONE must have `mode: "primary"`
+
+## Markdown DSL Format
+
+### Structure
+
+Markdown files use YAML frontmatter for configuration and markdown body for the prompt:
+
+```markdown
+---
+mode: primary
+model: gpt-4
+tools:
+  read_file: true
+  write_file: true
+---
+
+# System Prompt
+
+You are a helpful assistant specialized in file operations.
+
+## Guidelines
+
+- Always verify file paths before operations
+- Use read_file before write_file to check existing content
+- Provide clear error messages
+```
+
+### Markdown Example
+
+Filename: `assistant.md`
+
+```markdown
+---
+mode: primary
+model: claude-3-opus
+tools:
+  analyze_code: true
+  run_tests: true
+  git_commit: false
+metadata:
+  department: engineering
+  priority: high
+---
+
+# Code Review Assistant
+
+You are an expert code reviewer. Your responsibilities:
+
+1. Analyze code for bugs and security issues
+2. Check adherence to style guidelines
+3. Suggest improvements for readability
+4. Run automated tests before approval
+
+## Review Checklist
+
+- [ ] Code is well-documented
+- [ ] Edge cases handled
+- [ ] Tests present and passing
+- [ ] No security vulnerabilities
+```
+
+**Key Points:**
+- Filename (without `.md`) becomes agent name
+- YAML frontmatter contains same fields as JSON schema
+- Entire markdown body becomes the `prompt` field
+- Uses `yaml.safe_load()` for security
+
+## Loading & Compilation
+
+### Workflow
+
+The DSL loading pipeline has four stages:
+
+```python
+from ecs_agent.dsl import (
+    discover_agent_sources,
+    load_json_agents,
+    load_markdown_agent,
+    resolve_agent_specs,
+    compile_agent_specs,
+)
+
+# 1. Discover sources (sorted for determinism)
+sources = discover_agent_sources("./agents")
+# Returns: [Path('agents/assistant.json'), Path('agents/researcher.md')]
+
+# 2. Load from files
+specs = []
+for source in sources:
+    if str(source).endswith('.json'):
+        specs.extend(load_json_agents(source))
+    else:
+        specs.append(load_markdown_agent(source))
+
+# 3. Resolve conflicts (last-one-wins)
+resolved = resolve_agent_specs(specs)
+# Returns: {'assistant': AgentSpec(...), 'researcher': AgentSpec(...)}
+
+# 4. Compile to ECS World
+def provider_factory(model: str, system_prompt: str):
+    return OpenAIProvider(api_key="...", model=model)
+
+primary_entity, world = compile_agent_specs(resolved, provider_factory)
+# Returns: (EntityId, World) with components attached
+```
+
+### Stage Details
+
+**1. discover_agent_sources(directory: Path) → list[Path]**
+- Glob patterns: `*.json` and `*.md` (flat directory only)
+- Returns sorted paths for deterministic ordering
+- Raises `FileNotFoundError` if directory missing
+
+**2. load_json_agents(path: Path) → list[AgentSpec]**
+- Parses multi-agent dict from JSON file
+- Dict key becomes agent name
+- Validates each agent spec
+- Raises `ValueError` for malformed JSON or invalid schema
+
+**3. load_markdown_agent(path: Path) → AgentSpec**
+- Parses YAML frontmatter + markdown body
+- Filename (sans `.md`) becomes agent name
+- Body content becomes prompt
+- Raises `ValueError` for invalid YAML or missing frontmatter
+
+**4. resolve_agent_specs(specs: list[AgentSpec]) → dict[str, AgentSpec]**
+- Implements last-one-wins conflict resolution
+- Later specs override earlier ones with same name
+- Raises `ValueError` for empty agent names
+
+**5. compile_agent_specs(specs: dict[str, AgentSpec], factory) → tuple[EntityId, World]**
+- Creates exactly ONE runnable primary entity
+- Attaches `LLMComponent`, `PermissionComponent`, `SubagentRegistryComponent`
+- Subagents become `SubagentConfig` in registry
+- Raises `ValueError` if zero or multiple primaries
+
+## Conflict Resolution
+
+### Last-One-Wins Policy
+
+When multiple sources define agents with the same name, the **last one in sorted order wins**:
+
+```python
+# Directory structure:
+# agents/
+#   01-base.json       # defines "assistant"
+#   02-override.json   # defines "assistant" (wins)
+
+sources = discover_agent_sources("./agents")
+# Returns: [Path('agents/01-base.json'), Path('agents/02-override.json')]
+
+specs = []
+for source in sources:
+    specs.extend(load_json_agents(source))
+
+resolved = resolve_agent_specs(specs)
+# resolved['assistant'] uses config from 02-override.json
+```
+
+**Determinism Guarantee:**
+- `discover_agent_sources()` uses `sorted()` on paths
+- Same filesystem state always produces same result
+- Lexicographic ordering: `a.json` < `b.json` < `z.md`
+
+## Prompt File References
+
+### Syntax
+
+Use `{file:relative/path}` to reference external prompt files:
+
+```json
+{
+  "assistant": {
+    "mode": "primary",
+    "model": "gpt-4",
+    "prompt": "{file:prompts/assistant-system.txt}"
+  }
+}
+```
+
+### Security
+
+Prompt file resolution enforces strict security:
+
+```python
+from ecs_agent.dsl.prompt_resolver import resolve_prompt_file
+
+# Allowed: relative paths within source directory
+resolved = resolve_prompt_file("{file:prompts/system.txt}", source_dir=Path("./agents"))
+
+# Rejected: absolute paths
+resolve_prompt_file("{file:/etc/passwd}", ...)  # ValueError
+
+# Rejected: path traversal
+resolve_prompt_file("{file:../../secrets.txt}", ...)  # ValueError
+
+# Rejected: symlink escapes
+resolve_prompt_file("{file:link_to_outside}", ...)  # ValueError if target outside source_dir
+```
+
+**Security Checks:**
+1. Reject absolute paths (`Path.is_absolute()`)
+2. Reject path traversal (`..` in `Path.parts`)
+3. Validate resolved path stays within `source_dir` (`relative_to()` check)
+4. Reject symlinks pointing outside `source_dir`
+
+**Encoding:**
+- All files read as UTF-8
+- `UnicodeDecodeError` → `ValueError` with context
+
+## Permission Mapping
+
+### Tools Boolean Dict
+
+The `tools` field maps tool names to boolean enabled/disabled flags:
+
+```json
+{
+  "assistant": {
+    "mode": "primary",
+    "model": "gpt-4",
+    "prompt": "You are a helpful assistant.",
     "tools": {
-      "web_search": true,
-      "read_file": true
+      "read_file": true,
+      "write_file": true,
+      "execute_bash": false,
+      "delete_file": false
     }
   }
 }
 ```
 
-## Markdown DSL Format
+### Compilation Behavior
 
-The Markdown format is preferred for human-authored prompts, allowing you to use rich text for instructions while keeping configuration in a YAML frontmatter.
-
-### Syntax
-
-- **Name**: Derived from the **filename** (e.g., `analyst.md` becomes the "analyst" agent).
-- **Configuration**: Defined in a YAML frontmatter block (between `---` lines).
-- **Prompt**: The entire Markdown body after the frontmatter becomes the system prompt.
-
-### Example: `analyst.md`
-
-```markdown
----
-mode: primary
-model: gpt-4o
-tools:
-  read_file: true
-  edit_file: true
----
-# Data Analyst Specialist
-
-You are an expert data analyst. Your role is to:
-1. Read data files provided by the user.
-2. Perform statistical analysis.
-3. Suggest improvements to the data structure.
-
-## Guidelines
-- Always verify data types before analysis.
-- Use the `read_file` tool for inspection.
-```
-
-## Loading & Compilation
-
-The loading pipeline follows a deterministic four-step workflow:
-
-1. **Discovery**: Find all `*.json` and `*.md` files in a directory.
-2. **Loading**: Parse files into normalized `AgentSpec` objects.
-3. **Resolution**: Apply `last-one-wins` conflict resolution for duplicate agent names.
-4. **Compilation**: Transform specs into a runnable ECS `World` and primary `EntityId`.
-
-### Basic Workflow
+**Enabled tools (true) → PermissionComponent.allowed_tools:**
 
 ```python
-from ecs_agent import (
-    discover_agent_sources,
-    load_json_agents,
-    load_markdown_agent,
-    resolve_agent_specs,
-    compile_agent_specs
-)
-
-# 1. Discover sources
-paths = discover_agent_sources("./agents")
-
-# 2. Load all specs
-all_specs = []
-for p in paths:
-    if p.suffix == ".json":
-        all_specs.extend(load_json_agents(p))
-    else:
-        all_specs.append(load_markdown_agent(p))
-
-# 3. Resolve conflicts (last-one-wins)
-resolved = resolve_agent_specs(all_specs)
-
-# 4. Compile to World
-def provider_factory(model, prompt):
-    return OpenAIProvider(api_key="...", model=model)
-
-primary_id, world = compile_agent_specs(resolved, provider_factory)
+# Input: {"read_file": true, "write_file": true, "execute_bash": false}
+# Output: PermissionComponent(allowed_tools=["read_file", "write_file"])
 ```
 
-## Conflict Resolution
+**Rules:**
+- Only `true` values included in allowlist
+- Order preserved from dict iteration
+- Empty allowlist (`[]`) means deny-all (no tools allowed)
+- Missing `tools` field → no `PermissionComponent` (default runtime behavior)
 
-Agent names must be unique within a single `World`. If multiple files define an agent with the same name, the **last one** discovered overrides previous definitions. 
+**Integration with PermissionSystem:**
 
-Discovery ordering is lexicographical (alphabetical by path), ensuring that conflict resolution is 100% deterministic and reproducible across different environments.
-
-## Prompt File References
-
-Instead of inlining long prompts, you can use the `{file:relative/path}` syntax in the `prompt` field.
-
-### Security Features
-- **Path Traversal Protection**: References like `{file:../../etc/passwd}` are strictly rejected.
-- **Absolute Path Restriction**: Only relative paths within the agent's directory are allowed.
-- **Symlink Validation**: Resolved paths must remain within the source directory boundaries.
-- **UTF-8 Enforcement**: All prompt files must be valid UTF-8.
-
-## Permission Mapping
-
-The `tools` dictionary in the DSL maps directly to the `PermissionComponent` at runtime.
-
-- Only tools explicitly set to `true` are added to the `allowed_tools` list.
-- Tools set to `false` or omitted are excluded.
-- If the `tools` block is missing, no `PermissionComponent` is attached, falling back to the default system behavior (usually allow-all).
-- If a `tools` block exists but all are `false`, an empty allowlist is created, effectively denying all tool usage.
+```python
+# At runtime, PermissionSystem checks:
+if permission.allowed_tools:  # Non-empty list
+    if tool_name not in permission.allowed_tools:
+        raise PermissionError(f"Tool {tool_name} not in allowlist")
+else:  # Empty list
+    raise PermissionError("All tools denied (empty allowlist)")
+```
 
 ## Error Handling
 
-The Agent DSL follows a **fail-fast policy**. Any configuration error will raise a standard Python exception immediately to prevent undefined behavior.
+### Fail-Fast Policy
 
-| Scenario | Exception |
-|----------|-----------|
-| Missing directory during discovery | `FileNotFoundError` |
-| Missing required fields (`mode`, `model`, `prompt`) | `ValueError` |
-| Invalid mode (not `primary` or `subagent`) | `ValueError` |
-| Multiple primary agents in one compile | `ValueError` |
-| Path traversal in prompt reference | `ValueError` |
-| Missing prompt file reference | `FileNotFoundError` |
+All DSL errors raise exceptions immediately with detailed context:
+
+```python
+# Missing required field
+validate_agent_spec({"mode": "primary", "model": "gpt-4"}, source_name="assistant")
+# ValueError: Missing required field(s): prompt in 'assistant'
+
+# Unknown field
+validate_agent_spec({
+    "mode": "primary",
+    "model": "gpt-4",
+    "prompt": "...",
+    "unknown_field": 123
+}, source_name="assistant")
+# ValueError: Unknown field(s): unknown_field in 'assistant'
+
+# Invalid mode
+validate_agent_spec({
+    "mode": "invalid",
+    "model": "gpt-4",
+    "prompt": "..."
+}, source_name="assistant")
+# ValueError: Invalid mode 'invalid': must be 'primary' or 'subagent' in 'assistant'
+
+# Multiple primaries
+compile_agent_specs({
+    "a": AgentSpec(mode="primary", ...),
+    "b": AgentSpec(mode="primary", ...)
+}, factory)
+# ValueError: Expected exactly one primary agent, found 2
+
+# Missing primary
+compile_agent_specs({
+    "a": AgentSpec(mode="subagent", ...),
+    "b": AgentSpec(mode="subagent", ...)
+}, factory)
+# ValueError: Expected exactly one primary agent, found 0
+```
+
+### Error Types
+
+| Stage | Exception | Trigger | Message Format |
+|-------|-----------|---------|----------------|
+| Discovery | `FileNotFoundError` | Directory missing | `"Directory not found: {path}"` |
+| Discovery | `ValueError` | Path is file not dir | `"Path is not a directory: {path}"` |
+| JSON Load | `FileNotFoundError` | File missing | `"Agent JSON file not found: {path}"` |
+| JSON Load | `ValueError` | Malformed JSON | `"Failed to parse JSON from {path}: {error}"` |
+| Markdown Load | `FileNotFoundError` | File missing | `"Markdown agent file not found: {path}"` |
+| Markdown Load | `ValueError` | Invalid YAML | `"Failed to parse YAML frontmatter from {path}: {error}"` |
+| Validation | `ValueError` | Missing fields | `"Missing required fields: {fields} (source: {name})"` |
+| Validation | `ValueError` | Unknown fields | `"Unknown fields: {fields} (source: {name})"` |
+| Validation | `TypeError` | Wrong type | `"Field '{field}' must be {type} (source: {name})"` |
+| Resolver | `ValueError` | Empty name | `"Agent name cannot be empty (index: {index})"` |
+| Compiler | `ValueError` | Wrong primary count | `"Expected exactly one primary agent, found {count}"` |
+| Prompt File | `ValueError` | Absolute path | `"Absolute paths not allowed in {file:} reference: {path}"` |
+| Prompt File | `ValueError` | Path traversal | `"Path traversal (..) not allowed in {file:} reference: {path}"` |
+| Prompt File | `FileNotFoundError` | File missing | `"Prompt file not found: {path}"` |
+
+## Usage Examples
+
+### Basic Single-Agent JSON
+
+```python
+import asyncio
+from pathlib import Path
+from ecs_agent.dsl import discover_agent_sources, load_json_agents, resolve_agent_specs, compile_agent_specs
+from ecs_agent.core import Runner
+from ecs_agent.providers import OpenAIProvider
+from ecs_agent.components import ConversationComponent
+from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.memory import MemorySystem
+from ecs_agent.types import Message
+
+# Create agent config
+config = {
+    "assistant": {
+        "mode": "primary",
+        "model": "gpt-4",
+        "prompt": "You are a helpful assistant."
+    }
+}
+
+# Save to file
+Path("agents").mkdir(exist_ok=True)
+Path("agents/config.json").write_text(json.dumps(config))
+
+# Load and compile
+sources = discover_agent_sources("./agents")
+specs = []
+for source in sources:
+    specs.extend(load_json_agents(source))
+
+resolved = resolve_agent_specs(specs)
+
+def provider_factory(model: str, system_prompt: str):
+    return OpenAIProvider(api_key="your-key", model=model)
+
+primary_entity, world = compile_agent_specs(resolved, provider_factory)
+
+# Add conversation and systems
+world.add_component(
+    primary_entity,
+    ConversationComponent(messages=[Message(role="user", content="Hello!")])
+)
+world.register_system(ReasoningSystem(), priority=0)
+world.register_system(MemorySystem(), priority=10)
+
+# Run
+runner = Runner()
+await runner.run(world, max_ticks=3)
+```
+
+### Markdown with Subagents
+
+```markdown
+<!-- File: agents/main.md -->
+---
+mode: primary
+model: gpt-4
+tools:
+  delegate: true
+  read_file: true
+---
+
+# Orchestrator Agent
+
+You coordinate work between specialized subagents.
+Use the delegate tool to assign tasks to researchers and writers.
+```
+
+```markdown
+<!-- File: agents/researcher.md -->
+---
+mode: subagent
+model: gpt-3.5-turbo
+tools:
+  web_search: true
+  read_file: true
+---
+
+# Research Specialist
+
+You gather information from web searches and documents.
+Provide comprehensive, well-sourced answers.
+```
+
+```python
+# Load and run
+sources = discover_agent_sources("./agents")
+specs = [load_markdown_agent(s) for s in sources]
+resolved = resolve_agent_specs(specs)
+
+primary_entity, world = compile_agent_specs(resolved, provider_factory)
+
+# SubagentRegistryComponent now populated with 'researcher' config
+registry = world.get_component(primary_entity, SubagentRegistryComponent)
+assert 'researcher' in registry.subagents
+```
+
+### Prompt File References
+
+```
+agents/
+  assistant.json
+  prompts/
+    system.txt
+    guidelines.md
+```
+
+**assistant.json:**
+```json
+{
+  "assistant": {
+    "mode": "primary",
+    "model": "gpt-4",
+    "prompt": "{file:prompts/system.txt}"
+  }
+}
+```
+
+**prompts/system.txt:**
+```
+You are a helpful assistant specialized in code review.
+
+Guidelines:
+- Focus on security vulnerabilities
+- Check for proper error handling
+- Verify test coverage
+```
+
+```python
+# Load with prompt file resolution
+sources = discover_agent_sources("./agents")
+specs = []
+for source in sources:
+    if str(source).endswith('.json'):
+        specs_from_json = load_json_agents(source)
+        # Prompt file resolution happens automatically during load
+        # Each spec's prompt field contains resolved content
+        specs.extend(specs_from_json)
+```
 
 ## API Reference
 
-The following exports are available from `ecs_agent`:
+### ecs_agent.dsl
 
-### `AgentSpec`
-A dataclass representing a normalized agent definition.
+**AgentSpec**
 ```python
-@dataclass(slots=True)
+@dataclass
 class AgentSpec:
     mode: Literal["primary", "subagent"]
     model: str
@@ -183,23 +547,45 @@ class AgentSpec:
     name: str = ""
 ```
 
-### `validate_agent_spec(data: dict, source_name: str = "") -> AgentSpec`
-Validates a raw dictionary against the DSL schema.
+**validate_agent_spec(data, *, source_name="") → AgentSpec**
+- Validates and normalizes agent specification from raw dict
+- Raises `ValueError` for schema violations
+- Raises `TypeError` for type mismatches
 
-### `discover_agent_sources(directory: Path | str) -> list[Path]`
-Returns a sorted list of JSON and Markdown files in the target directory.
+**discover_agent_sources(directory) → list[Path]**
+- Discovers `*.json` and `*.md` files in directory (non-recursive)
+- Returns sorted paths for deterministic ordering
+- Raises `FileNotFoundError` if directory doesn't exist
 
-### `load_json_agents(path: Path | str) -> list[AgentSpec]`
-Parses a JSON file into a list of specs.
+**load_json_agents(path) → list[AgentSpec]**
+- Loads multi-agent dict from JSON file
+- Dict keys become agent names
+- Returns list of validated `AgentSpec` instances
+- Raises `ValueError` for malformed JSON or invalid specs
 
-### `load_markdown_agent(path: Path | str) -> AgentSpec`
-Parses a Markdown file (filename becomes agent name).
+**load_markdown_agent(path) → AgentSpec**
+- Loads single agent from Markdown file with YAML frontmatter
+- Filename (sans `.md`) becomes agent name
+- Markdown body becomes prompt
+- Raises `ValueError` for invalid YAML or missing frontmatter
 
-### `resolve_agent_specs(specs: list[AgentSpec]) -> dict[str, AgentSpec]`
-Resolves naming conflicts using a deterministic last-one-wins policy.
+**resolve_agent_specs(specs) → dict[str, AgentSpec]**
+- Resolves conflicts using last-one-wins policy
+- Returns dict mapping agent names to specs
+- Raises `ValueError` for empty agent names
 
-### `compile_agent_specs(specs: dict[str, AgentSpec], provider_factory: Callable[[str, str], LLMProvider]) -> tuple[EntityId, World]`
-Compiles resolved specs into a runnable ECS World. Requires a factory function to create LLM providers.
+**compile_agent_specs(specs, provider_factory) → tuple[EntityId, World]**
+- Compiles agent specs into ECS World with components
+- Creates exactly one runnable primary entity
+- Subagents populate `SubagentRegistryComponent`
+- `provider_factory: Callable[[str, str], LLMProvider]` creates providers
+- Raises `ValueError` if zero or multiple primaries
 
-### `resolve_prompt_file(prompt_spec: str, source_dir: Path) -> str`
-Resolves `{file:path}` syntax to UTF-8 file content with security checks.
+### ecs_agent.dsl.prompt_resolver
+
+**resolve_prompt_file(prompt_spec, source_dir) → str**
+- Resolves `{file:path}` references in prompt strings
+- Returns file content if pattern matches, otherwise returns input unchanged
+- Enforces security: rejects absolute paths, path traversal, symlink escapes
+- Raises `ValueError` for security violations
+- Raises `FileNotFoundError` if referenced file doesn't exist
