@@ -143,3 +143,36 @@ class SubagentRuntimeManager:
         """
         async with self._lock:
             return dict(self._sessions)
+
+    async def update_timeout(self, session_id: str, error: str) -> None:
+        """Update session to Timeout status with error message.
+        
+        Args:
+            session_id: Session identifier
+            error: Timeout error message
+        """
+        async with self._lock:
+            metadata = self._sessions.get(session_id)
+            if metadata is None:
+                # Missing session is a no-op (safe async behavior)
+                logger.warning("timeout_update_missing_session", session_id=session_id)
+                return
+            
+            # Validate transition to Timeout
+            from ecs_agent.types import validate_subagent_lifecycle_transition
+            validate_subagent_lifecycle_transition(metadata.status, "Timeout")
+            
+            # Update status and error
+            old_status = metadata.status
+            metadata.status = "Timeout"
+            metadata.error = error
+            
+            from datetime import datetime, timezone
+            metadata.updated_at = datetime.now(timezone.utc).isoformat()
+            
+            logger.info(
+                "session_timeout_updated",
+                session_id=session_id,
+                old_status=old_status,
+                error=error
+            )

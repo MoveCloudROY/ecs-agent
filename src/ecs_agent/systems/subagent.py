@@ -77,10 +77,14 @@ class SubagentSystem:
     4. Publishes delegation events to the event bus
     """
 
-    def __init__(self, priority: int = -1) -> None:
+    def __init__(self, priority: int = -1, default_timeout: float | None = None) -> None:
         self.priority = priority
         self._runtime_manager = SubagentRuntimeManager()
+        self._default_timeout = default_timeout
 
+    def _resolve_timeout(self, per_call_timeout: float | None) -> float | None:
+        """Resolve timeout with precedence: per-call > global > None."""
+        return per_call_timeout if per_call_timeout is not None else self._default_timeout
     def install_subagent_tool(
         self,
         world: World,
@@ -288,15 +292,46 @@ class SubagentSystem:
                 task=task,
             )
 
-            # Call shared execution core
-            result, success, error = await self._execute_subagent_core(
-                world,
-                parent_entity_id,
-                subagent_name,
-                task,
-                correlation_id,
-                traceparent,
-            )
+            # Resolve timeout and call shared execution core with timeout wrapping
+            resolved_timeout = self._resolve_timeout(None)  # delegate uses global default only
+            
+            try:
+                if resolved_timeout is not None:
+                    result, success, error = await asyncio.wait_for(
+                        self._execute_subagent_core(
+                            world,
+                            parent_entity_id,
+                            subagent_name,
+                            task,
+                            correlation_id,
+                            traceparent,
+                        ),
+                        timeout=resolved_timeout
+                    )
+                else:
+                    result, success, error = await self._execute_subagent_core(
+                        world,
+                        parent_entity_id,
+                        subagent_name,
+                        task,
+                        correlation_id,
+                        traceparent,
+                    )
+            except asyncio.TimeoutError:
+                error_msg = f"Error: Subagent timeout after {resolved_timeout}s"
+                logger.error("delegation_timeout", timeout=resolved_timeout, subagent=subagent_name)
+                # Emit completion event with error
+                await world.event_bus.publish(
+                    DelegationCompletedEvent(
+                        entity_id=parent_entity_id,
+                        subagent_name=subagent_name,
+                        success=False,
+                        result=error_msg,
+                        correlation_id=correlation_id,
+                        traceparent=traceparent,
+                    )
+                )
+                result = error_msg
 
             return result
 
@@ -336,6 +371,9 @@ class SubagentSystem:
             correlation_id = str(uuid.uuid4())
             traceparent = generate_traceparent()
 
+            # Resolve timeout for this subagent execution
+            resolved_timeout = self._resolve_timeout(timeout)
+
             async def execute_with_effective_skills() -> tuple[str, bool, str | None]:
                 original_config = registry_comp.subagents[category]
                 registry_comp.subagents[category] = effective_config
@@ -352,7 +390,18 @@ class SubagentSystem:
                     registry_comp.subagents[category] = original_config
 
             if not background:
-                result, _, _ = await execute_with_effective_skills()
+                # Sync mode: wrap with timeout
+                try:
+                    if resolved_timeout is not None:
+                        result, _, _ = await asyncio.wait_for(
+                            execute_with_effective_skills(), timeout=resolved_timeout
+                        )
+                    else:
+                        result, _, _ = await execute_with_effective_skills()
+                except asyncio.TimeoutError:
+                    error_msg = f"Error: Subagent timeout after {resolved_timeout}s"
+                    logger.error("subagent_timeout", timeout=resolved_timeout, category=category)
+                    result = error_msg
                 return result
 
             session_id = self._runtime_manager.create_session()
@@ -373,7 +422,20 @@ class SubagentSystem:
             )
 
             async def run_in_background() -> None:
-                result, success, error = await execute_with_effective_skills()
+                try:
+                    if resolved_timeout is not None:
+                        result, success, error = await asyncio.wait_for(
+                            execute_with_effective_skills(), timeout=resolved_timeout
+                        )
+                    else:
+                        result, success, error = await execute_with_effective_skills()
+                except asyncio.TimeoutError:
+                    error_msg = f"Error: Subagent timeout after {resolved_timeout}s"
+                    logger.error("subagent_background_timeout", timeout=resolved_timeout, category=category)
+                    # Update session to Timeout status
+                    await self._runtime_manager.update_timeout(session_id, error_msg)
+                    return
+                
                 metadata.updated_at = (
                     datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                 )
