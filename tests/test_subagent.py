@@ -1,6 +1,7 @@
 """Tests for subagent types and SubagentSystem."""
 
 from __future__ import annotations
+import asyncio
 from typing import Any
 
 from ecs_agent.components import MessageBusConfigComponent
@@ -18,6 +19,11 @@ from ecs_agent.types import (
     ToolSchema,
 )
 from ecs_agent.systems.message_bus import MessageBusSystem
+from ecs_agent.systems.subagent_runtime import (
+    SubagentLifecycleStatus,
+    SubagentRuntimeSessionManager,
+    SubagentSessionRecord,
+)
 
 
 def test_subagent_config_dataclass() -> None:
@@ -428,6 +434,110 @@ async def test_delegate_unknown_subagent_returns_error() -> None:
     assert "error" in result.lower() or "unknown" in result.lower()
 
 
+async def test_shared_core_sync_path_returns_success_tuple() -> None:
+    from ecs_agent.systems.subagent import SubagentSystem
+
+    world = World()
+    parent_entity = world.create_entity()
+
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"test-agent": config}),
+    )
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    _register_message_bus(world, parent_entity)
+
+    system = SubagentSystem()
+    result, success, error = await system._execute_subagent_core(
+        world=world,
+        parent_entity_id=parent_entity,
+        config_or_name=config,
+        task="Run task",
+        correlation_id="corr-shared-core-sync",
+        traceparent="00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+    )
+
+    assert result == "Done"
+    assert success is True
+    assert error is None
+
+
+async def test_shared_core_error_normalization_unknown_subagent() -> None:
+    from ecs_agent.systems.subagent import SubagentSystem
+
+    world = World()
+    parent_entity = world.create_entity()
+    world.add_component(parent_entity, SubagentRegistryComponent(subagents={}))
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    _register_message_bus(world, parent_entity)
+
+    system = SubagentSystem()
+    result, success, error = await system._execute_subagent_core(
+        world=world,
+        parent_entity_id=parent_entity,
+        config_or_name="unknown-agent",
+        task="Run task",
+        correlation_id="corr-shared-core-unknown",
+        traceparent="00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+    )
+
+    assert success is False
+    assert error is not None
+    assert "Unknown subagent" in result
+    assert result == error
+
+
+async def test_shared_core_error_normalization_execution_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ecs_agent.systems.subagent import SubagentSystem
+
+    world = World()
+    parent_entity = world.create_entity()
+
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"test-agent": config}),
+    )
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    _register_message_bus(world, parent_entity)
+
+    system = SubagentSystem()
+
+    async def _boom(
+        child_world: World,
+        child_entity: EntityId,
+        task: str,
+        config: SubagentConfig,
+    ) -> str:
+        del child_world, child_entity, task, config
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(system, "_execute_delegation", _boom)
+
+    result, success, error = await system._execute_subagent_core(
+        world=world,
+        parent_entity_id=parent_entity,
+        config_or_name="test-agent",
+        task="Run task",
+        correlation_id="corr-shared-core-exception",
+        traceparent="00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+    )
+
+    assert success is False
+    assert error is not None
+    assert result.startswith("Error during delegation:")
+    assert result == error
+
+
 async def test_subagent_system_registers_delegate_tool() -> None:
     """SubagentSystem.process() ensures delegate tool is registered."""
     from ecs_agent.systems.subagent import SubagentSystem
@@ -565,7 +675,9 @@ async def test_delegate_with_skills_installs_skills() -> None:
     assert metadata.has_system_prompt is True
 
 
-@pytest.mark.skip(reason="Timeout functionality removed in favor of synchronous delegation (commit 3bad29b)")
+@pytest.mark.skip(
+    reason="Timeout functionality removed in favor of synchronous delegation (commit 3bad29b)"
+)
 async def test_delegate_timeout_returns_deterministic_error_and_cleans_pending_requests() -> (
     None
 ):
@@ -1655,7 +1767,9 @@ async def test_subagent_skills_skill_manager_install_uninstall_lifecycle() -> No
 
     # RED TEST: Verify SkillManager.install() is called (not manual dict copy)
     # This will fail because SkillManager integration doesn't exist - RED!
-    with patch.object(SkillManager, "install", wraps=skill_manager.install) as mock_install:
+    with patch.object(
+        SkillManager, "install", wraps=skill_manager.install
+    ) as mock_install:
         system = SubagentSystem()
         await system.process(world)
 
@@ -1672,9 +1786,107 @@ async def test_subagent_skills_skill_manager_install_uninstall_lifecycle() -> No
         mock_install.assert_called()
         install_calls = mock_install.call_args_list
         child_install_calls = [
-            call for call in install_calls
+            call
+            for call in install_calls
             if call[0][1] == child_entity  # entity_id arg
         ]
         assert len(child_install_calls) > 0, (
             "SkillManager.install() should be called for child entity, not manual dict copy"
         )
+
+
+async def test_session_manager_background_happy_path() -> None:
+    world = World()
+    manager = SubagentRuntimeSessionManager(world)
+    session_id = manager.create_session()
+
+    record = SubagentSessionRecord(
+        session_id=session_id,
+        parent_entity_id=EntityId(1),
+        child_entity_id=None,
+        subagent_name="researcher",
+        task="collect facts",
+        status=SubagentLifecycleStatus.IDLE,
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+        deadline_at=None,
+        correlation_id="corr-1",
+        traceparent="00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+        timeout_seconds=30.0,
+        result=None,
+        error=None,
+        metadata={},
+    )
+
+    async def _do_work() -> None:
+        await asyncio.sleep(0.01)
+
+    task = asyncio.create_task(_do_work())
+    await manager.register_task(session_id=session_id, task=task, metadata=record)
+
+    stored = await manager.get_session(session_id)
+    assert stored is not None
+    assert stored.status is SubagentLifecycleStatus.IDLE
+
+    await manager.update_status(session_id, SubagentLifecycleStatus.WORKING)
+    updated = await manager.get_session(session_id)
+    assert updated is not None
+    assert updated.status is SubagentLifecycleStatus.WORKING
+
+    await manager.update_status(session_id, SubagentLifecycleStatus.IDLE)
+    final = await manager.get_session(session_id)
+    assert final is not None
+    assert final.status is SubagentLifecycleStatus.IDLE
+
+    await task
+    await manager.cleanup(session_id)
+    assert await manager.get_session(session_id) is None
+
+
+async def test_session_manager_cancel_cleans_handles() -> None:
+    world = World()
+    manager = SubagentRuntimeSessionManager(world)
+    session_id = manager.create_session()
+
+    record = SubagentSessionRecord(
+        session_id=session_id,
+        parent_entity_id=EntityId(1),
+        child_entity_id=None,
+        subagent_name="researcher",
+        task="long task",
+        status=SubagentLifecycleStatus.WORKING,
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+        deadline_at=None,
+        correlation_id="corr-2",
+        traceparent="00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
+        timeout_seconds=30.0,
+        result=None,
+        error=None,
+        metadata={},
+    )
+
+    blocker = asyncio.Event()
+
+    async def _never_finishes() -> None:
+        await blocker.wait()
+
+    task = asyncio.create_task(_never_finishes())
+    await manager.register_task(session_id=session_id, task=task, metadata=record)
+
+    await manager.cancel_session(session_id)
+    cancelled = await manager.get_session(session_id)
+    assert cancelled is not None
+    assert cancelled.status is SubagentLifecycleStatus.CANCELLED
+
+    await manager.cleanup(session_id)
+    assert await manager.get_session(session_id) is None
+
+
+async def test_session_manager_session_id_uniqueness() -> None:
+    world = World()
+    manager = SubagentRuntimeSessionManager(world)
+
+    session_ids = {manager.create_session() for _ in range(200)}
+    assert len(session_ids) == 200
+    assert all(len(session_id) == 16 for session_id in session_ids)
