@@ -455,6 +455,51 @@ class SubagentSystem:
             )
         return config
 
+    def _validate_subagent_params(
+        self, category: str, prompt: str, load_skills: list[str]
+    ) -> None:
+        """Validate subagent invocation parameters.
+
+        Args:
+            category: Subagent category/name
+            prompt: Task description
+            load_skills: List of skill names to load
+
+        Raises:
+            ValueError: If parameters are invalid
+        """
+        if not category or not category.strip():
+            raise ValueError("Error: category cannot be empty")
+        if not prompt or not prompt.strip():
+            raise ValueError("Error: prompt cannot be empty")
+        if not isinstance(load_skills, list):
+            raise ValueError(
+                f"Error: load_skills must be a list, got {type(load_skills).__name__}"
+            )
+
+    def _normalize_load_skills(
+        self, config: SubagentConfig, load_skills: list[str]
+    ) -> list[str]:
+        """Normalize load_skills as ordered unique merge of config.skills + load_skills.
+
+        Args:
+            config: Resolved subagent configuration
+            load_skills: Additional skills requested by caller
+
+        Returns:
+            List of skill names (ordered, deduplicated)
+        """
+        # Preserve order: config.skills first, then load_skills
+        # Remove duplicates while maintaining order
+        seen: set[str] = set()
+        result: list[str] = []
+        for skill in config.skills + load_skills:
+            if skill not in seen:
+                seen.add(skill)
+                result.append(skill)
+        return result
+
+
     def _assemble_child_world(
         self,
         parent_world: World,

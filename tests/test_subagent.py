@@ -23,6 +23,7 @@ from ecs_agent.types import (
     validate_subagent_lifecycle_transition,
 )
 from ecs_agent.systems.message_bus import MessageBusSystem
+from ecs_agent.systems.subagent import SubagentSystem
 
 
 def test_subagent_config_dataclass() -> None:
@@ -1860,3 +1861,90 @@ async def test_runtime_manager_cancel_cleans_handles() -> None:
         await task
     except asyncio.CancelledError:
         pass
+
+
+@pytest.mark.parametrize(
+    "category,prompt,load_skills,expected_error",
+    [
+        ("", "valid prompt", [], "category cannot be empty"),
+        ("  ", "valid prompt", [], "category cannot be empty"),
+        ("ultrabrain", "", [], "prompt cannot be empty"),
+        ("ultrabrain", "  ", [], "prompt cannot be empty"),
+        ("ultrabrain", "valid prompt", "not-a-list", "load_skills must be a list"),
+        ("ultrabrain", "valid prompt", None, "load_skills must be a list"),
+    ],
+)
+async def test_validate_subagent_params_rejects_invalid_input(
+    category: str, prompt: str, load_skills: list[str] | str | None, expected_error: str
+) -> None:
+    """SubagentSystem._validate_subagent_params rejects invalid parameters."""
+    world = World()
+    system = SubagentSystem()
+    
+    with pytest.raises(ValueError, match=expected_error):
+        system._validate_subagent_params(category, prompt, load_skills)  # type: ignore[arg-type]
+
+
+async def test_validate_subagent_params_accepts_valid_input() -> None:
+    """SubagentSystem._validate_subagent_params accepts valid parameters."""
+    world = World()
+    system = SubagentSystem()
+    
+    # Should not raise
+    system._validate_subagent_params("ultrabrain", "analyze this problem", [])
+    system._validate_subagent_params("quick", "fix typo", ["skill1", "skill2"])
+
+
+@pytest.mark.parametrize(
+    "config_skills,load_skills,expected",
+    [
+        ([], [], []),
+        (["skill1"], [], ["skill1"]),
+        ([], ["skill2"], ["skill2"]),
+        (["skill1"], ["skill2"], ["skill1", "skill2"]),
+        (["skill1", "skill2"], ["skill3"], ["skill1", "skill2", "skill3"]),
+        (["skill1"], ["skill1"], ["skill1"]),  # Deduplication
+        (["skill1", "skill2"], ["skill2", "skill3"], ["skill1", "skill2", "skill3"]),  # Dedup + order
+        (["skill2", "skill1"], ["skill1", "skill3"], ["skill2", "skill1", "skill3"]),  # Preserve config order
+    ],
+)
+async def test_normalize_load_skills_merges_and_deduplicates(
+    config_skills: list[str], load_skills: list[str], expected: list[str]
+) -> None:
+    """SubagentSystem._normalize_load_skills merges config + load_skills and deduplicates."""
+    world = World()
+    system = SubagentSystem()
+    config = SubagentConfig(
+        name="test",
+        provider=FakeProvider(responses=[CompletionResult(message=Message(role="assistant", content="done"))]),
+        model="fake",
+        skills=config_skills,
+    )
+    
+    result = system._normalize_load_skills(config, load_skills)
+    assert result == expected
+
+
+async def test_category_mapping_exact_match() -> None:
+    """SubagentSystem._resolve_subagent_config looks up subagent from registry."""
+    system = SubagentSystem()
+    provider = FakeProvider(responses=[CompletionResult(message=Message(role="assistant", content="done"))])
+    config = SubagentConfig(
+        name="ultrabrain",
+        provider=provider,
+        model="fake",
+    )
+    registry = SubagentRegistryComponent(subagents={"ultrabrain": config})
+    
+    resolved = system._resolve_subagent_config(registry, "ultrabrain")
+    
+    assert resolved.name == "ultrabrain"
+    assert resolved.model == "fake"
+
+async def test_category_mapping_unknown_category() -> None:
+    """SubagentSystem._resolve_subagent_config raises ValueError for unknown subagent."""
+    system = SubagentSystem()
+    registry = SubagentRegistryComponent(subagents={})
+    
+    with pytest.raises(ValueError, match="Error: Unknown subagent 'invalid_category'"):
+        system._resolve_subagent_config(registry, "invalid_category")
