@@ -22,6 +22,7 @@ The following types and classes are re-exported for convenience:
 - `StreamStartEvent`, `StreamDeltaEvent`, `StreamEndEvent`, `CheckpointCreatedEvent`, `CheckpointRestoredEvent`, `CompactionCompleteEvent`, `ToolApprovalRequestedEvent`, `ToolApprovedEvent`, `ToolDeniedEvent`, `RAGRetrievalCompletedEvent`, `UserInputRequestedEvent`, `MCTSNodeScoredEvent`, `MessageBusPublishedEvent`, `MessageBusDeliveredEvent`, `MessageBusResponseEvent`, `MessageBusTimeoutEvent` from `ecs_agent.types`
 - `scan_module`, `sandboxed_execute`, `tool` from `ecs_agent.tools`
 - `TaskStatus`, `TaskComponent`, `ScratchbookRef`, `ScratchbookRefComponent`, `ScratchbookIndexComponent` from `ecs_agent.types` and `ecs_agent.components`
+- `SubagentConfig`, `SubagentLifecycleStatus`, `SubagentSessionRecord`, `InheritancePolicy` from `ecs_agent.types`
 - `ScratchbookService`, `ScratchbookIndexer`, `ToolResultsSink` from `ecs_agent.scratchbook`
 - `TaskExecutor`, `StateMachine`, `TaskPersistenceService`, `ContextResolver`, `DependencyAnalyzer`, `WavePlanner`, `TaskFetchingUnit` from `ecs_agent.task`
 - `AgentSpec`, `validate_agent_spec`, `discover_agent_sources`, `load_json_agents`, `load_markdown_agent`, `resolve_agent_specs`, `compile_agent_specs`, `resolve_prompt_file` from `ecs_agent.dsl`
@@ -89,6 +90,40 @@ class MessageBusEnvelope:
     reply_to: str | None = None
     correlation_id: str | None = None
     traceparent: str | None = None
+```
+```python
+@dataclass(slots=True)
+class InheritancePolicy:
+    enabled: bool = True
+    inherit_system_prompt: bool = True
+    inherit_tools: list[str] = field(default_factory=list)
+    inherit_permissions: bool = False
+    allow_delegate_tool: bool = True
+    tool_conflict_policy: str = "skip"
+    missing_skill_policy: str = "warn"
+
+@dataclass(slots=True)
+class SubagentConfig:
+    name: str
+    provider: Any
+    model: str
+    system_prompt: str = ""
+    skills: list[str] = field(default_factory=list)
+    max_ticks: int = 10
+    inheritance_policy: InheritancePolicy = field(default_factory=InheritancePolicy)
+
+@dataclass(slots=True)
+class SubagentSessionRecord:
+    session_id: str
+    category: str
+    prompt: str
+    parent_entity_id: EntityId
+    created_at: str
+    updated_at: str
+    status: SubagentLifecycleStatus = "Idle"
+    timeout_seconds: float | None = None
+    result_excerpt: str | None = None
+    error: str | None = None
 ```
 ```python
 class ApprovalPolicy(Enum):
@@ -496,6 +531,15 @@ class UserInputSystem(priority: int = -10):
     async def process(self, world: World) -> None: ...
 ```
 
+### SubagentSystem
+
+```python
+class SubagentSystem(priority: int = -1, default_timeout: float | None = None):
+    async def process(self, world: World) -> None: ...
+    def install_subagent_tool(self, world: World, entity_id: EntityId, tool_name: str = "subagent", override: bool = False) -> None: ...
+    def install_delegate_tool(self, world: World, entity_id: EntityId, tool_name: str = "delegate", override: bool = False) -> None: ...
+    def install_subagent_control_tools(self, world: World, entity_id: EntityId) -> None: ...
+```
 ---
 
 ## ecs_agent.providers

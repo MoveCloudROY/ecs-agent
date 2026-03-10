@@ -7,7 +7,7 @@ The Task Orchestration System manages multi-step execution using a state-machine
 - **Task Status**: Six explicit states: `PENDING`, `READY`, `RUNNING`, `COMPLETED`, `FAILED`, and `BLOCKED`.
 - **Dependency Resolution**: Automatic detection of unresolved dependencies and cycle prevention.
 - **Wave Planning**: Grouping of ready tasks into waves for deterministic, parallel execution.
-- **Mixed Backend**: Execution can be routed to either local tools or specialized subagents.
+- **Mixed Backend**: Execution can be routed to either local tools or specialized subagents via the `subagent` tool.
 - **Dual-Path Persistence**: State is stored in both mutable snapshots and immutable event logs.
 
 ## The Task State Machine
@@ -93,6 +93,9 @@ When an upstream dependency fails, downstream tasks are moved to `BLOCKED`. Thes
 
 ### Dual-Path Persistence
 Every task has a snapshot (its current state) and an event log (its full history). The `TaskPersistenceService` manages this to ensure high reliability and auditability.
+### Subagent Compatibility
+
+The task system is compatible with both the legacy `delegate` tool and the new `subagent` tool. For new tasks, the `subagent` tool is preferred as it provides enhanced control over skills and background execution. When a task is assigned to a subagent backend, the `TaskExecutor` maps the assignment to the appropriate tool call.
 
 ## See Also
 
