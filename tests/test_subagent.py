@@ -2523,3 +2523,417 @@ async def test_reminder_table_deterministic_sort() -> None:
     assert "session-c" in data_lines[0]  # Most recent first
     assert "session-a" in data_lines[1]  # Alphabetically before B (same timestamp)
     assert "session-b" in data_lines[2]  # Alphabetically after A
+
+
+# ===== Task 11: Control Tools Tests =====
+
+
+async def test_subagent_status_aggregate_table() -> None:
+    """Test subagent_status tool returns aggregate table when session_id=None."""
+    from ecs_agent.components.definitions import SubagentSessionTableComponent
+    from ecs_agent.components import ToolRegistryComponent
+    
+    world = World()
+    system = SubagentSystem()
+    parent = world.create_entity()
+    
+    # Setup components
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    
+    # Setup registry with test agent
+    registry = SubagentRegistryComponent()
+    registry.subagents["test-agent"] = SubagentConfig(
+        name="test-agent",
+        provider=FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(role="assistant", content="Result 1")
+                )
+            ]
+        ),
+        model="fake",
+        system_prompt="Test",
+        skills=[]
+    )
+    world.add_component(parent, registry)
+    
+    # Install control tools
+    system.install_subagent_control_tools(world, parent)
+    
+    # Create 2 background sessions
+    system.install_subagent_tool(world, parent)
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+    
+    handler = tools.handlers["subagent"]
+    result1 = await handler(
+        category="test-agent",
+        prompt="Task 1",
+        load_skills=[],
+        background=True,
+        timeout=None,
+    )
+    result2 = await handler(
+        category="test-agent",
+        prompt="Task 2",
+        load_skills=[],
+        background=True,
+        timeout=None,
+    )
+    
+    session1 = json.loads(result1)["session_id"]
+    session2 = json.loads(result2)["session_id"]
+    
+    # Wait for completion
+    await asyncio.sleep(0.1)
+    
+    # Call subagent_status with no session_id
+    status_handler = tools.handlers["subagent_status"]
+    status_result_json = await status_handler(session_id=None)
+    status_result = json.loads(status_result_json)
+    
+    # Verify response structure
+    assert "session_count" in status_result
+    assert status_result["session_count"] == 2
+    assert "summary_table" in status_result
+    
+    # Verify both sessions appear in table
+    table_text = status_result["summary_table"]
+    assert session1 in table_text
+    assert session2 in table_text
+    assert "test-agent" in table_text
+
+
+async def test_subagent_status_single_session() -> None:
+    """Test subagent_status tool returns single session details when session_id provided."""
+    from ecs_agent.components.definitions import SubagentSessionTableComponent
+    from ecs_agent.components import ToolRegistryComponent
+    
+    world = World()
+    system = SubagentSystem()
+    parent = world.create_entity()
+    
+    # Setup components
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    
+    registry = SubagentRegistryComponent()
+    registry.subagents["test-agent"] = SubagentConfig(
+        name="test-agent",
+        provider=FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(role="assistant", content="Single result")
+                )
+            ]
+        ),
+        model="fake",
+        system_prompt="Test",
+        skills=[]
+    )
+    world.add_component(parent, registry)
+    
+    # Install tools
+    system.install_subagent_control_tools(world, parent)
+    system.install_subagent_tool(world, parent)
+    
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+    
+    # Create one session
+    handler = tools.handlers["subagent"]
+    result = await handler(
+        category="test-agent",
+        prompt="Single task",
+        load_skills=[],
+        background=True,
+        timeout=None,
+    )
+    session_id = json.loads(result)["session_id"]
+    
+    await asyncio.sleep(0.1)
+    
+    # Call subagent_status with session_id
+    status_handler = tools.handlers["subagent_status"]
+    status_result_json = await status_handler(session_id=session_id)
+    status_result = json.loads(status_result_json)
+    
+    # Verify single session response
+    assert status_result["session_id"] == session_id
+    assert status_result["category"] == "test-agent"
+    assert "lifecycle_status" in status_result
+    assert "created_at" in status_result
+    assert "updated_at" in status_result
+
+
+async def test_subagent_status_missing_session() -> None:
+    """Test subagent_status returns error for missing session_id."""
+    from ecs_agent.components.definitions import SubagentSessionTableComponent
+    from ecs_agent.components import ToolRegistryComponent
+    
+    world = World()
+    system = SubagentSystem()
+    parent = world.create_entity()
+    
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    
+    # Install control tools
+    system.install_subagent_control_tools(world, parent)
+    
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+    
+    # Query nonexistent session
+    status_handler = tools.handlers["subagent_status"]
+    result_json = await status_handler(session_id="nonexistent-session-id")
+    result = json.loads(result_json)
+    
+    # Verify error response
+    assert "error" in result
+    assert "not found" in result["error"].lower()
+
+
+async def test_subagent_result_completed_session() -> None:
+    """Test subagent_result returns immediately for completed (Idle) session."""
+    from ecs_agent.components.definitions import SubagentSessionTableComponent
+    from ecs_agent.components import ToolRegistryComponent
+    
+    world = World()
+    system = SubagentSystem()
+    parent = world.create_entity()
+    
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    
+    registry = SubagentRegistryComponent()
+    registry.subagents["test-agent"] = SubagentConfig(
+        name="test-agent",
+        provider=FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(role="assistant", content="Completed result")
+                )
+            ]
+        ),
+        model="fake",
+        system_prompt="Test",
+        skills=[]
+    )
+    world.add_component(parent, registry)
+    
+    system.install_subagent_control_tools(world, parent)
+    system.install_subagent_tool(world, parent)
+    
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+    
+    # Create and wait for completion
+    handler = tools.handlers["subagent"]
+    result = await handler(
+        category="test-agent",
+        prompt="Task",
+        load_skills=[],
+        background=True,
+        timeout=None,
+    )
+    session_id = json.loads(result)["session_id"]
+    
+    await asyncio.sleep(0.1)  # Let it finish
+    
+    # Get result
+    result_handler = tools.handlers["subagent_result"]
+    result_json = await result_handler(session_id=session_id, timeout=None)
+    result_data = json.loads(result_json)
+    
+    # Verify successful result
+    assert result_data["status"] == "success"
+    assert "result_excerpt" in result_data
+    assert "session_id" in result_data
+
+
+async def test_subagent_result_timeout() -> None:
+    """Test subagent_result returns timeout error when waiting too long."""
+    from ecs_agent.components.definitions import SubagentSessionTableComponent
+    from ecs_agent.components import ToolRegistryComponent
+    
+    world = World()
+    system = SubagentSystem()
+    parent = world.create_entity()
+    
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    
+    # Create provider with delayed response
+    async def slow_completion(*args: Any, **kwargs: Any) -> CompletionResult:
+        await asyncio.sleep(10.0)  # Very long delay
+        return CompletionResult(
+            message=Message(role="assistant", content="Slow result")
+        )
+    
+    from unittest.mock import AsyncMock
+    slow_provider = FakeProvider(responses=[])
+    slow_provider.complete = AsyncMock(side_effect=slow_completion)  # type: ignore[method-assign]
+    
+    registry = SubagentRegistryComponent()
+    registry.subagents["slow-agent"] = SubagentConfig(
+        name="slow-agent",
+        provider=slow_provider,
+        model="fake",
+        system_prompt="Test",
+        skills=[]
+    )
+    world.add_component(parent, registry)
+    
+    system.install_subagent_control_tools(world, parent)
+    system.install_subagent_tool(world, parent)
+    
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+    
+    # Launch slow session
+    handler = tools.handlers["subagent"]
+    result = await handler(
+        category="slow-agent",
+        prompt="Slow task",
+        load_skills=[],
+        background=True,
+        timeout=None,
+    )
+    session_id = json.loads(result)["session_id"]
+    
+    # Try to get result with very short timeout
+    result_handler = tools.handlers["subagent_result"]
+    result_json = await result_handler(session_id=session_id, timeout=0.05)
+    result_data = json.loads(result_json)
+    
+    # Verify timeout error
+    assert "error" in result_data
+    assert "timeout" in result_data["error"].lower() or "timed out" in result_data["error"].lower()
+
+
+async def test_subagent_cancel_active_session() -> None:
+    """Test subagent_cancel successfully cancels a Working session."""
+    from ecs_agent.components.definitions import SubagentSessionTableComponent
+    from ecs_agent.components import ToolRegistryComponent
+    
+    world = World()
+    system = SubagentSystem()
+    parent = world.create_entity()
+    
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    
+    # Create provider with very slow response
+    async def very_slow_completion(*args: Any, **kwargs: Any) -> CompletionResult:
+        await asyncio.sleep(100.0)
+        return CompletionResult(
+            message=Message(role="assistant", content="Never happens")
+        )
+    
+    from unittest.mock import AsyncMock
+    slow_provider = FakeProvider(responses=[])
+    slow_provider.complete = AsyncMock(side_effect=very_slow_completion)  # type: ignore[method-assign]
+    
+    registry = SubagentRegistryComponent()
+    registry.subagents["cancel-test"] = SubagentConfig(
+        name="cancel-test",
+        provider=slow_provider,
+        model="fake",
+        system_prompt="Test",
+        skills=[]
+    )
+    world.add_component(parent, registry)
+    
+    system.install_subagent_control_tools(world, parent)
+    system.install_subagent_tool(world, parent)
+    
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+    
+    # Launch session
+    handler = tools.handlers["subagent"]
+    result = await handler(
+        category="cancel-test",
+        prompt="Long task",
+        load_skills=[],
+        background=True,
+        timeout=None,
+    )
+    session_id = json.loads(result)["session_id"]
+    
+    await asyncio.sleep(0.05)  # Let it start
+    
+    # Cancel the session
+    cancel_handler = tools.handlers["subagent_cancel"]
+    cancel_result_json = await cancel_handler(session_id=session_id)
+    cancel_result = json.loads(cancel_result_json)
+    
+    # Verify cancellation
+    assert cancel_result["status"] == "cancelled"
+    assert cancel_result["session_id"] == session_id
+    
+    # Verify session state updated
+    table = world.get_component(parent, SubagentSessionTableComponent)
+    assert table is not None
+    assert session_id in table.sessions
+    assert table.sessions[session_id].status == "Cancelled"
+
+
+async def test_subagent_cancel_terminal_session() -> None:
+    """Test subagent_cancel allows cancelling already-completed sessions (Idle -> Cancelled)."""
+    from ecs_agent.components.definitions import SubagentSessionTableComponent
+    from ecs_agent.components import ToolRegistryComponent
+    
+    world = World()
+    system = SubagentSystem()
+    parent = world.create_entity()
+    
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    
+    registry = SubagentRegistryComponent()
+    registry.subagents["test-agent"] = SubagentConfig(
+        name="test-agent",
+        provider=FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(role="assistant", content="Done")
+                )
+            ]
+        ),
+        model="fake",
+        system_prompt="Test",
+        skills=[]
+    )
+    world.add_component(parent, registry)
+    
+    system.install_subagent_control_tools(world, parent)
+    system.install_subagent_tool(world, parent)
+    
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+    
+    # Create and wait for completion
+    handler = tools.handlers["subagent"]
+    result = await handler(
+        category="test-agent",
+        prompt="Task",
+        load_skills=[],
+        background=True,
+        timeout=None,
+    )
+    session_id = json.loads(result)["session_id"]
+    
+    await asyncio.sleep(0.1)  # Let it finish
+    
+    # Try to cancel already-finished session
+    cancel_handler = tools.handlers["subagent_cancel"]
+    cancel_result_json = await cancel_handler(session_id=session_id)
+    cancel_result = json.loads(cancel_result_json)
+    
+    # Verify Idle -> Cancelled transition is allowed
+    assert cancel_result["status"] == "cancelled"
+    assert cancel_result["lifecycle_status"] == "Cancelled"
+    assert cancel_result["session_id"] == session_id

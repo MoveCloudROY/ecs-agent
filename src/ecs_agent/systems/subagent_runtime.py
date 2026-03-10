@@ -148,6 +148,18 @@ class SubagentRuntimeManager:
         async with self._lock:
             return dict(self._sessions)
 
+    async def get_task(self, session_id: str) -> Optional[asyncio.Task[Any]]:
+        """Retrieve the asyncio.Task for a session.
+        
+        Args:
+            session_id: Session identifier
+        
+        Returns:
+            asyncio.Task if found and still tracked, None otherwise
+        """
+        async with self._lock:
+            return self._tasks.get(session_id)
+
     async def update_timeout(self, session_id: str, error: str) -> None:
         """Update session to Timeout status with error message.
         
