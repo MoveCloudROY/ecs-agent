@@ -208,20 +208,22 @@ def test_subagent_contract_and_lifecycle_session_record_fields() -> None:
         session_id="session-1",
         category="research",
         prompt="Gather context",
+        parent_entity_id=EntityId(1),
+        created_at="2026-03-10T10:00:00Z",
+        updated_at="2026-03-10T10:00:00Z",
         load_skills=["search", "summarize"],
         background=False,
-        timeout=120,
+        timeout_seconds=120,
         status="Idle",
         correlation_id="corr-123",
         traceparent="00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
     )
-
     assert record.session_id == "session-1"
     assert record.category == "research"
     assert record.prompt == "Gather context"
     assert record.load_skills == ["search", "summarize"]
     assert record.background is False
-    assert record.timeout == 120
+    assert record.timeout_seconds == 120
     assert record.status == "Idle"
     assert record.correlation_id == "corr-123"
     assert (

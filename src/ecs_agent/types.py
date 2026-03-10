@@ -422,7 +422,6 @@ class SubagentSessionRecord:
     updated_at: str  # ISO timestamp
     load_skills: list[str] = field(default_factory=list)
     background: bool = False
-    timeout: float | None = None
     status: SubagentLifecycleStatus = "Idle"
     correlation_id: str = ""
     traceparent: str = ""

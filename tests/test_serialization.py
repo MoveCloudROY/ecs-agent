@@ -1003,7 +1003,6 @@ def test_subagent_session_table_component_roundtrip() -> None:
         prompt="Do something",
         load_skills=["skill1"],
         background=True,
-        timeout=30.0,
         status="Working",
         correlation_id="corr_123",
         traceparent="00-trace-span-00",
@@ -1021,7 +1020,6 @@ def test_subagent_session_table_component_roundtrip() -> None:
         prompt="Create design",
         load_skills=[],
         background=False,
-        timeout=None,
         status="Dead",
         correlation_id="corr_456",
         traceparent="00-trace-span-01",
@@ -1058,14 +1056,13 @@ def test_subagent_session_table_component_roundtrip() -> None:
     assert restored_session1.prompt == "Do something"
     assert restored_session1.load_skills == ["skill1"]
     assert restored_session1.background is True
-    assert restored_session1.timeout == 30.0
+    assert restored_session1.timeout_seconds == 60.0
     assert restored_session1.status == "Working"
     assert restored_session1.correlation_id == "corr_123"
     assert restored_session1.traceparent == "00-trace-span-00"
     assert restored_session1.parent_entity_id == EntityId(42)
     assert restored_session1.created_at == "2026-03-10T10:00:00Z"
     assert restored_session1.updated_at == "2026-03-10T10:05:00Z"
-    assert restored_session1.timeout_seconds == 60.0
     assert restored_session1.deadline_at == "2026-03-10T11:00:00Z"
     assert restored_session1.result_excerpt == "Success"
     assert restored_session1.error is None
