@@ -1,0 +1,24 @@
+{
+  "assistant": {
+    "mode": "primary",
+    "model": "qwen3.5-flash",
+    "prompt": "You are a helpful AI assistant. You can help users with various tasks including answering questions, providing information, and solving problems. Always be polite, clear, and concise in your responses.",
+    "tools": {
+      "read_file": true,
+      "write_file": true,
+      "execute_bash": false
+    },
+    "metadata": {
+      "description": "General-purpose helpful assistant",
+      "version": "1.0"
+    }
+  },
+  "researcher": {
+    "mode": "subagent",
+    "model": "qwen3.5-flash",
+    "prompt": "You are a research specialist focused on gathering and analyzing information. Provide detailed, well-researched answers with sources when possible.",
+    "metadata": {
+      "specialty": "research and analysis"
+    }
+  }
+}
