@@ -18,6 +18,7 @@ from ecs_agent.types import (
     EntityId,
     InheritancePolicy,
     Message,
+    RetryConfig,
     SubagentLifecycleStatus,
     SubagentSessionRecord,
     SubagentConfig,
@@ -2320,3 +2321,80 @@ async def test_delegate_timeout_backward_compatible() -> None:
     )
     
     assert "Error: Subagent timeout after 0.3s" in result
+
+
+# Task 9: RetryProvider wrapping tests
+
+async def test_subagent_retry_default_wrap() -> None:
+    """Test that non-wrapped providers are wrapped with RetryProvider by default."""
+    from ecs_agent.providers.openai_provider import OpenAIProvider
+    from ecs_agent.providers.retry_provider import RetryProvider
+
+    world = World()
+    parent_entity = world.create_entity()
+
+    base_provider = OpenAIProvider(api_key="test", base_url="http://test", model="test")
+    config = SubagentConfig(name="test", provider=base_provider, model="test")
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"test": config})
+    )
+
+    system = SubagentSystem()
+    registry = world.get_component(parent_entity, SubagentRegistryComponent)
+    assert registry is not None
+    
+    resolved = system._resolve_subagent_config(registry, "test")
+
+    # Verify provider is now wrapped
+    assert isinstance(resolved.provider, RetryProvider)
+
+
+async def test_subagent_retry_no_double_wrap() -> None:
+    """Test that already-wrapped providers are not double-wrapped."""
+    from ecs_agent.providers.openai_provider import OpenAIProvider
+    from ecs_agent.providers.retry_provider import RetryProvider
+
+    world = World()
+    parent_entity = world.create_entity()
+
+    base_provider = OpenAIProvider(api_key="test", base_url="http://test", model="test")
+    retry_provider = RetryProvider(provider=base_provider, retry_config=RetryConfig())
+
+    config = SubagentConfig(name="test", provider=retry_provider, model="test")
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"test": config})
+    )
+
+    system = SubagentSystem()
+    registry = world.get_component(parent_entity, SubagentRegistryComponent)
+    assert registry is not None
+    
+    resolved = system._resolve_subagent_config(registry, "test")
+
+    # Verify provider is STILL the same RetryProvider (not double-wrapped)
+    assert resolved.provider is retry_provider
+
+
+async def test_subagent_retry_fake_provider_stable() -> None:
+    """Test that FakeProvider remains unwrapped for deterministic tests."""
+    world = World()
+    parent_entity = world.create_entity()
+
+    fake_provider = FakeProvider(responses=[])
+    config = SubagentConfig(name="test", provider=fake_provider, model="fake")
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"test": config})
+    )
+
+    system = SubagentSystem()
+    registry = world.get_component(parent_entity, SubagentRegistryComponent)
+    assert registry is not None
+    
+    resolved = system._resolve_subagent_config(registry, "test")
+
+    # Verify FakeProvider is NOT wrapped
+    assert resolved.provider is fake_provider
+    assert type(resolved.provider).__name__ == "FakeProvider"

@@ -34,10 +34,16 @@ from ecs_agent.types import (
     EntityId,
     InheritancePolicy,
     Message,
+    RetryConfig,
     SubagentConfig,
     SubagentSessionRecord,
     ToolSchema,
 )
+
+# Task 9: Import providers for retry wrapping
+from ecs_agent.providers.fake_provider import FakeProvider
+from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.retry_provider import RetryProvider
 
 logger = get_logger(__name__)
 
@@ -85,6 +91,27 @@ class SubagentSystem:
     def _resolve_timeout(self, per_call_timeout: float | None) -> float | None:
         """Resolve timeout with precedence: per-call > global > None."""
         return per_call_timeout if per_call_timeout is not None else self._default_timeout
+
+    def _wrap_retry_provider_if_needed(self, provider: LLMProvider) -> LLMProvider:
+        """Wrap provider with RetryProvider if not already wrapped.
+
+        Args:
+            provider: LLM provider to wrap
+
+        Returns:
+            RetryProvider-wrapped provider, or original if already wrapped or FakeProvider
+        """
+        # Skip if already wrapped (idempotent)
+        if isinstance(provider, RetryProvider):
+            return provider
+
+        # Skip FakeProvider (deterministic tests)
+        if isinstance(provider, FakeProvider):
+            return provider
+
+        # Wrap with default config
+        return RetryProvider(provider=provider, retry_config=RetryConfig())
+
     def install_subagent_tool(
         self,
         world: World,
@@ -673,7 +700,12 @@ class SubagentSystem:
             raise ValueError(
                 f"Error: Unknown subagent '{subagent_name}'. Available subagents: {list(registry.subagents.keys())}"
             )
-        return config
+        
+        # Task 9: Wrap provider with RetryProvider by default
+        wrapped_provider = self._wrap_retry_provider_if_needed(config.provider)
+        
+        # Return config with wrapped provider (use replace to preserve other fields)
+        return replace(config, provider=wrapped_provider)
 
     def _validate_subagent_params(
         self, category: str, prompt: str, load_skills: list[str]
