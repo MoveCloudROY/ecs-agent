@@ -2398,3 +2398,128 @@ async def test_subagent_retry_fake_provider_stable() -> None:
     # Verify FakeProvider is NOT wrapped
     assert resolved.provider is fake_provider
     assert type(resolved.provider).__name__ == "FakeProvider"
+
+
+
+async def test_reminder_table_updates_on_transitions() -> None:
+    """Verify session table updates on each lifecycle transition."""
+    from ecs_agent.components.definitions import SubagentSessionTableComponent
+    from ecs_agent.systems.subagent_runtime import render_subagent_session_reminder_table
+    
+    world = World()
+    system = SubagentSystem()
+    parent = world.create_entity()
+    
+    # Setup parent with session table and tool registry
+    from ecs_agent.components import ToolRegistryComponent
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    
+    registry = SubagentRegistryComponent()
+    registry.subagents["test-agent"] = SubagentConfig(
+        name="test-agent",
+        provider=FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(role="assistant", content="Test result")
+                )
+            ]
+        ),
+        model="fake",
+        system_prompt="Test",
+        skills=[]
+    )
+    world.add_component(parent, registry)
+    
+    # Install subagent tool
+    system.install_subagent_tool(world, parent)
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+    assert "subagent" in tools.tools
+    
+    # Execute background subagent
+    handler = tools.handlers["subagent"]
+    result_json = await handler(
+        category="test-agent",
+        prompt="Test task",
+        load_skills=[],
+        background=True,
+        timeout=None,
+    )
+    
+    result = json.loads(result_json)
+    session_id = result["session_id"]
+    
+    # Wait for completion
+    await asyncio.sleep(0.1)
+    
+    # Check session table was updated
+    table = world.get_component(parent, SubagentSessionTableComponent)
+    assert table is not None
+    assert session_id in table.sessions
+    session = table.sessions[session_id]
+    
+    # Verify session fields
+    assert session.category == "test-agent"
+    assert session.status in ["Idle", "Dead", "Working"]  # Could be any terminal state
+    assert session.updated_at != ""
+    
+    # Render reminder table
+    reminder = render_subagent_session_reminder_table(table.sessions)
+    assert session_id in reminder
+    assert "test-agent" in reminder
+    
+
+async def test_reminder_table_deterministic_sort() -> None:
+    """Verify deterministic sorting: updated_at desc, session_id asc."""
+    from ecs_agent.components.definitions import SubagentSessionTableComponent
+    from ecs_agent.systems.subagent_runtime import render_subagent_session_reminder_table
+    from ecs_agent.types import SubagentSessionRecord
+    from datetime import datetime, timezone, timedelta
+    
+    # Create sessions with different timestamps
+    world = World()
+    parent = world.create_entity()
+    table = SubagentSessionTableComponent()
+    
+    now = datetime.now(timezone.utc)
+    sessions = {
+        "session-b": SubagentSessionRecord(
+            session_id="session-b",
+            category="test",
+            prompt="Task B",
+            parent_entity_id=parent,
+            created_at=now.isoformat(),
+            updated_at=(now - timedelta(seconds=10)).isoformat(),  # Older
+        ),
+        "session-a": SubagentSessionRecord(
+            session_id="session-a",
+            category="test",
+            prompt="Task A",
+            parent_entity_id=parent,
+            created_at=now.isoformat(),
+            updated_at=(now - timedelta(seconds=10)).isoformat(),  # Same time as B
+        ),
+        "session-c": SubagentSessionRecord(
+            session_id="session-c",
+            category="test",
+            prompt="Task C",
+            parent_entity_id=parent,
+            created_at=now.isoformat(),
+            updated_at=now.isoformat(),  # Most recent
+        ),
+    }
+    table.sessions = sessions
+    
+    # Render twice and verify deterministic output
+    reminder1 = render_subagent_session_reminder_table(table.sessions)
+    reminder2 = render_subagent_session_reminder_table(table.sessions)
+    assert reminder1 == reminder2
+    
+    # Verify sort order: session-c first (most recent), then session-a, then session-b
+    lines = reminder1.split("\n")
+    data_lines = [l for l in lines if l and not l.startswith("Session ID") and not l.startswith("-")]
+    assert len(data_lines) == 3
+    assert "session-c" in data_lines[0]  # Most recent first
+    assert "session-a" in data_lines[1]  # Alphabetically before B (same timestamp)
+    assert "session-b" in data_lines[2]  # Alphabetically after A

@@ -9,10 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
 from ecs_agent.logging import get_logger
 from ecs_agent.types import SubagentLifecycleStatus, SubagentSessionRecord
+
+if TYPE_CHECKING:
+    from ecs_agent.core.world import World
+    from ecs_agent.types import EntityId
 
 logger = get_logger(__name__)
 
@@ -176,3 +180,90 @@ class SubagentRuntimeManager:
                 old_status=old_status,
                 error=error
             )
+
+    async def sync_to_component(
+        self, world: "World", entity_id: "EntityId"
+    ) -> None:
+        """Sync runtime sessions to ECS component table.
+        
+        Copies current runtime session state to the SubagentSessionTableComponent
+        on the specified entity, making session state visible to other systems.
+        
+        Args:
+            world: World instance
+            entity_id: Entity containing SubagentSessionTableComponent
+        """
+        from ecs_agent.components.definitions import SubagentSessionTableComponent
+        from ecs_agent.core.world import World
+        from ecs_agent.types import EntityId
+        
+        async with self._lock:
+            table = world.get_component(entity_id, SubagentSessionTableComponent)
+            if table is None:
+                logger.warning(
+                    "sync_missing_table",
+                    entity_id=entity_id,
+                    message="SubagentSessionTableComponent not found"
+                )
+                return
+            
+            # Deep copy sessions to avoid shared state
+            from dataclasses import replace
+            table.sessions = {
+                sid: replace(metadata) for sid, metadata in self._sessions.items()
+            }
+            
+            from datetime import datetime, timezone
+            logger.info(
+                "sessions_synced_to_component",
+                entity_id=entity_id,
+                session_count=len(table.sessions)
+            )
+
+
+def render_subagent_session_reminder_table(
+    sessions: Dict[str, SubagentSessionRecord]
+) -> str:
+    """Render deterministic reminder table from sessions.
+    
+    Args:
+        sessions: Dictionary of session_id to SubagentSessionRecord
+    
+    Returns:
+        Formatted table string with columns: session_id | category | status | updated_at | last_message
+        
+    Sorting: updated_at desc (most recent first), then session_id asc (deterministic)
+    """
+    if not sessions:
+        return "No active subagent sessions."
+    
+    # Convert ISO timestamps to sortable floats for ordering
+    def iso_to_sortable(iso_str: str) -> float:
+        from datetime import datetime
+        try:
+            return datetime.fromisoformat(iso_str.replace('Z', '+00:00')).timestamp()
+        except Exception:
+            return 0.0
+    
+    # Sort: updated_at desc (negative for reverse), then session_id asc
+    sorted_sessions = sorted(
+        sessions.items(),
+        key=lambda x: (-iso_to_sortable(x[1].updated_at), x[0])
+    )
+    
+    # Build table
+    lines = []
+    lines.append("Session ID       | Category        | Status    | Updated At          | Last Message")
+    lines.append("-" * 95)
+    
+    for session_id, metadata in sorted_sessions:
+        # Truncate last_message to 50 chars
+        last_msg = metadata.result_excerpt or ""
+        if len(last_msg) > 50:
+            last_msg = last_msg[:47] + "..."
+        
+        lines.append(
+            f"{session_id:16} | {metadata.category:15} | {metadata.status:9} | {metadata.updated_at:19} | {last_msg}"
+        )
+    
+    return "\n".join(lines)

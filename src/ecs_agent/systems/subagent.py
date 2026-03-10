@@ -461,6 +461,8 @@ class SubagentSystem:
                     logger.error("subagent_background_timeout", timeout=resolved_timeout, category=category)
                     # Update session to Timeout status
                     await self._runtime_manager.update_timeout(session_id, error_msg)
+                    # Hook: Sync to component after timeout
+                    await self._runtime_manager.sync_to_component(world, parent_entity_id)
                     return
                 
                 metadata.updated_at = (
@@ -473,11 +475,15 @@ class SubagentSystem:
                     metadata.status = "Dead"
                     metadata.error = error
                 await self._runtime_manager.update_status(session_id, metadata.status)
+                # Hook: Sync to component after completion/error
+                await self._runtime_manager.sync_to_component(world, parent_entity_id)
 
             background_task = asyncio.create_task(run_in_background())
             await self._runtime_manager.register_task(
                 session_id, background_task, metadata
             )
+            # Hook: Sync to component after launch
+            await self._runtime_manager.sync_to_component(world, parent_entity_id)
 
             return json.dumps(
                 {
