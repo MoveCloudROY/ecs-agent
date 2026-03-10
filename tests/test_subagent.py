@@ -1,6 +1,7 @@
 """Tests for subagent types and SubagentSystem."""
 
 from __future__ import annotations
+import json
 from typing import Any
 
 import pytest
@@ -1880,7 +1881,7 @@ async def test_validate_subagent_params_rejects_invalid_input(
     """SubagentSystem._validate_subagent_params rejects invalid parameters."""
     world = World()
     system = SubagentSystem()
-    
+
     with pytest.raises(ValueError, match=expected_error):
         system._validate_subagent_params(category, prompt, load_skills)  # type: ignore[arg-type]
 
@@ -1889,7 +1890,7 @@ async def test_validate_subagent_params_accepts_valid_input() -> None:
     """SubagentSystem._validate_subagent_params accepts valid parameters."""
     world = World()
     system = SubagentSystem()
-    
+
     # Should not raise
     system._validate_subagent_params("ultrabrain", "analyze this problem", [])
     system._validate_subagent_params("quick", "fix typo", ["skill1", "skill2"])
@@ -1904,8 +1905,16 @@ async def test_validate_subagent_params_accepts_valid_input() -> None:
         (["skill1"], ["skill2"], ["skill1", "skill2"]),
         (["skill1", "skill2"], ["skill3"], ["skill1", "skill2", "skill3"]),
         (["skill1"], ["skill1"], ["skill1"]),  # Deduplication
-        (["skill1", "skill2"], ["skill2", "skill3"], ["skill1", "skill2", "skill3"]),  # Dedup + order
-        (["skill2", "skill1"], ["skill1", "skill3"], ["skill2", "skill1", "skill3"]),  # Preserve config order
+        (
+            ["skill1", "skill2"],
+            ["skill2", "skill3"],
+            ["skill1", "skill2", "skill3"],
+        ),  # Dedup + order
+        (
+            ["skill2", "skill1"],
+            ["skill1", "skill3"],
+            ["skill2", "skill1", "skill3"],
+        ),  # Preserve config order
     ],
 )
 async def test_normalize_load_skills_merges_and_deduplicates(
@@ -1916,11 +1925,15 @@ async def test_normalize_load_skills_merges_and_deduplicates(
     system = SubagentSystem()
     config = SubagentConfig(
         name="test",
-        provider=FakeProvider(responses=[CompletionResult(message=Message(role="assistant", content="done"))]),
+        provider=FakeProvider(
+            responses=[
+                CompletionResult(message=Message(role="assistant", content="done"))
+            ]
+        ),
         model="fake",
         skills=config_skills,
     )
-    
+
     result = system._normalize_load_skills(config, load_skills)
     assert result == expected
 
@@ -1928,23 +1941,164 @@ async def test_normalize_load_skills_merges_and_deduplicates(
 async def test_category_mapping_exact_match() -> None:
     """SubagentSystem._resolve_subagent_config looks up subagent from registry."""
     system = SubagentSystem()
-    provider = FakeProvider(responses=[CompletionResult(message=Message(role="assistant", content="done"))])
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
     config = SubagentConfig(
         name="ultrabrain",
         provider=provider,
         model="fake",
     )
     registry = SubagentRegistryComponent(subagents={"ultrabrain": config})
-    
+
     resolved = system._resolve_subagent_config(registry, "ultrabrain")
-    
+
     assert resolved.name == "ultrabrain"
     assert resolved.model == "fake"
+
 
 async def test_category_mapping_unknown_category() -> None:
     """SubagentSystem._resolve_subagent_config raises ValueError for unknown subagent."""
     system = SubagentSystem()
     registry = SubagentRegistryComponent(subagents={})
-    
+
     with pytest.raises(ValueError, match="Error: Unknown subagent 'invalid_category'"):
         system._resolve_subagent_config(registry, "invalid_category")
+
+
+async def test_subagent_tool_sync_happy_path() -> None:
+    world = World()
+    parent_entity = world.create_entity()
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
+    config = SubagentConfig(name="quick", provider=provider, model="fake")
+
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"quick": config}),
+    )
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem()
+    system.install_subagent_tool(world, parent_entity)
+
+    async def fake_execute_core(
+        world_arg: World,
+        parent_entity_id: EntityId,
+        subagent_name: str,
+        task: str,
+        correlation_id: str,
+        traceparent: str,
+    ) -> tuple[str, bool, str | None]:
+        assert world_arg is world
+        assert parent_entity_id == parent_entity
+        assert subagent_name == "quick"
+        assert task == "investigate this"
+        assert correlation_id
+        assert traceparent
+        return ("sync-result", True, None)
+
+    system._execute_subagent_core = fake_execute_core  # type: ignore[method-assign]
+
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    handler = tool_registry.handlers["subagent"]
+
+    result = await handler(
+        category="quick",
+        prompt="investigate this",
+        load_skills=[],
+        background=False,
+        timeout=None,
+    )
+
+    assert result == "sync-result"
+
+
+async def test_subagent_tool_background_returns_session_id() -> None:
+    world = World()
+    parent_entity = world.create_entity()
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
+    config = SubagentConfig(name="deep", provider=provider, model="fake")
+
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"deep": config}),
+    )
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem()
+    system.install_subagent_tool(world, parent_entity)
+
+    async def fake_execute_core(
+        world_arg: World,
+        parent_entity_id: EntityId,
+        subagent_name: str,
+        task: str,
+        correlation_id: str,
+        traceparent: str,
+    ) -> tuple[str, bool, str | None]:
+        _ = (
+            world_arg,
+            parent_entity_id,
+            subagent_name,
+            task,
+            correlation_id,
+            traceparent,
+        )
+        return ("async-result", True, None)
+
+    system._execute_subagent_core = fake_execute_core  # type: ignore[method-assign]
+
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    handler = tool_registry.handlers["subagent"]
+
+    result = await handler(
+        category="deep",
+        prompt="run in background",
+        load_skills=["skill-a"],
+        background=True,
+        timeout=300.0,
+    )
+
+    payload = json.loads(result)
+    assert isinstance(payload["session_id"], str)
+    assert payload["session_id"]
+    assert payload["status"] == "Working"
+    assert payload["category"] == "deep"
+    assert payload["timeout"] == 300.0
+
+
+async def test_subagent_tool_validates_parameters() -> None:
+    world = World()
+    parent_entity = world.create_entity()
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
+    config = SubagentConfig(name="quick", provider=provider, model="fake")
+
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"quick": config}),
+    )
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem()
+    system.install_subagent_tool(world, parent_entity)
+
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    handler = tool_registry.handlers["subagent"]
+
+    with pytest.raises(ValueError, match="category cannot be empty"):
+        await handler(
+            category="",
+            prompt="valid",
+            load_skills=[],
+            background=False,
+            timeout=None,
+        )

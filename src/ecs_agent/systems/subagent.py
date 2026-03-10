@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
+from dataclasses import replace
+from datetime import datetime, timezone
 from typing import Any
 
 from ecs_agent.components import (
@@ -22,6 +26,7 @@ from ecs_agent.skills.protocol import Skill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.subagent_runtime import SubagentRuntimeManager
 from ecs_agent.observability import generate_traceparent
 from ecs_agent.types import (
     DelegationCompletedEvent,
@@ -30,6 +35,7 @@ from ecs_agent.types import (
     InheritancePolicy,
     Message,
     SubagentConfig,
+    SubagentSessionRecord,
     ToolSchema,
 )
 
@@ -73,6 +79,64 @@ class SubagentSystem:
 
     def __init__(self, priority: int = -1) -> None:
         self.priority = priority
+        self._runtime_manager = SubagentRuntimeManager()
+
+    def install_subagent_tool(
+        self,
+        world: World,
+        entity_id: EntityId,
+        tool_name: str = "subagent",
+        override: bool = False,
+    ) -> None:
+        registry = world.get_component(entity_id, SubagentRegistryComponent)
+        if registry is None:
+            raise ValueError(f"Entity {entity_id} missing SubagentRegistryComponent")
+
+        tool_registry = world.get_component(entity_id, ToolRegistryComponent)
+        if tool_registry is None:
+            raise ValueError(f"Entity {entity_id} missing ToolRegistryComponent")
+
+        tool_registry.tools[tool_name] = ToolSchema(
+            name=tool_name,
+            description=(
+                "Execute a category-based subagent task either synchronously or in "
+                "background mode."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "Subagent category/name to execute",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Task prompt for the subagent",
+                    },
+                    "load_skills": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Additional skills to merge with category defaults",
+                    },
+                    "background": {
+                        "type": "boolean",
+                        "description": "Run asynchronously and return a session payload",
+                    },
+                    "timeout": {
+                        "type": ["number", "null"],
+                        "description": "Optional timeout in seconds",
+                    },
+                },
+                "required": ["category", "prompt"],
+            },
+        )
+
+        if tool_name in tool_registry.handlers and not override:
+            return
+
+        tool_registry.handlers[tool_name] = self._make_subagent_handler(
+            world, entity_id
+        )
 
     def install_delegate_tool(
         self,
@@ -238,6 +302,104 @@ class SubagentSystem:
 
         return delegate_handler
 
+    def _make_subagent_handler(self, world: World, parent_entity_id: EntityId) -> Any:
+        async def subagent_handler(
+            category: str,
+            prompt: str,
+            load_skills: list[str] | None = None,
+            background: bool = False,
+            timeout: float | None = None,
+        ) -> str:
+            effective_load_skills = [] if load_skills is None else load_skills
+            self._validate_subagent_params(category, prompt, effective_load_skills)
+
+            registry_comp = world.get_component(
+                parent_entity_id, SubagentRegistryComponent
+            )
+            if registry_comp is None:
+                return f"Error: SubagentRegistryComponent not found on entity {parent_entity_id}"
+
+            try:
+                config = self._resolve_subagent_config(registry_comp, category)
+            except ValueError as exc:
+                return str(exc)
+
+            normalized_skills = self._normalize_load_skills(
+                config, effective_load_skills
+            )
+            effective_config = (
+                config
+                if normalized_skills == config.skills
+                else replace(config, skills=normalized_skills)
+            )
+
+            correlation_id = str(uuid.uuid4())
+            traceparent = generate_traceparent()
+
+            async def execute_with_effective_skills() -> tuple[str, bool, str | None]:
+                original_config = registry_comp.subagents[category]
+                registry_comp.subagents[category] = effective_config
+                try:
+                    return await self._execute_subagent_core(
+                        world,
+                        parent_entity_id,
+                        category,
+                        prompt,
+                        correlation_id,
+                        traceparent,
+                    )
+                finally:
+                    registry_comp.subagents[category] = original_config
+
+            if not background:
+                result, _, _ = await execute_with_effective_skills()
+                return result
+
+            session_id = self._runtime_manager.create_session()
+            now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            metadata = SubagentSessionRecord(
+                session_id=session_id,
+                category=category,
+                prompt=prompt,
+                parent_entity_id=parent_entity_id,
+                created_at=now_iso,
+                updated_at=now_iso,
+                load_skills=normalized_skills,
+                background=True,
+                status="Working",
+                correlation_id=correlation_id,
+                traceparent=traceparent,
+                timeout_seconds=timeout,
+            )
+
+            async def run_in_background() -> None:
+                result, success, error = await execute_with_effective_skills()
+                metadata.updated_at = (
+                    datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                )
+                if success:
+                    metadata.status = "Idle"
+                    metadata.result_excerpt = result[:200]
+                else:
+                    metadata.status = "Dead"
+                    metadata.error = error
+                await self._runtime_manager.update_status(session_id, metadata.status)
+
+            background_task = asyncio.create_task(run_in_background())
+            await self._runtime_manager.register_task(
+                session_id, background_task, metadata
+            )
+
+            return json.dumps(
+                {
+                    "session_id": session_id,
+                    "status": "Working",
+                    "category": category,
+                    "timeout": timeout,
+                }
+            )
+
+        return subagent_handler
 
     async def _execute_subagent_core(
         self,
@@ -265,9 +427,7 @@ class SubagentSystem:
             - error: Error message if failed, None otherwise
         """
         # Get registry component
-        registry_comp = world.get_component(
-            parent_entity_id, SubagentRegistryComponent
-        )
+        registry_comp = world.get_component(parent_entity_id, SubagentRegistryComponent)
         if registry_comp is None:
             error_msg = f"Error: SubagentRegistryComponent not found on entity {parent_entity_id}"
             logger.error("delegation_failed", reason=error_msg)
@@ -327,9 +487,7 @@ class SubagentSystem:
 
             world.add_component(
                 child_entity_id,
-                ConversationComponent(
-                    messages=[Message(role="user", content=task)]
-                ),
+                ConversationComponent(messages=[Message(role="user", content=task)]),
             )
 
             world.add_component(
@@ -498,7 +656,6 @@ class SubagentSystem:
                 seen.add(skill)
                 result.append(skill)
         return result
-
 
     def _assemble_child_world(
         self,
