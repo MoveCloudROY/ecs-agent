@@ -1,69 +1,47 @@
-"""Runtime session manager for subagent background execution."""
+"""Runtime session manager for async subagent handles.
+
+This module provides in-memory management of async task handles and lifecycle
+state transitions for background subagent sessions. It keeps asyncio.Task
+handles separate from serializable ECS components.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import uuid
-from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
-from enum import Enum
-from typing import Any
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
-from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
-from ecs_agent.types import EntityId
+from ecs_agent.types import SubagentLifecycleStatus, SubagentSessionRecord
+
+if TYPE_CHECKING:
+    from ecs_agent.core.world import World
+    from ecs_agent.types import EntityId
 
 logger = get_logger(__name__)
 
 
-class SubagentLifecycleStatus(str, Enum):
-    """Lifecycle status for delegated subagent sessions."""
+class SubagentRuntimeManager:
+    """Manages async task handles and lifecycle transitions for subagent sessions.
 
-    IDLE = "Idle"
-    WORKING = "Working"
-    DEAD = "Dead"
-    TIMEOUT = "Timeout"
-    CANCELLED = "Cancelled"
+    This manager maintains the runtime state (asyncio.Task handles) separately from
+    the serializable metadata (SubagentSessionRecord in SubagentSessionTableComponent).
 
+    Thread-safe for concurrent access via asyncio.Lock.
+    """
 
-@dataclass(slots=True)
-class SubagentSessionRecord:
-    """Persistent metadata for one runtime subagent session."""
-
-    session_id: str
-    parent_entity_id: EntityId
-    child_entity_id: EntityId | None
-    subagent_name: str
-    task: str
-    status: SubagentLifecycleStatus
-    created_at: str
-    updated_at: str
-    deadline_at: str | None
-    correlation_id: str
-    traceparent: str
-    timeout_seconds: float | None = None
-    result: str | None = None
-    error: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class SubagentSessionTableComponent:
-    """Serializable table of active and historical subagent sessions."""
-
-    sessions: dict[str, SubagentSessionRecord] = field(default_factory=dict)
-
-
-class SubagentRuntimeSessionManager:
-    """Concurrency-safe runtime manager for async subagent task handles."""
-
-    def __init__(self, world: World, table_entity_id: EntityId | None = None) -> None:
-        self._world = world
+    def __init__(self) -> None:
+        """Initialize the runtime manager with empty state."""
+        self._sessions: Dict[str, SubagentSessionRecord] = {}
+        self._tasks: Dict[str, asyncio.Task[Any]] = {}
         self._lock = asyncio.Lock()
-        self._table_entity_id = table_entity_id
-        self._task_handles: dict[str, asyncio.Task[Any]] = {}
 
     def create_session(self) -> str:
+        """Generate a unique session ID.
+
+        Returns:
+            A 16-character hexadecimal session ID.
+        """
         return uuid.uuid4().hex[:16]
 
     async def register_task(
@@ -72,129 +50,232 @@ class SubagentRuntimeSessionManager:
         task: asyncio.Task[Any],
         metadata: SubagentSessionRecord,
     ) -> None:
+        """Register an async task with its session metadata.
+
+        Args:
+            session_id: Unique session identifier
+            task: The asyncio.Task handle for the background execution
+            metadata: Serializable session metadata
+        """
         async with self._lock:
-            table = self._get_or_create_table_component()
-            normalized = replace(
-                metadata,
+            self._sessions[session_id] = metadata
+            self._tasks[session_id] = task
+            logger.info(
+                "session_registered",
                 session_id=session_id,
-                updated_at=self._now_iso(),
+                category=metadata.category,
+                status=metadata.status,
             )
-            table.sessions[session_id] = normalized
-            self._task_handles[session_id] = task
+
+    async def get_session(self, session_id: str) -> Optional[SubagentSessionRecord]:
+        """Retrieve session metadata by ID.
+
+        Args:
+            session_id: Session identifier to query
+
+        Returns:
+            SubagentSessionRecord if found, None otherwise
+        """
+        async with self._lock:
+            return self._sessions.get(session_id)
 
     async def update_status(
         self,
         session_id: str,
         status: SubagentLifecycleStatus,
     ) -> None:
+        """Update the lifecycle status of a session.
+
+        Args:
+            session_id: Session identifier
+            status: New lifecycle status
+
+        Raises:
+            ValueError: If session not found
+        """
         async with self._lock:
-            table = self._get_or_create_table_component()
-            existing = table.sessions.get(session_id)
-            if existing is None:
-                raise KeyError(f"Unknown session_id: {session_id}")
+            metadata = self._sessions.get(session_id)
+            if metadata is None:
+                raise ValueError(f"Session not found: {session_id}")
 
-            if not self._is_valid_transition(existing.status, status):
-                raise ValueError(
-                    f"Invalid lifecycle transition {existing.status.value} -> {status.value}"
-                )
+            old_status = metadata.status
+            metadata.status = status
 
-            table.sessions[session_id] = replace(
-                existing,
-                status=status,
-                updated_at=self._now_iso(),
+            logger.info(
+                "session_status_updated",
+                session_id=session_id,
+                old_status=old_status,
+                new_status=status,
             )
 
     async def cancel_session(self, session_id: str) -> None:
-        task: asyncio.Task[Any] | None
+        """Cancel a running session and mark it as Cancelled.
+
+        Args:
+            session_id: Session identifier to cancel
+        """
         async with self._lock:
-            table = self._get_or_create_table_component()
-            existing = table.sessions.get(session_id)
-            if existing is None:
-                return
+            task = self._tasks.get(session_id)
+            if task and not task.done():
+                task.cancel()
+                logger.info("session_task_cancelled", session_id=session_id)
 
-            table.sessions[session_id] = replace(
-                existing,
-                status=SubagentLifecycleStatus.CANCELLED,
-                updated_at=self._now_iso(),
-            )
-            task = self._task_handles.pop(session_id, None)
-
-        if task is not None and not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                logger.debug("subagent_runtime_task_cancelled", session_id=session_id)
-
-    async def get_session(self, session_id: str) -> SubagentSessionRecord | None:
-        async with self._lock:
-            table = self._get_or_create_table_component()
-            record = table.sessions.get(session_id)
-            if record is None:
-                return None
-            return replace(record)
+            metadata = self._sessions.get(session_id)
+            if metadata:
+                metadata.status = "Cancelled"
+                logger.info("session_status_cancelled", session_id=session_id)
 
     async def cleanup(self, session_id: str) -> None:
+        """Remove a completed or cancelled session from the runtime map.
+
+        Args:
+            session_id: Session identifier to clean up
+        """
         async with self._lock:
-            table = self._get_or_create_table_component()
-            table.sessions.pop(session_id, None)
-            self._task_handles.pop(session_id, None)
+            if session_id in self._tasks:
+                del self._tasks[session_id]
+            if session_id in self._sessions:
+                del self._sessions[session_id]
 
-    def _get_or_create_table_component(self) -> SubagentSessionTableComponent:
-        if self._table_entity_id is not None:
-            existing = self._world.get_component(
-                self._table_entity_id,
-                SubagentSessionTableComponent,
+            logger.info("session_cleaned_up", session_id=session_id)
+
+    async def get_all_sessions(self) -> Dict[str, SubagentSessionRecord]:
+        """Get all active session metadata.
+
+        Returns:
+            Dictionary mapping session_id to SubagentSessionRecord
+        """
+        async with self._lock:
+            return dict(self._sessions)
+
+    async def get_task(self, session_id: str) -> Optional[asyncio.Task[Any]]:
+        """Retrieve the asyncio.Task for a session.
+        
+        Args:
+            session_id: Session identifier
+        
+        Returns:
+            asyncio.Task if found and still tracked, None otherwise
+        """
+        async with self._lock:
+            return self._tasks.get(session_id)
+
+    async def update_timeout(self, session_id: str, error: str) -> None:
+        """Update session to Timeout status with error message.
+        
+        Args:
+            session_id: Session identifier
+            error: Timeout error message
+        """
+        async with self._lock:
+            metadata = self._sessions.get(session_id)
+            if metadata is None:
+                # Missing session is a no-op (safe async behavior)
+                logger.warning("timeout_update_missing_session", session_id=session_id)
+                return
+            
+            # Validate transition to Timeout
+            from ecs_agent.types import validate_subagent_lifecycle_transition
+            validate_subagent_lifecycle_transition(metadata.status, "Timeout")
+            
+            # Update status and error
+            old_status = metadata.status
+            metadata.status = "Timeout"
+            metadata.error = error
+            
+            from datetime import datetime, timezone
+            metadata.updated_at = datetime.now(timezone.utc).isoformat()
+            
+            logger.info(
+                "session_timeout_updated",
+                session_id=session_id,
+                old_status=old_status,
+                error=error
             )
-            if existing is not None:
-                assert isinstance(existing, SubagentSessionTableComponent)
-                return existing
 
-        session_table_entities = list(self._world.query(SubagentSessionTableComponent))
-        if session_table_entities:
-            entity_id, (table,) = session_table_entities[0]
-            assert isinstance(table, SubagentSessionTableComponent)
-            self._table_entity_id = entity_id
-            return table
-
-        entity_id = self._world.create_entity()
-        table = SubagentSessionTableComponent()
-        self._world.add_component(entity_id, table)
-        self._table_entity_id = entity_id
-        return table
-
-    def _is_valid_transition(
-        self,
-        current: SubagentLifecycleStatus,
-        next_status: SubagentLifecycleStatus,
-    ) -> bool:
-        if current in {
-            SubagentLifecycleStatus.DEAD,
-            SubagentLifecycleStatus.TIMEOUT,
-            SubagentLifecycleStatus.CANCELLED,
-        }:
-            return False
-
-        if current is SubagentLifecycleStatus.IDLE:
-            return next_status is SubagentLifecycleStatus.WORKING
-
-        if current is SubagentLifecycleStatus.WORKING:
-            return next_status in {
-                SubagentLifecycleStatus.IDLE,
-                SubagentLifecycleStatus.DEAD,
-                SubagentLifecycleStatus.TIMEOUT,
-                SubagentLifecycleStatus.CANCELLED,
+    async def sync_to_component(
+        self, world: "World", entity_id: "EntityId"
+    ) -> None:
+        """Sync runtime sessions to ECS component table.
+        
+        Copies current runtime session state to the SubagentSessionTableComponent
+        on the specified entity, making session state visible to other systems.
+        
+        Args:
+            world: World instance
+            entity_id: Entity containing SubagentSessionTableComponent
+        """
+        from ecs_agent.components.definitions import SubagentSessionTableComponent
+        from ecs_agent.core.world import World
+        from ecs_agent.types import EntityId
+        
+        async with self._lock:
+            table = world.get_component(entity_id, SubagentSessionTableComponent)
+            if table is None:
+                logger.warning(
+                    "sync_missing_table",
+                    entity_id=entity_id,
+                    message="SubagentSessionTableComponent not found"
+                )
+                return
+            
+            # Deep copy sessions to avoid shared state
+            from dataclasses import replace
+            table.sessions = {
+                sid: replace(metadata) for sid, metadata in self._sessions.items()
             }
+            
+            from datetime import datetime, timezone
+            logger.info(
+                "sessions_synced_to_component",
+                entity_id=entity_id,
+                session_count=len(table.sessions)
+            )
 
-        return False
 
-    def _now_iso(self) -> str:
-        return datetime.now(timezone.utc).isoformat()
-
-
-__all__ = [
-    "SubagentLifecycleStatus",
-    "SubagentRuntimeSessionManager",
-    "SubagentSessionRecord",
-    "SubagentSessionTableComponent",
-]
+def render_subagent_session_reminder_table(
+    sessions: Dict[str, SubagentSessionRecord]
+) -> str:
+    """Render deterministic reminder table from sessions.
+    
+    Args:
+        sessions: Dictionary of session_id to SubagentSessionRecord
+    
+    Returns:
+        Formatted table string with columns: session_id | category | status | updated_at | last_message
+        
+    Sorting: updated_at desc (most recent first), then session_id asc (deterministic)
+    """
+    if not sessions:
+        return "No active subagent sessions."
+    
+    # Convert ISO timestamps to sortable floats for ordering
+    def iso_to_sortable(iso_str: str) -> float:
+        from datetime import datetime
+        try:
+            return datetime.fromisoformat(iso_str.replace('Z', '+00:00')).timestamp()
+        except Exception:
+            return 0.0
+    
+    # Sort: updated_at desc (negative for reverse), then session_id asc
+    sorted_sessions = sorted(
+        sessions.items(),
+        key=lambda x: (-iso_to_sortable(x[1].updated_at), x[0])
+    )
+    
+    # Build table
+    lines = []
+    lines.append("Session ID       | Category        | Status    | Updated At          | Last Message")
+    lines.append("-" * 95)
+    
+    for session_id, metadata in sorted_sessions:
+        # Truncate last_message to 50 chars
+        last_msg = metadata.result_excerpt or ""
+        if len(last_msg) > 50:
+            last_msg = last_msg[:47] + "..."
+        
+        lines.append(
+            f"{session_id:16} | {metadata.category:15} | {metadata.status:9} | {metadata.updated_at:19} | {last_msg}"
+        )
+    
+    return "\n".join(lines)

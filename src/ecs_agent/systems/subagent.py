@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
+from dataclasses import replace
+from datetime import datetime, timezone
 from typing import Any
 
 from ecs_agent.components import (
@@ -22,6 +26,7 @@ from ecs_agent.skills.protocol import Skill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.subagent_runtime import SubagentRuntimeManager
 from ecs_agent.observability import generate_traceparent
 from ecs_agent.types import (
     DelegationCompletedEvent,
@@ -29,9 +34,16 @@ from ecs_agent.types import (
     EntityId,
     InheritancePolicy,
     Message,
+    RetryConfig,
     SubagentConfig,
+    SubagentSessionRecord,
     ToolSchema,
 )
+
+# Task 9: Import providers for retry wrapping
+from ecs_agent.providers.fake_provider import FakeProvider
+from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.retry_provider import RetryProvider
 
 logger = get_logger(__name__)
 
@@ -71,8 +83,91 @@ class SubagentSystem:
     4. Publishes delegation events to the event bus
     """
 
-    def __init__(self, priority: int = -1) -> None:
+    def __init__(self, priority: int = -1, default_timeout: float | None = None) -> None:
         self.priority = priority
+        self._runtime_manager = SubagentRuntimeManager()
+        self._default_timeout = default_timeout
+
+    def _resolve_timeout(self, per_call_timeout: float | None) -> float | None:
+        """Resolve timeout with precedence: per-call > global > None."""
+        return per_call_timeout if per_call_timeout is not None else self._default_timeout
+
+    def _wrap_retry_provider_if_needed(self, provider: LLMProvider) -> LLMProvider:
+        """Wrap provider with RetryProvider if not already wrapped.
+
+        Args:
+            provider: LLM provider to wrap
+
+        Returns:
+            RetryProvider-wrapped provider, or original if already wrapped or FakeProvider
+        """
+        # Skip if already wrapped (idempotent)
+        if isinstance(provider, RetryProvider):
+            return provider
+
+        # Skip FakeProvider (deterministic tests)
+        if isinstance(provider, FakeProvider):
+            return provider
+
+        # Wrap with default config
+        return RetryProvider(provider=provider, retry_config=RetryConfig())
+
+    def install_subagent_tool(
+        self,
+        world: World,
+        entity_id: EntityId,
+        tool_name: str = "subagent",
+        override: bool = False,
+    ) -> None:
+        registry = world.get_component(entity_id, SubagentRegistryComponent)
+        if registry is None:
+            raise ValueError(f"Entity {entity_id} missing SubagentRegistryComponent")
+
+        tool_registry = world.get_component(entity_id, ToolRegistryComponent)
+        if tool_registry is None:
+            raise ValueError(f"Entity {entity_id} missing ToolRegistryComponent")
+
+        tool_registry.tools[tool_name] = ToolSchema(
+            name=tool_name,
+            description=(
+                "Execute a category-based subagent task either synchronously or in "
+                "background mode."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "Subagent category/name to execute",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Task prompt for the subagent",
+                    },
+                    "load_skills": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Additional skills to merge with category defaults",
+                    },
+                    "background": {
+                        "type": "boolean",
+                        "description": "Run asynchronously and return a session payload",
+                    },
+                    "timeout": {
+                        "type": ["number", "null"],
+                        "description": "Optional timeout in seconds",
+                    },
+                },
+                "required": ["category", "prompt"],
+            },
+        )
+
+        if tool_name in tool_registry.handlers and not override:
+            return
+
+        tool_registry.handlers[tool_name] = self._make_subagent_handler(
+            world, entity_id
+        )
 
     def install_delegate_tool(
         self,
@@ -142,6 +237,219 @@ class SubagentSystem:
                 entity_id=entity_id,
                 available_subagents=list(registry_comp.subagents.keys()),
             )
+
+    def install_subagent_control_tools(
+        self,
+        world: World,
+        entity_id: EntityId,
+    ) -> None:
+        """Install all three subagent control tools: status, result, cancel."""
+        from ecs_agent.components.definitions import SubagentSessionTableComponent
+        
+        table = world.get_component(entity_id, SubagentSessionTableComponent)
+        if table is None:
+            raise ValueError(f"Entity {entity_id} missing SubagentSessionTableComponent")
+        
+        tool_registry = world.get_component(entity_id, ToolRegistryComponent)
+        if tool_registry is None:
+            raise ValueError(f"Entity {entity_id} missing ToolRegistryComponent")
+        
+        # Install subagent_status tool
+        tool_registry.tools["subagent_status"] = ToolSchema(
+            name="subagent_status",
+            description="Query subagent session status - returns summary table or single session details",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": ["string", "null"],
+                        "description": "Optional session ID - if None, returns summary table of all sessions",
+                    }
+                },
+                "required": [],
+            },
+        )
+        tool_registry.handlers["subagent_status"] = self._make_status_handler(world, entity_id)
+        
+        # Install subagent_result tool
+        tool_registry.tools["subagent_result"] = ToolSchema(
+            name="subagent_result",
+            description="Await and retrieve result from a background subagent session",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID to retrieve result from",
+                    },
+                    "timeout": {
+                        "type": ["number", "null"],
+                        "description": "Optional timeout in seconds (default: wait indefinitely)",
+                    },
+                },
+                "required": ["session_id"],
+            },
+        )
+        tool_registry.handlers["subagent_result"] = self._make_result_handler(world, entity_id)
+        
+        # Install subagent_cancel tool
+        tool_registry.tools["subagent_cancel"] = ToolSchema(
+            name="subagent_cancel",
+            description="Cancel a running background subagent session",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID to cancel",
+                    }
+                },
+                "required": ["session_id"],
+            },
+        )
+        tool_registry.handlers["subagent_cancel"] = self._make_cancel_handler(world, entity_id)
+        
+        logger.info("subagent_control_tools_installed", entity_id=entity_id)
+
+    def _make_status_handler(self, world: World, parent_entity_id: EntityId) -> Any:
+        """Create handler for subagent_status tool."""
+        
+        async def status_handler(session_id: str | None = None) -> str:
+            from ecs_agent.components.definitions import SubagentSessionTableComponent
+            from ecs_agent.systems.subagent_runtime import render_subagent_session_reminder_table
+            
+            table = world.get_component(parent_entity_id, SubagentSessionTableComponent)
+            if table is None:
+                return json.dumps({"error": "SubagentSessionTableComponent not found"})
+            
+            if session_id is None:
+                table_text = render_subagent_session_reminder_table(table.sessions)
+                return json.dumps({
+                    "status": "ok",
+                    "session_count": len(table.sessions),
+                    "summary_table": table_text
+                })
+            
+            session = table.sessions.get(session_id)
+            if session is None:
+                return json.dumps({
+                    "error": f"Session not found: {session_id}",
+                    "session_id": session_id
+                })
+            
+            return json.dumps({
+                "status": "ok",
+                "session_id": session.session_id,
+                "category": session.category,
+                "lifecycle_status": session.status,
+                "created_at": session.created_at,
+                "updated_at": session.updated_at,
+                "result_excerpt": session.result_excerpt,
+                "error": session.error,
+            })
+        
+        return status_handler
+
+    def _make_result_handler(self, world: World, parent_entity_id: EntityId) -> Any:
+        """Create handler for subagent_result tool."""
+        
+        async def result_handler(session_id: str, timeout: float | None = None) -> str:
+            session = await self._runtime_manager.get_session(session_id)
+            if session is None:
+                return json.dumps({
+                    "error": f"Session not found: {session_id}",
+                    "session_id": session_id
+                })
+            
+            if session.status in ("Dead", "Timeout", "Cancelled"):
+                return json.dumps({
+                    "status": "terminal",
+                    "session_id": session_id,
+                    "lifecycle_status": session.status,
+                    "result_excerpt": session.result_excerpt,
+                    "error": session.error,
+                })
+            
+            if session.status == "Idle":
+                return json.dumps({
+                    "status": "success",
+                    "session_id": session_id,
+                    "lifecycle_status": session.status,
+                    "result_excerpt": session.result_excerpt,
+                })
+            
+            task = await self._runtime_manager.get_task(session_id)
+            if task is None:
+                return json.dumps({
+                    "error": f"Task handle not found for session: {session_id}",
+                    "session_id": session_id
+                })
+            
+            try:
+                if timeout is not None:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+                else:
+                    await asyncio.shield(task)
+                
+                session = await self._runtime_manager.get_session(session_id)
+                if session is None:
+                    return json.dumps({
+                        "error": f"Session disappeared after await: {session_id}",
+                        "session_id": session_id
+                    })
+                
+                return json.dumps({
+                    "status": "completed",
+                    "session_id": session_id,
+                    "lifecycle_status": session.status,
+                    "result_excerpt": session.result_excerpt,
+                    "error": session.error,
+                })
+                
+            except asyncio.TimeoutError:
+                return json.dumps({
+                    "error": f"Timeout waiting for session result after {timeout}s",
+                    "session_id": session_id,
+                    "timeout": timeout
+                })
+            except asyncio.CancelledError:
+                return json.dumps({
+                    "error": f"Session was cancelled: {session_id}",
+                    "session_id": session_id
+                })
+        
+        return result_handler
+
+    def _make_cancel_handler(self, world: World, parent_entity_id: EntityId) -> Any:
+        """Create handler for subagent_cancel tool."""
+        
+        async def cancel_handler(session_id: str) -> str:
+            session = await self._runtime_manager.get_session(session_id)
+            if session is None:
+                return json.dumps({
+                    "error": f"Session not found: {session_id}",
+                    "session_id": session_id
+                })
+            
+            if session.status in ("Dead", "Timeout", "Cancelled"):
+                return json.dumps({
+                    "error": f"Session already terminal: {session.status}",
+                    "session_id": session_id,
+                    "lifecycle_status": session.status
+                })
+            
+            await self._runtime_manager.cancel_session(session_id)
+            await self._runtime_manager.sync_to_component(world, parent_entity_id)
+            
+            session = await self._runtime_manager.get_session(session_id)
+            
+            return json.dumps({
+                "status": "cancelled",
+                "session_id": session_id,
+                "lifecycle_status": session.status if session else "Cancelled"
+            })
+        
+        return cancel_handler
 
     def _build_delegate_tool_schema(self, subagent_names: list[str]) -> dict[str, Any]:
         """Build OpenAI-style function schema for the delegate tool."""
@@ -224,182 +532,381 @@ class SubagentSystem:
                 task=task,
             )
 
+            # Resolve timeout and call shared execution core with timeout wrapping
+            resolved_timeout = self._resolve_timeout(None)  # delegate uses global default only
+            
+            try:
+                if resolved_timeout is not None:
+                    result, success, error = await asyncio.wait_for(
+                        self._execute_subagent_core(
+                            world,
+                            parent_entity_id,
+                            subagent_name,
+                            task,
+                            correlation_id,
+                            traceparent,
+                        ),
+                        timeout=resolved_timeout
+                    )
+                else:
+                    result, success, error = await self._execute_subagent_core(
+                        world,
+                        parent_entity_id,
+                        subagent_name,
+                        task,
+                        correlation_id,
+                        traceparent,
+                    )
+            except asyncio.TimeoutError:
+                error_msg = f"Error: Subagent timeout after {resolved_timeout}s"
+                logger.error("delegation_timeout", timeout=resolved_timeout, subagent=subagent_name)
+                # Emit completion event with error
+                await world.event_bus.publish(
+                    DelegationCompletedEvent(
+                        entity_id=parent_entity_id,
+                        subagent_name=subagent_name,
+                        success=False,
+                        result=error_msg,
+                        correlation_id=correlation_id,
+                        traceparent=traceparent,
+                    )
+                )
+                result = error_msg
+
+            return result
+
+        return delegate_handler
+
+    def _make_subagent_handler(self, world: World, parent_entity_id: EntityId) -> Any:
+        async def subagent_handler(
+            category: str,
+            prompt: str,
+            load_skills: list[str] | None = None,
+            background: bool = False,
+            timeout: float | None = None,
+        ) -> str:
+            effective_load_skills = [] if load_skills is None else load_skills
+            self._validate_subagent_params(category, prompt, effective_load_skills)
+
             registry_comp = world.get_component(
                 parent_entity_id, SubagentRegistryComponent
             )
             if registry_comp is None:
-                error_msg = f"Error: SubagentRegistryComponent not found on entity {parent_entity_id}"
-                logger.error("delegation_failed", reason=error_msg)
-                await self._publish_delegation_events(
-                    world,
-                    parent_entity_id,
-                    subagent_name,
-                    correlation_id=correlation_id,
-                    traceparent=traceparent,
-                    result=error_msg,
-                    success=False,
-                    error=error_msg,
-                )
-                return error_msg
+                return f"Error: SubagentRegistryComponent not found on entity {parent_entity_id}"
 
             try:
-                config = self._resolve_subagent_config(registry_comp, subagent_name)
+                config = self._resolve_subagent_config(registry_comp, category)
             except ValueError as exc:
-                error_msg = str(exc)
-                logger.error(
-                    "delegation_failed",
-                    reason="unknown_subagent",
-                    subagent_name=subagent_name,
-                    available=list(registry_comp.subagents.keys()),
-                )
-                await self._publish_delegation_events(
-                    world,
-                    parent_entity_id,
-                    subagent_name,
-                    correlation_id=correlation_id,
-                    traceparent=traceparent,
-                    result=error_msg,
-                    success=False,
-                    error=error_msg,
-                )
-                return error_msg
+                return str(exc)
 
-            try:
-                child_entity_id = world.create_entity()
-                logger.info(
-                    "child_entity_created",
-                    parent_entity=parent_entity_id,
-                    child_entity=child_entity_id,
-                    subagent_name=subagent_name,
-                )
+            normalized_skills = self._normalize_load_skills(
+                config, effective_load_skills
+            )
+            effective_config = (
+                config
+                if normalized_skills == config.skills
+                else replace(config, skills=normalized_skills)
+            )
 
-                world.add_component(
-                    child_entity_id,
-                    LLMComponent(
-                        provider=config.provider,
-                        model=config.model,
-                        system_prompt=config.system_prompt,
-                    ),
-                )
+            correlation_id = str(uuid.uuid4())
+            traceparent = generate_traceparent()
 
-                world.add_component(
-                    child_entity_id,
-                    ConversationComponent(
-                        messages=[Message(role="user", content=task)]
-                    ),
-                )
+            # Resolve timeout for this subagent execution
+            resolved_timeout = self._resolve_timeout(timeout)
 
-                world.add_component(
-                    child_entity_id, OwnerComponent(owner_id=parent_entity_id)
-                )
+            async def execute_with_effective_skills() -> tuple[str, bool, str | None]:
+                original_config = registry_comp.subagents[category]
+                registry_comp.subagents[category] = effective_config
+                try:
+                    return await self._execute_subagent_core(
+                        world,
+                        parent_entity_id,
+                        category,
+                        prompt,
+                        correlation_id,
+                        traceparent,
+                    )
+                finally:
+                    registry_comp.subagents[category] = original_config
 
-                child_world, child_world_entity_id = self._assemble_child_world(
-                    world,
-                    parent_entity_id,
-                    config,
-                    parent_child_entity=child_entity_id,
-                )
-                result = await self._execute_delegation(
-                    child_world,
-                    child_world_entity_id,
-                    task,
-                    config,
-                )
-
-                child_conv = child_world.get_component(
-                    child_world_entity_id,
-                    ConversationComponent,
-                )
-                parent_child_conv = world.get_component(
-                    child_entity_id,
-                    ConversationComponent,
-                )
-                if child_conv is not None and parent_child_conv is not None:
-                    parent_child_conv.messages = list(child_conv.messages)
-
-                logger.info(
-                    "delegation_completed",
-                    parent_entity=parent_entity_id,
-                    child_entity=child_entity_id,
-                    subagent_name=subagent_name,
-                    result_length=len(result),
-                )
-
-                await self._publish_delegation_events(
-                    world,
-                    parent_entity_id,
-                    subagent_name,
-                    correlation_id=correlation_id,
-                    traceparent=traceparent,
-                    result=result,
-                    success=True,
-                    error=None,
-                )
-
+            if not background:
+                # Sync mode: wrap with timeout
+                try:
+                    if resolved_timeout is not None:
+                        result, _, _ = await asyncio.wait_for(
+                            execute_with_effective_skills(), timeout=resolved_timeout
+                        )
+                    else:
+                        result, _, _ = await execute_with_effective_skills()
+                except asyncio.TimeoutError:
+                    error_msg = f"Error: Subagent timeout after {resolved_timeout}s"
+                    logger.error("subagent_timeout", timeout=resolved_timeout, category=category)
+                    result = error_msg
                 return result
 
-            except TimeoutError as exc:
-                error_msg = "Error: Subagent timeout"
-                logger.error(
-                    "delegation_timeout",
-                    parent_entity=parent_entity_id,
-                    subagent_name=subagent_name,
-                    correlation_id=correlation_id,
-                    exception=str(exc),
-                )
-                await self._publish_delegation_events(
-                    world,
-                    parent_entity_id,
-                    subagent_name,
-                    correlation_id=correlation_id,
-                    traceparent=traceparent,
-                    result=error_msg,
-                    success=False,
-                    error=error_msg,
-                )
-                return error_msg
+            session_id = self._runtime_manager.create_session()
+            now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            metadata = SubagentSessionRecord(
+                session_id=session_id,
+                category=category,
+                prompt=prompt,
+                parent_entity_id=parent_entity_id,
+                created_at=now_iso,
+                updated_at=now_iso,
+                load_skills=normalized_skills,
+                background=True,
+                status="Working",
+                correlation_id=correlation_id,
+                traceparent=traceparent,
+                timeout_seconds=timeout,
+            )
 
-            except ValueError as exc:
-                error_msg = str(exc)
-                logger.error(
-                    "delegation_exception",
-                    parent_entity=parent_entity_id,
-                    subagent_name=subagent_name,
-                    exception=error_msg,
+            async def run_in_background() -> None:
+                try:
+                    if resolved_timeout is not None:
+                        result, success, error = await asyncio.wait_for(
+                            execute_with_effective_skills(), timeout=resolved_timeout
+                        )
+                    else:
+                        result, success, error = await execute_with_effective_skills()
+                except asyncio.TimeoutError:
+                    error_msg = f"Error: Subagent timeout after {resolved_timeout}s"
+                    logger.error("subagent_background_timeout", timeout=resolved_timeout, category=category)
+                    # Update session to Timeout status
+                    await self._runtime_manager.update_timeout(session_id, error_msg)
+                    # Hook: Sync to component after timeout
+                    await self._runtime_manager.sync_to_component(world, parent_entity_id)
+                    return
+                
+                metadata.updated_at = (
+                    datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                 )
-                await self._publish_delegation_events(
-                    world,
-                    parent_entity_id,
-                    subagent_name,
-                    correlation_id=correlation_id,
-                    traceparent=traceparent,
-                    result=error_msg,
-                    success=False,
-                    error=error_msg,
-                )
-                raise
+                if success:
+                    metadata.status = "Idle"
+                    metadata.result_excerpt = result[:200]
+                else:
+                    metadata.status = "Dead"
+                    metadata.error = error
+                await self._runtime_manager.update_status(session_id, metadata.status)
+                # Hook: Sync to component after completion/error
+                await self._runtime_manager.sync_to_component(world, parent_entity_id)
 
-            except Exception as exc:
-                error_msg = f"Error during delegation: {exc}"
-                logger.error(
-                    "delegation_exception",
-                    parent_entity=parent_entity_id,
-                    subagent_name=subagent_name,
-                    exception=str(exc),
-                )
-                await self._publish_delegation_events(
-                    world,
-                    parent_entity_id,
-                    subagent_name,
-                    correlation_id=correlation_id,
-                    traceparent=traceparent,
-                    result=error_msg,
-                    success=False,
-                    error=error_msg,
-                )
-                return error_msg
+            background_task = asyncio.create_task(run_in_background())
+            await self._runtime_manager.register_task(
+                session_id, background_task, metadata
+            )
+            # Hook: Sync to component after launch
+            await self._runtime_manager.sync_to_component(world, parent_entity_id)
 
-        return delegate_handler
+            return json.dumps(
+                {
+                    "session_id": session_id,
+                    "status": "Working",
+                    "category": category,
+                    "timeout": timeout,
+                }
+            )
+
+        return subagent_handler
+
+    async def _execute_subagent_core(
+        self,
+        world: World,
+        parent_entity_id: EntityId,
+        subagent_name: str,
+        task: str,
+        correlation_id: str,
+        traceparent: str,
+    ) -> tuple[str, bool, str | None]:
+        """Shared subagent execution core for both delegate and subagent APIs.
+
+        Args:
+            world: Parent world instance
+            parent_entity_id: Parent entity delegating the task
+            subagent_name: Name of subagent to execute
+            task: Task description
+            correlation_id: CloudEvents correlation ID
+            traceparent: W3C trace context
+
+        Returns:
+            Tuple of (result, success, error):
+            - result: Result string from delegation
+            - success: True if successful, False otherwise
+            - error: Error message if failed, None otherwise
+        """
+        # Get registry component
+        registry_comp = world.get_component(parent_entity_id, SubagentRegistryComponent)
+        if registry_comp is None:
+            error_msg = f"Error: SubagentRegistryComponent not found on entity {parent_entity_id}"
+            logger.error("delegation_failed", reason=error_msg)
+            await self._publish_delegation_events(
+                world,
+                parent_entity_id,
+                subagent_name,
+                correlation_id=correlation_id,
+                traceparent=traceparent,
+                result=error_msg,
+                success=False,
+                error=error_msg,
+            )
+            return (error_msg, False, error_msg)
+
+        # Resolve config
+        try:
+            config = self._resolve_subagent_config(registry_comp, subagent_name)
+        except ValueError as exc:
+            error_msg = str(exc)
+            logger.error(
+                "delegation_failed",
+                reason="unknown_subagent",
+                subagent_name=subagent_name,
+                available=list(registry_comp.subagents.keys()),
+            )
+            await self._publish_delegation_events(
+                world,
+                parent_entity_id,
+                subagent_name,
+                correlation_id=correlation_id,
+                traceparent=traceparent,
+                result=error_msg,
+                success=False,
+                error=error_msg,
+            )
+            return (error_msg, False, error_msg)
+
+        # Execute delegation
+        try:
+            child_entity_id = world.create_entity()
+            logger.info(
+                "child_entity_created",
+                parent_entity=parent_entity_id,
+                child_entity=child_entity_id,
+                subagent_name=subagent_name,
+            )
+
+            world.add_component(
+                child_entity_id,
+                LLMComponent(
+                    provider=config.provider,
+                    model=config.model,
+                    system_prompt=config.system_prompt,
+                ),
+            )
+
+            world.add_component(
+                child_entity_id,
+                ConversationComponent(messages=[Message(role="user", content=task)]),
+            )
+
+            world.add_component(
+                child_entity_id, OwnerComponent(owner_id=parent_entity_id)
+            )
+
+            child_world, child_world_entity_id = self._assemble_child_world(
+                world,
+                parent_entity_id,
+                config,
+                parent_child_entity=child_entity_id,
+            )
+            result = await self._execute_delegation(
+                child_world,
+                child_world_entity_id,
+                task,
+                config,
+            )
+
+            child_conv = child_world.get_component(
+                child_world_entity_id,
+                ConversationComponent,
+            )
+            parent_child_conv = world.get_component(
+                child_entity_id,
+                ConversationComponent,
+            )
+            if child_conv is not None and parent_child_conv is not None:
+                parent_child_conv.messages = list(child_conv.messages)
+
+            logger.info(
+                "delegation_completed",
+                parent_entity=parent_entity_id,
+                child_entity=child_entity_id,
+                subagent_name=subagent_name,
+                result_length=len(result),
+            )
+
+            await self._publish_delegation_events(
+                world,
+                parent_entity_id,
+                subagent_name,
+                correlation_id=correlation_id,
+                traceparent=traceparent,
+                result=result,
+                success=True,
+                error=None,
+            )
+
+            return (result, True, None)
+
+        except TimeoutError as exc:
+            error_msg = "Error: Subagent timeout"
+            logger.error(
+                "delegation_timeout",
+                parent_entity=parent_entity_id,
+                subagent_name=subagent_name,
+                correlation_id=correlation_id,
+                exception=str(exc),
+            )
+            await self._publish_delegation_events(
+                world,
+                parent_entity_id,
+                subagent_name,
+                correlation_id=correlation_id,
+                traceparent=traceparent,
+                result=error_msg,
+                success=False,
+                error=error_msg,
+            )
+            return (error_msg, False, error_msg)
+
+        except ValueError as exc:
+            error_msg = str(exc)
+            logger.error(
+                "delegation_exception",
+                parent_entity=parent_entity_id,
+                subagent_name=subagent_name,
+                exception=error_msg,
+            )
+            await self._publish_delegation_events(
+                world,
+                parent_entity_id,
+                subagent_name,
+                correlation_id=correlation_id,
+                traceparent=traceparent,
+                result=error_msg,
+                success=False,
+                error=error_msg,
+            )
+            raise
+
+        except Exception as exc:
+            error_msg = f"Error during delegation: {exc}"
+            logger.error(
+                "delegation_exception",
+                parent_entity=parent_entity_id,
+                subagent_name=subagent_name,
+                exception=str(exc),
+            )
+            await self._publish_delegation_events(
+                world,
+                parent_entity_id,
+                subagent_name,
+                correlation_id=correlation_id,
+                traceparent=traceparent,
+                result=error_msg,
+                success=False,
+                error=error_msg,
+            )
+            return (error_msg, False, error_msg)
 
     def _resolve_subagent_config(
         self,
@@ -412,7 +919,56 @@ class SubagentSystem:
             raise ValueError(
                 f"Error: Unknown subagent '{subagent_name}'. Available subagents: {list(registry.subagents.keys())}"
             )
-        return config
+        
+        # Task 9: Wrap provider with RetryProvider by default
+        wrapped_provider = self._wrap_retry_provider_if_needed(config.provider)
+        
+        # Return config with wrapped provider (use replace to preserve other fields)
+        return replace(config, provider=wrapped_provider)
+
+    def _validate_subagent_params(
+        self, category: str, prompt: str, load_skills: list[str]
+    ) -> None:
+        """Validate subagent invocation parameters.
+
+        Args:
+            category: Subagent category/name
+            prompt: Task description
+            load_skills: List of skill names to load
+
+        Raises:
+            ValueError: If parameters are invalid
+        """
+        if not category or not category.strip():
+            raise ValueError("Error: category cannot be empty")
+        if not prompt or not prompt.strip():
+            raise ValueError("Error: prompt cannot be empty")
+        if not isinstance(load_skills, list):
+            raise ValueError(
+                f"Error: load_skills must be a list, got {type(load_skills).__name__}"
+            )
+
+    def _normalize_load_skills(
+        self, config: SubagentConfig, load_skills: list[str]
+    ) -> list[str]:
+        """Normalize load_skills as ordered unique merge of config.skills + load_skills.
+
+        Args:
+            config: Resolved subagent configuration
+            load_skills: Additional skills requested by caller
+
+        Returns:
+            List of skill names (ordered, deduplicated)
+        """
+        # Preserve order: config.skills first, then load_skills
+        # Remove duplicates while maintaining order
+        seen: set[str] = set()
+        result: list[str] = []
+        for skill in config.skills + load_skills:
+            if skill not in seen:
+                seen.add(skill)
+                result.append(skill)
+        return result
 
     def _assemble_child_world(
         self,

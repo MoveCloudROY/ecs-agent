@@ -1,6 +1,6 @@
 # Subagent Delegation
 
-The `SubagentSystem` enables parent agents to spawn child agents for subtask execution via the `delegate` tool. The system supports explicit registration via an installer API and backward-compatible auto-registration. Child agents run in isolated environments with optional skill and configuration inheritance.
+The `SubagentSystem` enables parent agents to spawn child agents for subtask execution via the `subagent` and `delegate` tools. The system supports synchronous and background execution modes, with isolated environments and policy-based capability inheritance.
 
 
 ## Overview
@@ -11,6 +11,11 @@ Subagent delegation provides:
 - **Automatic Result Aggregation**: Results flow back to parent via tool result messages.
 - **Event Tracking**: Monitor delegation lifecycle with `DelegationStartedEvent` and `DelegationCompletedEvent`.
 - **Skill Inheritance**: Subagents can inherit specific skills, system prompts, and tools from their parent agent via `InheritancePolicy`.
+- **Sync and Background Modes**: Execute tasks immediately or as background sessions with ID tracking.
+- **Lifecycle Management**: Track background sessions through `Idle`, `Working`, `Dead`, `Timeout`, and `Cancelled` states.
+- **Control Tools**: Tools to query status, retrieve results, and cancel background sessions.
+- **Timeout Policy**: Per-call timeout overrides with global fallback and automated handling.
+- **Retry Reliability**: Transparent `RetryProvider` wrapping for transient LLM failures.
 - **Explicit Control**: Install the delegation tool manually with custom names using the `install_delegate_tool` API.
 
 
@@ -53,6 +58,34 @@ world.add_component(
     ),
 )
 ```
+### SubagentSessionRecord
+
+Track background session metadata:
+
+```python
+from ecs_agent.types import SubagentSessionRecord
+
+record = SubagentSessionRecord(
+    session_id="session_123",
+    category="researcher",
+    prompt="...",
+    status="Working",
+    timeout_seconds=30.0,
+    # ... other fields
+)
+```
+
+### SubagentLifecycleStatus
+
+Background sessions transition through a strict state machine:
+
+| State | Description |
+| :--- | :--- |
+| `Idle` | Completed successfully. |
+| `Working` | Currently executing. |
+| `Dead` | Failed with an error. |
+| `Timeout` | Terminated after exceeding timeout limit. |
+| `Cancelled` | Terminated by explicit cancel request. |
 
 The system handles delegation and auto-registers the `delegate` tool. It supports both manual registration and backward-compatible auto-discovery for entities with the required components.
 
@@ -68,6 +101,10 @@ world.register_system(subagent_system)
 subagent_system.install_delegate_tool(
     world, 1, tool_name="ask_subagent", override=True
 )
+### Subagent Control Installer
+
+Entities using background subagents must have the `SubagentSessionTableComponent` and call `install_subagent_control_tools` to enable control tools.
+,
 ```
 
 ### Auto-Registration Semantics (Backward Compatibility)
@@ -209,28 +246,39 @@ runner = Runner()
 await runner.run(world, max_ticks=20)
 ```
 
-### Delegate Tool Usage
+### Unified `subagent` Tool Usage
 
-The LLM can call the `delegate` tool to invoke subagents:
+The `subagent` tool replaces the legacy `delegate` tool for most use cases, adding support for background execution and skill overrides:
 
 ```json
 {
-  "name": "delegate",
+  "name": "subagent",
   "arguments": {
-    "subagent_name": "researcher",
-    "task": "Explain quantum entanglement in simple terms"
+    "category": "researcher",
+    "prompt": "Explain quantum entanglement",
+    "load_skills": ["web_search"],
+    "background": true,
+    "timeout": 30.0
   }
 }
 ```
 
-The SubagentSystem will:
-1. Look up "researcher" in the `SubagentRegistryComponent`
-2. Create a new isolated `World` for the subagent
-3. Run the subagent to completion with the task as a user message
-4. Extract the final assistant response from the child conversation
-5. Return result to parent as a tool result message
-6. Parent ReasoningSystem receives the tool result and generates final response
+**Parameters:**
+- `category`: Name of the subagent configuration to use.
+- `prompt`: The task description.
+- `load_skills`: Optional list of additional skills to install on the child.
+- `background`: If `true`, returns a session ID immediately; if `false`, waits for completion.
+- `timeout`: Optional per-call timeout in seconds (overrides global default).
 
+### Background Control Usage
+
+When running in `background: true` mode, use control tools to manage the session:
+
+1. **Check Status**: `subagent_status(session_id="session_123")` returns current lifecycle state and a summary table if `session_id` is omitted.
+2. **Retrieve Result**: `subagent_result(session_id="session_123", timeout=10.0)` waits for completion and returns the result.
+3. **Cancel**: `subagent_cancel(session_id="session_123")` terminates the session.
+
+### Timeout Precedence
 ### Multi-Subagent Workflow
 
 Use multiple specialized subagents:
@@ -243,6 +291,13 @@ subagents = {
         model="gpt-4o",
         system_prompt="Research specialist. Provide detailed facts.",
         max_ticks=10,
+Timeouts are resolved in the following order:
+1. **Per-call override**: The `timeout` argument in the `subagent` tool call.
+2. **Global default**: The `default_timeout` passed to `SubagentSystem` constructor.
+3. **None**: No timeout limit applied.
+
+### Retry and Reliability
+By default, all subagent LLM providers are wrapped in a `RetryProvider` using a standard `RetryConfig`. This handles transient network errors and rate limits automatically. `FakeProvider` used in tests is exempt from this wrapping to maintain deterministic behavior.
         skills=[],
     ),
     "writer": SubagentConfig(

@@ -16,7 +16,27 @@ class FakeProvider:
         self._responses = responses
         self._index = 0
         self.last_response_format: dict[str, Any] | None = None
+        self._tool_responses: dict[str, str] = {}
 
+    def add_tool_response(self, tool_name: str, content: str) -> None:
+        """Register a canned response for a specific tool name.
+
+        Args:
+            tool_name: Name of the tool to handle.
+            content: String content to return for that tool call.
+        """
+        self._tool_responses[tool_name] = content
+
+    async def get_tool_response(self, tool_name: str) -> str | None:
+        """Retrieve a canned tool response if registered.
+
+        Args:
+            tool_name: Name of the tool to lookup.
+
+        Returns:
+            The canned response string or None if not found.
+        """
+        return self._tool_responses.get(tool_name)
 
     async def complete(
         self,

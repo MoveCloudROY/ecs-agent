@@ -1,10 +1,10 @@
 """Sub-agent delegation example using the ECS-based LLM Agent framework.
 
 This example demonstrates:
-- A manager agent that delegates a research task to a sub-agent using the 'delegate' tool
-- SubagentSystem auto-registration of the delegate tool
-- Tool-driven roundtrip workflow: manager calls delegate → SubagentSystem executes child → result returned as tool response
-- OwnerComponent linking the sub-agent to its parent
+- A manager agent that delegates a research task to a sub-agent using both 'delegate' (sync) and 'subagent' (async) tools.
+- SubagentSystem unified API for session management and background execution.
+- Tool-driven roundtrip workflow: manager calls subagent → SubagentSystem executes child → result retrieved via session tools.
+- OwnerComponent linking the sub-agent to its parent.
 
 Dual-mode operation:
 - Without LLM_API_KEY: Uses FakeProvider for demonstration
@@ -19,11 +19,13 @@ from ecs_agent.components import (
     LLMComponent,
     OwnerComponent,
     SubagentRegistryComponent,
+    SubagentSessionTableComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeProvider
 from ecs_agent.providers.openai_provider import OpenAIProvider
+from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -31,6 +33,7 @@ from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import (
     CompletionResult,
+    EntityId,
     InheritancePolicy,
     Message,
     SubagentConfig,
@@ -39,23 +42,25 @@ from ecs_agent.types import (
 
 
 async def main() -> None:
-    """Run a sub-agent delegation example using delegate-tool workflow.
+    """Run a sub-agent delegation example using unified subagent tools.
 
     Flow:
-      1. Manager receives user question
-      2. Manager calls delegate tool
-      3. SubagentSystem creates and executes child entity
-      4. Tool result delivered to manager conversation
-      5. Manager synthesizes final summary
+      1. Manager receives user question.
+      2. Manager calls legacy 'delegate' tool (sync).
+      3. Manager calls new 'subagent' tool in background mode (async).
+      4. SubagentSystem creates and executes child entities.
+      5. Results delivered to manager conversation.
+      6. Manager synthesizes final summary.
     """
     world = World()
 
     # ── LLM Provider Configuration ──────────────────────────────────
+    DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    DEFAULT_MODEL = "qwen3.5-flash"
+
     api_key = os.environ.get("LLM_API_KEY", "")
-    base_url = os.environ.get(
-        "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    )
-    model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
+    base_url = os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL)
+    model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
 
     if api_key:
         print(f"Using OpenAIProvider with model: {model}")
@@ -67,6 +72,9 @@ async def main() -> None:
         print()
 
     # ── Provider Setup ──────────────────────────────────────────────
+    manager_provider: LLMProvider
+    subagent_provider: LLMProvider
+
     if api_key:
         manager_provider = OpenAIProvider(
             api_key=api_key, base_url=base_url, model=model
@@ -75,48 +83,78 @@ async def main() -> None:
             api_key=api_key, base_url=base_url, model=model
         )
     else:
-        # FakeProvider for manager: first response calls delegate tool, second produces summary
+        # FakeProvider for manager: first response calls legacy delegate tool,
+        # second calls new subagent background tool, then produces summary.
         manager_provider = FakeProvider(
             responses=[
+                # 1. Call legacy 'delegate' tool (sync)
                 CompletionResult(
                     message=Message(
                         role="assistant",
-                        content="I'll delegate this research to my subagent.",
+                        content="I'll first use my legacy researcher subagent to get a quick overview.",
                         tool_calls=[
                             ToolCall(
-                                id="call_001",
+                                id="call_sync_001",
                                 name="delegate",
                                 arguments={
                                     "subagent_name": "researcher",
-                                    "task": (
-                                        "Research the most promising near-term applications "
-                                        "of quantum computing. Report your findings."
-                                    ),
+                                    "task": "Provide a 1-sentence overview of quantum computing.",
                                 },
                             )
                         ],
                     )
                 ),
+                # 2. Call new 'subagent' tool (background=True)
+                CompletionResult(
+                    message=Message(
+                        role="assistant",
+                        content="Now I'll start a deep-dive research task in the background.",
+                        tool_calls=[
+                            ToolCall(
+                                id="call_async_001",
+                                name="subagent",
+                                arguments={
+                                    "category": "researcher",
+                                    "prompt": "Research the most promising near-term applications of quantum computing.",
+                                    "background": True,
+                                },
+                            )
+                        ],
+                    )
+                ),
+                # 3. Final summary
                 CompletionResult(
                     message=Message(
                         role="assistant",
                         content=(
-                            "Based on my sub-agent's research, here is the summary:\n\n"
-                            "Quantum computing has three key near-term applications:\n"
+                            "Based on both sync and async research, here is the summary:\n\n"
+                            "Quantum computing uses qubits to perform calculations impossible for classical computers.\n"
+                            "Key near-term applications include:\n"
                             "1. Drug discovery — simulating molecular interactions\n"
                             "2. Optimization — logistics and supply-chain routing\n"
-                            "3. Cryptography — post-quantum encryption standards\n\n"
-                            "These areas are expected to see practical impact within "
-                            "the next 5–10 years."
+                            "3. Cryptography — post-quantum encryption standards"
                         ),
                     )
                 ),
             ]
         )
+        # Type check bypass for FakeProvider-specific method
+        getattr(manager_provider, "add_tool_response")(
+            "subagent",
+            '{"session_id": "session_001", "status": "Working", "category": "researcher"}',
+        )
 
-        # FakeProvider for subagent (used by SubagentSystem when delegate tool is called)
+        # FakeProvider for subagent (used for both sync and async calls)
         subagent_provider = FakeProvider(
             responses=[
+                # Response for sync call
+                CompletionResult(
+                    message=Message(
+                        role="assistant",
+                        content="Quantum computing uses quantum-mechanical phenomena like superposition and entanglement.",
+                    )
+                ),
+                # Response for async call
                 CompletionResult(
                     message=Message(
                         role="assistant",
@@ -124,8 +162,7 @@ async def main() -> None:
                             "After researching quantum computing applications, I found "
                             "three promising areas: (1) drug discovery through molecular "
                             "simulation, (2) combinatorial optimization for logistics, "
-                            "and (3) post-quantum cryptography. Each has active research "
-                            "programs and early commercial prototypes."
+                            "and (3) post-quantum cryptography."
                         ),
                     )
                 ),
@@ -134,7 +171,6 @@ async def main() -> None:
 
     # ── Manager Entity Setup ────────────────────────────────────────
     manager_id = world.create_entity()
-
     world.add_component(
         manager_id,
         LLMComponent(
@@ -142,7 +178,7 @@ async def main() -> None:
             model=model if api_key else "fake-manager",
             system_prompt=(
                 "You are a manager agent. When given a complex question, "
-                "use the 'delegate' tool to assign research to your 'researcher' subagent. "
+                "use the 'delegate' tool for sync tasks or 'subagent' tool for background tasks. "
                 "After receiving the results, synthesize them into a concise summary."
             ),
         ),
@@ -178,28 +214,28 @@ async def main() -> None:
                     ),
                     max_ticks=10,
                     inheritance_policy=InheritancePolicy(
-                        inherit_system_prompt=True,  # Child will see manager's system prompt too
-                        inherit_tools=[],  # No parent tools inherited in this example
-                        allow_delegate_tool=True,  # Default, allows child to have its own delegate tool
+                        inherit_system_prompt=True,
+                        inherit_tools=[],
+                        allow_delegate_tool=True,
                     ),
                 )
             }
         ),
     )
 
-    # ToolRegistryComponent required for delegate tool registration
+    # ToolRegistryComponent and SessionTable required for subagent tools
     world.add_component(manager_id, ToolRegistryComponent(tools={}, handlers={}))
-
-    # ToolRegistryComponent required for SubagentSystem to auto-register delegate tool
+    world.add_component(manager_id, SubagentSessionTableComponent(sessions={}))
 
     # ── Systems Registration ────────────────────────────────────────
     subagent_system = SubagentSystem(priority=-1)
     world.register_system(subagent_system, priority=-1)
 
-    # Explicitly install delegate tool (demonstrates installer API)
-    # Note: SubagentSystem would also auto-register this if we skipped this call.
+    # Install tools
     subagent_system.install_delegate_tool(world, manager_id, tool_name="delegate")
-    # SubagentSystem priority=-1 ensures delegate tool registered BEFORE ReasoningSystem runs
+    subagent_system.install_subagent_tool(world, manager_id, tool_name="subagent")
+    subagent_system.install_subagent_control_tools(world, manager_id)
+
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
     world.register_system(MemorySystem(), priority=10)
@@ -211,7 +247,7 @@ async def main() -> None:
 
     # ── Print Results ───────────────────────────────────────────────
     print("=" * 60)
-    print("Manager Conversation (Delegate-Tool Roundtrip)")
+    print("Manager Conversation (Unified Subagent API)")
     print("=" * 60)
     _print_conversation("Manager", manager_id, world)
 
@@ -224,7 +260,7 @@ async def main() -> None:
         )
 
 
-def _print_conversation(label: str, entity_id: int, world: World) -> None:
+def _print_conversation(label: str, entity_id: EntityId, world: World) -> None:
     """Pretty-print an entity's conversation."""
     print(f"\n--- {label} (entity {entity_id}) ---")
     conv = world.get_component(entity_id, ConversationComponent)

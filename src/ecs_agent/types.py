@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime, timezone
-from typing import Any, NewType
+from typing import Any, Literal, NewType
 
 EntityId = NewType("EntityId", int)
 SystemHandle = NewType("SystemHandle", str)
@@ -177,6 +177,8 @@ class ScratchbookRef:
     category: str
     content_hash: str
     timestamp: str
+
+
 @dataclass(slots=True)
 class ToolApprovalRequestedEvent:
     """Event emitted when a tool call requires approval."""
@@ -399,6 +401,83 @@ class SubagentConfig:
     inheritance_policy: InheritancePolicy = field(default_factory=InheritancePolicy)
 
 
+SubagentLifecycleStatus = Literal[
+    "Idle",
+    "Working",
+    "Dead",
+    "Timeout",
+    "Cancelled",
+]
+
+
+@dataclass(slots=True)
+class SubagentSessionRecord:
+    """Serializable session metadata for a subagent delegation."""
+    
+    session_id: str
+    category: str
+    prompt: str
+    parent_entity_id: EntityId
+    created_at: str  # ISO timestamp
+    updated_at: str  # ISO timestamp
+    load_skills: list[str] = field(default_factory=list)
+    background: bool = False
+    status: SubagentLifecycleStatus = "Idle"
+    correlation_id: str = ""
+    traceparent: str = ""
+    timeout_seconds: float | None = None
+    deadline_at: str | None = None  # ISO timestamp
+    result_excerpt: str | None = None
+    error: str | None = None
+
+def validate_subagent_lifecycle_transition(
+    current: SubagentLifecycleStatus,
+    next_status: SubagentLifecycleStatus,
+) -> None:
+    allowed_transitions: dict[SubagentLifecycleStatus, set[SubagentLifecycleStatus]] = {
+        "Idle": {"Working"},
+        "Working": {"Idle", "Dead", "Timeout", "Cancelled"},
+        "Dead": set(),
+        "Timeout": set(),
+        "Cancelled": set(),
+    }
+    if next_status not in allowed_transitions[current]:
+        raise ValueError(
+            f"Invalid subagent lifecycle transition from '{current}' to '{next_status}'"
+        )
+
+
+def render_subagent_session_reminder_table(
+    sessions: dict[str, SubagentSessionRecord],
+) -> list[str]:
+    """Render subagent session reminder table rows sorted by updated_at desc, then session_id asc."""
+    if not sessions:
+        return []
+    
+    # Sort by updated_at descending, then session_id ascending
+    sorted_sessions = sorted(
+        sessions.items(),
+        key=lambda item: (-_iso_timestamp_to_sortable(item[1].updated_at), item[0]),
+    )
+    
+    rows = []
+    for session_id, record in sorted_sessions:
+        # Format: session_id | status | category | updated_at
+        row = f"{session_id} | {record.status} | {record.category} | {record.updated_at}"
+        rows.append(row)
+    
+    return rows
+
+
+def _iso_timestamp_to_sortable(timestamp: str) -> float:
+    """Convert ISO timestamp to sortable float (seconds since epoch)."""
+    try:
+        dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        return dt.timestamp()
+    except (ValueError, AttributeError):
+        # Invalid timestamp, return 0 so it sorts last
+        return 0.0
+
 @dataclass(slots=True)
 class DelegationStartedEvent:
     """Event emitted when subagent delegation starts."""
@@ -470,98 +549,113 @@ class TaskFailedEvent:
     error: str
     retry_count: int = 0
 
+
 @dataclass(slots=True, frozen=True)
 class TaskReadyEvent:
     """Event emitted when a task becomes ready for execution.
-    
+
     Fired when all upstream dependencies are resolved and the task
     transitions from PENDING to READY status.
     """
-    
+
     entity_id: EntityId
     task_id: str
     dependencies_resolved: list[str] = field(default_factory=list)
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
     correlation_id: str = ""
 
 
 @dataclass(slots=True, frozen=True)
 class TaskRunningEvent:
     """Event emitted when a task begins execution.
-    
+
     Fired when task transitions from READY/BLOCKED to RUNNING status.
     Includes backend assignment and agent information.
     """
-    
+
     entity_id: EntityId
     task_id: str
     backend: str  # e.g., 'fetch', 'dispatch', 'completion'
     assigned_agent: str | None = None
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
     correlation_id: str = ""
 
 
 @dataclass(slots=True, frozen=True)
 class TaskBlockedUpdatedEvent:
     """Event emitted when a task becomes or remains blocked.
-    
+
     Fired when task transitions to BLOCKED status due to upstream failures
     or missing dependencies. Includes context about what is blocking it.
     """
-    
+
     entity_id: EntityId
     task_id: str
     blocking_reasons: list[str] = field(default_factory=list)
-    upstream_failures: list[str] = field(default_factory=list)  # task_ids of failed dependencies
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    upstream_failures: list[str] = field(
+        default_factory=list
+    )  # task_ids of failed dependencies
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
     correlation_id: str = ""
 
 
 @dataclass(slots=True, frozen=True)
 class TaskCompletedWithMetadataEvent:
     """Event emitted when a task completes successfully with correlation metadata.
-    
+
     Fired when task transitions to COMPLETED status. Includes result references
     and duration information for observability.
     """
-    
+
     entity_id: EntityId
     task_id: str
     result_refs: list[str] = field(default_factory=list)  # ScratchbookRef artifact IDs
     duration_ms: float = 0.0
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
     correlation_id: str = ""
 
 
 @dataclass(slots=True, frozen=True)
 class TaskFailedWithReasonEvent:
     """Event emitted when a task fails with detailed reason.
-    
+
     Fired when task transitions to FAILED status. Includes error details
     and exception information for debugging.
     """
-    
+
     entity_id: EntityId
     task_id: str
     error_reason: str
     exception_details: str = ""
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
     correlation_id: str = ""
 
 
 @dataclass(slots=True, frozen=True)
 class TaskUnblockedEvent:
     """Event emitted when a task transitions from BLOCKED to ready state.
-    
+
     Fired when upstream dependencies are resolved or manual override is applied.
     Enables tracking of task unblocking events in the execution pipeline.
     """
-    
+
     entity_id: EntityId
     task_id: str
     unblock_reason: str  # e.g., 'dependency_resolved', 'manual_override'
     manual_override: bool = False
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
     correlation_id: str = ""
 
 
@@ -692,6 +786,8 @@ __all__ = [
     "StreamEndEvent",
     "StreamStartEvent",
     "SubagentConfig",
+    "SubagentLifecycleStatus",
+    "SubagentSessionRecord",
     "SystemHandle",
     "TaskBlockedEvent",
     "TaskBlockedUpdatedEvent",
@@ -715,4 +811,6 @@ __all__ = [
     "ToolTimeoutError",
     "Usage",
     "UserInputRequestedEvent",
+    "render_subagent_session_reminder_table",
+    "validate_subagent_lifecycle_transition",
 ]
