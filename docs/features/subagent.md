@@ -101,10 +101,15 @@ world.register_system(subagent_system)
 subagent_system.install_delegate_tool(
     world, 1, tool_name="ask_subagent", override=True
 )
+```
 ### Subagent Control Installer
 
 Entities using background subagents must have the `SubagentSessionTableComponent` and call `install_subagent_control_tools` to enable control tools.
-,
+
+```python
+subagent_system = SubagentSystem()
+world.register_system(subagent_system)
+subagent_system.install_subagent_control_tools(world, entity_id)
 ```
 
 ### Auto-Registration Semantics (Backward Compatibility)
@@ -128,50 +133,6 @@ from ecs_agent.systems.subagent import SubagentSystem
 world.register_system(SubagentSystem(priority=-1), priority=-1)
 ```
 
-
-## Inheritance Policy
-
-The `InheritancePolicy` class controls which capabilities are inherited from parent to child agents during delegation. See [detailed documentation](#inheritance-policy-detailed) below for complete field reference and examples.
-### Tool Conflict Semantics
-
-When a parent delegates to a subagent, it can specify a list of skills to inherit. The `SubagentSystem` will:
-1. Check if the parent entity has the requested skill installed.
-2. Copy the skill metadata and its associated tools/handlers to the subagent's world.
-3. Log a warning if a requested skill is missing from the parent.
-
-This ensures subagents have the necessary capabilities (like web search or file access) while maintaining isolation.
-
-#### Explicit Installer API
-
-For advanced use cases (custom tool names, explicit override control), use the `install_delegate_tool()` method:
-
-```python
-from ecs_agent.systems.subagent import SubagentSystem
-
-subagent_system = SubagentSystem(priority=-1)
-world.register_system(subagent_system, priority=-1)
-
-# Install delegate tool with custom name
-subagent_system.install_delegate_tool(
-    world=world,
-    entity_id=parent,
-    tool_name="delegate",  # default name
-    override=False  # skip if tool already exists (default: False)
-)
-```
-
-**Parameters:**
-- `world`: World instance
-- `entity_id`: Entity to install the tool on
-- `tool_name`: Name for the delegate tool (default: `"delegate"`)
-- `override`: If `True`, replace existing tool; if `False` (default), skip if tool exists
-
-**When to use:**
-- Custom tool naming (e.g., `"spawn_subagent"` instead of `"delegate"`)
-- Explicit control over tool registration timing
-- Override protection (prevent accidental tool replacement)
-
-**Backward compatibility:** The SubagentSystem still auto-registers the `delegate` tool during `process()` for entities with both `SubagentRegistryComponent` and `ToolRegistryComponent`. The explicit API is optional for advanced scenarios.
 
 ## Usage
 
@@ -279,6 +240,12 @@ When running in `background: true` mode, use control tools to manage the session
 3. **Cancel**: `subagent_cancel(session_id="session_123")` terminates the session.
 
 ### Timeout Precedence
+
+Timeouts are resolved in the following order:
+1. **Per-call override**: The `timeout` argument in the `subagent` tool call.
+2. **Global default**: The `default_timeout` passed to `SubagentSystem` constructor.
+3. **None**: No timeout limit applied.
+
 ### Multi-Subagent Workflow
 
 Use multiple specialized subagents:
@@ -291,13 +258,6 @@ subagents = {
         model="gpt-4o",
         system_prompt="Research specialist. Provide detailed facts.",
         max_ticks=10,
-Timeouts are resolved in the following order:
-1. **Per-call override**: The `timeout` argument in the `subagent` tool call.
-2. **Global default**: The `default_timeout` passed to `SubagentSystem` constructor.
-3. **None**: No timeout limit applied.
-
-### Retry and Reliability
-By default, all subagent LLM providers are wrapped in a `RetryProvider` using a standard `RetryConfig`. This handles transient network errors and rate limits automatically. `FakeProvider` used in tests is exempt from this wrapping to maintain deterministic behavior.
         skills=[],
     ),
     "writer": SubagentConfig(
@@ -333,6 +293,9 @@ Parent LLM:
 4. Revise based on feedback
 ```
 
+### Retry and Reliability
+
+By default, all subagent LLM providers are wrapped in a `RetryProvider` using a standard `RetryConfig`. This handles transient network errors and rate limits automatically. `FakeProvider` used in tests is exempt from this wrapping to maintain deterministic behavior.
 ## Events
 
 ### DelegationStartedEvent
@@ -546,13 +509,6 @@ config = SubagentConfig(
 )
 ```
 
-### Best Practices
-
-1. **Whitelist Tools Explicitly**: Only inherit tools the child actually needs. Avoid inheriting all parent tools.
-2. **Use `skip` for Conflict Policy**: Prevents accidental tool overwrites. Use `override` only when intentional.
-3. **Test Missing Skills**: Ensure parent has required skills installed before delegation if using `inherit_tools`.
-4. **Disable Recursive Delegation**: Set `allow_delegate_tool=False` to prevent children from spawning sub-children.
-
 
 ## Best Practices
 
@@ -610,6 +566,12 @@ task="Extract all dates mentioned in this text: [text]"
 # Bad
 task="Help me with this"
 ```
+### 5. Inheritance Policy Best Practices
+
+1. **Whitelist Tools Explicitly**: Only inherit tools the child actually needs. Avoid inheriting all parent tools.
+2. **Use `skip` for Conflict Policy**: Prevents accidental tool overwrites. Use `override` only when intentional.
+3. **Test Missing Skills**: Ensure parent has required skills installed before delegation if using `inherit_tools`.
+4. **Disable Recursive Delegation**: Set `allow_delegate_tool=False` to prevent children from spawning sub-children.
 
 ## Limitations
 
