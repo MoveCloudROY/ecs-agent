@@ -55,9 +55,12 @@ async def main() -> None:
     world = World()
 
     # ── LLM Provider Configuration ──────────────────────────────────
+    DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    DEFAULT_MODEL = "qwen3.5-flash"
+
     api_key = os.environ.get("LLM_API_KEY", "")
-    base_url = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1")
-    model = os.environ.get("LLM_MODEL", "gpt-4o")
+    base_url = os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL)
+    model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
 
     if api_key:
         print(f"Using OpenAIProvider with model: {model}")
