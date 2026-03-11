@@ -11,43 +11,6 @@
 
 Build modular, testable LLM agents by composing behavior from dataclass components, async systems, and pluggable providers. No inheritance hierarchies, just clean composition.
 
-## Features
-
-- **ECS Architecture**, Entities hold identity, components hold data, systems hold logic. Mix and match freely.
-- **Async-Native**, Built on `asyncio` with structured concurrency. Systems at the same priority run concurrently via `TaskGroup`.
-- **Provider-Agnostic**, Swap between providers without touching agent logic. Ships with `OpenAIProvider`, `ClaudeProvider`, `LiteLLMProvider`, `FakeProvider`, and `RetryProvider`.
-- **Streaming**, First-class SSE streaming with `AsyncIterator[StreamDelta]` for real-time token delivery.
-- **OpenAI Responses API**, Native support for `/v1/responses` endpoint with automatic Chat Completions fallback, streaming, and enhanced metadata tracking.
-- **Streaming Output (System-Level)**, `StreamingComponent` enables system-level streaming with `StreamStartEvent`, `StreamDeltaEvent`, `StreamEndEvent`.
-- **Context Management**, Checkpoint-based undo (`CheckpointSystem`), LLM-powered conversation compaction (`CompactionSystem`), resume from checkpoint, and conversation tree revert (`revert_to_message`).
-- **Claude Provider**, Native Anthropic API provider with SSE streaming support.
-- **LiteLLM Provider**, Access 100+ LLM providers through a single unified interface via litellm.
-- **User Input System**, Async human-in-the-loop input with `UserInputSystem`, supports infinite wait (`timeout=None`).
-- **Infinite Runner Loop**, `max_ticks=None` for agents that run indefinitely until a `TerminalComponent` is found.
-- **Tool Use**, Register tool schemas and async handlers. The framework manages the LLM ↔ tool call loop automatically.
-- **Planning & ReAct**, Built-in `PlanningSystem` and `ReplanningSystem` for multi-step reasoning with dynamic plan adjustment.
-- **Multi-Agent Messaging**, Entities communicate via `MessageBusSystem` using a pub/sub or request-response pattern with CloudEvents-compatible envelopes.
-- **Subagent Delegation**, Spawn child agents for subtasks via `SubagentSystem`. Unified API supports both synchronous delegation and background execution with session management (`subagent`, `subagent_status`, `subagent_result`, `subagent_cancel`). Named subagent registry, isolated execution, policy-based inheritance, and legacy `delegate` tool support.
-- **Tree-Structured Conversations**, Branch and merge conversation history with `ConversationTreeComponent`. Navigate multiple reasoning paths, compare outcomes, and linearize for system compatibility.
-- **Structured Output**, JSON mode with Pydantic schema support for type-safe LLM responses.
-- **Serialization**, Save and restore full `World` state (entities, components, conversation history) via `WorldSerializer`.
-- **Type-Safe**, Full type annotations, `dataclass(slots=True)` components, mypy strict mode. Errors surface at write-time, not runtime.
-- **Tool Auto-Discovery & Approval**, Secure your agent with manual approval policies for sensitive tool calls.
-- **MCTS Plan Optimization**, Find optimal execution paths using Monte Carlo Tree Search (MCTS) for complex goals.
-- **RAG (Vector Search)**, Retrieval-Augmented Generation with pluggable embedding providers and vector stores.
-- **Skills System**, Composable capability modules with progressive disclosure (Tier 1/2/3) and file-based auto-discovery.
-- **Markdown Skills**, Load skills from `.claude/skills/<name>/SKILL.md` format with YAML frontmatter, automatic tool discovery from `scripts/` directory, and progressive disclosure.
-- **Web Search**, Built-in web search capabilities via Brave Search API.
-- **Permission System**, Granular tool whitelisting/blacklisting and secure `bwrap` sandboxing.
-- **Enhanced Logging**, Structured logging with `structlog` featuring caller info, exception formatting, per-module log level filtering, and stdlib logging bridge.
-- **MCP Integration**, Connect to external tool servers via the Model Context Protocol (stdio, SSE, HTTP).
-- **Built-in Tools**, High-quality file manipulation (read/write/hash-anchored edit) and bash execution tools.
-- **Runtime Dynamic Control**, Register entities by name/tag, dynamically add/remove/replace systems at tick boundaries, switch models per-entity, and gracefully interrupt generation.
-- **Agent DSL**, Define AI agents declaratively using JSON or Markdown configuration files with deterministic loading and fail-fast validation.
-- **Agent Scratchbook**, Persistent filesystem-backed storage for categorized agent artifacts (tool results, plans, snapshots) with atomic index updates.
-
-- **Task Orchestration**, Multi-step task management with explicit state machine (READY → RUNNING → COMPLETED), dependency resolution, wave-based parallel dispatch, and mixed backend routing (local tools or subagent delegation).
-
 ## Installation
 
 ```bash
@@ -113,47 +76,52 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-## Using a Real LLM
+## Features
 
-Copy `.env.example` to `.env` and add your API credentials:
+### Core Architecture
+- **ECS Architecture**, Entities hold identity, components hold data, systems hold logic. Mix and match freely.
+- **Async-Native**, Built on `asyncio` with structured concurrency. Systems at the same priority run concurrently via `TaskGroup`.
+- **Type-Safe**, Full type annotations, `dataclass(slots=True)` components, mypy strict mode. Errors surface at write-time, not runtime.
+- **Serialization**, Save and restore full `World` state (entities, components, conversation history) via `WorldSerializer`.
+- **Infinite Runner Loop**, `max_ticks=None` for agents that run indefinitely until a `TerminalComponent` is found.
+- **Runtime Dynamic Control**, Register entities by name/tag, dynamically add/remove/replace systems at tick boundaries, switch models per-entity, and gracefully interrupt generation.
 
-```bash
-cp .env.example .env
-```
+### LLM Providers & Streaming
+- **Provider-Agnostic**, Swap between providers without touching agent logic. Ships with `OpenAIProvider`, `ClaudeProvider`, `LiteLLMProvider`, `FakeProvider`, and `RetryProvider`.
+- **Claude Provider**, Native Anthropic API provider with SSE streaming support.
+- **LiteLLM Provider**, Access 100+ LLM providers through a single unified interface via litellm.
+- **OpenAI Responses API**, Native support for `/v1/responses` endpoint with automatic Chat Completions fallback, streaming, and enhanced metadata tracking.
+- **Streaming**, First-class SSE streaming with `AsyncIterator[StreamDelta]` for real-time token delivery.
+- **Streaming Output (System-Level)**, `StreamingComponent` enables system-level streaming with `StreamStartEvent`, `StreamDeltaEvent`, `StreamEndEvent`.
 
-```ini
-LLM_API_KEY=your-api-key-here
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_MODEL=qwen3.5-plus
+### Agent Capabilities
+- **Planning & ReAct**, Built-in `PlanningSystem` and `ReplanningSystem` for multi-step reasoning with dynamic plan adjustment.
+- **Multi-Agent Messaging**, Entities communicate via `MessageBusSystem` using a pub/sub or request-response pattern with CloudEvents-compatible envelopes.
+- **Subagent Delegation**, Spawn child agents for subtasks via `SubagentSystem`. Unified API supports both synchronous delegation and background execution with session management (`subagent`, `subagent_status`, `subagent_result`, `subagent_cancel`).
+- **Tree-Structured Conversations**, Branch and merge conversation history with `ConversationTreeComponent`. Navigate multiple reasoning paths, compare outcomes, and linearize for system compatibility.
+- **Context Management**, Checkpoint-based undo (`CheckpointSystem`), LLM-powered conversation compaction (`CompactionSystem`), resume from checkpoint, and conversation tree revert (`revert_to_message`).
+- **MCTS Plan Optimization**, Find optimal execution paths using Monte Carlo Tree Search (MCTS) for complex goals.
+- **Structured Output**, JSON mode with Pydantic schema support for type-safe LLM responses.
 
-# For DashScope (Aliyun), also set:
-DASHSCOPE_API_KEY=your-api-key-here
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_MODEL=qwen3.5-plus
-```
+### Tools & Integration
+- **Tool Use**, Register tool schemas and async handlers. The framework manages the LLM ↔ tool call loop automatically.
+- **Built-in Tools**, High-quality file manipulation (read/write/hash-anchored edit) and bash execution tools.
+- **Skills System**, Composable capability modules with progressive disclosure (Tier 1/2/3) and file-based auto-discovery.
+- **Markdown Skills**, Load skills from `.claude/skills/<name>/SKILL.md` format with YAML frontmatter, automatic tool discovery from `scripts/` directory, and progressive disclosure.
+- **Tool Auto-Discovery & Approval**, Secure your agent with manual approval policies for sensitive tool calls.
+- **MCP Integration**, Connect to external tool servers via the Model Context Protocol (stdio, SSE, HTTP).
+- **Web Search**, Built-in web search capabilities via Brave Search API.
+- **Permission System**, Granular tool whitelisting/blacklisting and secure `bwrap` sandboxing.
 
-Then use `OpenAIProvider` (works with any OpenAI-compatible API):
+### Advanced Features & Orchestration
+- **Task Orchestration**, Multi-step task management with explicit state machine (READY → RUNNING → COMPLETED), dependency resolution, wave-based parallel dispatch, and mixed backend routing.
+- **RAG (Vector Search)**, Retrieval-Augmented Generation with pluggable embedding providers and vector stores.
+- **Agent DSL**, Define AI agents declaratively using JSON or Markdown configuration files with deterministic loading and fail-fast validation.
+- **Agent Scratchbook**, Persistent filesystem-backed storage for categorized agent artifacts (tool results, plans, snapshots) with atomic index updates.
 
-```python
-from ecs_agent.providers import OpenAIProvider
-
-provider = OpenAIProvider(
-    api_key="your-api-key",
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-    model="qwen3.5-plus",
-)
-```
-
-Wrap with `RetryProvider` for automatic retries on transient failures:
-
-```python
-from ecs_agent import RetryProvider, RetryConfig
-
-provider = RetryProvider(
-    provider=OpenAIProvider(api_key="...", base_url="...", model="..."),
-    config=RetryConfig(max_retries=3, initial_wait=1.0, max_wait=30.0),
-)
-```
+### Development & Observability
+- **User Input System**, Async human-in-the-loop input with `UserInputSystem`, supports infinite wait (`timeout=None`).
+- **Enhanced Logging**, Structured logging with `structlog` featuring caller info, exception formatting, per-module log level filtering, and stdlib logging bridge.
 
 ## Architecture
 
@@ -320,6 +288,48 @@ uv run python examples/react_agent.py
 LLM_API_KEY=your-api-key EMBEDDING_MODEL=text-embedding-3-small uv run python examples/rag_agent.py
 ```
 
+## Using a Real LLM
+
+Copy `.env.example` to `.env` and add your API credentials:
+
+```bash
+cp .env.example .env
+```
+
+```ini
+LLM_API_KEY=your-api-key-here
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_MODEL=qwen3.5-plus
+
+# For DashScope (Aliyun), also set:
+DASHSCOPE_API_KEY=your-api-key-here
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_MODEL=qwen3.5-plus
+```
+
+Then use `OpenAIProvider` (works with any OpenAI-compatible API):
+
+```python
+from ecs_agent.providers import OpenAIProvider
+
+provider = OpenAIProvider(
+    api_key="your-api-key",
+    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    model="qwen3.5-plus",
+)
+```
+
+Wrap with `RetryProvider` for automatic retries on transient failures:
+
+```python
+from ecs_agent import RetryProvider, RetryConfig
+
+provider = RetryProvider(
+    provider=OpenAIProvider(api_key="...", base_url="...", model="..."),
+    config=RetryConfig(max_retries=3, initial_wait=1.0, max_wait=30.0),
+)
+```
+
 ## Development
 
 ### Tests
@@ -359,35 +369,38 @@ uv run mypy src/ecs_agent/core/world.py
 
 See [`docs/`](docs/) for detailed guides:
 
+### Getting Started
 - [Getting Started](docs/getting-started.md), Installation, first agent, key concepts
 - [Architecture](docs/architecture.md), ECS pattern, data flow, system lifecycle
 - [Core Concepts](docs/core-concepts.md), World, Entity, Component, System, Runner
-- [Components](docs/components.md), All 27 components with usage examples
-- [Systems](docs/systems.md), All 14 systems with configuration details
-
-- [Providers](docs/providers.md), LLM provider protocol, built-in providers
 - [API Reference](docs/api-reference.md), Complete API surface
 - [Examples](docs/examples.md), Walkthrough of all 21 examples
+
+### Core Features
+- [Components](docs/components.md), All 27 components with usage examples
+- [Systems](docs/systems.md), All 14 systems with configuration details
+- [Providers](docs/providers.md), LLM provider protocol, built-in providers
 - [Streaming](docs/features/streaming.md), SSE streaming setup and usage
-- [Retry](docs/features/retry.md), RetryProvider configuration
+- [Structured Output](docs/features/structured-output.md), Pydantic schema → JSON mode
 - [Serialization](docs/features/serialization.md), World state persistence
 - [Logging](docs/features/logging.md), structlog integration
-- [Structured Output](docs/features/structured-output.md), Pydantic schema → JSON mode
-- [Context Management](docs/features/context-management.md), Checkpoint, undo, and compaction
-- [Tool Discovery & Approval](docs/features/tool-discovery.md), Auto-discovery, sandbox, approval flow
-- [User Input](docs/features/user-input.md), Async human-in-the-loop input
-- [Skills](docs/features/skills.md), Composable capabilities and progressive disclosure
-- [MCP Integration](docs/features/mcp.md), Connecting to external MCP tool servers
-- [Built-in Tools](docs/features/builtin-tools.md), File manipulation and shell execution
-- [Built-in Tools](docs/features/builtin-tools.md), File manipulation and shell execution
-- [Agent DSL](docs/features/agent-dsl.md), Declarative agent definition and loading
-- [Web Search](docs/features/web-search.md), Brave Search API integration
+- [Retry](docs/features/retry.md), RetryProvider configuration
 
-- [Permissions](docs/features/permissions.md), Tool filtering and bwrap sandboxing
+### Agent Capabilities
+- [Context Management](docs/features/context-management.md), Checkpoint, undo, and compaction
 - [Runtime Control](docs/features/runtime-control.md), Entity registry, system lifecycle, model switching, interruption, revert
+- [Agent DSL](docs/features/agent-dsl.md), Declarative agent definition and loading
 - [Agent Scratchbook](docs/features/scratchbook.md), Persistent filesystem-backed artifact storage and indexing
 - [Task Orchestration](docs/features/task-system.md), Multi-step task management and dependency resolution
 
-## License
+### Tools & Integration
+- [Skills](docs/features/skills.md), Composable capabilities and progressive disclosure
+- [Built-in Tools](docs/features/builtin-tools.md), File manipulation and shell execution
+- [Tool Discovery & Approval](docs/features/tool-discovery.md), Auto-discovery, sandbox, approval flow
+- [MCP Integration](docs/features/mcp.md), Connecting to external MCP tool servers
+- [Web Search](docs/features/web-search.md), Brave Search API integration
+- [Permissions](docs/features/permissions.md), Tool filtering and bwrap sandboxing
+- [User Input](docs/features/user-input.md), Async human-in-the-loop input
 
-This project is currently unlicensed. See the repository for updates.
+## License
+MIT
