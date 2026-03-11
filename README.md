@@ -27,7 +27,7 @@ Build modular, testable LLM agents by composing behavior from dataclass componen
 - **Tool Use**, Register tool schemas and async handlers. The framework manages the LLM ↔ tool call loop automatically.
 - **Planning & ReAct**, Built-in `PlanningSystem` and `ReplanningSystem` for multi-step reasoning with dynamic plan adjustment.
 - **Multi-Agent Messaging**, Entities communicate via `MessageBusSystem` using a pub/sub or request-response pattern with CloudEvents-compatible envelopes.
-- **Subagent Delegation**, Spawn child agents for subtasks via `SubagentSystem`. Named subagent registry, isolated execution, policy-based inheritance, explicit installer API (`install_delegate_tool()`), and automatic result aggregation with the `delegate` tool.
+- **Subagent Delegation**, Spawn child agents for subtasks via `SubagentSystem`. Unified API supports both synchronous delegation and background execution with session management (`subagent`, `subagent_status`, `subagent_result`, `subagent_cancel`). Named subagent registry, isolated execution, policy-based inheritance, and legacy `delegate` tool support.
 - **Tree-Structured Conversations**, Branch and merge conversation history with `ConversationTreeComponent`. Navigate multiple reasoning paths, compare outcomes, and linearize for system compatibility.
 - **Structured Output**, JSON mode with Pydantic schema support for type-safe LLM responses.
 - **Serialization**, Save and restore full `World` state (entities, components, conversation history) via `WorldSerializer`.
@@ -123,6 +123,11 @@ cp .env.example .env
 
 ```ini
 LLM_API_KEY=your-api-key-here
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_MODEL=qwen3.5-plus
+
+# For DashScope (Aliyun), also set:
+DASHSCOPE_API_KEY=your-api-key-here
 LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 LLM_MODEL=qwen3.5-plus
 ```
@@ -286,7 +291,7 @@ The `examples/` directory contains 24 runnable demos:
 | [`tool_approval_agent.py`](examples/tool_approval_agent.py) | Manual approval flow for sensitive tools |
 | [`tree_search_agent.py`](examples/tree_search_agent.py) | MCTS-based planning for complex goals (dual-mode) |
 | [`rag_agent.py`](examples/rag_agent.py) | Retrieval-Augmented Generation demo (dual-mode with real embeddings) |
-| [`subagent_delegation.py`](examples/subagent_delegation.py) | Parent agent delegates subtasks via `delegate` tool with SubagentSystem (dual-mode) |
+| [`subagent_delegation.py`](examples/subagent_delegation.py) | Parent agent delegates subtasks via legacy `delegate` and new unified `subagent` tools (dual-mode) |
 | [`claude_agent.py`](examples/claude_agent.py) | Native Anthropic Claude provider usage |
 | [`litellm_agent.py`](examples/litellm_agent.py) | LiteLLM unified provider for 100+ models |
 | [`streaming_system_agent.py`](examples/streaming_system_agent.py) | System-level streaming with events |
