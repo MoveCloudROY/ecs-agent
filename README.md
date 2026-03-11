@@ -78,50 +78,23 @@ asyncio.run(main())
 
 ## Features
 
-### Core Architecture
-- **ECS Architecture**, Entities hold identity, components hold data, systems hold logic. Mix and match freely.
-- **Async-Native**, Built on `asyncio` with structured concurrency. Systems at the same priority run concurrently via `TaskGroup`.
-- **Type-Safe**, Full type annotations, `dataclass(slots=True)` components, mypy strict mode. Errors surface at write-time, not runtime.
-- **Serialization**, Save and restore full `World` state (entities, components, conversation history) via `WorldSerializer`.
-- **Infinite Runner Loop**, `max_ticks=None` for agents that run indefinitely until a `TerminalComponent` is found.
-- **Runtime Dynamic Control**, Register entities by name/tag, dynamically add/remove/replace systems at tick boundaries, switch models per-entity, and gracefully interrupt generation.
+### Composition-First Architecture
+Mix 30+ components to build custom agents without inheritance bloat. The Entity-Component-System (ECS) pattern keeps logic and data strictly separated, making agents modular, serializable, and easy to test. Fully type-safe with strict mypy and `dataclass(slots=True)`.
 
-### LLM Providers & Streaming
-- **Provider-Agnostic**, Swap between providers without touching agent logic. Ships with `OpenAIProvider`, `ClaudeProvider`, `LiteLLMProvider`, `FakeProvider`, and `RetryProvider`.
-- **Claude Provider**, Native Anthropic API provider with SSE streaming support.
-- **LiteLLM Provider**, Access 100+ LLM providers through a single unified interface via litellm.
-- **OpenAI Responses API**, Native support for `/v1/responses` endpoint with automatic Chat Completions fallback, streaming, and enhanced metadata tracking.
-- **Streaming**, First-class SSE streaming with `AsyncIterator[StreamDelta]` for real-time token delivery.
-- **Streaming Output (System-Level)**, `StreamingComponent` enables system-level streaming with `StreamStartEvent`, `StreamDeltaEvent`, `StreamEndEvent`.
+### Multi-Agent Orchestration
+- **Subagent Delegation** — Spawn child agents for subtasks with skill and permission inheritance.
+- **MessageBus** — Parent-child and sibling messaging via pub/sub or request-response patterns.
+- **Unified API** — Control lifecycle with `subagent`, `subagent_status`, `subagent_result`, and `subagent_cancel` tools.
 
-### Agent Capabilities
-- **Planning & ReAct**, Built-in `PlanningSystem` and `ReplanningSystem` for multi-step reasoning with dynamic plan adjustment.
-- **Multi-Agent Messaging**, Entities communicate via `MessageBusSystem` using a pub/sub or request-response pattern with CloudEvents-compatible envelopes.
-- **Subagent Delegation**, Spawn child agents for subtasks via `SubagentSystem`. Unified API supports both synchronous delegation and background execution with session management (`subagent`, `subagent_status`, `subagent_result`, `subagent_cancel`).
-- **Tree-Structured Conversations**, Branch and merge conversation history with `ConversationTreeComponent`. Navigate multiple reasoning paths, compare outcomes, and linearize for system compatibility.
-- **Context Management**, Checkpoint-based undo (`CheckpointSystem`), LLM-powered conversation compaction (`CompactionSystem`), resume from checkpoint, and conversation tree revert (`revert_to_message`).
-- **MCTS Plan Optimization**, Find optimal execution paths using Monte Carlo Tree Search (MCTS) for complex goals.
-- **Structured Output**, JSON mode with Pydantic schema support for type-safe LLM responses.
+### Advanced Reasoning & Tree Search
+- **Tree Conversations** — Branch reasoning paths, navigate multiple strategies, and linearize history for LLM compatibility.
+- **Planning & ReAct** — Multi-step reasoning with dynamic replanning on errors or unexpected tool results.
+- **MCTS Optimization** — Find optimal execution paths using Monte Carlo Tree Search for complex goals.
 
-### Tools & Integration
-- **Tool Use**, Register tool schemas and async handlers. The framework manages the LLM ↔ tool call loop automatically.
-- **Built-in Tools**, High-quality file manipulation (read/write/hash-anchored edit) and bash execution tools.
-- **Skills System**, Composable capability modules with progressive disclosure (Tier 1/2/3) and file-based auto-discovery.
-- **Markdown Skills**, Load skills from `.claude/skills/<name>/SKILL.md` format with YAML frontmatter, automatic tool discovery from `scripts/` directory, and progressive disclosure.
-- **Tool Auto-Discovery & Approval**, Secure your agent with manual approval policies for sensitive tool calls.
-- **MCP Integration**, Connect to external tool servers via the Model Context Protocol (stdio, SSE, HTTP).
-- **Web Search**, Built-in web search capabilities via Brave Search API.
-- **Permission System**, Granular tool whitelisting/blacklisting and secure `bwrap` sandboxing.
-
-### Advanced Features & Orchestration
-- **Task Orchestration**, Multi-step task management with explicit state machine (READY → RUNNING → COMPLETED), dependency resolution, wave-based parallel dispatch, and mixed backend routing.
-- **RAG (Vector Search)**, Retrieval-Augmented Generation with pluggable embedding providers and vector stores.
-- **Agent DSL**, Define AI agents declaratively using JSON or Markdown configuration files with deterministic loading and fail-fast validation.
-- **Agent Scratchbook**, Persistent filesystem-backed storage for categorized agent artifacts (tool results, plans, snapshots) with atomic index updates.
-
-### Development & Observability
-- **User Input System**, Async human-in-the-loop input with `UserInputSystem`, supports infinite wait (`timeout=None`).
-- **Enhanced Logging**, Structured logging with `structlog` featuring caller info, exception formatting, per-module log level filtering, and stdlib logging bridge.
+### Production Infrastructure
+- **5 LLM Providers + Streaming** — OpenAI, Claude, LiteLLM (100+ models), Fake, and Retry providers with real-time SSE token delivery.
+- **Context Management** — Checkpoints (undo/resume), conversation compaction (compression), and memory windowing.
+- **Tool Ecosystem** — Auto-discovery, manual approval flows, secure `bwrap` sandboxing, and composable skills.
 
 ## Architecture
 
