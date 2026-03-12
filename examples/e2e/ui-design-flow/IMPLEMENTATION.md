@@ -1,72 +1,73 @@
 # UI Design Flow E2E — Implementation Architecture
 
-## Overview
+This document details the technical architecture and implementation of the UI Design Flow E2E example, focusing on the Entity-Component-System (ECS) patterns, system orchestration, and skill-based extension.
 
-This document describes the architecture and implementation plan for the UI
-Design Flow E2E example.
+## Architecture Overview
 
-## Structure
+The example follows a strict ECS pattern where data (Components) is separated from logic (Systems). The `World` manages entities and their components, while the `Runner` executes systems in a prioritized tick loop.
 
+### Core Components
+
+- **LLMComponent**: Stores the provider (OpenAI or Fake), model name, and system prompt.
+- **ConversationComponent**: Manages the message history between the user and the agent.
+- **UserInputComponent**: Indicates that the agent is waiting for external input from the user.
+- **SkillComponent**: Holds metadata for installed skills (`ui-navigator`, `ui-prompt`).
+- **ToolRegistryComponent**: (Internal) Map of tool names to their execution logic, populated by installed skills.
+- **TerminalComponent**: Attached when the user sends an "exit" command or the agent completes its task.
+
+### System Execution Order
+
+Systems are registered with specific priorities to ensure correct data flow within each tick. Lower priority values execute first.
+
+| System | Priority | Purpose |
+|--------|----------|---------|
+| **UserInputSystem** | -5 | Processes `UserInputComponent` and triggers `UserInputRequestedEvent`. |
+| **ReasoningSystem** | 0 | Calls the LLM provider to generate the next response or tool call. |
+| **ToolExecutionSystem** | 5 | Dispatches pending tool calls to their respective skill scripts. |
+| **MemorySystem** | 10 | Updates conversation history and manages context window. |
+| **ErrorHandlingSystem** | 99 | Captures exceptions from other systems and attaches `ErrorComponent`. |
+
+## Interactive Input Handling
+
+Interactive input is achieved through an event-driven adapter in `runtime.py`.
+
+1. **Trigger**: When `UserInputSystem` detects a `UserInputComponent`, it emits a `UserInputRequestedEvent`.
+2. **Subscription**: `setup_interactive_input` subscribes to this event.
+3. **Async Stdin**: The subscriber uses `asyncio.run_in_executor` to call the blocking `input()` function without freezing the event loop.
+4. **Resolution**: Once input is received, the subscriber resolves the event's `input_future`, allowing the system tick to complete.
+5. **Termination**: Typing "exit" or "quit" attaches a `TerminalComponent` to the agent, signaling the `Runner` to stop.
+
+## Skill Installation Lifecycle
+
+Skills are loaded from Markdown files (`SKILL.md`) using the `MarkdownSkill` class and installed via `SkillManager`.
+
+```python
+manager = SkillManager()
+ui_nav = MarkdownSkill(skill_path=Path("path/to/SKILL.md"))
+manager.install(world, agent_id, ui_nav)
 ```
-examples/e2e/ui-design-flow/
-├── main.py                  # Entrypoint: world setup, provider selection, agent loop
-├── runtime.py               # Interactive input adapter (Task 3)
-├── artifacts.py             # Path utilities and output management
-├── README.md                # Usage guide
-├── IMPLEMENTATION.md        # This file
-└── ui-design/               # Output directory for artifacts
-    ├── draft.md             # UI design from ui-navigator skill
-    └── nano-banana-prompts.md # Component prompts from ui-prompt skill
-```
 
-## Design Phases (10 Tasks)
+**Critical Timing**: Skills must be installed after the agent entity is created but *before* systems are registered. This ensures the `ToolRegistryComponent` is available for the `ReasoningSystem` during the first tick.
 
-### Wave 1: Core Scaffolding & Skills (Tasks 1-5)
+## Artifact Management & Security
 
-| Task | Focus | Status |
-|------|-------|--------|
-| 1 | File scaffolding (THIS TASK) | In Progress |
-| 2 | Skill installation & loading | Pending |
-| 3 | Interactive input + UserInputSystem | Pending |
-| 4 | Artifact writing + @path rewriting | Pending |
-| 5 | System integration + FakeProvider tests | Pending |
+Artifacts are managed by the `artifacts.py` module, which provides a safe abstraction over filesystem operations.
 
-### Wave 2: Real LLM & Production (Tasks 6-10)
-
-| Task | Focus | Status |
-|------|-------|--------|
-| 6 | OpenAI provider real-LLM tests | Pending |
-| 7 | TDD slash expansion & @path security | Pending |
-| 8 | Interactive CLI loop with DashScope | Pending |
-| 9 | Artifact pipeline optimization | Pending |
-| 10 | Full E2E documentation & cleanup | Pending |
-
-## Key Patterns
-
-### Provider Dual-Mode
-See `main.py:42-63` — environment-gated provider selection
-
-### Artifact Output
-See `artifacts.py` — path utilities with traversal protection
-
-### Async Input
-See `runtime.py` — placeholder for Task 3 UserInputSystem integration
-
-## Dependencies
-
-- `ecs_agent` — Core ECS framework
-- `ecs_agent.providers` — LLM provider protocol
-- `ecs_agent.systems` — Built-in systems (Reasoning, ToolExecution, etc.)
-- `ecs_agent.skills` — Markdown skill support (Task 2)
+- **Output Layout**: `ensure_output_layout()` creates the `ui-design/` directory and returns a dataclass with absolute paths to `draft.md` and `nano-banana-prompts.md`.
+- **Path Traversal Protection**: Every read/write operation is validated against the base output directory using `Path.resolve()` and prefix checking. Any attempt to use `../` to escape the sandbox raises a `ValueError`.
+- **Deterministic Resets**: In testing, the output directory is recreated to ensure a clean state for each run.
 
 ## Testing Strategy
 
-**Task 1 (Scaffolding)**: Syntax validation via `py_compile`
+The implementation is verified through a tiered testing approach in `tests/integration/test_ui_design_flow.py`:
 
-**Task 5 (Integration)**: FakeProvider tests with mocked tool responses
+1. **Deterministic E2E (FakeProvider)**: Validates the entire system loop, system priorities, and event-driven input using a mocked LLM.
+2. **Error Boundary Tests**: Ensures the orchestrator handles missing prompt files or invalid skill paths gracefully without crashing.
+3. **CLI Automation Tests**: Uses `subprocess` to verify that the example can be run as a standalone script with piped input.
+4. **Real-LLM Gated Tests**: Optional integration tests for OpenAI-compatible providers, skipped automatically if `LLM_API_KEY` is missing.
 
-**Task 6+**: Real-LLM tests gated by `@pytest.mark.skipif(not LLM_API_KEY)`
+## Known Limitations & Future Work
 
-## Next Steps
-
-See `.sisyphus/plans/ui-design-flow-e2e.md` for detailed task breakdown.
+- **Slash Commands**: Documentation of `/skill-name` syntax is omitted as the feature was deferred. Interaction is purely natural language or tool-driven.
+- **State Persistence**: The current implementation does not persist the `World` state to disk between runs (serialization).
+- **Tool Concurrency**: Tool execution is currently sequential within each tick.
