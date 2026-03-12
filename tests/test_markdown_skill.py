@@ -961,3 +961,367 @@ def test_render_with_arguments_full_substitution_round_trip(
         f"full=hello world indexed=hello "
         f"short=hello session=<session-id> dir={tmp_path}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Advanced frontmatter field tests (Task 10)
+# ---------------------------------------------------------------------------
+
+
+def _install_skill_from_content(content: str, skill_name: str) -> "SkillMetadata":
+    """Helper: write SKILL.md, install via DiscoveryManager, return SkillMetadata."""
+    import asyncio
+    import tempfile
+    from ecs_agent.components.definitions import SkillComponent, SkillMetadata
+    from ecs_agent.skills.discovery import DiscoveryManager
+    from ecs_agent.skills.manager import SkillManager
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        skill_dir = base / ".claude" / "skills" / skill_name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(content)
+
+        world = World()
+        entity = world.create_entity()
+
+        asyncio.run(
+            DiscoveryManager().auto_discover_and_install(
+                world,
+                entity,
+                SkillManager(),
+                directories=[base],
+            )
+        )
+
+        skill_comp = world.get_component(entity, SkillComponent)
+        assert skill_comp is not None, "SkillComponent missing after install"
+        return skill_comp.skills[skill_name]
+
+
+def test_markdown_skill_argument_hint_parses_to_metadata() -> None:
+    """argument-hint in frontmatter maps to argument_hint field on SkillMetadata."""
+    content = (
+        "---\n"
+        "name: arg-hint-skill\n"
+        "description: Tests argument-hint\n"
+        "argument-hint: '<query>'\n"
+        "---\n"
+        "Skill body"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        skill_dir = base / ".claude" / "skills" / "arg-hint-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(content)
+
+        import asyncio
+        from ecs_agent.components.definitions import SkillComponent
+        from ecs_agent.skills.discovery import DiscoveryManager
+        from ecs_agent.skills.manager import SkillManager
+
+        world = World()
+        entity = world.create_entity()
+        asyncio.run(
+            DiscoveryManager().auto_discover_and_install(
+                world, entity, SkillManager(), directories=[base]
+            )
+        )
+
+        skill_comp = world.get_component(entity, SkillComponent)
+        assert skill_comp is not None
+        metadata = skill_comp.skills["arg-hint-skill"]
+        assert metadata.argument_hint == "<query>"
+
+
+def test_markdown_skill_allowed_tools_list_parses_to_metadata() -> None:
+    """allowed-tools list in frontmatter maps to allowed_tools field on SkillMetadata."""
+    content = (
+        "---\n"
+        "name: allowed-tools-skill\n"
+        "description: Tests allowed-tools\n"
+        "allowed-tools:\n"
+        "  - bash_tool\n"
+        "  - read_file\n"
+        "---\n"
+        "Skill body"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        skill_dir = base / ".claude" / "skills" / "allowed-tools-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(content)
+
+        import asyncio
+        from ecs_agent.components.definitions import SkillComponent
+        from ecs_agent.skills.discovery import DiscoveryManager
+        from ecs_agent.skills.manager import SkillManager
+
+        world = World()
+        entity = world.create_entity()
+        asyncio.run(
+            DiscoveryManager().auto_discover_and_install(
+                world, entity, SkillManager(), directories=[base]
+            )
+        )
+
+        skill_comp = world.get_component(entity, SkillComponent)
+        assert skill_comp is not None
+        metadata = skill_comp.skills["allowed-tools-skill"]
+        assert metadata.allowed_tools == ["bash_tool", "read_file"]
+
+
+def test_markdown_skill_context_field_parses_to_metadata() -> None:
+    """context string in frontmatter maps to context field on SkillMetadata."""
+    content = (
+        "---\n"
+        "name: context-skill\n"
+        "description: Tests context\n"
+        "context: 'code-review'\n"
+        "---\n"
+        "Skill body"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        skill_dir = base / ".claude" / "skills" / "context-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(content)
+
+        import asyncio
+        from ecs_agent.components.definitions import SkillComponent
+        from ecs_agent.skills.discovery import DiscoveryManager
+        from ecs_agent.skills.manager import SkillManager
+
+        world = World()
+        entity = world.create_entity()
+        asyncio.run(
+            DiscoveryManager().auto_discover_and_install(
+                world, entity, SkillManager(), directories=[base]
+            )
+        )
+
+        skill_comp = world.get_component(entity, SkillComponent)
+        assert skill_comp is not None
+        metadata = skill_comp.skills["context-skill"]
+        assert metadata.context == "code-review"
+
+
+def test_markdown_skill_agent_field_parses_to_metadata() -> None:
+    """agent string in frontmatter maps to agent field on SkillMetadata."""
+    content = (
+        "---\n"
+        "name: agent-skill\n"
+        "description: Tests agent\n"
+        "agent: 'reviewer-agent'\n"
+        "---\n"
+        "Skill body"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        skill_dir = base / ".claude" / "skills" / "agent-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(content)
+
+        import asyncio
+        from ecs_agent.components.definitions import SkillComponent
+        from ecs_agent.skills.discovery import DiscoveryManager
+        from ecs_agent.skills.manager import SkillManager
+
+        world = World()
+        entity = world.create_entity()
+        asyncio.run(
+            DiscoveryManager().auto_discover_and_install(
+                world, entity, SkillManager(), directories=[base]
+            )
+        )
+
+        skill_comp = world.get_component(entity, SkillComponent)
+        assert skill_comp is not None
+        metadata = skill_comp.skills["agent-skill"]
+        assert metadata.agent == "reviewer-agent"
+
+
+def test_markdown_skill_model_field_parses_to_metadata() -> None:
+    """model string in frontmatter maps to model field on SkillMetadata."""
+    content = (
+        "---\n"
+        "name: model-skill\n"
+        "description: Tests model\n"
+        "model: 'claude-3-5-sonnet'\n"
+        "---\n"
+        "Skill body"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        skill_dir = base / ".claude" / "skills" / "model-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(content)
+
+        import asyncio
+        from ecs_agent.components.definitions import SkillComponent
+        from ecs_agent.skills.discovery import DiscoveryManager
+        from ecs_agent.skills.manager import SkillManager
+
+        world = World()
+        entity = world.create_entity()
+        asyncio.run(
+            DiscoveryManager().auto_discover_and_install(
+                world, entity, SkillManager(), directories=[base]
+            )
+        )
+
+        skill_comp = world.get_component(entity, SkillComponent)
+        assert skill_comp is not None
+        metadata = skill_comp.skills["model-skill"]
+        assert metadata.model == "claude-3-5-sonnet"
+
+
+def test_markdown_skill_hooks_dict_parses_to_metadata() -> None:
+    """hooks dict in frontmatter maps to hooks field on SkillMetadata."""
+    content = (
+        "---\n"
+        "name: hooks-skill\n"
+        "description: Tests hooks\n"
+        "hooks:\n"
+        "  pre_run: 'setup.sh'\n"
+        "  post_run: 'cleanup.sh'\n"
+        "---\n"
+        "Skill body"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        skill_dir = base / ".claude" / "skills" / "hooks-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(content)
+
+        import asyncio
+        from ecs_agent.components.definitions import SkillComponent
+        from ecs_agent.skills.discovery import DiscoveryManager
+        from ecs_agent.skills.manager import SkillManager
+
+        world = World()
+        entity = world.create_entity()
+        asyncio.run(
+            DiscoveryManager().auto_discover_and_install(
+                world, entity, SkillManager(), directories=[base]
+            )
+        )
+
+        skill_comp = world.get_component(entity, SkillComponent)
+        assert skill_comp is not None
+        metadata = skill_comp.skills["hooks-skill"]
+        assert metadata.hooks == {"pre_run": "setup.sh", "post_run": "cleanup.sh"}
+
+
+def test_markdown_skill_allowed_tools_invalid_type_produces_empty_list() -> None:
+    """allowed-tools: 'not-a-list' (invalid type) → allowed_tools == [] safe default."""
+    content = (
+        "---\n"
+        "name: bad-tools-skill\n"
+        "description: Tests invalid allowed-tools\n"
+        "allowed-tools: 'not-a-list'\n"
+        "---\n"
+        "Skill body"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        skill_dir = base / ".claude" / "skills" / "bad-tools-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(content)
+
+        import asyncio
+        from ecs_agent.components.definitions import SkillComponent
+        from ecs_agent.skills.discovery import DiscoveryManager
+        from ecs_agent.skills.manager import SkillManager
+
+        world = World()
+        entity = world.create_entity()
+        asyncio.run(
+            DiscoveryManager().auto_discover_and_install(
+                world, entity, SkillManager(), directories=[base]
+            )
+        )
+
+        skill_comp = world.get_component(entity, SkillComponent)
+        assert skill_comp is not None
+        metadata = skill_comp.skills["bad-tools-skill"]
+        assert metadata.allowed_tools == []
+
+
+def test_markdown_skill_hooks_invalid_type_produces_empty_dict() -> None:
+    """hooks: 'not-a-dict' (invalid type) → hooks == {} safe default."""
+    content = (
+        "---\n"
+        "name: bad-hooks-skill\n"
+        "description: Tests invalid hooks\n"
+        "hooks: 'not-a-dict'\n"
+        "---\n"
+        "Skill body"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        skill_dir = base / ".claude" / "skills" / "bad-hooks-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(content)
+
+        import asyncio
+        from ecs_agent.components.definitions import SkillComponent
+        from ecs_agent.skills.discovery import DiscoveryManager
+        from ecs_agent.skills.manager import SkillManager
+
+        world = World()
+        entity = world.create_entity()
+        asyncio.run(
+            DiscoveryManager().auto_discover_and_install(
+                world, entity, SkillManager(), directories=[base]
+            )
+        )
+
+        skill_comp = world.get_component(entity, SkillComponent)
+        assert skill_comp is not None
+        metadata = skill_comp.skills["bad-hooks-skill"]
+        assert metadata.hooks == {}
+
+
+def test_markdown_skill_user_invocable_alias_maps_to_user_invocable_field() -> None:
+    """user-invocable: false in frontmatter maps to user_invocable=False on SkillMetadata."""
+    content = (
+        "---\n"
+        "name: no-user-invoke\n"
+        "description: Tests user-invocable alias\n"
+        "user-invocable: false\n"
+        "---\n"
+        "Skill body"
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        skill_dir = base / ".claude" / "skills" / "no-user-invoke"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(content)
+
+        import asyncio
+        from ecs_agent.components.definitions import SkillComponent
+        from ecs_agent.skills.discovery import DiscoveryManager
+        from ecs_agent.skills.manager import SkillManager
+
+        world = World()
+        entity = world.create_entity()
+        asyncio.run(
+            DiscoveryManager().auto_discover_and_install(
+                world, entity, SkillManager(), directories=[base]
+            )
+        )
+
+        skill_comp = world.get_component(entity, SkillComponent)
+        assert skill_comp is not None
+        metadata = skill_comp.skills["no-user-invoke"]
+        assert metadata.user_invocable is False
