@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
+import shutil
 from pathlib import Path
 
 import pytest
@@ -329,3 +331,37 @@ async def test_ui_design_flow_real_llm(tmp_path: Path) -> None:
     conv = world.get_component(agent_id, ConversationComponent)
     assert conv is not None
     assert len(conv.messages) > 1, "Expected conversation to have occurred"
+
+
+@pytest.mark.asyncio
+async def test_ui_design_flow_cli_automation() -> None:
+    """Test CLI automation with piped stdin input (FakeProvider mode).
+
+    This test simulates interactive CLI usage by piping stdin to main.py
+    without LLM_API_KEY set, ensuring FakeProvider fallback is used.
+    Verifies the agent responds to user input and conversation occurs.
+    """
+    # Input sequence: Design request → continue → exit
+    input_sequence = "Design a calculator UI\ncontinue\nexit\n"
+
+    # Run main.py with stdin piped, without LLM_API_KEY
+    result = subprocess.run(
+        ["uv", "run", "python", "examples/e2e/ui-design-flow/main.py"],
+        input=input_sequence,
+        text=True,
+        capture_output=True,
+        cwd=Path(__file__).parent.parent.parent,
+        env={**os.environ, "LLM_API_KEY": ""},  # Force FakeProvider
+    )
+
+    # Verify successful execution
+    assert result.returncode == 0, (
+        f"Expected exit code 0, got {result.returncode}. "
+        f"stderr: {result.stderr}"
+    )
+
+    # Verify conversation occurred (assistant response visible in output)
+    output = result.stdout + result.stderr
+    assert "assistant" in output.lower() or "conversation" in output.lower(), (
+        f"Expected conversation evidence in output. Got:\n{output}"
+    )
