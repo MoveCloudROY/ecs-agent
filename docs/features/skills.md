@@ -36,7 +36,7 @@ Skills use progressive disclosure to minimize the context window while keeping c
 
 ## Skill Protocol
 
-Any class implementing the `Skill` protocol can be managed by a `SkillManager`.
+Any class implementing the `ScriptSkill` protocol can be managed by a `SkillManager`.
 
 ```python
 from typing import Protocol, runtime_checkable
@@ -44,7 +44,7 @@ from ecs_agent.core import World
 from ecs_agent.types import EntityId, ToolSchema, ToolHandler
 
 @runtime_checkable
-class Skill(Protocol):
+class ScriptSkill(Protocol):
     name: str
     description: str
 
@@ -73,9 +73,9 @@ The `SkillManager` handles the installation lifecycle, tool registration, and pr
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `index` | `index(world, entity_id, skill)` | Register metadata only. No tools loaded. `activated=False`. |
+| `index` | `index(world, entity_id, skill: ScriptSkill)` | Register metadata only. No tools loaded. `activated=False`. |
 | `activate` | `activate(world, entity_id, skill_name)` | Load system prompt and register tools. Idempotent. |
-| `install` | `install(world, entity_id, skill)` | Convenience: `index()` + `activate()` in one call. |
+| `install` | `install(world, entity_id, skill: ScriptSkill)` | Convenience: `index()` + `activate()` in one call. |
 | `uninstall` | `uninstall(world, entity_id, skill_name)` | Remove metadata, tools, and system prompt fragment. |
 | `list_skills` | `list_skills(world, entity_id)` | Return all `SkillMetadata` for installed skills. |
 | `get_skill_metadata` | `get_skill_metadata(world, entity_id, skill_name)` | Return metadata for a specific skill, or `None`. |
@@ -180,7 +180,7 @@ can_auto = manager.can_model_auto_invoke_skill(world, agent, "web-scraper")
 ```
 
 ### Path Safety
-The `MarkdownSkill` class provides `resolve_supporting_path` to safely resolve paths within the skill directory, blocking any directory traversal attempts.
+The `Skill` class provides `resolve_supporting_path` to safely resolve paths within the skill directory, blocking any directory traversal attempts.
 
 ```python
 # Safe
@@ -195,22 +195,22 @@ If a `SKILL.md` file contains invalid frontmatter or missing required fields, th
 ## Skill Discovery
 
 ### Python Skill Discovery (SkillDiscovery)
-Scans directories for `.py` files and instantiates classes implementing the `Skill` protocol.
+Scans directories for `.py` files and instantiates classes implementing the `ScriptSkill` protocol.
 
 ```python
 from ecs_agent.skills.discovery import SkillDiscovery
 
 discovery = SkillDiscovery(skill_paths=["./my_skills"])
-skills = discovery.discover() # Returns list[Skill]
+skills = discovery.discover() # Returns list[ScriptSkill]
 ```
 
-### Markdown Skill Discovery (discover_markdown_skills)
+### Markdown Skill Discovery (discover_skills)
 Recursively scans directories for `SKILL.md` files.
 
 ```python
-from ecs_agent.skills.markdown_skill import discover_markdown_skills
+from ecs_agent.skills.markdown_skill import discover_skills
 
-skills = discover_markdown_skills(directories=[Path(".claude/skills")])
+skills = discover_skills(directories=[Path(".claude/skills")])
 ```
 
 ### DiscoveryManager
@@ -261,7 +261,8 @@ Stored in the `SkillComponent` for each installed skill.
 ## Creating a Custom Skill
 
 ```python
-from ecs_agent import Skill, ToolSchema
+from ecs_agent.skills import ScriptSkill
+from ecs_agent.types import ToolSchema
 from ecs_agent.core import World
 from ecs_agent.types import EntityId
 
