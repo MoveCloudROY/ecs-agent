@@ -16,7 +16,7 @@ from structlog.processors import (
 )
 from structlog.dev import ConsoleRenderer
 
-_log_level = os.getenv("ECS_AGENT_LOG_LEVEL", "WARNING").upper()
+_log_level = os.getenv("ECS_AGENT_LOG_LEVEL", "ERROR").upper()
 _module_levels: dict[str, int] = {}
 _LEVEL_MAP = {
     "DEBUG": logging.DEBUG,
@@ -175,14 +175,14 @@ def configure_logging(
 
     Args:
         json_output: If True, output JSON format (production). If False, use console format (development).
-        level: Logging level as string ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"). If None, reads from ECS_AGENT_LOG_LEVEL environment variable (default "WARNING").
+        level: Logging level as string ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"). If None, reads from ECS_AGENT_LOG_LEVEL environment variable (default "ERROR").
         module_levels: Optional module-specific level map. Keys are logger/module prefixes and values are levels.
         colors: Whether to use colored output in console mode.
     """
     global _log_level
     global _module_levels
     if level is None:
-        level = os.getenv("ECS_AGENT_LOG_LEVEL", "WARNING").upper()
+        level = os.getenv("ECS_AGENT_LOG_LEVEL", "ERROR").upper()
     _log_level = level
     _module_levels = {
         module_name: _LEVEL_MAP.get(module_level.upper(), logging.INFO)
@@ -372,7 +372,7 @@ def log_task_ready(
     correlation_id: str = "",
 ) -> None:
     """Log task_ready lifecycle event.
-    
+
     Args:
         logger: Structlog logger instance.
         task_id: Task identifier.
@@ -395,7 +395,7 @@ def log_task_running(
     correlation_id: str = "",
 ) -> None:
     """Log task_running lifecycle event.
-    
+
     Args:
         logger: Structlog logger instance.
         task_id: Task identifier.
@@ -420,7 +420,7 @@ def log_task_completed(
     correlation_id: str = "",
 ) -> None:
     """Log task_completed lifecycle event.
-    
+
     Args:
         logger: Structlog logger instance.
         task_id: Task identifier.
@@ -446,7 +446,7 @@ def log_task_failed(
     correlation_id: str = "",
 ) -> None:
     """Log task_failed lifecycle event with reason and context.
-    
+
     Args:
         logger: Structlog logger instance.
         task_id: Task identifier.
@@ -473,7 +473,7 @@ def log_task_blocked(
     correlation_id: str = "",
 ) -> None:
     """Log task_blocked lifecycle event.
-    
+
     Args:
         logger: Structlog logger instance.
         task_id: Task identifier.
@@ -498,7 +498,7 @@ def log_task_unblocked(
     correlation_id: str = "",
 ) -> None:
     """Log task_unblocked lifecycle event.
-    
+
     Args:
         logger: Structlog logger instance.
         task_id: Task identifier.
