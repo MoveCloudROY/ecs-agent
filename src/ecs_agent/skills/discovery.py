@@ -306,6 +306,13 @@ def discover_markdown_skills(directories: list[Path]) -> list[Skill]:
             try:
                 from typing import cast
                 skill = MarkdownSkill(skill_file)
+                if not skill.valid:
+                    logger.warning(
+                        "markdown_skill_invalid",
+                        path=str(skill_file),
+                        skill_name=skill.name,
+                    )
+                    continue
                 skills.append(cast(Skill, skill))
                 logger.info(
                     "markdown_skill_discovered",
@@ -318,5 +325,4 @@ def discover_markdown_skills(directories: list[Path]) -> list[Skill]:
                     path=str(skill_file),
                     error=str(exc),
                 )
-
     return skills

@@ -79,6 +79,24 @@ def test_skill_component_dataclass_structure() -> None:
         "description": "math helpers",
         "tool_names": ["sum", "subtract"],
         "has_system_prompt": True,
+        # Extended fields with defaults (Task 3 metadata manifest expansion):
+        "user_invocable": True,
+        "disable_model_invocation": False,
+        "argument_hint": "",
+        "allowed_tools": [],
+        "context": None,
+        "agent": None,
+        "model": None,
+        "hooks": {},
+        "skill_dir_path": None,
+        "slash_command": "",
+        "substitution_variables": [
+            "$ARGUMENTS",
+            "$ARGUMENTS[0]",
+            "$1",
+            "${CLAUDE_SESSION_ID}",
+            "${CLAUDE_SKILL_DIR}",
+        ],
     }
 
 
