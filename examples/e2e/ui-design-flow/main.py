@@ -1,0 +1,121 @@
+"""UI Design Flow E2E example entrypoint.
+
+Demonstrates a complete workflow for designing UI through an interactive
+agent using ECS-based composition with dual-mode provider selection.
+
+Tasks:
+- Create World with ReasoningSystem, ToolExecutionSystem, and error handling
+- Install ui-navigator and ui-prompt skills
+- Setup interactive input handling via UserInputSystem
+- Execute agent loop until TerminalComponent or max_ticks
+- Output results to ui-design/ directory via artifacts module
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+from pathlib import Path
+
+from ecs_agent.components import ConversationComponent, LLMComponent
+from ecs_agent.core import Runner, World
+from ecs_agent.logging import configure_logging, get_logger
+from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.systems.error_handling import ErrorHandlingSystem
+from ecs_agent.systems.memory import MemorySystem
+from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.tool_execution import ToolExecutionSystem
+from ecs_agent.types import CompletionResult, Message
+
+from runtime import setup_interactive_input  # type: ignore
+from artifacts import ensure_output_layout  # type: ignore
+
+logger = get_logger(__name__)
+
+
+async def main() -> None:
+    """Run the UI Design Flow E2E example."""
+    configure_logging(json_output=False)
+
+    # Create output directory structure
+    ensure_output_layout()
+
+    # Create World
+    world = World()
+
+    # --- Create LLM provider (dual-mode) ---
+    api_key: str = os.environ.get("LLM_API_KEY", "")
+    base_url: str = os.environ.get(
+        "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    model: str = os.environ.get("LLM_MODEL", "qwen3.5-flash")
+
+    provider: LLMProvider
+    if api_key:
+        logger.info("using_provider", provider="OpenAIProvider", model=model)
+        print(f"Using OpenAIProvider with model: {model}")
+        provider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+    else:
+        logger.info("using_provider", provider="FakeProvider")
+        print("No LLM_API_KEY set. Using FakeProvider for demonstration.")
+        provider = FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(
+                        role="assistant",
+                        content="I'll help you design a beautiful UI. Please describe what you'd like to create.",
+                    )
+                )
+            ]
+        )
+
+    # Create Agent Entity
+    agent_id = world.create_entity()
+    world.add_component(
+        agent_id,
+        LLMComponent(
+            provider=provider,
+            model=model if api_key else "fake",
+            system_prompt="You are a UI design expert. Help users create stunning interfaces.",
+        ),
+    )
+    world.add_component(
+        agent_id,
+        ConversationComponent(
+            messages=[
+                Message(
+                    role="user", content="Help me design a UI for a novel writing app."
+                )
+            ]
+        ),
+    )
+
+    # Register Systems (priority order: lower = earlier execution)
+    world.register_system(ReasoningSystem(priority=0), priority=0)
+    world.register_system(ToolExecutionSystem(priority=5), priority=5)
+    world.register_system(MemorySystem(), priority=10)
+    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
+
+    # Setup interactive input handling
+    # TODO: Implement in Task 3 with UserInputSystem integration
+    await setup_interactive_input(world, agent_id)
+
+    # Run agent loop
+    runner = Runner()
+    await runner.run(world, max_ticks=10)
+
+    # Print results
+    conv = world.get_component(agent_id, ConversationComponent)
+    if conv is not None:
+        logger.info("conversation_complete", message_count=len(conv.messages))
+        print("\nConversation:")
+        for msg in conv.messages:
+            print(f"  {msg.role}: {msg.content}")
+    else:
+        logger.warning("no_conversation_found")
+        print("No conversation found")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
