@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from pathlib import Path
 
 from ecs_agent.components import ConversationComponent, LLMComponent
@@ -27,6 +28,8 @@ from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import CompletionResult, Message
+from ecs_agent.skills.manager import SkillManager
+from ecs_agent.skills.markdown_skill import MarkdownSkill
 
 from runtime import setup_interactive_input  # type: ignore
 from artifacts import ensure_output_layout  # type: ignore
@@ -72,6 +75,28 @@ async def main() -> None:
 
     # Create Agent Entity
     agent_id = world.create_entity()
+
+    # Install skills BEFORE registering systems
+    manager = SkillManager()
+    ui_navigator_skill = MarkdownSkill(
+        skill_path=Path(__file__).parent / ".claude/skills/ui-navigator/SKILL.md"
+    )
+    ui_prompt_skill = MarkdownSkill(
+        skill_path=Path(__file__).parent / ".claude/skills/ui-prompt/SKILL.md"
+    )
+    manager.install(world, agent_id, ui_navigator_skill)
+    manager.install(world, agent_id, ui_prompt_skill)
+
+    # Read initial prompt from file
+    prompt_path = Path(__file__).parent / "assets/prompt.txt"
+    try:
+        initial_prompt = prompt_path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        logger.error("prompt_file_not_found", path=str(prompt_path))
+        print(f"Error: Prompt file not found: {prompt_path}")
+        sys.exit(1)
+
+    # Add components
     world.add_component(
         agent_id,
         LLMComponent(
@@ -83,11 +108,7 @@ async def main() -> None:
     world.add_component(
         agent_id,
         ConversationComponent(
-            messages=[
-                Message(
-                    role="user", content="Help me design a UI for a novel writing app."
-                )
-            ]
+            messages=[Message(role="user", content=initial_prompt)]
         ),
     )
 
@@ -98,7 +119,7 @@ async def main() -> None:
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     # Setup interactive input handling
-    # TODO: Implement in Task 3 with UserInputSystem integration
+    # Setup interactive input handling (implemented in Task 3)
     await setup_interactive_input(world, agent_id)
 
     # Run agent loop
