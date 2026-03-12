@@ -449,10 +449,24 @@ class Skill:
     def install(self, world: World, entity_id: EntityId) -> None:
         """Install skill by adding system prompt and tools.
 
+        When called after SkillManager.activate() (the canonical lifecycle path),
+        this method is a no-op because the manager has already registered tools
+        and injected the system prompt. Idempotency is checked via SkillComponent:
+        if the manager has indexed or activated this skill, skip all work here to
+        prevent duplicate tool entries and doubled system prompts.
+
         Args:
             world: World instance
             entity_id: Entity to install skill on
         """
+        # Guard: if SkillManager has already indexed (or activated) this skill,
+        # all tool and prompt registration was done by the manager. Skip to avoid
+        # duplicate registrations — SkillManager is the canonical lifecycle owner.
+        skill_comp = world.get_component(entity_id, SkillComponent)
+        if skill_comp is not None and self.name in skill_comp.skills:
+            return
+
+        # Standalone path (no manager): register tools, prompt, and SkillComponent.
         # Add or update SystemPromptComponent
         prompt_comp = world.get_component(entity_id, SystemPromptComponent)
         if prompt_comp is None:
@@ -477,7 +491,6 @@ class Skill:
             tool_reg.handlers[tool_name] = handler
 
         # Track installed skill in SkillComponent
-        skill_comp = world.get_component(entity_id, SkillComponent)
         if skill_comp is None:
             skill_comp = SkillComponent(skills={})
             world.add_component(entity_id, skill_comp)
@@ -500,7 +513,6 @@ class Skill:
             skill_dir_path=str(self.skill_dir_path),
             slash_command=self.slash_command,
         )
-
     def uninstall(self, world: World, entity_id: EntityId) -> None:
         """Uninstall skill by removing system prompt and tools.
 

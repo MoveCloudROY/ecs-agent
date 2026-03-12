@@ -481,3 +481,134 @@ def test_script_skill_in_skills_module_is_the_protocol() -> None:
         "After rename: protocol.py's Skill class becomes ScriptSkill. "
         "renamed to ScriptSkill — use ScriptSkill for protocol-based isinstance checks."
     )
+
+
+# ---------------------------------------------------------------------------
+# T3: Lifecycle idempotency tests — SkillManager as canonical lifecycle owner
+# ---------------------------------------------------------------------------
+
+
+def _write_simple_markdown_skill_fixture(base_dir: Path) -> Path:
+    """Write a minimal SKILL.md with a single tool script for lifecycle testing."""
+    skill_name = "lifecycle-test-skill"
+    skill_dir = base_dir / ".claude" / "skills" / skill_name
+    scripts_dir = skill_dir / "scripts"
+    scripts_dir.mkdir(parents=True)
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text(
+        "---\n"
+        "name: lifecycle-test-skill\n"
+        "description: skill for lifecycle testing\n"
+        "---\n"
+        "You are a lifecycle test skill.",
+        encoding="utf-8",
+    )
+    (scripts_dir / "hello.py").write_text(
+        "import json\n"
+        "import sys\n"
+        "payload = json.loads(sys.stdin.read() or '{}')\n"
+        "print(payload.get('name', 'world'))\n",
+        encoding="utf-8",
+    )
+    return skill_md
+
+
+def test_skill_lifecycle_no_duplicate_tools_after_activate(tmp_path: Path) -> None:
+    """After manager.activate(), skill.install() must not re-add tools.
+
+    SkillManager is the canonical lifecycle owner. When activate() has already
+    registered a skill's tools, a subsequent skill.install() call must NOT
+    result in duplicate tool entries.
+    """
+    from ecs_agent import SkillManager
+    from ecs_agent.skills.markdown_skill import Skill
+
+    skill_md = _write_simple_markdown_skill_fixture(tmp_path)
+    skill = Skill(skill_md)
+
+    world = World()
+    entity = world.create_entity()
+    manager = SkillManager()
+
+    # index + activate (activate internally calls skill.install())
+    manager.index(world, entity, skill)
+    manager.activate(world, entity, skill.name)
+
+    registry = world.get_component(entity, ToolRegistryComponent)
+    assert registry is not None
+    tool_count_after_activate = len(registry.tools)
+
+    # Now call skill.install() explicitly — must not add duplicates
+    skill.install(world, entity)
+
+    assert len(registry.tools) == tool_count_after_activate, (
+        f"Tool count changed from {tool_count_after_activate} to {len(registry.tools)}: "
+        "skill.install() re-registered tools already registered by the manager."
+    )
+
+
+def test_skill_lifecycle_no_duplicate_prompts_after_activate(tmp_path: Path) -> None:
+    """After manager.activate(), skill.install() must not double the system prompt.
+
+    SkillManager is the canonical lifecycle owner. When activate() has already
+    injected a skill's system prompt, a subsequent skill.install() call must NOT
+    append the same prompt again.
+    """
+    from ecs_agent import SkillManager
+    from ecs_agent.components import SystemPromptComponent
+    from ecs_agent.skills.markdown_skill import Skill
+
+    skill_md = _write_simple_markdown_skill_fixture(tmp_path)
+    skill = Skill(skill_md)
+
+    world = World()
+    entity = world.create_entity()
+    manager = SkillManager()
+
+    # index + activate (activate internally calls skill.install())
+    manager.index(world, entity, skill)
+    manager.activate(world, entity, skill.name)
+
+    prompt_comp = world.get_component(entity, SystemPromptComponent)
+    assert prompt_comp is not None
+    prompt_after_activate = prompt_comp.content
+
+    # Now call skill.install() explicitly — prompt must not be doubled
+    skill.install(world, entity)
+
+    assert prompt_comp.content == prompt_after_activate, (
+        "System prompt was modified by skill.install() after manager already registered it: "
+        "lifecycle ownership not unified in SkillManager."
+    )
+
+
+def test_skill_lifecycle_manager_install_prompt_appears_exactly_once(
+    tmp_path: Path,
+) -> None:
+    """manager.install() must register the system prompt exactly once.
+
+    When manager.install() calls index() then activate(), and activate() calls
+    skill.install() internally, the system prompt must not be doubled.
+    This is the core lifecycle ownership invariant.
+    """
+    from ecs_agent import SkillManager
+    from ecs_agent.components import SystemPromptComponent
+    from ecs_agent.skills.markdown_skill import Skill
+
+    skill_md = _write_simple_markdown_skill_fixture(tmp_path)
+    skill = Skill(skill_md)
+
+    world = World()
+    entity = world.create_entity()
+    manager = SkillManager()
+
+    manager.install(world, entity, skill)
+
+    prompt_comp = world.get_component(entity, SystemPromptComponent)
+    assert prompt_comp is not None
+    skill_prompt = skill.system_prompt()
+    occurrences = prompt_comp.content.count(skill_prompt)
+    assert occurrences == 1, (
+        f"System prompt appears {occurrences} times after manager.install() — "", "
+        "expected exactly 1. manager.activate() + skill.install() doubled the prompt."
+    )
