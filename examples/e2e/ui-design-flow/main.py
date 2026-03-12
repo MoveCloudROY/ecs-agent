@@ -31,8 +31,8 @@ from ecs_agent.types import CompletionResult, Message
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.markdown_skill import MarkdownSkill
 
-from runtime import setup_interactive_input  # type: ignore
-from artifacts import ensure_output_layout  # type: ignore
+from runtime import setup_interactive_input
+from artifacts import ensure_output_layout
 
 logger = get_logger(__name__)
 
@@ -84,8 +84,8 @@ async def main() -> None:
     ui_prompt_skill = MarkdownSkill(
         skill_path=Path(__file__).parent / ".claude/skills/ui-prompt/SKILL.md"
     )
-    manager.install(world, agent_id, ui_navigator_skill)
-    manager.install(world, agent_id, ui_prompt_skill)
+    manager.install(world, agent_id, ui_navigator_skill)  # type: ignore[arg-type]
+    manager.install(world, agent_id, ui_prompt_skill)  # type: ignore[arg-type]
 
     # Read initial prompt from file
     prompt_path = Path(__file__).parent / "assets/prompt.txt"
