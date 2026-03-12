@@ -260,19 +260,15 @@ world.add_component(
 )
 ```
 
-### File-Based Auto-Discovery
-
-Discover all skills in a directory:
-
 ```python
-from ecs_agent.skills.discovery import discover_skills_from_directory
+from ecs_agent.skills.discovery import discover_markdown_skills
+from pathlib import Path
 
-# Discover all SKILL.md files
-skills = discover_skills_from_directory(Path(".claude/skills"))
+# Discover all SKILL.md files (returns list of MarkdownSkill objects)
+skills = discover_markdown_skills(directories=[Path(".claude/skills")])
 
 for skill in skills:
     print(f"Found skill: {skill.name}")
-```
 
 ## Progressive Disclosure
 
