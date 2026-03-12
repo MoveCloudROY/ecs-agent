@@ -472,3 +472,104 @@ def test_skill_export_from_skills_init_is_not_protocol_class() -> None:
         skill_path.write_text(content)
         instance = Skill(skill_path)
         assert instance.name == "contract-test"
+
+
+# ---------------------------------------------------------------------------
+# Metadata alignment: uniform invocation controls for ScriptSkill and Skill
+# ---------------------------------------------------------------------------
+
+
+def test_metadata_user_invocable_defaults_true_for_script_skill() -> None:
+    """ScriptSkill without user_invocable attr gets user_invocable=True in SkillMetadata.
+
+    manager.index() uses getattr(skill, 'user_invocable', True) so a plain Python
+    ScriptSkill object that does not declare user_invocable defaults to True — meaning
+    the skill is user-invocable unless explicitly opted-out.
+    """
+    world = World()
+    manager = SkillManager()
+    entity_id = world.create_entity()
+
+    # DummySkill has NO user_invocable attribute — exercises the getattr default path
+    skill = DummySkill(
+        name="no-invocable-attr",
+        description="ScriptSkill without user_invocable",
+        tool_bundle={"t": (_tool("t"), _noop_handler)},
+    )
+    assert not hasattr(skill, "user_invocable"), (
+        "DummySkill must not have user_invocable for this test"
+    )
+
+    manager.index(world, entity_id, skill)
+
+    metadata = manager.get_skill_metadata(world, entity_id, "no-invocable-attr")
+    assert metadata is not None
+    assert metadata.user_invocable is True, (
+        "ScriptSkill without user_invocable attr must default to user_invocable=True"
+    )
+
+
+def test_metadata_disable_model_invocation_defaults_false_for_script_skill() -> None:
+    """ScriptSkill without disable_model_invocation attr gets disable_model_invocation=False.
+
+    manager.index() uses getattr(skill, 'disable_model_invocation', False) so a plain Python
+    ScriptSkill object that does not declare disable_model_invocation defaults to False —
+    meaning model auto-invocation is enabled unless explicitly disabled.
+    """
+    world = World()
+    manager = SkillManager()
+    entity_id = world.create_entity()
+
+    # DummySkill has NO disable_model_invocation attribute — exercises the getattr default path
+    skill = DummySkill(
+        name="no-disable-attr",
+        description="ScriptSkill without disable_model_invocation",
+        tool_bundle={"t": (_tool("t"), _noop_handler)},
+    )
+    assert not hasattr(skill, "disable_model_invocation"), (
+        "DummySkill must not have disable_model_invocation for this test"
+    )
+
+    manager.index(world, entity_id, skill)
+
+    metadata = manager.get_skill_metadata(world, entity_id, "no-disable-attr")
+    assert metadata is not None
+    assert metadata.disable_model_invocation is False, (
+        "ScriptSkill without disable_model_invocation attr must default to disable_model_invocation=False"
+    )
+
+    # Also verify: can_model_auto_invoke_skill returns True (model CAN invoke by default)
+    assert manager.can_model_auto_invoke_skill(world, entity_id, "no-disable-attr") is True, (
+        "can_model_auto_invoke_skill must return True when disable_model_invocation=False"
+    )
+
+
+def test_metadata_invalid_frontmatter_gets_graceful_defaults() -> None:
+    """Markdown skill with malformed/missing frontmatter produces safe metadata defaults.
+
+    When a SKILL.md has invalid YAML (e.g. unterminated bracket), the Skill object has
+    valid=False and the invocation control attributes are NOT set. The properties fall back
+    to safe defaults via getattr: user_invocable=True, disable_model_invocation=False.
+    """
+    import tempfile
+    from pathlib import Path
+    from ecs_agent.skills.markdown_skill import Skill
+
+    malformed = "---\nname: bad-yaml\ndescription: [unterminated\n---\nBody"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        skill_path = Path(tmpdir) / "SKILL.md"
+        skill_path.write_text(malformed)
+
+        skill = Skill(skill_path)
+
+        # Confirm the skill is invalid due to malformed frontmatter
+        assert skill.valid is False, "Expected invalid skill for malformed YAML"
+
+        # Invocation control properties must still return safe defaults
+        assert skill.user_invocable is True, (
+            "user_invocable must default to True even for invalid Skill (safe default)"
+        )
+        assert skill.disable_model_invocation is False, (
+            "disable_model_invocation must default to False even for invalid Skill (safe default)"
+        )
