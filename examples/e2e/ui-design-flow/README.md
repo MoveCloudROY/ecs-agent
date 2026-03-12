@@ -6,8 +6,8 @@ This example demonstrates an end-to-end interactive UI design workflow using the
 
 The agent acts as a UI design expert that can:
 1. Reason about design requirements through interactive dialogue.
-2. Generate design drafts using the `ui-navigator` skill.
-3. Create specific styling prompts for components using the `ui-prompt` skill.
+2. Generate design drafts using the `/ui-navigator` skill.
+3. Create specific styling prompts for components using the `/ui-prompt` skill.
 4. Output structured artifacts to the `ui-design/` directory.
 
 ## Features
@@ -30,7 +30,7 @@ The agent acts as a UI design expert that can:
    To use a real LLM, set the following environment variables. If `LLM_API_KEY` is not set, the example will fall back to `FakeProvider`.
    - `LLM_API_KEY`: Your OpenAI-compatible API key.
    - `LLM_BASE_URL`: API base URL (defaults to DashScope).
-   - `LLM_MODEL`: The model to use (defaults to `qwen3.5-flash`).
+   - `LLM_MODEL`: The model to use (defaults to `LLM_MODEL=qwen3.5-flash`).
 
 ## Usage
 
@@ -58,8 +58,8 @@ printf 'Design a calculator\ncontinue\nexit\n' | uv run python main.py
 
 The agent generates design artifacts in the `ui-design/` directory:
 
-- `ui-design/draft.md`: The high-level UI design draft produced by the `ui-navigator` skill.
-- `ui-design/nano-banana-prompts.md`: Component-specific styling prompts produced by the `ui-prompt` skill.
+- `ui-design/draft.md`: The high-level UI design draft produced by the `/ui-navigator` skill.
+- `ui-design/nano-banana-prompts.md`: Component-specific styling prompts produced by the `/ui-prompt` skill.
 
 ## Testing
 

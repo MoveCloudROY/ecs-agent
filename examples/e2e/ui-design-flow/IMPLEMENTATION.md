@@ -8,10 +8,10 @@ The example follows a strict ECS pattern where data (Components) is separated fr
 
 ### Core Components
 
-- **LLMComponent**: Stores the provider (OpenAI or Fake), model name, and system prompt.
+- **LLMComponent**: Stores the provider (OpenAI or Fake), model name (defaults to `qwen3.5-flash`), and system prompt.
 - **ConversationComponent**: Manages the message history between the user and the agent.
 - **UserInputComponent**: Indicates that the agent is waiting for external input from the user.
-- **SkillComponent**: Holds metadata for installed skills (`ui-navigator`, `ui-prompt`).
+- **SkillComponent**: Holds metadata for installed skills (`/ui-navigator`, `/ui-prompt`).
 - **ToolRegistryComponent**: (Internal) Map of tool names to their execution logic, populated by installed skills.
 - **TerminalComponent**: Attached when the user sends an "exit" command or the agent completes its task.
 
