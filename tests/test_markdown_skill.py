@@ -650,6 +650,57 @@ def test_markdown_skill_contract_invocation_controls_are_parsed() -> None:
         assert getattr(metadata, "disable_model_invocation", None) is True
 
 
+def test_markdown_skill_resolve_supporting_path_resolves_relative_path(
+    tmp_path: Path,
+) -> None:
+    skill_file = tmp_path / "SKILL.md"
+    skill_file.write_text("---\nname: resolver\ndescription: resolver\n---\nPrompt")
+
+    skill = MarkdownSkill(skill_file)
+    resolved = skill.resolve_supporting_path("data.json")
+
+    assert resolved == (tmp_path / "data.json").resolve()
+    assert str(resolved).endswith("data.json")
+    assert str(resolved).startswith(str(tmp_path.resolve()))
+
+
+def test_markdown_skill_resolve_supporting_path_blocks_traversal(
+    tmp_path: Path,
+) -> None:
+    skill_file = tmp_path / "SKILL.md"
+    skill_file.write_text("---\nname: traversal\ndescription: traversal\n---\nPrompt")
+
+    skill = MarkdownSkill(skill_file)
+
+    with pytest.raises(ValueError, match="Path traversal"):
+        skill.resolve_supporting_path("../etc/passwd")
+
+
+def test_markdown_skill_resolve_supporting_path_blocks_absolute_path(
+    tmp_path: Path,
+) -> None:
+    skill_file = tmp_path / "SKILL.md"
+    skill_file.write_text("---\nname: absolute\ndescription: absolute\n---\nPrompt")
+
+    skill = MarkdownSkill(skill_file)
+
+    with pytest.raises(ValueError):
+        skill.resolve_supporting_path("/etc/passwd")
+
+
+def test_markdown_skill_resolve_supporting_path_allows_nested_relative(
+    tmp_path: Path,
+) -> None:
+    skill_file = tmp_path / "SKILL.md"
+    skill_file.write_text("---\nname: nested\ndescription: nested\n---\nPrompt")
+
+    skill = MarkdownSkill(skill_file)
+    resolved = skill.resolve_supporting_path("assets/image.png")
+
+    assert resolved == (tmp_path / "assets" / "image.png").resolve()
+    assert str(resolved).startswith(str(tmp_path.resolve()))
+
+
 def test_markdown_skill_contract_path_traversal_is_blocked_for_supporting_files() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         skill_path = Path(tmpdir) / "SKILL.md"
