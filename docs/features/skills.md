@@ -52,7 +52,32 @@ class Skill(Protocol):
 
 ## SkillManager
 
-The `SkillManager` handles the installation lifecycle, tool registration, and prompt management.
+The `SkillManager` handles the installation lifecycle, tool registration, and prompt management. It supports a **two-phase loading** process for efficient token management:
+
+1.  **Index**: Register skill metadata (name, description, tool names) into the `SkillComponent`. No tools are registered yet, and the system prompt is not loaded. `SkillMetadata.activated` is `False`.
+2.  **Activate**: Load the skill's system prompt into the `SystemPromptComponent` and register tools into the `ToolRegistryComponent`. `SkillMetadata.activated` is `True`.
+
+### Basic Usage
+
+```python
+from ecs_agent import SkillManager
+
+manager = SkillManager()
+
+# Option 1: Full Installation (Index + Activate)
+manager.install(world, agent_entity, my_skill)
+
+# Option 2: Two-Phase Loading
+manager.index(world, agent_entity, my_skill)
+# ... later ...
+manager.activate(world, agent_entity, "my-skill")
+
+# List installed skills (shows metadata for both indexed and activated skills)
+skills = manager.list_skills(world, agent_entity)
+
+# Uninstall a skill
+manager.uninstall(world, agent_entity, "my-skill")
+```
 
 ```python
 from ecs_agent import SkillManager
@@ -95,7 +120,28 @@ installed_names = discovery.discover_and_install(world, agent_entity, manager)
 
 ## Discovery Manager
 
-The `DiscoveryManager` provides a high-level API for discovering and installing skills from both the filesystem and external MCP servers.
+The `DiscoveryManager` provides a high-level API for discovering and installing skills from both the filesystem and external MCP servers. For **Markdown Skills**, it uses the lazy indexing path by default.
+
+### Using DiscoveryManager
+
+It combines the capabilities of `SkillDiscovery` and `MCPSkillAdapter` into a single operation. When `directories` are provided, it recursively scans for `SKILL.md` files and **indexes** them for the entity.
+
+```python
+from ecs_agent.skills.discovery import DiscoveryManager
+
+discovery_mgr = DiscoveryManager(
+    skill_paths=["./examples/skills"],
+)
+
+# Discover and index markdown skills
+# Report includes skills that were indexed successfully
+report = await discovery_mgr.auto_discover_and_install(
+    world, agent_entity, manager, directories=[Path(".claude/skills")]
+)
+
+# To use a discovered markdown skill, it must be activated:
+manager.activate(world, agent_entity, "my-discovered-skill")
+```
 
 ### Using DiscoveryManager
 

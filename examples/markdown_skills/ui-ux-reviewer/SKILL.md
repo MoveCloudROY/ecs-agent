@@ -1,6 +1,17 @@
 ---
 name: ui-ux-reviewer
 description: "UI/UX review checklist for landing pages and dashboards. Focus on hierarchy, accessibility, responsive layout, and interaction quality."
+user-invocable: true
+argument-hint: "<design-description>"
+disable-model-invocation: false
+---
+
+# UI/UX Reviewer
+
+Use this skill when reviewing or refining UI output. You are currently reviewing: $ARGUMENTS
+Your instructions are located in: ${CLAUDE_SKILL_DIR}/SKILL.md
+name: ui-ux-reviewer
+description: "UI/UX review checklist for landing pages and dashboards. Focus on hierarchy, accessibility, responsive layout, and interaction quality."
 ---
 
 # UI/UX Reviewer

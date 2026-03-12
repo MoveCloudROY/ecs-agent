@@ -22,7 +22,13 @@ async def main() -> None:
     skill_path = (
         Path(__file__).parent / "markdown_skills" / "ui-ux-reviewer" / "SKILL.md"
     )
+    # Load skill object
     skill = MarkdownSkill(skill_path=skill_path)
+
+    # Note: manager.install() is a convenience for direct installation.
+    # It performs both indexing (metadata) and activation (tools/prompt) in one step.
+    # For automatic discovery from directories, prefer the lazy DiscoveryManager path.
+    manager.install(world, agent, skill)
     manager.install(world, agent, skill)
 
     api_key = os.environ.get("LLM_API_KEY", "")

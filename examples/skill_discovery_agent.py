@@ -47,6 +47,11 @@ async def main() -> None:
     agent = world.create_entity()
 
     # 3. Discover and install directly onto the agent
+    # This registers tools, adds system prompts, and tracks metadata.
+    # Note: For Markdown Skills, DiscoveryManager.auto_discover_and_install()
+    # follows the lazy indexing path (metadata only), requiring an explicit
+    # manager.activate() before the skill is fully operational.
+    installed_names = discovery.discover_and_install(world, agent, manager)
     # This registers tools, adds system prompts, and tracks metadata
     installed_names = discovery.discover_and_install(world, agent, manager)
     print(f"Installed skills: {installed_names}")

@@ -1,11 +1,17 @@
 # Markdown Skills
 
-Load skills from `.claude/skills/<name>/SKILL.md` format with YAML frontmatter, automatic tool discovery from `scripts/` directory, and progressive disclosure.
+Load skills from `.claude/skills/<name>/SKILL.md` format with YAML frontmatter, automatic tool discovery from `scripts/` directory, and lazy two-phase loading.
 
 ## Overview
 
 Markdown Skills provide:
-- **SKILL.md Format**: Define skills in markdown files with YAML frontmatter
+- **SKILL.md Format**: Define skills in markdown files with YAML frontmatter.
+- **Lazy Two-Phase Loading**: Index metadata first, activate body and tools on demand.
+- **Automatic Tool Discovery**: Python scripts in `scripts/` become tools.
+- **Claude-Compatible Substitutions**: Support for `$ARGUMENTS`, `$N`, and environment variables.
+- **Invocation Control**: Fine-grained control over who can invoke the skill.
+- **Path Traversal Protection**: Securely resolve paths within the skill directory.
+- **Skip+Warn Policy**: Invalid skills are skipped with a warning instead of aborting.
 - **Automatic Tool Discovery**: Python scripts in `scripts/` become tools
 - **System Prompt Integration**: Markdown body becomes agent system prompt
 - **File-Based Auto-Discovery**: Load skills from directory structure
@@ -36,8 +42,18 @@ Tools are discovered from the scripts/ directory.
 ### YAML Frontmatter
 
 Required fields:
-- `name`: Skill identifier (kebab-case recommended)
+- `name`: Skill identifier (regex: `[a-z0-9-]{1,64}`)
 - `description`: Brief summary of skill purpose
+
+Optional fields:
+- `user-invocable`: Whether the user can invoke via slash command (default: `true`)
+- `disable-model-invocation`: Whether to exclude from model auto-invoke (default: `false`)
+- `argument-hint`: Hint text shown for arguments (e.g., `<url>`)
+- `allowed-tools`: List of tool names this skill is allowed to use
+- `context`: Context routing identifier
+- `agent`: Agent routing identifier
+- `model`: Specific model to use for this skill
+- `hooks`: Dictionary of lifecycle hook configurations
 
 Example:
 
@@ -45,12 +61,42 @@ Example:
 ---
 name: data-analyst
 description: Analyze datasets and generate statistical insights
+user-invocable: true
+argument-hint: "<csv-file-path>"
+allowed-tools:
+  - read_file
+  - python_repl
 ---
 ```
 
+### Substitutions
+
+The markdown body and scripts can use Claude-compatible substitution variables:
+
+- `$ARGUMENTS`: The entire whitespace-separated arguments string.
+- `$ARGUMENTS[N]`: The Nth word from arguments (0-indexed).
+- `$N`: Shorthand for Nth argument (1-indexed: `$1`, `$2`, etc.).
+- `${CLAUDE_SESSION_ID}`: Resolves to the current session ID.
+- `${CLAUDE_SKILL_DIR}`: Resolves to the absolute path of the skill directory.
+
 ### Markdown Body
 
-The entire markdown body (everything after the frontmatter) becomes the system prompt:
+The entire markdown body (everything after the frontmatter) becomes the system prompt. You can use substitutions here to customize instructions based on input:
+
+```markdown
+---
+name: code-reviewer
+description: Review code for quality and best practices
+argument-hint: "<file-path>"
+---
+
+# Code Review Specialist
+
+You are reviewing: $1
+
+Please analyze the file at ${CLAUDE_SKILL_DIR}/$1 for:
+...
+```
 
 ```markdown
 ---
@@ -147,25 +193,45 @@ Tool names are derived from:
 
 ## Usage
 
-### Loading a Skill
+Markdown skills support a **two-phase loading** lifecycle to remain token-efficient:
+
+1.  **Index**: Load metadata (name, description, tool names) into the `SkillComponent`. No tools are registered yet, and the body is not loaded.
+2.  **Activate**: Load the markdown body into the `SystemPromptComponent` and register tools into the `ToolRegistryComponent`.
+
+### Direct Installation
+
+For manual use, `manager.install()` performs both index and activation:
 
 ```python
 from pathlib import Path
 from ecs_agent.skills.markdown_skill import MarkdownSkill
+from ecs_agent.skills.manager import SkillManager
 
-# Load skill from SKILL.md
+# Load skill object
 skill = MarkdownSkill(skill_path=Path(".claude/skills/my-skill/SKILL.md"))
 
-# Access metadata
-print(skill.name)  # "my-skill"
-print(skill.description)  # "A brief description..."
-
-# Get system prompt (full markdown body)
-system_prompt = skill.system_prompt()
-
-# Get tools (auto-discovered from scripts/)
-tools = skill.tools()  # dict[str, tuple[ToolSchema, ToolHandler]]
+# Install (Index + Activate)
+manager = SkillManager()
+manager.install(world, entity, skill)
 ```
+
+### Lazy Discovery
+
+When using `DiscoveryManager`, skills are indexed but not activated until needed:
+
+```python
+from ecs_agent.skills.discovery import DiscoveryManager
+
+discovery = DiscoveryManager()
+# Indexed only: metadata available, tools/prompt NOT yet loaded
+await discovery.auto_discover_and_install(
+    world, entity, manager, directories=[Path(".claude/skills")]
+)
+
+# Activate later when needed
+manager.activate(world, entity, "my-skill")
+```
+
 
 ### Applying to an Entity
 
@@ -329,7 +395,25 @@ world.add_component(
 
 The agent now has web scraping capabilities with appropriate context.
 
-## Sandboxing
+### Path Traversal Protection
+
+Markdown skills include protection against path traversal when resolving files:
+
+```python
+# Safe resolution within skill_dir
+path = skill.resolve_supporting_path("data/config.json")
+
+# Raises ValueError (traversal detected)
+path = skill.resolve_supporting_path("../../../etc/passwd")
+```
+
+### Skip+Warn Policy
+
+The discovery system follows a "skip and warn" policy. If a `SKILL.md` has invalid YAML, a malformed name, or is missing required fields:
+1.  A warning is logged with the file path.
+2.  The specific skill is skipped.
+3.  The rest of the discovery process continues normally.
+
 
 Tool scripts execute in isolated environments:
 
