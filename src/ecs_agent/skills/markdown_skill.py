@@ -34,6 +34,7 @@ _ARGS_RE = re.compile(r"\$ARGUMENTS(?!\[)")
 _DOLLAR_N_RE = re.compile(r"\$([1-9])(?!\w)")
 _SESSION_ID_RE = re.compile(r"\$\{CLAUDE_SESSION_ID\}")
 _SKILL_DIR_RE = re.compile(r"\$\{CLAUDE_SKILL_DIR\}")
+_DYNAMIC_INJECTION_RE = re.compile(r"!`[^`]*`")
 
 
 def render_skill_content(template: str, arguments: str, skill_dir: Path) -> str:
@@ -74,6 +75,7 @@ def render_skill_content(template: str, arguments: str, skill_dir: Path) -> str:
     result = _SESSION_ID_RE.sub("<session-id>", result)
     result = _SKILL_DIR_RE.sub(str(skill_dir), result)
     return result
+
 
 class MarkdownSkill:
     """Skill loaded from a SKILL.md file with YAML frontmatter.
@@ -144,7 +146,9 @@ class MarkdownSkill:
                 try:
                     frontmatter_text = b"\n".join(fm_lines).decode("utf-8")
                 except UnicodeDecodeError:
-                    frontmatter_text = b"\n".join(fm_lines).decode("utf-8", errors="replace")
+                    frontmatter_text = b"\n".join(fm_lines).decode(
+                        "utf-8", errors="replace"
+                    )
                 # Body bytes: everything after closing ---
                 body_lines = stripped_lines[closing_idx + 1 :]
                 self._body_bytes = separator.join(body_lines).strip()
@@ -225,15 +229,27 @@ class MarkdownSkill:
         self._name = name
         self._description = description
         self._user_invocable: bool = bool(metadata.get("user-invocable", True))
-        self._disable_model_invocation: bool = bool(metadata.get("disable-model-invocation", False))
+        self._disable_model_invocation: bool = bool(
+            metadata.get("disable-model-invocation", False)
+        )
         self._argument_hint: str = str(metadata.get("argument-hint", ""))
         raw_allowed = metadata.get("allowed-tools", [])
-        self._allowed_tools: list[str] = [str(t) for t in raw_allowed] if isinstance(raw_allowed, list) else []
-        self._context: str | None = str(metadata["context"]) if "context" in metadata else None
-        self._agent: str | None = str(metadata["agent"]) if "agent" in metadata else None
-        self._model: str | None = str(metadata["model"]) if "model" in metadata else None
+        self._allowed_tools: list[str] = (
+            [str(t) for t in raw_allowed] if isinstance(raw_allowed, list) else []
+        )
+        self._context: str | None = (
+            str(metadata["context"]) if "context" in metadata else None
+        )
+        self._agent: str | None = (
+            str(metadata["agent"]) if "agent" in metadata else None
+        )
+        self._model: str | None = (
+            str(metadata["model"]) if "model" in metadata else None
+        )
         raw_hooks = metadata.get("hooks", {})
-        self._hooks: dict[str, Any] = dict(raw_hooks) if isinstance(raw_hooks, dict) else {}
+        self._hooks: dict[str, Any] = (
+            dict(raw_hooks) if isinstance(raw_hooks, dict) else {}
+        )
 
     @property
     def name(self) -> str:
@@ -264,6 +280,11 @@ class MarkdownSkill:
     def disable_model_invocation(self) -> bool:
         """Whether model-initiated invocation is disabled."""
         return getattr(self, "_disable_model_invocation", False)
+
+    @property
+    def injection_policy(self) -> str:
+        """Dynamic injection handling policy."""
+        return "deny"
 
     @property
     def argument_hint(self) -> str:
@@ -326,6 +347,10 @@ class MarkdownSkill:
             Template with all substitution variables resolved
         """
         return render_skill_content(template, arguments, self._skill_path.parent)
+
+    def is_dynamic_injection_safe(self, content: str) -> bool:
+        """Return whether dynamic content is safe to process."""
+        return _DYNAMIC_INJECTION_RE.search(content) is None
 
     def system_prompt(self) -> str:
         """Return markdown body as system prompt."""

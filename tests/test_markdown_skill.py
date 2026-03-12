@@ -468,7 +468,9 @@ def test_markdown_skill_contract_invalid_yaml_skips_skill_without_raising(
         assert any("yaml" in record.getMessage().lower() for record in caplog.records)
 
 
-def test_markdown_skill_contract_optional_frontmatter_defaults_persist_in_metadata() -> None:
+def test_markdown_skill_contract_optional_frontmatter_defaults_persist_in_metadata() -> (
+    None
+):
     from ecs_agent.components.definitions import SkillComponent
     from ecs_agent.skills.discovery import DiscoveryManager
     from ecs_agent.skills.manager import SkillManager
@@ -701,7 +703,9 @@ def test_markdown_skill_resolve_supporting_path_allows_nested_relative(
     assert str(resolved).startswith(str(tmp_path.resolve()))
 
 
-def test_markdown_skill_contract_path_traversal_is_blocked_for_supporting_files() -> None:
+def test_markdown_skill_contract_path_traversal_is_blocked_for_supporting_files() -> (
+    None
+):
     with tempfile.TemporaryDirectory() as tmpdir:
         skill_path = Path(tmpdir) / "SKILL.md"
         skill_path.write_text(
@@ -714,6 +718,64 @@ def test_markdown_skill_contract_path_traversal_is_blocked_for_supporting_files(
         assert callable(resolver)
         with pytest.raises(ValueError):
             resolver("../secrets.txt")
+
+
+# ---------------------------------------------------------------------------
+# MarkdownSkill advanced injection guard tests
+# ---------------------------------------------------------------------------
+
+
+def test_markdown_skill_advanced_injection_policy_defaults_to_deny() -> None:
+    """injection_policy defaults to deny-by-default."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        skill_path = Path(tmpdir) / "SKILL.md"
+        skill_path.write_text(
+            "---\nname: injection-guard\ndescription: injection guard\n---\nPrompt"
+        )
+
+        skill = MarkdownSkill(skill_path)
+
+        assert skill.injection_policy == "deny"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "safe content",
+        "no backtick here",
+        "",
+        "regular `backtick` without bang",
+    ],
+)
+def test_markdown_skill_injection_safe_allows_non_shell_patterns(content: str) -> None:
+    """is_dynamic_injection_safe returns True for safe content."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        skill_path = Path(tmpdir) / "SKILL.md"
+        skill_path.write_text("---\nname: safe\ndescription: safe\n---\nPrompt")
+
+        skill = MarkdownSkill(skill_path)
+
+        assert skill.is_dynamic_injection_safe(content) is True
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "use !`ls -la` here",
+        "run !`echo hello`",
+    ],
+)
+def test_markdown_skill_injection_blocked_for_shell_backtick_patterns(
+    content: str,
+) -> None:
+    """is_dynamic_injection_safe returns False for !`...` shell execution forms."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        skill_path = Path(tmpdir) / "SKILL.md"
+        skill_path.write_text("---\nname: blocked\ndescription: blocked\n---\nPrompt")
+
+        skill = MarkdownSkill(skill_path)
+
+        assert skill.is_dynamic_injection_safe(content) is False
 
 
 # ---------------------------------------------------------------------------
@@ -885,9 +947,7 @@ def test_render_with_arguments_full_substitution_round_trip(
 ) -> None:
     """render_with_arguments() resolves all substitution forms in one call."""
     skill_file = tmp_path / "SKILL.md"
-    skill_file.write_text(
-        "---\nname: round-trip\ndescription: round trip\n---\nPrompt"
-    )
+    skill_file.write_text("---\nname: round-trip\ndescription: round trip\n---\nPrompt")
 
     skill = MarkdownSkill(skill_file)
     result = skill.render_with_arguments(
@@ -901,4 +961,3 @@ def test_render_with_arguments_full_substitution_round_trip(
         f"full=hello world indexed=hello "
         f"short=hello session=<session-id> dir={tmp_path}"
     )
-
