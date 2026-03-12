@@ -28,6 +28,52 @@ _stdlib_logger = logging.getLogger(__name__)
 
 _NAME_RE = re.compile(r"[a-z0-9-]{1,64}")
 
+# Pre-compiled substitution patterns (process $ARGUMENTS[N] before $ARGUMENTS)
+_ARGS_INDEXED_RE = re.compile(r"\$ARGUMENTS\[(\d+)\]")
+_ARGS_RE = re.compile(r"\$ARGUMENTS(?!\[)")
+_DOLLAR_N_RE = re.compile(r"\$([1-9])(?!\w)")
+_SESSION_ID_RE = re.compile(r"\$\{CLAUDE_SESSION_ID\}")
+_SKILL_DIR_RE = re.compile(r"\$\{CLAUDE_SKILL_DIR\}")
+
+
+def render_skill_content(template: str, arguments: str, skill_dir: Path) -> str:
+    """Render a skill template with Claude-compatible string substitutions.
+
+    Substitution forms (all required):
+        $ARGUMENTS        → entire arguments string
+        $ARGUMENTS[N]     → Nth word (0-indexed), empty string if out of bounds
+        $N (N is 1–9)    → word at index N-1, empty string if out of bounds
+        ${CLAUDE_SESSION_ID} → literal '<session-id>'
+        ${CLAUDE_SKILL_DIR}  → str(skill_dir)
+        ${UNKNOWN_VAR}    → left as-is
+
+    Uses regex substitution only. No eval(), no str.format(), no shell.
+
+    Args:
+        template: Template string with substitution variables
+        arguments: Whitespace-separated arguments string
+        skill_dir: Skill base directory (used for ${CLAUDE_SKILL_DIR})
+
+    Returns:
+        Template with all substitution variables resolved
+    """
+    words = arguments.split() if arguments.strip() else []
+
+    def _replace_indexed(match: re.Match[str]) -> str:
+        idx = int(match.group(1))
+        return words[idx] if idx < len(words) else ""
+
+    def _replace_dollar_n(match: re.Match[str]) -> str:
+        idx = int(match.group(1)) - 1  # $1 → index 0
+        return words[idx] if idx < len(words) else ""
+
+    # Order matters: $ARGUMENTS[N] must be processed before bare $ARGUMENTS
+    result = _ARGS_INDEXED_RE.sub(_replace_indexed, template)
+    result = _ARGS_RE.sub(arguments, result)
+    result = _DOLLAR_N_RE.sub(_replace_dollar_n, result)
+    result = _SESSION_ID_RE.sub("<session-id>", result)
+    result = _SKILL_DIR_RE.sub(str(skill_dir), result)
+    return result
 
 class MarkdownSkill:
     """Skill loaded from a SKILL.md file with YAML frontmatter.
@@ -268,6 +314,18 @@ class MarkdownSkill:
                 f"Path traversal detected: {relative_path!r} resolves outside skill directory"
             )
         return resolved
+
+    def render_with_arguments(self, template: str, arguments: str) -> str:
+        """Render template with Claude-compatible substitutions using skill_dir_path.
+
+        Args:
+            template: Template string with substitution variables
+            arguments: Whitespace-separated arguments string
+
+        Returns:
+            Template with all substitution variables resolved
+        """
+        return render_skill_content(template, arguments, self._skill_path.parent)
 
     def system_prompt(self) -> str:
         """Return markdown body as system prompt."""

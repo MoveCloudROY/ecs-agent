@@ -714,3 +714,191 @@ def test_markdown_skill_contract_path_traversal_is_blocked_for_supporting_files(
         assert callable(resolver)
         with pytest.raises(ValueError):
             resolver("../secrets.txt")
+
+
+# ---------------------------------------------------------------------------
+# render_skill_content / render_with_arguments — substitution engine tests
+# ---------------------------------------------------------------------------
+
+
+def test_render_skill_content_substitutes_arguments_placeholder(
+    tmp_path: Path,
+) -> None:
+    """$ARGUMENTS is replaced by the entire arguments string."""
+    from ecs_agent.skills.markdown_skill import render_skill_content
+
+    result = render_skill_content(
+        template="Use this: $ARGUMENTS",
+        arguments="foo bar baz",
+        skill_dir=tmp_path,
+    )
+    assert result == "Use this: foo bar baz"
+
+
+def test_render_skill_content_substitutes_arguments_indexed(
+    tmp_path: Path,
+) -> None:
+    """$ARGUMENTS[N] is replaced by the Nth word (0-indexed)."""
+    from ecs_agent.skills.markdown_skill import render_skill_content
+
+    result = render_skill_content(
+        template="first=$ARGUMENTS[0] second=$ARGUMENTS[1]",
+        arguments="hello world",
+        skill_dir=tmp_path,
+    )
+    assert result == "first=hello second=world"
+
+
+def test_render_skill_content_substitutes_dollar_n_shorthand(
+    tmp_path: Path,
+) -> None:
+    """$1 and $2 are replaced by first and second words."""
+    from ecs_agent.skills.markdown_skill import render_skill_content
+
+    result = render_skill_content(
+        template="arg1=$1 arg2=$2",
+        arguments="alpha beta gamma",
+        skill_dir=tmp_path,
+    )
+    assert result == "arg1=alpha arg2=beta"
+
+
+def test_render_skill_content_substitutes_session_id(
+    tmp_path: Path,
+) -> None:
+    """${CLAUDE_SESSION_ID} is replaced by the literal string '<session-id>'."""
+    from ecs_agent.skills.markdown_skill import render_skill_content
+
+    result = render_skill_content(
+        template="session=${CLAUDE_SESSION_ID}",
+        arguments="",
+        skill_dir=tmp_path,
+    )
+    assert result == "session=<session-id>"
+
+
+def test_render_skill_content_substitutes_skill_dir(
+    tmp_path: Path,
+) -> None:
+    """${CLAUDE_SKILL_DIR} is replaced by str(skill_dir)."""
+    from ecs_agent.skills.markdown_skill import render_skill_content
+
+    result = render_skill_content(
+        template="dir=${CLAUDE_SKILL_DIR}",
+        arguments="",
+        skill_dir=tmp_path,
+    )
+    assert result == f"dir={tmp_path}"
+
+
+def test_render_skill_content_out_of_bounds_arguments_index_returns_empty(
+    tmp_path: Path,
+) -> None:
+    """$ARGUMENTS[99] returns empty string when there are fewer than 100 words."""
+    from ecs_agent.skills.markdown_skill import render_skill_content
+
+    result = render_skill_content(
+        template="word=$ARGUMENTS[99]",
+        arguments="one two three",
+        skill_dir=tmp_path,
+    )
+    assert result == "word="
+
+
+def test_render_skill_content_out_of_bounds_dollar_n_returns_empty(
+    tmp_path: Path,
+) -> None:
+    """$9 returns empty string when fewer than 9 words provided."""
+    from ecs_agent.skills.markdown_skill import render_skill_content
+
+    result = render_skill_content(
+        template="ninth=$9",
+        arguments="only one",
+        skill_dir=tmp_path,
+    )
+    assert result == "ninth="
+
+
+def test_render_skill_content_unknown_variable_left_unchanged(
+    tmp_path: Path,
+) -> None:
+    """${UNKNOWN_VAR} is left as-is (no modification)."""
+    from ecs_agent.skills.markdown_skill import render_skill_content
+
+    result = render_skill_content(
+        template="x=${UNKNOWN_VAR}",
+        arguments="",
+        skill_dir=tmp_path,
+    )
+    assert result == "x=${UNKNOWN_VAR}"
+
+
+def test_render_skill_content_empty_arguments_string(
+    tmp_path: Path,
+) -> None:
+    """Empty arguments string: $ARGUMENTS becomes empty, $1 becomes empty."""
+    from ecs_agent.skills.markdown_skill import render_skill_content
+
+    result = render_skill_content(
+        template="args='$ARGUMENTS' first='$1'",
+        arguments="",
+        skill_dir=tmp_path,
+    )
+    assert result == "args='' first=''"
+
+
+def test_render_skill_content_arguments_index_before_full_arguments(
+    tmp_path: Path,
+) -> None:
+    """$ARGUMENTS[N] is processed before $ARGUMENTS to avoid partial conflicts."""
+    from ecs_agent.skills.markdown_skill import render_skill_content
+
+    # If $ARGUMENTS replaced first, '$ARGUMENTS[0]' becomes 'foo bar[0]' — wrong.
+    # Correct order: $ARGUMENTS[0] → 'foo', then $ARGUMENTS → 'foo bar'
+    result = render_skill_content(
+        template="indexed=$ARGUMENTS[0] full=$ARGUMENTS",
+        arguments="foo bar",
+        skill_dir=tmp_path,
+    )
+    assert result == "indexed=foo full=foo bar"
+
+
+def test_render_with_arguments_uses_skill_dir_path(
+    tmp_path: Path,
+) -> None:
+    """render_with_arguments() uses self.skill_dir_path for ${CLAUDE_SKILL_DIR}."""
+    skill_file = tmp_path / "SKILL.md"
+    skill_file.write_text(
+        "---\nname: render-test\ndescription: render test\n---\nPrompt"
+    )
+
+    skill = MarkdownSkill(skill_file)
+    result = skill.render_with_arguments(
+        template="dir=${CLAUDE_SKILL_DIR}",
+        arguments="",
+    )
+    assert result == f"dir={tmp_path}"
+
+
+def test_render_with_arguments_full_substitution_round_trip(
+    tmp_path: Path,
+) -> None:
+    """render_with_arguments() resolves all substitution forms in one call."""
+    skill_file = tmp_path / "SKILL.md"
+    skill_file.write_text(
+        "---\nname: round-trip\ndescription: round trip\n---\nPrompt"
+    )
+
+    skill = MarkdownSkill(skill_file)
+    result = skill.render_with_arguments(
+        template=(
+            "full=$ARGUMENTS indexed=$ARGUMENTS[0] "
+            "short=$1 session=${CLAUDE_SESSION_ID} dir=${CLAUDE_SKILL_DIR}"
+        ),
+        arguments="hello world",
+    )
+    assert result == (
+        f"full=hello world indexed=hello "
+        f"short=hello session=<session-id> dir={tmp_path}"
+    )
+
