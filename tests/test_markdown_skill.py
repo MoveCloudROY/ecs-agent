@@ -468,9 +468,7 @@ def test_markdown_skill_contract_invalid_yaml_skips_skill_without_raising(
         assert any("yaml" in record.getMessage().lower() for record in caplog.records)
 
 
-def test_markdown_skill_contract_optional_frontmatter_defaults_persist_in_metadata() -> (
-    None
-):
+def test_markdown_skill_contract_optional_frontmatter_defaults_persist_in_metadata() -> None:
     from ecs_agent.components.definitions import SkillComponent
     from ecs_agent.skills.discovery import DiscoveryManager
     from ecs_agent.skills.manager import SkillManager
@@ -652,9 +650,7 @@ def test_markdown_skill_contract_invocation_controls_are_parsed() -> None:
         assert getattr(metadata, "disable_model_invocation", None) is True
 
 
-def test_markdown_skill_contract_path_traversal_is_blocked_for_supporting_files() -> (
-    None
-):
+def test_markdown_skill_contract_path_traversal_is_blocked_for_supporting_files() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         skill_path = Path(tmpdir) / "SKILL.md"
         skill_path.write_text(
