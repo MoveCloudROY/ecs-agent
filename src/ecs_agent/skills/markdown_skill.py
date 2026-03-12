@@ -197,12 +197,18 @@ class MarkdownSkill:
                     str(raw_description) if raw_description is not None else ""
                 )
                 return
-            # No frontmatter — use defaults (legacy behavior)
-            self.valid = True
-            self._name = str(metadata.get("name", self._skill_path.stem))
-            self._description = str(
-                metadata.get("description", f"Skill from {self._skill_path.name}")
+            # No frontmatter — reject per new spec (frontmatter required)
+            logger.warning(
+                "markdown_skill_no_frontmatter",
+                skill_path=str(self._skill_path),
             )
+            _stdlib_logger.warning(
+                "markdown_skill_no_frontmatter: no YAML frontmatter in %s",
+                str(self._skill_path),
+            )
+            self.valid = False
+            self._name = ""
+            self._description = ""
             return
 
         name = str(raw_name)
@@ -330,7 +336,7 @@ class MarkdownSkill:
         """
         skill_dir = self._skill_path.parent.resolve()
         resolved = (skill_dir / relative_path).resolve()
-        if not str(resolved).startswith(str(skill_dir)):
+        if not resolved.is_relative_to(skill_dir):
             raise ValueError(
                 f"Path traversal detected: {relative_path!r} resolves outside skill directory"
             )

@@ -186,10 +186,10 @@ Just markdown content without frontmatter."""
 
         skill = MarkdownSkill(skill_path)
 
-        # Should use filename or default name
-        assert skill.name != ""
-        assert skill.description != ""
-        assert "# No Frontmatter Skill" in skill.system_prompt()
+        # Per new spec: no frontmatter → invalid
+        assert skill.valid is False
+        assert skill.name == ""
+        assert skill.description == ""
 
 
 @pytest.mark.asyncio

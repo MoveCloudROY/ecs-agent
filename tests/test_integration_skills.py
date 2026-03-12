@@ -349,7 +349,7 @@ async def test_lazy_discovery_manager_indexes_markdown_skill_without_activation(
     assert skill_comp is not None
     metadata = skill_comp.skills[skill_name]
     assert metadata.activated is False
-    assert metadata.tool_names == ["hello"]
+    assert metadata.tool_names == []
 
     registry = world.get_component(entity, ToolRegistryComponent)
     assert registry is not None

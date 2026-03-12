@@ -37,7 +37,6 @@ class SkillManager:
 
         self._ensure_skill_details_tool(world, entity_id, registry)
 
-        skill_tools = skill.tools()
         skill_component = world.get_component(entity_id, SkillComponent)
         if skill_component is None:
             skill_component = SkillComponent(skills={})
@@ -46,7 +45,7 @@ class SkillManager:
         skill_component.skills[skill.name] = SkillMetadata(
             name=skill.name,
             description=skill.description,
-            tool_names=list(skill_tools.keys()),
+            tool_names=[],
             has_system_prompt=False,
             activated=False,
             user_invocable=getattr(skill, "user_invocable", True),
@@ -132,9 +131,11 @@ class SkillManager:
         if refreshed_metadata is None:
             metadata.has_system_prompt = bool(prompt)
             metadata.activated = True
+            metadata.tool_names = list(skill_tools.keys())
         else:
             refreshed_metadata.has_system_prompt = bool(prompt)
             refreshed_metadata.activated = True
+            refreshed_metadata.tool_names = list(skill_tools.keys())
 
         # Publish SkillInstalledEvent
         self._publish_event(
