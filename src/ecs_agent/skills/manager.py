@@ -74,6 +74,21 @@ class SkillManager:
             description=skill.description,
             tool_names=list(skill_tools.keys()),
             has_system_prompt=bool(prompt),
+            user_invocable=getattr(skill, "user_invocable", True),
+            disable_model_invocation=getattr(skill, "disable_model_invocation", False),
+            argument_hint=getattr(skill, "argument_hint", ""),
+            allowed_tools=getattr(skill, "allowed_tools", []),
+            context=getattr(skill, "context", None),
+            agent=getattr(skill, "agent", None),
+            model=getattr(skill, "model", None),
+            hooks=getattr(skill, "hooks", {}),
+            skill_dir_path=getattr(skill, "skill_dir_path", None),
+            slash_command=getattr(skill, "slash_command", f"/{skill.name}"),
+            substitution_variables=getattr(
+                skill,
+                "substitution_variables",
+                ["$ARGUMENTS", "$ARGUMENTS[0]", "$1", "${CLAUDE_SESSION_ID}", "${CLAUDE_SKILL_DIR}"],
+            ),
         )
         self._installed_skills[(entity_id, skill.name)] = skill
         skill.install(world, entity_id)

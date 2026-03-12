@@ -4,7 +4,9 @@ Loads skills from SKILL.md files with YAML frontmatter.
 """
 
 import asyncio
+import logging
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,9 @@ from ecs_agent.skills.protocol import ToolHandler
 from ecs_agent.types import EntityId, ToolSchema
 
 logger = get_logger(__name__)
+_stdlib_logger = logging.getLogger(__name__)
+
+_NAME_RE = re.compile(r"[a-z0-9-]{1,64}")
 
 
 class MarkdownSkill:
@@ -49,44 +54,140 @@ class MarkdownSkill:
         self._parse_skill_file()
 
     def _parse_skill_file(self) -> None:
-        """Parse YAML frontmatter and markdown body."""
-        content = self._skill_path.read_text()
+        """Parse YAML frontmatter and markdown body using strict line-delimited approach.
 
-        # Check if frontmatter exists (starts with ---)
-        if content.startswith("---"):
-            # Split on closing ---
-            parts = content.split("---", 2)
-            if len(parts) >= 3:
-                frontmatter_text = parts[1].strip()
-                body = parts[2].strip()
-            else:
-                # Malformed frontmatter, treat as no frontmatter
-                frontmatter_text = ""
-                body = content.strip()
-        else:
-            # No frontmatter
-            frontmatter_text = ""
-            body = content.strip()
+        Reads the file in binary mode to allow the body to contain arbitrary bytes.
+        Only the frontmatter section (before the closing ---) needs to be valid UTF-8.
+        The body is stored as raw bytes and decoded lazily in system_prompt().
+        """
+        raw = self._skill_path.read_bytes()
+        # Try to decode up to potential frontmatter boundary in UTF-8
+        # We need to find b"---" line boundaries in raw bytes
+        # Split on newlines at byte level
+        separator = b"\n"
+        lines_bytes = raw.split(separator)
 
-        # Parse YAML frontmatter
+        # Strip trailing \r from each line (handle CRLF)
+        stripped_lines = [line.rstrip(b"\r") for line in lines_bytes]
+
+        # Find first non-empty line — must be exactly b"---" to have frontmatter
+        first_non_empty_idx: int | None = None
+        for i, line in enumerate(stripped_lines):
+            if line.strip():
+                first_non_empty_idx = i
+                break
+
+        frontmatter_text = ""
+        # body_bytes will be decoded lazily
+        self._body_bytes: bytes = raw.strip()
+
+        if (
+            first_non_empty_idx is not None
+            and stripped_lines[first_non_empty_idx] == b"---"
+        ):
+            # Look for closing "---"
+            closing_idx: int | None = None
+            for i in range(first_non_empty_idx + 1, len(stripped_lines)):
+                if stripped_lines[i] == b"---":
+                    closing_idx = i
+                    break
+
+            if closing_idx is not None:
+                # Frontmatter bytes are safe UTF-8 YAML
+                fm_lines = stripped_lines[first_non_empty_idx + 1 : closing_idx]
+                try:
+                    frontmatter_text = b"\n".join(fm_lines).decode("utf-8")
+                except UnicodeDecodeError:
+                    frontmatter_text = b"\n".join(fm_lines).decode("utf-8", errors="replace")
+                # Body bytes: everything after closing ---
+                body_lines = stripped_lines[closing_idx + 1 :]
+                self._body_bytes = separator.join(body_lines).strip()
+
+        # Attempt YAML parse
+        metadata: dict[str, Any] = {}
         if frontmatter_text:
             try:
-                metadata: dict[str, Any] = yaml.safe_load(frontmatter_text) or {}
-            except yaml.YAMLError:
+                parsed = yaml.safe_load(frontmatter_text)
+                if isinstance(parsed, dict):
+                    metadata = parsed
+            except yaml.YAMLError as exc:
                 logger.warning(
                     "markdown_skill_invalid_yaml",
                     skill_path=str(self._skill_path),
+                    exception=str(exc),
                 )
-                metadata = {}
-        else:
-            metadata = {}
+                _stdlib_logger.warning(
+                    "markdown_skill_invalid_yaml: %s", str(self._skill_path)
+                )
+                self.valid = False
+                self._name = ""
+                self._description = ""
+                return
 
-        # Extract name and description (use defaults if missing)
-        self._name: str = str(metadata.get("name", self._skill_path.stem))
-        self._description: str = str(
-            metadata.get("description", f"Skill from {self._skill_path.name}")
-        )
-        self._system_prompt_content = body
+        # Check required fields
+        raw_name = metadata.get("name")
+        raw_description = metadata.get("description")
+
+        if not frontmatter_text or raw_name is None or raw_description is None:
+            if frontmatter_text and (raw_name is None or raw_description is None):
+                # Has frontmatter but missing required fields
+                logger.warning(
+                    "markdown_skill_missing_required_field",
+                    skill_path=str(self._skill_path),
+                    missing_name=(raw_name is None),
+                    missing_description=(raw_description is None),
+                )
+                _stdlib_logger.warning(
+                    "markdown_skill_missing_required_field: required fields missing in %s",
+                    str(self._skill_path),
+                )
+                self.valid = False
+                self._name = str(raw_name) if raw_name is not None else ""
+                self._description = (
+                    str(raw_description) if raw_description is not None else ""
+                )
+                return
+            # No frontmatter — use defaults (legacy behavior)
+            self.valid = True
+            self._name = str(metadata.get("name", self._skill_path.stem))
+            self._description = str(
+                metadata.get("description", f"Skill from {self._skill_path.name}")
+            )
+            return
+
+        name = str(raw_name)
+        description = str(raw_description)
+
+        # Validate name format
+        if not _NAME_RE.fullmatch(name):
+            logger.warning(
+                "markdown_skill_invalid_name",
+                skill_path=str(self._skill_path),
+                name=name,
+            )
+            _stdlib_logger.warning(
+                "markdown_skill_invalid_name: invalid name format %r in %s",
+                name,
+                str(self._skill_path),
+            )
+            self.valid = False
+            self._name = name
+            self._description = description
+            return
+
+        self.valid = True
+        self._name = name
+        self._description = description
+        self._user_invocable: bool = bool(metadata.get("user-invocable", True))
+        self._disable_model_invocation: bool = bool(metadata.get("disable-model-invocation", False))
+        self._argument_hint: str = str(metadata.get("argument-hint", ""))
+        raw_allowed = metadata.get("allowed-tools", [])
+        self._allowed_tools: list[str] = [str(t) for t in raw_allowed] if isinstance(raw_allowed, list) else []
+        self._context: str | None = str(metadata["context"]) if "context" in metadata else None
+        self._agent: str | None = str(metadata["agent"]) if "agent" in metadata else None
+        self._model: str | None = str(metadata["model"]) if "model" in metadata else None
+        raw_hooks = metadata.get("hooks", {})
+        self._hooks: dict[str, Any] = dict(raw_hooks) if isinstance(raw_hooks, dict) else {}
 
     @property
     def name(self) -> str:
@@ -98,9 +199,79 @@ class MarkdownSkill:
         """Skill description from frontmatter."""
         return self._description
 
+    @property
+    def slash_command(self) -> str:
+        """Slash command token for this skill."""
+        return f"/{self._name}"
+
+    @property
+    def skill_dir_path(self) -> Path:
+        """Parent directory of the SKILL.md file."""
+        return self._skill_path.parent
+
+    @property
+    def user_invocable(self) -> bool:
+        """Whether the skill can be invoked by the user."""
+        return getattr(self, "_user_invocable", True)
+
+    @property
+    def disable_model_invocation(self) -> bool:
+        """Whether model-initiated invocation is disabled."""
+        return getattr(self, "_disable_model_invocation", False)
+
+    @property
+    def argument_hint(self) -> str:
+        """Argument hint shown to user."""
+        return getattr(self, "_argument_hint", "")
+
+    @property
+    def allowed_tools(self) -> list[str]:
+        """List of allowed tool names."""
+        return getattr(self, "_allowed_tools", [])
+
+    @property
+    def context(self) -> str | None:
+        """Context routing field."""
+        return getattr(self, "_context", None)
+
+    @property
+    def agent(self) -> str | None:
+        """Agent routing field."""
+        return getattr(self, "_agent", None)
+
+    @property
+    def model(self) -> str | None:
+        """Model routing field."""
+        return getattr(self, "_model", None)
+
+    @property
+    def hooks(self) -> dict[str, Any]:
+        """Hook configurations."""
+        return getattr(self, "_hooks", {})
+
+    def resolve_supporting_path(self, relative_path: str) -> Path:
+        """Resolve a supporting file path relative to the skill directory.
+
+        Args:
+            relative_path: Path relative to skill directory
+
+        Returns:
+            Absolute resolved path
+
+        Raises:
+            ValueError: If the resolved path is outside the skill directory (path traversal)
+        """
+        skill_dir = self._skill_path.parent.resolve()
+        resolved = (skill_dir / relative_path).resolve()
+        if not str(resolved).startswith(str(skill_dir)):
+            raise ValueError(
+                f"Path traversal detected: {relative_path!r} resolves outside skill directory"
+            )
+        return resolved
+
     def system_prompt(self) -> str:
         """Return markdown body as system prompt."""
-        return self._system_prompt_content
+        return self._body_bytes.decode("utf-8", errors="replace").strip()
 
     def tools(self) -> dict[str, tuple[ToolSchema, ToolHandler]]:
         """Discover tools from scripts/ directory.
@@ -223,11 +394,22 @@ class MarkdownSkill:
             world.add_component(entity_id, skill_comp)
 
         from ecs_agent.components.definitions import SkillMetadata
+
         skill_comp.skills[self.name] = SkillMetadata(
             name=self.name,
             description=self.description,
             tool_names=list(self.tools().keys()),
             has_system_prompt=bool(self.system_prompt()),
+            user_invocable=self.user_invocable,
+            disable_model_invocation=self.disable_model_invocation,
+            argument_hint=self.argument_hint,
+            allowed_tools=self.allowed_tools,
+            context=self.context,
+            agent=self.agent,
+            model=self.model,
+            hooks=self.hooks,
+            skill_dir_path=str(self.skill_dir_path),
+            slash_command=self.slash_command,
         )
 
     def uninstall(self, world: World, entity_id: EntityId) -> None:

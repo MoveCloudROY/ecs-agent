@@ -73,11 +73,46 @@ class ToolRegistryComponent:
 
 @dataclass(slots=True)
 class SkillMetadata:
+    """Tier-1 metadata manifest for an installed skill (two-phase loading)."""
+
+    # --- Core identity (required) ---
     name: str
     description: str
     tool_names: list[str]
     has_system_prompt: bool
 
+    # --- Invocation controls ---
+    user_invocable: bool = True
+    disable_model_invocation: bool = False
+
+    # --- Argument passing ---
+    argument_hint: str = ""
+
+    # --- Tool filtering ---
+    allowed_tools: list[str] = field(default_factory=list)
+
+    # --- Advanced routing metadata ---
+    context: str | None = None
+    agent: str | None = None
+    model: str | None = None
+    hooks: dict[str, Any] = field(default_factory=dict)
+
+    # --- Skill location ---
+    skill_dir_path: str | None = None
+
+    # --- Slash command identity ---
+    slash_command: str = ""
+
+    # --- Substitution variables available at metadata build time ---
+    substitution_variables: list[str] = field(
+        default_factory=lambda: [
+            "$ARGUMENTS",
+            "$ARGUMENTS[0]",
+            "$1",
+            "${CLAUDE_SESSION_ID}",
+            "${CLAUDE_SKILL_DIR}",
+        ]
+    )
 
 @dataclass(slots=True)
 class SkillComponent:
