@@ -197,6 +197,33 @@ class SkillManager:
             return None
         return skill_component.skills.get(skill_name)
 
+    def can_invoke_via_slash(
+        self, world: World, entity: EntityId, slash_cmd: str
+    ) -> bool:
+        skill_component = world.get_component(entity, SkillComponent)
+        if skill_component is None:
+            return False
+
+        skill_name = slash_cmd[1:] if slash_cmd.startswith("/") else slash_cmd
+        for metadata in skill_component.skills.values():
+            if metadata.slash_command == slash_cmd or metadata.name == skill_name:
+                return metadata.user_invocable
+
+        return False
+
+    def can_model_auto_invoke_skill(
+        self, world: World, entity: EntityId, skill_name: str
+    ) -> bool:
+        skill_component = world.get_component(entity, SkillComponent)
+        if skill_component is None:
+            return False
+
+        metadata = skill_component.skills.get(skill_name)
+        if metadata is None:
+            return False
+
+        return not metadata.disable_model_invocation
+
     def format_skill_details(
         self, world: World, entity_id: EntityId, skill_name: str
     ) -> str | None:
