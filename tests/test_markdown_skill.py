@@ -1,5 +1,6 @@
 """Tests for MarkdownSkill parser."""
 
+import logging
 import tempfile
 from pathlib import Path
 
@@ -12,7 +13,6 @@ from ecs_agent.components.definitions import (
 from ecs_agent.core.world import World
 from ecs_agent.skills.markdown_skill import MarkdownSkill
 from ecs_agent.skills.protocol import Skill
-from ecs_agent.types import EntityId
 
 
 def test_markdown_skill_parses_yaml_frontmatter() -> None:
@@ -346,7 +346,9 @@ async def test_discovery_manager_auto_discovers_markdown_skills() -> None:
         skill_manager = SkillManager()
 
         # Auto-discover from base directory
-        await manager.auto_discover_and_install(world, entity, skill_manager, directories=[base])
+        await manager.auto_discover_and_install(
+            world, entity, skill_manager, directories=[base]
+        )
 
         # Verify skill was installed
         from ecs_agent.components.definitions import SkillComponent
@@ -355,3 +357,313 @@ async def test_discovery_manager_auto_discovers_markdown_skills() -> None:
         assert skill_comp is not None
         assert "auto-skill" in skill_comp.skills
         assert skill_comp.skills["auto-skill"].name == "auto-skill"
+
+
+@pytest.mark.parametrize(
+    ("frontmatter", "expected_name", "expected_description", "expected_body"),
+    [
+        (
+            "---\nname: ui-design\ndescription: Build UI\n---\n# Prompt\nUse a design system.",
+            "ui-design",
+            "Build UI",
+            "# Prompt\nUse a design system.",
+        )
+    ],
+)
+def test_markdown_skill_contract_frontmatter_structure_extracts_body_after_closing_delimiter(
+    frontmatter: str,
+    expected_name: str,
+    expected_description: str,
+    expected_body: str,
+) -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        skill_path = Path(tmpdir) / "SKILL.md"
+        skill_path.write_text(frontmatter)
+
+        skill = MarkdownSkill(skill_path)
+
+        assert skill.name == expected_name
+        assert skill.description == expected_description
+        assert skill.system_prompt() == expected_body
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "---\nname: only-name\n---\nbody",
+        "---\ndescription: only description\n---\nbody",
+    ],
+)
+def test_markdown_skill_contract_required_frontmatter_fields_missing_skips_discovery(
+    content: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from ecs_agent.skills.discovery import discover_markdown_skills
+
+    caplog.set_level(logging.WARNING)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        skill_dir = base / ".claude" / "skills" / "missing-required"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(content)
+
+        skills = discover_markdown_skills([base])
+
+        assert skills == []
+        assert any(
+            "required" in record.getMessage().lower() for record in caplog.records
+        )
+
+
+@pytest.mark.parametrize(
+    "invalid_name",
+    [
+        "Uppercase",
+        "snake_case",
+        "with space",
+        "a" * 65,
+    ],
+)
+def test_markdown_skill_contract_invalid_name_format_skips_discovery(
+    invalid_name: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from ecs_agent.skills.discovery import discover_markdown_skills
+
+    caplog.set_level(logging.WARNING)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        skill_dir = base / ".claude" / "skills" / "invalid-name"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {invalid_name}\ndescription: bad\n---\nbody"
+        )
+
+        skills = discover_markdown_skills([base])
+
+        assert skills == []
+        assert any("name" in record.getMessage().lower() for record in caplog.records)
+
+
+def test_markdown_skill_contract_invalid_yaml_skips_skill_without_raising(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from ecs_agent.skills.discovery import discover_markdown_skills
+
+    caplog.set_level(logging.WARNING)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        skill_dir = base / ".claude" / "skills" / "broken-yaml"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: broken\ndescription: [unterminated\n---\nBody"
+        )
+
+        skills = discover_markdown_skills([base])
+
+        assert skills == []
+        assert any("yaml" in record.getMessage().lower() for record in caplog.records)
+
+
+def test_markdown_skill_contract_optional_frontmatter_defaults_persist_in_metadata() -> (
+    None
+):
+    from ecs_agent.components.definitions import SkillComponent
+    from ecs_agent.skills.discovery import DiscoveryManager
+    from ecs_agent.skills.manager import SkillManager
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        skill_dir = base / ".claude" / "skills" / "defaults"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: defaults\ndescription: Defaults contract\n---\nContract body"
+        )
+
+        world = World()
+        entity = world.create_entity()
+        manager = SkillManager()
+        discovery = DiscoveryManager()
+
+        import asyncio
+
+        asyncio.run(
+            discovery.auto_discover_and_install(
+                world,
+                entity,
+                manager,
+                directories=[base],
+            )
+        )
+
+        skill_comp = world.get_component(entity, SkillComponent)
+        assert skill_comp is not None
+        metadata = skill_comp.skills["defaults"]
+
+        assert getattr(metadata, "user_invocable", None) is True
+        assert getattr(metadata, "disable_model_invocation", None) is False
+        assert getattr(metadata, "argument_hint", None) == ""
+        assert getattr(metadata, "allowed_tools", None) == []
+        assert getattr(metadata, "context", None) is None
+        assert getattr(metadata, "agent", None) is None
+        assert getattr(metadata, "model", None) is None
+        assert getattr(metadata, "hooks", None) == {}
+
+
+def test_markdown_skill_contract_slash_command_identity_maps_from_name() -> None:
+    from ecs_agent.components.definitions import SkillComponent
+    from ecs_agent.skills.discovery import DiscoveryManager
+    from ecs_agent.skills.manager import SkillManager
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        skill_dir = base / ".claude" / "skills" / "ui-design"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: ui-design\ndescription: Slash contract\n---\nPrompt"
+        )
+
+        world = World()
+        entity = world.create_entity()
+
+        import asyncio
+
+        asyncio.run(
+            DiscoveryManager().auto_discover_and_install(
+                world,
+                entity,
+                SkillManager(),
+                directories=[base],
+            )
+        )
+
+        skill_comp = world.get_component(entity, SkillComponent)
+        assert skill_comp is not None
+        metadata = skill_comp.skills["ui-design"]
+        assert getattr(metadata, "slash_command", None) == "/ui-design"
+
+
+def test_markdown_skill_contract_lazy_discovery_does_not_read_markdown_body() -> None:
+    from ecs_agent.skills.discovery import discover_markdown_skills
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        skill_dir = base / ".claude" / "skills" / "lazy"
+        skill_dir.mkdir(parents=True)
+
+        skill_file = skill_dir / "SKILL.md"
+        skill_file.write_bytes(
+            (
+                b"---\n"
+                b"name: lazy\n"
+                b"description: Metadata only\n"
+                b"---\n"
+                b"# body starts\n"
+                b"\xff\xfe\x00\x00"
+            )
+        )
+
+        skills = discover_markdown_skills([base])
+
+        assert len(skills) == 1
+        assert skills[0].name == "lazy"
+
+
+def test_markdown_skill_contract_substitutions_available_in_metadata_contract() -> None:
+    from ecs_agent.components.definitions import SkillComponent
+    from ecs_agent.skills.discovery import DiscoveryManager
+    from ecs_agent.skills.manager import SkillManager
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        skill_dir = base / ".claude" / "skills" / "subs"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: subs\ndescription: substitutions\n---\nUse $ARGUMENTS"
+        )
+
+        world = World()
+        entity = world.create_entity()
+
+        import asyncio
+
+        asyncio.run(
+            DiscoveryManager().auto_discover_and_install(
+                world,
+                entity,
+                SkillManager(),
+                directories=[base],
+            )
+        )
+
+        skill_comp = world.get_component(entity, SkillComponent)
+        assert skill_comp is not None
+        metadata = skill_comp.skills["subs"]
+        substitutions = set(getattr(metadata, "substitution_variables", []))
+        assert {
+            "$ARGUMENTS",
+            "$ARGUMENTS[0]",
+            "$1",
+            "${CLAUDE_SESSION_ID}",
+            "${CLAUDE_SKILL_DIR}",
+        }.issubset(substitutions)
+
+
+def test_markdown_skill_contract_invocation_controls_are_parsed() -> None:
+    from ecs_agent.components.definitions import SkillComponent
+    from ecs_agent.skills.discovery import DiscoveryManager
+    from ecs_agent.skills.manager import SkillManager
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        skill_dir = base / ".claude" / "skills" / "controls"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: controls\n"
+            "description: controls\n"
+            "user-invocable: false\n"
+            "disable-model-invocation: true\n"
+            "---\n"
+            "Prompt"
+        )
+
+        world = World()
+        entity = world.create_entity()
+
+        import asyncio
+
+        asyncio.run(
+            DiscoveryManager().auto_discover_and_install(
+                world,
+                entity,
+                SkillManager(),
+                directories=[base],
+            )
+        )
+
+        skill_comp = world.get_component(entity, SkillComponent)
+        assert skill_comp is not None
+        metadata = skill_comp.skills["controls"]
+        assert getattr(metadata, "user_invocable", None) is False
+        assert getattr(metadata, "disable_model_invocation", None) is True
+
+
+def test_markdown_skill_contract_path_traversal_is_blocked_for_supporting_files() -> (
+    None
+):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        skill_path = Path(tmpdir) / "SKILL.md"
+        skill_path.write_text(
+            "---\nname: traversal\ndescription: traversal\n---\nPrompt"
+        )
+
+        skill = MarkdownSkill(skill_path)
+        resolver = getattr(skill, "resolve_supporting_path", None)
+
+        assert callable(resolver)
+        with pytest.raises(ValueError):
+            resolver("../secrets.txt")
