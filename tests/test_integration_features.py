@@ -30,7 +30,7 @@ from ecs_agent.logging import configure_logging, get_logger
 from ecs_agent.providers import FakeProvider
 from ecs_agent.providers.openai_provider import OpenAIProvider
 from ecs_agent.serialization import WorldSerializer
-from ecs_agent.skills.markdown_skill import MarkdownSkill
+from ecs_agent.skills.markdown_skill import Skill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -159,7 +159,7 @@ async def test_tree_conversation_with_reasoning_system() -> None:
 
 
 async def test_markdown_skill_install_and_use() -> None:
-    """Test loading MarkdownSkill from SKILL.md fixture and using it."""
+    """Test loading markdown Skill from SKILL.md fixture and using it."""
     # Create temporary SKILL.md fixture
     with tempfile.TemporaryDirectory() as tmpdir:
         skill_path = Path(tmpdir) / "SKILL.md"
@@ -184,7 +184,7 @@ None
 """)
 
         # Load skill
-        skill = MarkdownSkill(skill_path=skill_path)
+        skill = Skill(skill_path=skill_path)
 
         # Verify metadata
         assert skill.description == "Test skill for integration testing"

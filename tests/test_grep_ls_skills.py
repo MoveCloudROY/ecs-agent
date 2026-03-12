@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.protocol import ScriptSkill
 
 
 class TestGrepSkillProtocol:
@@ -15,7 +15,7 @@ class TestGrepSkillProtocol:
         from examples.skills.grep_skill import GrepSkill
 
         skill = GrepSkill()
-        assert isinstance(skill, Skill)
+        assert isinstance(skill, ScriptSkill)
         assert skill.name == "grep"
         assert skill.description is not None
         assert len(skill.description) > 0
@@ -79,7 +79,7 @@ class TestLsSkillProtocol:
         from examples.skills.ls_skill import LsSkill
 
         skill = LsSkill()
-        assert isinstance(skill, Skill)
+        assert isinstance(skill, ScriptSkill)
         assert skill.name == "ls"
         assert skill.description is not None
         assert len(skill.description) > 0

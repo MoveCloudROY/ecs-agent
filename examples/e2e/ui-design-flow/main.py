@@ -29,7 +29,7 @@ from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import CompletionResult, Message
 from ecs_agent.skills.manager import SkillManager
-from ecs_agent.skills.markdown_skill import MarkdownSkill
+from ecs_agent.skills.markdown_skill import Skill
 
 from runtime import setup_interactive_input
 from artifacts import ensure_output_layout
@@ -78,10 +78,10 @@ async def main() -> None:
 
     # Install skills BEFORE registering systems
     manager = SkillManager()
-    ui_navigator_skill = MarkdownSkill(
+    ui_navigator_skill = Skill(
         skill_path=Path(__file__).parent / ".claude/skills/ui-navigator/SKILL.md"
     )
-    ui_prompt_skill = MarkdownSkill(
+    ui_prompt_skill = Skill(
         skill_path=Path(__file__).parent / ".claude/skills/ui-prompt/SKILL.md"
     )
     manager.install(world, agent_id, ui_navigator_skill)  # type: ignore[arg-type]
@@ -107,9 +107,7 @@ async def main() -> None:
     )
     world.add_component(
         agent_id,
-        ConversationComponent(
-            messages=[Message(role="user", content=initial_prompt)]
-        ),
+        ConversationComponent(messages=[Message(role="user", content=initial_prompt)]),
     )
 
     # Register Systems (priority order: lower = earlier execution)

@@ -1,4 +1,4 @@
-"""Skill protocol definitions."""
+"""Script skill protocol definitions."""
 
 from collections.abc import Awaitable, Callable
 from typing import Protocol, runtime_checkable
@@ -10,7 +10,7 @@ ToolHandler = Callable[..., Awaitable[str]]
 
 
 @runtime_checkable
-class Skill(Protocol):
+class ScriptSkill(Protocol):
     name: str
     description: str
 

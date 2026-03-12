@@ -52,11 +52,11 @@ from ecs_agent.tools import (
     tool,
     wrap_sandbox_handler,
 )
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.protocol import ScriptSkill
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.discovery import DiscoveryManager, DiscoveryReport, SkillDiscovery
 from ecs_agent.skills.web_search import WebSearchSkill
-from ecs_agent.skills.markdown_skill import MarkdownSkill
+from ecs_agent.skills.markdown_skill import Skill
 from ecs_agent.components.definitions import SkillComponent, SkillMetadata
 from ecs_agent.tools.builtins import BuiltinToolsSkill
 from ecs_agent.systems.permission import PermissionSystem
@@ -112,9 +112,19 @@ except ImportError:
     LiteLLMProvider = None  # type: ignore[assignment, misc]
 
 
-from ecs_agent.systems import CheckpointSystem, CompactionSystem, UserInputSystem, MessageBusSystem
+from ecs_agent.systems import (
+    CheckpointSystem,
+    CompactionSystem,
+    UserInputSystem,
+    MessageBusSystem,
+)
 from ecs_agent.systems.subagent import SubagentSystem
-from ecs_agent.conversation_tree import add_message, create_branch, linearize, switch_branch
+from ecs_agent.conversation_tree import (
+    add_message,
+    create_branch,
+    linearize,
+    switch_branch,
+)
 
 
 __all__ = [
@@ -151,7 +161,6 @@ __all__ = [
     "MCPConnectedEvent",
     "MCPDisconnectedEvent",
     "MCPToolCallEvent",
-    "MarkdownSkill",
     "Message",
     "MessageBusDeliveredEvent",
     "MessageBusEnvelope",
@@ -170,6 +179,7 @@ __all__ = [
     "RunnerStateComponent",
     "SandboxConfigComponent",
     "Skill",
+    "ScriptSkill",
     "SkillComponent",
     "SkillDiscovery",
     "SkillDiscoveryEvent",

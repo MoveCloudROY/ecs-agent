@@ -17,11 +17,11 @@ def _write_skill_file(path: Path, class_name: str, skill_name: str) -> None:
         f'''
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.protocol import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
-class {class_name}(Skill):
+class {class_name}(ScriptSkill):
     name = "{skill_name}"
     description = "{skill_name} skill"
 

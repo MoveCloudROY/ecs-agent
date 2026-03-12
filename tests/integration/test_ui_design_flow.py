@@ -20,7 +20,7 @@ from ecs_agent.providers import FakeProvider
 from ecs_agent.providers.openai_provider import OpenAIProvider
 from ecs_agent.skills.discovery import DiscoveryManager
 from ecs_agent.skills.manager import SkillManager
-from ecs_agent.skills.markdown_skill import MarkdownSkill
+from ecs_agent.skills.markdown_skill import Skill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -187,7 +187,7 @@ async def test_ui_design_flow_missing_prompt(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_ui_design_flow_skill_manager_installation() -> None:
-    """Test SkillManager can install MarkdownSkill without errors."""
+    """Test SkillManager can install markdown Skill without errors."""
     world = World()
     agent_id = world.create_entity()
 
@@ -226,7 +226,7 @@ This is a test skill.
     try:
         # Test skill installation
         manager = SkillManager()
-        skill = MarkdownSkill(skill_path=skill_file)
+        skill = Skill(skill_path=skill_file)
         manager.install(world, agent_id, skill)  # type: ignore[arg-type]
 
         # Verify skill was installed (SkillComponent should exist)

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.protocol import ScriptSkill
 from ecs_agent.types import EntityId, SkillDiscoveryEvent
 
 try:
@@ -43,22 +43,22 @@ class _MCPClientConfig:
 
 
 class SkillDiscovery:
-    """Discover and load Skill implementations from filesystem paths.
+    """Discover and load ScriptSkill implementations from filesystem paths.
 
     Args:
-        skill_paths: List of directory paths to scan for Python modules containing Skill classes.
+        skill_paths: List of directory paths to scan for Python modules containing ScriptSkill classes.
     """
 
     def __init__(self, skill_paths: list[str | Path]) -> None:
         self.skill_paths = skill_paths
 
-    def discover(self) -> list[Skill]:
-        """Scan configured paths and return all discovered Skill instances.
+    def discover(self) -> list[ScriptSkill]:
+        """Scan configured paths and return all discovered ScriptSkill instances.
 
         Returns:
-            List of Skill instances found in the configured paths.
+            List of ScriptSkill instances found in the configured paths.
         """
-        skills: list[Skill] = []
+        skills: list[ScriptSkill] = []
 
         for base_path in self.skill_paths:
             path = Path(base_path)
@@ -90,14 +90,14 @@ class SkillDiscovery:
                         # Skip non-classes
                         if not isinstance(obj, type):
                             continue
-                        # Skip the Skill protocol itself
-                        if obj.__name__ == "Skill":
+                        # Skip the ScriptSkill protocol itself
+                        if obj.__name__ == "ScriptSkill":
                             continue
-                        # Try to instantiate and check if it's a Skill
+                        # Try to instantiate and check if it's a ScriptSkill
                         try:
                             skill_instance = obj()
-                            # Verify it's actually a Skill instance
-                            if isinstance(skill_instance, Skill):
+                            # Verify it's actually a ScriptSkill instance
+                            if isinstance(skill_instance, ScriptSkill):
                                 skills.append(skill_instance)
                                 logger.info(
                                     "skill_discovered",
@@ -105,8 +105,8 @@ class SkillDiscovery:
                                     skill_name=skill_instance.name,
                                 )
                         except Exception:
-                            # Not a Skill class or instantiation failed
-                            # This is normal for non-Skill classes, don't log
+                            # Not a ScriptSkill class or instantiation failed
+                            # This is normal for non-ScriptSkill classes, don't log
                             continue
 
                 except Exception as exc:
@@ -285,20 +285,20 @@ class DiscoveryManager:
         )
 
 
-def discover_markdown_skills(directories: list[Path]) -> list[Skill]:
-    """Discover MarkdownSkill instances from SKILL.md files.
+def discover_markdown_skills(directories: list[Path]) -> list[ScriptSkill]:
+    """Discover markdown Skill instances from SKILL.md files.
 
-    Recursively scans directories for SKILL.md files and creates MarkdownSkill instances.
+    Recursively scans directories for SKILL.md files and creates Skill instances.
 
     Args:
         directories: List of directory paths to scan
 
     Returns:
-        List of MarkdownSkill instances found
+        List of markdown Skill instances found
     """
-    from ecs_agent.skills.markdown_skill import MarkdownSkill
+    from ecs_agent.skills.markdown_skill import Skill
 
-    discovered_by_name: dict[str, Skill] = {}
+    discovered_by_name: dict[str, ScriptSkill] = {}
     discovered_path_by_name: dict[str, str] = {}
 
     for base_dir in directories:
@@ -309,7 +309,7 @@ def discover_markdown_skills(directories: list[Path]) -> list[Skill]:
         # Recursively find all SKILL.md files
         for skill_file in sorted(base_dir.rglob("SKILL.md")):
             try:
-                skill = MarkdownSkill(skill_file)
+                skill = Skill(skill_file)
                 if not skill.valid:
                     logger.warning(
                         "markdown_skill_invalid",
@@ -326,7 +326,7 @@ def discover_markdown_skills(directories: list[Path]) -> list[Skill]:
                         overriding_path=str(skill_file),
                     )
 
-                discovered_by_name[skill_name] = cast(Skill, skill)
+                discovered_by_name[skill_name] = cast(ScriptSkill, skill)
                 discovered_path_by_name[skill_name] = str(skill_file)
                 logger.info(
                     "markdown_skill_discovered",

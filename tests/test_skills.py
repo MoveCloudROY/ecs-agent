@@ -7,7 +7,7 @@ import pytest
 from ecs_agent.components import SystemPromptComponent, ToolRegistryComponent
 from ecs_agent.components.definitions import SkillComponent, SkillMetadata
 from ecs_agent.core import World
-from ecs_agent.skills import Skill, SkillManager
+from ecs_agent.skills import ScriptSkill, SkillManager
 from ecs_agent.types import EntityId, ToolSchema
 
 
@@ -61,7 +61,7 @@ class DummySkill:
 
 def test_skill_protocol_duck_typing_compliance() -> None:
     skill = DummySkill("math", "math helpers", {"sum": (_tool("sum"), _sum_handler)})
-    assert isinstance(skill, Skill)
+    assert isinstance(skill, ScriptSkill)
 
 
 def test_skill_component_dataclass_structure() -> None:
@@ -456,7 +456,7 @@ def test_skill_export_from_skills_init_is_not_protocol_class() -> None:
     import tempfile
     from pathlib import Path
     from ecs_agent.skills import Skill
-    from ecs_agent.skills.markdown_skill import MarkdownSkill as _MarkdownSkill
+    from ecs_agent.skills.markdown_skill import Skill as _MarkdownSkill
 
     # After rename: Skill must be MarkdownSkill (concrete markdown implementation)
     assert Skill is _MarkdownSkill, (
@@ -466,7 +466,7 @@ def test_skill_export_from_skills_init_is_not_protocol_class() -> None:
     )
 
     # Also verify we can instantiate it as the markdown class
-    content = '---\nname: contract-test\ndescription: contract test\n---\n# body'
+    content = "---\nname: contract-test\ndescription: contract test\n---\n# body"
     with tempfile.TemporaryDirectory() as tmpdir:
         skill_path = Path(tmpdir) / "SKILL.md"
         skill_path.write_text(content)

@@ -7,7 +7,7 @@ import pytest
 from ecs_agent.core.world import World
 from ecs_agent.skills.discovery import SkillDiscovery, discover_markdown_skills
 from ecs_agent.skills.manager import SkillManager
-from ecs_agent.skills.markdown_skill import MarkdownSkill
+from ecs_agent.skills.markdown_skill import Skill
 from ecs_agent.components import SkillComponent
 
 
@@ -18,11 +18,11 @@ def test_skill_discovery_finds_valid_skill(tmp_path: Path) -> None:
         """
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.protocol import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
-class DemoSkill(Skill):
+class DemoSkill(ScriptSkill):
     name = "demo"
     description = "Demo skill"
 
@@ -56,11 +56,11 @@ def test_skill_discovery_skips_non_skill_classes(tmp_path: Path) -> None:
         """
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.protocol import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
-class ValidSkill(Skill):
+class ValidSkill(ScriptSkill):
     name = "valid"
     description = "Valid skill"
 
@@ -124,11 +124,11 @@ def test_skill_discovery_handles_malformed_python_file(tmp_path: Path) -> None:
         """
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.protocol import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
-class ValidSkill(Skill):
+class ValidSkill(ScriptSkill):
     name = "valid"
     description = "Valid skill"
 
@@ -165,11 +165,11 @@ def test_skill_discovery_and_install(tmp_path: Path) -> None:
         """
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.protocol import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
-class InstallSkill(Skill):
+class InstallSkill(ScriptSkill):
     name = "install-test"
     description = "Install test skill"
 
@@ -214,11 +214,11 @@ def test_skill_discovery_multiple_paths(tmp_path: Path) -> None:
         """
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.protocol import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
-class Skill1(Skill):
+class Skill1(ScriptSkill):
     name = "skill1"
     description = "First skill"
 
@@ -241,11 +241,11 @@ class Skill1(Skill):
         """
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.protocol import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
-class Skill2(Skill):
+class Skill2(ScriptSkill):
     name = "skill2"
     description = "Second skill"
 
@@ -279,11 +279,11 @@ def test_skill_discovery_skips_init_py(tmp_path: Path) -> None:
 # This file should be skipped
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.protocol import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
-class InitSkill(Skill):
+class InitSkill(ScriptSkill):
     name = "init"
     description = "Init skill"
 
@@ -316,10 +316,10 @@ def test_discover_markdown_skills_returns_metadata_without_eager_system_prompt_c
         (b"---\nname: lazy\ndescription: metadata only\n---\n# Body\n\xff\xfe\x00\x00")
     )
 
-    def _raise_if_called(_: MarkdownSkill) -> str:
+    def _raise_if_called(_: Skill) -> str:
         raise AssertionError("system_prompt() must not be called during discovery")
 
-    monkeypatch.setattr(MarkdownSkill, "system_prompt", _raise_if_called)
+    monkeypatch.setattr(Skill, "system_prompt", _raise_if_called)
 
     skills = discover_markdown_skills([tmp_path])
 

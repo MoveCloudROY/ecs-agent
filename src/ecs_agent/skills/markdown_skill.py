@@ -77,7 +77,7 @@ def render_skill_content(template: str, arguments: str, skill_dir: Path) -> str:
     return result
 
 
-class MarkdownSkill:
+class Skill:
     """Skill loaded from a SKILL.md file with YAML frontmatter.
 
     SKILL.md format:
@@ -91,7 +91,7 @@ class MarkdownSkill:
     """
 
     def __init__(self, skill_path: Path, sandbox_timeout: float = 30.0) -> None:
-        """Initialize MarkdownSkill by parsing SKILL.md.
+        """Initialize Skill by parsing SKILL.md.
 
         Args:
             skill_path: Path to SKILL.md file
