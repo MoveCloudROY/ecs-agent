@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from ecs_agent.core.world import World
-from ecs_agent.skills.discovery import SkillDiscovery, discover_markdown_skills
+from ecs_agent.skills.discovery import SkillDiscovery, discover_skills
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.markdown_skill import Skill
 from ecs_agent.components import SkillComponent
@@ -307,7 +307,7 @@ class InitSkill(ScriptSkill):
     assert skills == []
 
 
-def test_discover_markdown_skills_returns_metadata_without_eager_system_prompt_call(
+def test_discover_skills_returns_metadata_without_eager_system_prompt_call(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     skill_dir = tmp_path / ".claude" / "skills" / "lazy"
@@ -321,14 +321,14 @@ def test_discover_markdown_skills_returns_metadata_without_eager_system_prompt_c
 
     monkeypatch.setattr(Skill, "system_prompt", _raise_if_called)
 
-    skills = discover_markdown_skills([tmp_path])
+    skills = discover_skills([tmp_path])
 
     assert len(skills) == 1
     assert skills[0].name == "lazy"
     assert skills[0].description == "metadata only"
 
 
-def test_discover_markdown_skills_skips_invalid_file_and_keeps_valid_skills(
+def test_discover_skills_skips_invalid_file_and_keeps_valid_skills(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     valid_dir = tmp_path / ".claude" / "skills" / "valid"
@@ -344,7 +344,7 @@ def test_discover_markdown_skills_skips_invalid_file_and_keeps_valid_skills(
     )
 
     caplog.set_level("WARNING")
-    skills = discover_markdown_skills([tmp_path])
+    skills = discover_skills([tmp_path])
 
     assert [skill.name for skill in skills] == ["valid"]
     assert any(
@@ -354,7 +354,7 @@ def test_discover_markdown_skills_skips_invalid_file_and_keeps_valid_skills(
     )
 
 
-def test_discover_markdown_skills_duplicate_name_conflict_is_deterministic_last_wins(
+def test_discover_skills_duplicate_name_conflict_raises_value_error(
     tmp_path: Path,
 ) -> None:
     first = tmp_path / ".claude" / "skills" / "a-first"
@@ -369,8 +369,11 @@ def test_discover_markdown_skills_duplicate_name_conflict_is_deterministic_last_
         "---\nname: duplicate\ndescription: second\n---\nBody"
     )
 
-    skills = discover_markdown_skills([tmp_path])
+    with pytest.raises(ValueError) as exc_info:
+        discover_skills([tmp_path])
 
-    assert len(skills) == 1
-    assert skills[0].name == "duplicate"
-    assert skills[0].description == "second"
+    assert str(exc_info.value) == (
+        "Skill name collision: 'duplicate' found at both "
+        f"'{first / 'SKILL.md'}' and '{second / 'SKILL.md'}'. "
+        "Remove one SKILL.md or rename the skill."
+    )

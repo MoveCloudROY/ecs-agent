@@ -225,3 +225,37 @@ async def test_discovery_manager_mixed_success_failure_installs_available_source
     assert (str(missing_path), "path not found") in report.failed_sources
     assert ("offline", "offline offline") in report.failed_sources
     assert report.skipped_mcp == ["offline"]
+
+
+@pytest.mark.asyncio
+async def test_discovery_manager_markdown_name_collision_is_rejected(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / ".claude" / "skills" / "a-first"
+    first.mkdir(parents=True)
+    first_file = first / "SKILL.md"
+    first_file.write_text("---\nname: duplicate\ndescription: first\n---\nBody")
+
+    second = tmp_path / ".claude" / "skills" / "z-second"
+    second.mkdir(parents=True)
+    second_file = second / "SKILL.md"
+    second_file.write_text("---\nname: duplicate\ndescription: second\n---\nBody")
+
+    world = World()
+    entity_id = world.create_entity()
+    manager = SkillManager()
+
+    report = await DiscoveryManager().auto_discover_and_install(
+        world,
+        entity_id,
+        manager,
+        directories=[tmp_path],
+    )
+
+    expected_error = (
+        "Skill name collision: 'duplicate' found at both "
+        f"'{first_file}' and '{second_file}'. "
+        "Remove one SKILL.md or rename the skill."
+    )
+    assert report.installed_skills == []
+    assert report.failed_sources == [(str(tmp_path), expected_error)]

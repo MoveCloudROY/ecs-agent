@@ -198,7 +198,7 @@ class DiscoveryManager:
                 md_source_errors: list[str] = []
 
                 try:
-                    markdown_skills = discover_markdown_skills([base_dir])
+                    markdown_skills = discover_skills([base_dir])
                     for skill in markdown_skills:
                         try:
                             manager.index(world, entity_id, skill)
@@ -285,7 +285,7 @@ class DiscoveryManager:
         )
 
 
-def discover_markdown_skills(directories: list[Path]) -> list[ScriptSkill]:
+def discover_skills(directories: list[Path]) -> list[ScriptSkill]:
     """Discover markdown Skill instances from SKILL.md files.
 
     Recursively scans directories for SKILL.md files and creates Skill instances.
@@ -319,11 +319,12 @@ def discover_markdown_skills(directories: list[Path]) -> list[ScriptSkill]:
                     continue
                 skill_name = skill.name
                 if skill_name in discovered_by_name:
-                    logger.warning(
-                        "markdown_skill_name_conflict",
-                        skill_name=skill_name,
-                        kept_path=discovered_path_by_name[skill_name],
-                        overriding_path=str(skill_file),
+                    raise ValueError(
+                        "Skill name collision: "
+                        f"'{skill_name}' found at both "
+                        f"'{discovered_path_by_name[skill_name]}' and "
+                        f"'{str(skill_file)}'. "
+                        "Remove one SKILL.md or rename the skill."
                     )
 
                 discovered_by_name[skill_name] = cast(ScriptSkill, skill)
@@ -333,6 +334,8 @@ def discover_markdown_skills(directories: list[Path]) -> list[ScriptSkill]:
                     path=str(skill_file),
                     skill_name=skill_name,
                 )
+            except ValueError:
+                raise
             except Exception as exc:
                 logger.warning(
                     "markdown_skill_load_failed",

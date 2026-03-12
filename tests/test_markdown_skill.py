@@ -329,7 +329,7 @@ def test_markdown_skill_contract_required_frontmatter_fields_missing_skips_disco
     content: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from ecs_agent.skills.discovery import discover_markdown_skills
+    from ecs_agent.skills.discovery import discover_skills
 
     caplog.set_level(logging.WARNING)
 
@@ -339,7 +339,7 @@ def test_markdown_skill_contract_required_frontmatter_fields_missing_skips_disco
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text(content)
 
-        skills = discover_markdown_skills([base])
+        skills = discover_skills([base])
 
         assert skills == []
         assert any(
@@ -360,7 +360,7 @@ def test_markdown_skill_contract_invalid_name_format_skips_discovery(
     invalid_name: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from ecs_agent.skills.discovery import discover_markdown_skills
+    from ecs_agent.skills.discovery import discover_skills
 
     caplog.set_level(logging.WARNING)
 
@@ -372,7 +372,7 @@ def test_markdown_skill_contract_invalid_name_format_skips_discovery(
             f"---\nname: {invalid_name}\ndescription: bad\n---\nbody"
         )
 
-        skills = discover_markdown_skills([base])
+        skills = discover_skills([base])
 
         assert skills == []
         assert any("name" in record.getMessage().lower() for record in caplog.records)
@@ -381,7 +381,7 @@ def test_markdown_skill_contract_invalid_name_format_skips_discovery(
 def test_markdown_skill_contract_invalid_yaml_skips_skill_without_raising(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from ecs_agent.skills.discovery import discover_markdown_skills
+    from ecs_agent.skills.discovery import discover_skills
 
     caplog.set_level(logging.WARNING)
 
@@ -393,7 +393,7 @@ def test_markdown_skill_contract_invalid_yaml_skips_skill_without_raising(
             "---\nname: broken\ndescription: [unterminated\n---\nBody"
         )
 
-        skills = discover_markdown_skills([base])
+        skills = discover_skills([base])
 
         assert skills == []
         assert any("yaml" in record.getMessage().lower() for record in caplog.records)
@@ -478,7 +478,7 @@ def test_markdown_skill_contract_slash_command_identity_maps_from_name() -> None
 
 
 def test_markdown_skill_contract_lazy_discovery_does_not_read_markdown_body() -> None:
-    from ecs_agent.skills.discovery import discover_markdown_skills
+    from ecs_agent.skills.discovery import discover_skills
 
     with tempfile.TemporaryDirectory() as tmpdir:
         base = Path(tmpdir)
@@ -497,7 +497,7 @@ def test_markdown_skill_contract_lazy_discovery_does_not_read_markdown_body() ->
             )
         )
 
-        skills = discover_markdown_skills([base])
+        skills = discover_skills([base])
 
         assert len(skills) == 1
         assert skills[0].name == "lazy"

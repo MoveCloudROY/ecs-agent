@@ -1,4 +1,9 @@
-from ecs_agent.skills.discovery import DiscoveryManager, DiscoveryReport, SkillDiscovery
+from ecs_agent.skills.discovery import (
+    DiscoveryManager,
+    DiscoveryReport,
+    SkillDiscovery,
+    discover_skills,
+)
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.markdown_skill import Skill
 from ecs_agent.skills.protocol import ScriptSkill
@@ -10,6 +15,7 @@ __all__ = [
     "Skill",
     "ScriptSkill",
     "SkillDiscovery",
+    "discover_skills",
     "SkillManager",
     "WebSearchSkill",
 ]
