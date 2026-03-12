@@ -404,3 +404,82 @@ async def test_lazy_manager_activate_registers_markdown_prompt_and_tools_after_i
     prompt = world.get_component(entity, SystemPromptComponent)
     assert prompt is not None
     assert "Do not eagerly activate this skill." in prompt.content
+
+
+# ---------------------------------------------------------------------------
+# Naming Contract Tests (skills-refactor-v2 hard switch)
+# These tests MUST FAIL until implementation tasks rename the symbols.
+# ---------------------------------------------------------------------------
+
+
+def test_import_skill_protocol_is_markdown_class() -> None:
+    """After hard switch: `Skill` from ecs_agent must be the markdown class, not Protocol."""
+    import ecs_agent
+    from ecs_agent.skills.markdown_skill import MarkdownSkill as _MarkdownSkill
+
+    # After renaming, `Skill` must be the concrete markdown class
+    assert ecs_agent.Skill is _MarkdownSkill, (
+        "Naming contract violated: `Skill` must be the markdown skill class (formerly `MarkdownSkill`). "
+        "renamed to ScriptSkill — use ScriptSkill for the Python protocol interface."
+    )
+
+
+def test_script_skill_is_exported_as_protocol_interface() -> None:
+    """After hard switch: `ScriptSkill` must exist in ecs_agent and be the Protocol."""
+    import ecs_agent
+
+    # ScriptSkill must be exported from the package
+    assert hasattr(ecs_agent, "ScriptSkill"), (
+        "Naming contract violated: `ScriptSkill` not found in ecs_agent. "
+        "The Python protocol interface (formerly named `Skill`) must be exported as `ScriptSkill`."
+    )
+    script_skill = getattr(ecs_agent, "ScriptSkill")
+    assert script_skill is not None
+
+
+def test_markdown_skill_name_not_exported_from_package() -> None:
+    """After hard switch: `MarkdownSkill` must NOT exist in ecs_agent top-level exports."""
+    import ecs_agent
+
+    # Hard switch: no MarkdownSkill alias, code using MarkdownSkill must migrate to Skill
+    assert not hasattr(ecs_agent, "MarkdownSkill"), (
+        "Naming contract violated: `MarkdownSkill` is still exported from ecs_agent. "
+        "Hard switch complete — remove the MarkdownSkill export. "
+        "Migration: use `Skill` instead (renamed to Skill in skills-refactor-v2)."
+    )
+
+
+def test_legacy_skill_protocol_name_not_in_skills_init() -> None:
+    """After hard switch: `Skill` in ecs_agent.skills must be the markdown class, not Protocol."""
+    import importlib
+    import ecs_agent.skills as skills_module
+    from ecs_agent.skills.markdown_skill import MarkdownSkill as _MarkdownSkill
+
+    # The `Skill` export from ecs_agent.skills must now be the markdown class
+    skill_export = getattr(skills_module, "Skill", None)
+    assert skill_export is not None, "Skill must be exported from ecs_agent.skills"
+    assert skill_export is _MarkdownSkill, (
+        "Naming contract violated: ecs_agent.skills.Skill must be the markdown class. "
+        "The old Skill Protocol is now ScriptSkill — use ScriptSkill for duck-typing checks. "
+        "renamed to ScriptSkill — use ScriptSkill for the protocol interface."
+    )
+
+
+def test_script_skill_in_skills_module_is_the_protocol() -> None:
+    """After hard switch: `ScriptSkill` in ecs_agent.skills must be the python Protocol."""
+    import ecs_agent.skills as skills_module
+    from ecs_agent.skills.protocol import Skill as _OldSkillProtocol
+
+    # ScriptSkill must exist in the skills module
+    assert hasattr(skills_module, "ScriptSkill"), (
+        "Naming contract violated: `ScriptSkill` not found in ecs_agent.skills. "
+        "The Python protocol (formerly `Skill`) must be re-exported as `ScriptSkill`."
+    )
+    script_skill = getattr(skills_module, "ScriptSkill")
+    # ScriptSkill must be the protocol class (what was Skill before)
+    assert script_skill is _OldSkillProtocol, (
+        "Naming contract violated: ScriptSkill in ecs_agent.skills must be the Protocol class. "
+        "After rename: protocol.py's Skill class becomes ScriptSkill. "
+        "renamed to ScriptSkill — use ScriptSkill for protocol-based isinstance checks."
+    )
+

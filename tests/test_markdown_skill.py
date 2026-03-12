@@ -1256,3 +1256,74 @@ def test_markdown_skill_user_invocable_alias_maps_to_user_invocable_field() -> N
         assert skill_comp is not None
         metadata = skill_comp.skills["no-user-invoke"]
         assert metadata.user_invocable is False
+
+
+# ---------------------------------------------------------------------------
+# Naming Contract Tests (skills-refactor-v2 hard switch)
+# These tests MUST FAIL until implementation tasks rename the symbols.
+# ---------------------------------------------------------------------------
+
+
+def test_markdown_skill_name_replaced_by_skill_in_exports() -> None:
+    """After hard switch: `Skill` from ecs_agent.skills.markdown_skill must be importable.
+
+    Previously the class was called MarkdownSkill. After the rename it is called Skill.
+    """
+    import importlib
+    module = importlib.import_module("ecs_agent.skills.markdown_skill")
+
+    # After rename: the module must expose `Skill` (not `MarkdownSkill`)
+    assert hasattr(module, "Skill"), (
+        "Naming contract violated: ecs_agent.skills.markdown_skill must export `Skill`. "
+        "renamed to Skill — the class formerly known as MarkdownSkill is now called Skill."
+    )
+
+
+def test_markdown_skill_class_name_is_skill_after_hard_switch() -> None:
+    """After hard switch: class within markdown_skill.py must be named `Skill`, not `MarkdownSkill`.
+
+    Hard switch: NO alias, the class must be renamed. Code using MarkdownSkill must migrate.
+    """
+    import importlib
+    module = importlib.import_module("ecs_agent.skills.markdown_skill")
+
+    # After rename: MarkdownSkill class must not exist (hard switch, no alias)
+    assert not hasattr(module, "MarkdownSkill"), (
+        "Naming contract violated: `MarkdownSkill` class still exists in markdown_skill.py. "
+        "Hard switch complete — the class is now named `Skill`. "
+        "Migration: replace all usages of `MarkdownSkill` with `Skill`. "
+        "renamed to Skill — no compatibility alias is provided."
+    )
+
+
+def test_script_skill_protocol_is_importable_from_protocol_module() -> None:
+    """After hard switch: protocol.py must export `ScriptSkill`, not `Skill`.
+
+    The current `Skill` Protocol in protocol.py is renamed to `ScriptSkill`.
+    """
+    import importlib
+    module = importlib.import_module("ecs_agent.skills.protocol")
+
+    # After rename: ScriptSkill must exist in protocol.py
+    assert hasattr(module, "ScriptSkill"), (
+        "Naming contract violated: ecs_agent.skills.protocol must export `ScriptSkill`. "
+        "renamed to ScriptSkill — the Protocol class formerly named `Skill` is now `ScriptSkill`. "
+        "Migration: replace all `from ecs_agent.skills.protocol import Skill` with `ScriptSkill`."
+    )
+
+
+def test_protocol_module_skill_name_is_script_skill_no_legacy_alias() -> None:
+    """After hard switch: `Skill` must NOT exist in protocol.py (hard switch, no alias).
+
+    The protocol class is renamed to ScriptSkill. No compatibility alias is provided.
+    """
+    import importlib
+    module = importlib.import_module("ecs_agent.skills.protocol")
+
+    # Hard switch: the name `Skill` must not exist in protocol.py anymore
+    assert not hasattr(module, "Skill"), (
+        "Naming contract violated: `Skill` Protocol class still exists in protocol.py. "
+        "Hard switch complete — the Protocol is now named `ScriptSkill`. "
+        "Migration: update all isinstance(x, Skill) checks to isinstance(x, ScriptSkill). "
+        "renamed to ScriptSkill — no backward-compatible Skill alias is allowed."
+    )

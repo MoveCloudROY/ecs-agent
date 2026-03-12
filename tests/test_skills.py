@@ -431,3 +431,44 @@ def test_skill_uninstall_one_does_not_affect_another() -> None:
     assert text_meta is not None
     assert text_meta.tool_names == ["title"]
     assert math_meta is None
+
+
+# ---------------------------------------------------------------------------
+# Naming Contract Tests (skills-refactor-v2 hard switch)
+# These tests MUST FAIL until implementation tasks rename the symbols.
+# ---------------------------------------------------------------------------
+
+
+def test_skill_protocol_duck_typing_uses_script_skill_name() -> None:
+    """After hard switch: duck-typing against protocol must use ScriptSkill, not Skill."""
+    from ecs_agent.skills import ScriptSkill
+
+    # ScriptSkill is the protocol interface for Python-based skills
+    skill = DummySkill("math", "math helpers", {"sum": (_tool("sum"), _sum_handler)})
+    assert isinstance(skill, ScriptSkill), (
+        "Naming contract violated: DummySkill must satisfy ScriptSkill protocol. "
+        "renamed to ScriptSkill — use ScriptSkill for duck-typing checks."
+    )
+
+
+def test_skill_export_from_skills_init_is_not_protocol_class() -> None:
+    """After hard switch: `Skill` from ecs_agent.skills is the markdown class, not Protocol."""
+    import tempfile
+    from pathlib import Path
+    from ecs_agent.skills import Skill
+    from ecs_agent.skills.markdown_skill import MarkdownSkill as _MarkdownSkill
+
+    # After rename: Skill must be MarkdownSkill (concrete markdown implementation)
+    assert Skill is _MarkdownSkill, (
+        "Naming contract violated: `Skill` from ecs_agent.skills must be the markdown skill class. "
+        "renamed to ScriptSkill — use ScriptSkill for the protocol interface, "
+        "`Skill` now refers to the markdown-based skill class (formerly MarkdownSkill)."
+    )
+
+    # Also verify we can instantiate it as the markdown class
+    content = '---\nname: contract-test\ndescription: contract test\n---\n# body'
+    with tempfile.TemporaryDirectory() as tmpdir:
+        skill_path = Path(tmpdir) / "SKILL.md"
+        skill_path.write_text(content)
+        instance = Skill(skill_path)
+        assert instance.name == "contract-test"
