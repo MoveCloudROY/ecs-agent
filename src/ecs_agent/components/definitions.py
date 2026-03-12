@@ -80,6 +80,7 @@ class SkillMetadata:
     description: str
     tool_names: list[str]
     has_system_prompt: bool
+    activated: bool = False
 
     # --- Invocation controls ---
     user_invocable: bool = True
@@ -113,6 +114,7 @@ class SkillMetadata:
             "${CLAUDE_SKILL_DIR}",
         ]
     )
+
 
 @dataclass(slots=True)
 class SkillComponent:
@@ -396,5 +398,5 @@ class ScratchbookIndexComponent:
 @dataclass(slots=True)
 class SubagentSessionTableComponent:
     """Table of active and recent subagent sessions."""
-    
+
     sessions: dict[str, "SubagentSessionRecord"] = field(default_factory=dict)

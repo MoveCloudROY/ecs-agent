@@ -29,7 +29,64 @@ class SkillManager:
     def __init__(self) -> None:
         self._installed_skills: dict[tuple[EntityId, str], Skill] = {}
 
-    def install(self, world: World, entity_id: EntityId, skill: Skill) -> None:
+    def index(self, world: World, entity_id: EntityId, skill: Skill) -> None:
+        registry = world.get_component(entity_id, ToolRegistryComponent)
+        if registry is None:
+            registry = ToolRegistryComponent(tools={}, handlers={})
+            world.add_component(entity_id, registry)
+
+        self._ensure_skill_details_tool(world, entity_id, registry)
+
+        skill_tools = skill.tools()
+        skill_component = world.get_component(entity_id, SkillComponent)
+        if skill_component is None:
+            skill_component = SkillComponent(skills={})
+            world.add_component(entity_id, skill_component)
+
+        skill_component.skills[skill.name] = SkillMetadata(
+            name=skill.name,
+            description=skill.description,
+            tool_names=list(skill_tools.keys()),
+            has_system_prompt=False,
+            activated=False,
+            user_invocable=getattr(skill, "user_invocable", True),
+            disable_model_invocation=getattr(skill, "disable_model_invocation", False),
+            argument_hint=getattr(skill, "argument_hint", ""),
+            allowed_tools=getattr(skill, "allowed_tools", []),
+            context=getattr(skill, "context", None),
+            agent=getattr(skill, "agent", None),
+            model=getattr(skill, "model", None),
+            hooks=getattr(skill, "hooks", {}),
+            skill_dir_path=getattr(skill, "skill_dir_path", None),
+            slash_command=getattr(skill, "slash_command", f"/{skill.name}"),
+            substitution_variables=getattr(
+                skill,
+                "substitution_variables",
+                [
+                    "$ARGUMENTS",
+                    "$ARGUMENTS[0]",
+                    "$1",
+                    "${CLAUDE_SESSION_ID}",
+                    "${CLAUDE_SKILL_DIR}",
+                ],
+            ),
+        )
+        self._installed_skills[(entity_id, skill.name)] = skill
+
+    def activate(self, world: World, entity_id: EntityId, skill_name: str) -> None:
+        skill_component = world.get_component(entity_id, SkillComponent)
+        metadata = (
+            None if skill_component is None else skill_component.skills.get(skill_name)
+        )
+        skill = self._installed_skills.get((entity_id, skill_name))
+        if metadata is None or skill is None:
+            raise ValueError(
+                f"Skill '{skill_name}' is not indexed for entity {entity_id}."
+            )
+
+        if metadata.activated:
+            return
+
         registry = world.get_component(entity_id, ToolRegistryComponent)
         if registry is None:
             registry = ToolRegistryComponent(tools={}, handlers={})
@@ -42,7 +99,7 @@ class SkillManager:
         if collisions:
             collision_list = ", ".join(collisions)
             raise ValueError(
-                f"Tool name collision for skill '{skill.name}': {collision_list}"
+                f"Tool name collision for skill '{skill_name}': {collision_list}"
             )
 
         sandbox_config = world.get_component(entity_id, SandboxConfigComponent)
@@ -64,33 +121,8 @@ class SkillManager:
             else:
                 prompt_component.content = prompt
 
-        skill_component = world.get_component(entity_id, SkillComponent)
-        if skill_component is None:
-            skill_component = SkillComponent(skills={})
-            world.add_component(entity_id, skill_component)
-
-        skill_component.skills[skill.name] = SkillMetadata(
-            name=skill.name,
-            description=skill.description,
-            tool_names=list(skill_tools.keys()),
-            has_system_prompt=bool(prompt),
-            user_invocable=getattr(skill, "user_invocable", True),
-            disable_model_invocation=getattr(skill, "disable_model_invocation", False),
-            argument_hint=getattr(skill, "argument_hint", ""),
-            allowed_tools=getattr(skill, "allowed_tools", []),
-            context=getattr(skill, "context", None),
-            agent=getattr(skill, "agent", None),
-            model=getattr(skill, "model", None),
-            hooks=getattr(skill, "hooks", {}),
-            skill_dir_path=getattr(skill, "skill_dir_path", None),
-            slash_command=getattr(skill, "slash_command", f"/{skill.name}"),
-            substitution_variables=getattr(
-                skill,
-                "substitution_variables",
-                ["$ARGUMENTS", "$ARGUMENTS[0]", "$1", "${CLAUDE_SESSION_ID}", "${CLAUDE_SKILL_DIR}"],
-            ),
-        )
-        self._installed_skills[(entity_id, skill.name)] = skill
+        metadata.has_system_prompt = bool(prompt)
+        metadata.activated = True
         skill.install(world, entity_id)
 
         # Publish SkillInstalledEvent
@@ -98,10 +130,28 @@ class SkillManager:
             world,
             SkillInstalledEvent(
                 entity_id=entity_id,
-                skill_name=skill.name,
+                skill_name=skill_name,
                 tool_names=list(skill_tools.keys()),
             ),
         )
+
+    def install(self, world: World, entity_id: EntityId, skill: Skill) -> None:
+        registry = world.get_component(entity_id, ToolRegistryComponent)
+        if registry is None:
+            registry = ToolRegistryComponent(tools={}, handlers={})
+            world.add_component(entity_id, registry)
+
+        self._ensure_skill_details_tool(world, entity_id, registry)
+
+        collisions = sorted(set(skill.tools()).intersection(registry.tools))
+        if collisions:
+            collision_list = ", ".join(collisions)
+            raise ValueError(
+                f"Tool name collision for skill '{skill.name}': {collision_list}"
+            )
+
+        self.index(world, entity_id, skill)
+        self.activate(world, entity_id, skill.name)
 
     def uninstall(self, world: World, entity_id: EntityId, skill_name: str) -> None:
         skill_component = world.get_component(entity_id, SkillComponent)

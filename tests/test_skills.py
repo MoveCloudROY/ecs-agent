@@ -79,6 +79,7 @@ def test_skill_component_dataclass_structure() -> None:
         "description": "math helpers",
         "tool_names": ["sum", "subtract"],
         "has_system_prompt": True,
+        "activated": False,
         # Extended fields with defaults (Task 3 metadata manifest expansion):
         "user_invocable": True,
         "disable_model_invocation": False,
@@ -98,6 +99,148 @@ def test_skill_component_dataclass_structure() -> None:
             "${CLAUDE_SKILL_DIR}",
         ],
     }
+
+
+def test_skill_index_registers_only_metadata() -> None:
+    world = World()
+    manager = SkillManager()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ToolRegistryComponent(
+            tools={"existing": _tool("existing")},
+            handlers={"existing": _noop_handler},
+        ),
+    )
+
+    skill = DummySkill(
+        name="math",
+        description="math helpers",
+        tool_bundle={"sum": (_tool("sum"), _sum_handler)},
+        prompt="Use careful arithmetic.",
+    )
+
+    manager.index(world, entity_id, skill)
+
+    registry = world.get_component(entity_id, ToolRegistryComponent)
+    prompts = world.get_component(entity_id, SystemPromptComponent)
+    metadata = manager.get_skill_metadata(world, entity_id, "math")
+
+    assert registry is not None
+    assert set(registry.tools) == {"existing", "load_skill_details"}
+    assert set(registry.handlers) == {"existing", "load_skill_details"}
+    assert prompts is None
+    assert metadata is not None
+    assert metadata.activated is False
+    assert skill.install_calls == 0
+
+
+def test_skill_activate_loads_prompt_and_tools_after_index() -> None:
+    world = World()
+    manager = SkillManager()
+    entity_id = world.create_entity()
+    world.add_component(entity_id, SystemPromptComponent(content="base prompt"))
+
+    skill = DummySkill(
+        name="math",
+        description="math helpers",
+        tool_bundle={"sum": (_tool("sum"), _sum_handler)},
+        prompt="Use careful arithmetic.",
+    )
+    manager.index(world, entity_id, skill)
+
+    manager.activate(world, entity_id, "math")
+
+    registry = world.get_component(entity_id, ToolRegistryComponent)
+    prompts = world.get_component(entity_id, SystemPromptComponent)
+    metadata = manager.get_skill_metadata(world, entity_id, "math")
+
+    assert registry is not None
+    assert set(registry.tools) == {"sum", "load_skill_details"}
+    assert set(registry.handlers) == {"sum", "load_skill_details"}
+    assert prompts is not None
+    assert "base prompt" in prompts.content
+    assert "Use careful arithmetic." in prompts.content
+    assert metadata is not None
+    assert metadata.activated is True
+    assert skill.install_calls == 1
+
+
+def test_skill_activate_is_idempotent() -> None:
+    world = World()
+    manager = SkillManager()
+    entity_id = world.create_entity()
+
+    skill = DummySkill(
+        name="math",
+        description="math helpers",
+        tool_bundle={"sum": (_tool("sum"), _sum_handler)},
+        prompt="Use careful arithmetic.",
+    )
+    manager.index(world, entity_id, skill)
+
+    manager.activate(world, entity_id, "math")
+    manager.activate(world, entity_id, "math")
+
+    prompts = world.get_component(entity_id, SystemPromptComponent)
+    metadata = manager.get_skill_metadata(world, entity_id, "math")
+
+    assert prompts is not None
+    assert prompts.content.count("Use careful arithmetic.") == 1
+    assert metadata is not None
+    assert metadata.activated is True
+    assert skill.install_calls == 1
+
+
+def test_skill_activate_raises_for_non_indexed_skill() -> None:
+    world = World()
+    manager = SkillManager()
+    entity_id = world.create_entity()
+
+    with pytest.raises(ValueError, match="not indexed"):
+        manager.activate(world, entity_id, "missing")
+
+
+def test_skill_uninstall_removes_indexed_and_activated_artifacts() -> None:
+    world = World()
+    manager = SkillManager()
+    entity_id = world.create_entity()
+    world.add_component(entity_id, SystemPromptComponent(content="base prompt"))
+
+    indexed_only_skill = DummySkill(
+        name="indexed",
+        description="indexed skill",
+        tool_bundle={"idx": (_tool("idx"), _noop_handler)},
+        prompt="Indexed prompt",
+    )
+    active_skill = DummySkill(
+        name="active",
+        description="active skill",
+        tool_bundle={"act": (_tool("act"), _noop_handler)},
+        prompt="Active prompt",
+    )
+
+    manager.index(world, entity_id, indexed_only_skill)
+    manager.index(world, entity_id, active_skill)
+    manager.activate(world, entity_id, "active")
+
+    manager.uninstall(world, entity_id, "indexed")
+    manager.uninstall(world, entity_id, "active")
+
+    registry = world.get_component(entity_id, ToolRegistryComponent)
+    metadata_active = manager.get_skill_metadata(world, entity_id, "active")
+    metadata_indexed = manager.get_skill_metadata(world, entity_id, "indexed")
+    prompt_component = world.get_component(entity_id, SystemPromptComponent)
+
+    assert registry is not None
+    assert "idx" not in registry.tools
+    assert "act" not in registry.tools
+    assert "load_skill_details" not in registry.tools
+    assert metadata_active is None
+    assert metadata_indexed is None
+    assert prompt_component is not None
+    assert indexed_only_skill.uninstall_calls == 1
+    assert active_skill.uninstall_calls == 1
 
 
 def test_skill_install_merges_tools() -> None:
