@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from ecs_agent.core import World
+from ecs_agent.skills.protocol import ScriptSkill
 from ecs_agent.skills.web_search import WebSearchSkill
 from ecs_agent.types import EntityId
 
@@ -189,3 +190,16 @@ async def test_web_search_skill_system_prompt() -> None:
     skill = WebSearchSkill(api_key="test-key")
     prompt = skill.system_prompt()
     assert isinstance(prompt, str)
+
+
+async def test_web_search_skill_satisfies_protocol() -> None:
+    """WebSearchSkill should satisfy ScriptSkill protocol."""
+    skill = WebSearchSkill(api_key="test-key")
+    assert isinstance(skill, ScriptSkill)
+    assert skill.name == "web-search"
+    assert skill.description is not None
+    assert len(skill.description) > 0
+    assert callable(skill.tools)
+    assert callable(skill.system_prompt)
+    assert callable(skill.install)
+    assert callable(skill.uninstall)
