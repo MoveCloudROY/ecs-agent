@@ -408,7 +408,7 @@ async def test_lazy_manager_activate_registers_markdown_prompt_and_tools_after_i
 
 # ---------------------------------------------------------------------------
 # Naming Contract Tests (skills-refactor-v2 hard switch)
-# These tests MUST FAIL until implementation tasks rename the symbols.
+# Hard switch complete — all tests in this section must pass.
 # ---------------------------------------------------------------------------
 
 
@@ -482,6 +482,70 @@ def test_script_skill_in_skills_module_is_the_protocol() -> None:
         "renamed to ScriptSkill — use ScriptSkill for protocol-based isinstance checks."
     )
 
+
+# ---------------------------------------------------------------------------
+# Hard-switch rejection tests — legacy symbols must raise ImportError
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_markdown_skill_import_raises_import_error() -> None:
+    """Hard-switch: `MarkdownSkill` must NOT be importable from ecs_agent — raises ImportError.
+
+    This is the canonical proof that the hard-switch is enforced: any code that
+    tries to import the old name must fail with ImportError, not silently succeed.
+    """
+    import importlib
+    import sys
+
+    # Remove any cached module state that might have stale exports
+    ecs_agent_mod = sys.modules.get("ecs_agent")
+
+    # Direct attribute access must fail
+    assert ecs_agent_mod is None or not hasattr(ecs_agent_mod, "MarkdownSkill"), (
+        "MarkdownSkill still reachable on already-imported module — hard-switch incomplete"
+    )
+
+    # Import statement must raise ImportError
+    try:
+        from ecs_agent import MarkdownSkill  # type: ignore[attr-defined]  # noqa: F401
+        raise AssertionError(
+            "Expected ImportError when importing MarkdownSkill from ecs_agent, but import succeeded."
+        )
+    except ImportError as exc:
+        assert "MarkdownSkill" in str(exc) or "cannot import" in str(exc).lower(), (
+            f"ImportError raised but message is unexpected: {exc}"
+        )
+
+
+def test_legacy_discover_markdown_skills_not_importable() -> None:
+    """Hard-switch: `discover_markdown_skills` must NOT be importable — raises ImportError.
+
+    After the T5 rename, `discover_markdown_skills` was removed and replaced by
+    `discover_skills`. Any import of the old function must raise ImportError.
+    """
+    try:
+        from ecs_agent.skills.discovery import discover_markdown_skills  # type: ignore[attr-defined]  # noqa: F401
+        raise AssertionError(
+            "Expected ImportError when importing discover_markdown_skills, but import succeeded."
+        )
+    except ImportError as exc:
+        assert "discover_markdown_skills" in str(exc) or "cannot import" in str(exc).lower(), (
+            f"ImportError raised but message is unexpected: {exc}"
+        )
+
+
+def test_canonical_discover_skills_is_importable() -> None:
+    """Canonical API: `discover_skills` must be importable from ecs_agent.skills.discovery.
+
+    Complements the rejection test above — verifies the replacement symbol exists.
+    """
+    from ecs_agent.skills.discovery import discover_skills
+    from ecs_agent.skills import discover_skills as discover_skills_from_init
+
+    assert callable(discover_skills), "discover_skills must be callable"
+    assert discover_skills is discover_skills_from_init, (
+        "discover_skills must be the same object in both discovery module and skills package init"
+    )
 
 # ---------------------------------------------------------------------------
 # T3: Lifecycle idempotency tests — SkillManager as canonical lifecycle owner
