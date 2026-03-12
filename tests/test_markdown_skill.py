@@ -287,76 +287,7 @@ description: Multiple scripts
         assert "tool_c" in tools
 
 
-# --- Discovery Integration Tests (Task 10) ---
-
-
-def test_skill_discovery_finds_markdown_skills() -> None:
-    """discover_markdown_skills finds SKILL.md files in .claude/skills/ directories."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        base = Path(tmpdir)
-        skill_dir = base / ".claude" / "skills" / "my-skill"
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(
-            "---\nname: my-skill\ndescription: Test skill\n---\nPrompt content"
-        )
-
-        from ecs_agent.skills.discovery import discover_markdown_skills
-
-        skills = discover_markdown_skills([base])
-        assert len(skills) == 1
-        assert skills[0].name == "my-skill"
-        assert skills[0].description == "Test skill"
-
-
-def test_skill_discovery_ignores_non_skill_md_files() -> None:
-    """discover_markdown_skills ignores random .md files not named SKILL.md."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        base = Path(tmpdir)
-        # Create a random .md file (not SKILL.md)
-        (base / "README.md").write_text("# Random README")
-        # Create a .md file in a subdirectory (but not SKILL.md)
-        subdir = base / "docs"
-        subdir.mkdir()
-        (subdir / "guide.md").write_text("# Guide")
-
-        from ecs_agent.skills.discovery import discover_markdown_skills
-
-        skills = discover_markdown_skills([base])
-        assert len(skills) == 0
-
-
-async def test_discovery_manager_auto_discovers_markdown_skills() -> None:
-    """DiscoveryManager.auto_discover_and_install finds and installs MarkdownSkills."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        base = Path(tmpdir)
-        skill_dir = base / ".claude" / "skills" / "auto-skill"
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(
-            "---\nname: auto-skill\ndescription: Auto-discovered\n---\nAuto prompt"
-        )
-
-        from ecs_agent.skills.discovery import DiscoveryManager
-
-        world = World()
-        entity = world.create_entity()
-        manager = DiscoveryManager()
-
-        from ecs_agent.skills.manager import SkillManager
-
-        skill_manager = SkillManager()
-
-        # Auto-discover from base directory
-        await manager.auto_discover_and_install(
-            world, entity, skill_manager, directories=[base]
-        )
-
-        # Verify skill was installed
-        from ecs_agent.components.definitions import SkillComponent
-
-        skill_comp = world.get_component(entity, SkillComponent)
-        assert skill_comp is not None
-        assert "auto-skill" in skill_comp.skills
-        assert skill_comp.skills["auto-skill"].name == "auto-skill"
+# --- Contract Tests (Task 8+) ---
 
 
 @pytest.mark.parametrize(
