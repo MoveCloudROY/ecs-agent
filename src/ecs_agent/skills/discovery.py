@@ -201,7 +201,7 @@ class DiscoveryManager:
                     markdown_skills = discover_markdown_skills([base_dir])
                     for skill in markdown_skills:
                         try:
-                            manager.install(world, entity_id, skill)
+                            manager.index(world, entity_id, skill)
                             report.installed_skills.append(skill.name)
                             md_source_installed.append(skill.name)
                         except Exception as exc:

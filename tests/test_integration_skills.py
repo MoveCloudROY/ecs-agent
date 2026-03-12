@@ -3,20 +3,16 @@
 from __future__ import annotations
 
 import sys
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
 from ecs_agent.components.definitions import (
     SkillComponent,
-    SkillMetadata,
     ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.types import ToolSchema
-
-if TYPE_CHECKING:
-    from ecs_agent.skills.protocol import Skill
 
 
 # Helper to create test skill
@@ -121,7 +117,9 @@ def test_mcp_import_without_package_raises_helpful_error() -> None:
     # Now verify that importing MCPClient from ecs_agent doesn't crash
     # but simply doesn't export it
     try:
-        from ecs_agent import MCPClient  # type: ignore[attr-defined]
+        from ecs_agent import MCPClient as _MCPClient  # type: ignore[attr-defined]
+
+        assert _MCPClient is not None
 
         # If we get here, mcp WAS available (shouldn't happen with guard above)
         pytest.fail("MCPClient should not be importable without mcp package")
@@ -173,6 +171,7 @@ def test_full_skill_lifecycle() -> None:
     skill_comp = world.get_component(entity, SkillComponent)
     assert skill_comp is not None
     assert len(skill_comp.skills) == 0
+
 
 def test_multiple_skills_on_same_entity() -> None:
     """Test multiple skills can be installed on the same entity."""
@@ -246,6 +245,7 @@ async def test_load_skill_details_meta_tool() -> None:
     assert "parameters" in result
     assert "workspace_root" in result
 
+
 def test_skill_uninstall_removes_only_owned_tools() -> None:
     """Test that uninstalling a skill only removes tools it owns."""
     from ecs_agent import BuiltinToolsSkill, SkillManager
@@ -299,3 +299,108 @@ def test_skill_manager_duplicate_installation_raises_error() -> None:
     registry = world.get_component(entity, ToolRegistryComponent)
     assert registry is not None
     assert len(registry.tools) == 5  # 4 builtin + 1 meta-tool
+
+
+def _write_markdown_skill_fixture(base_dir: Path) -> str:
+    skill_name = "lazy-skill"
+    skill_dir = base_dir / ".claude" / "skills" / skill_name
+    scripts_dir = skill_dir / "scripts"
+    scripts_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: lazy-skill\n"
+        "description: lazily activated skill\n"
+        "user-invocable: false\n"
+        "disable-model-invocation: true\n"
+        "---\n"
+        "Do not eagerly activate this skill.",
+        encoding="utf-8",
+    )
+    (scripts_dir / "hello.py").write_text(
+        "import json\n"
+        "import sys\n"
+        "payload = json.loads(sys.stdin.read() or '{}')\n"
+        "print(payload.get('name', 'world'))\n",
+        encoding="utf-8",
+    )
+    return skill_name
+
+
+@pytest.mark.asyncio
+async def test_lazy_discovery_manager_indexes_markdown_skill_without_activation(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent import SkillManager
+    from ecs_agent.skills.discovery import DiscoveryManager
+
+    skill_name = _write_markdown_skill_fixture(tmp_path)
+    world = World()
+    entity = world.create_entity()
+    manager = SkillManager()
+
+    await DiscoveryManager().auto_discover_and_install(
+        world,
+        entity,
+        manager,
+        directories=[tmp_path],
+    )
+
+    skill_comp = world.get_component(entity, SkillComponent)
+    assert skill_comp is not None
+    metadata = skill_comp.skills[skill_name]
+    assert metadata.activated is False
+    assert metadata.tool_names == ["hello"]
+
+    registry = world.get_component(entity, ToolRegistryComponent)
+    assert registry is not None
+    assert set(registry.tools) == {"load_skill_details"}
+    assert "hello" not in registry.tools
+
+    manager_for_policy_checks = SkillManager()
+    assert (
+        manager_for_policy_checks.can_invoke_via_slash(world, entity, "/lazy-skill")
+        is False
+    )
+    assert (
+        manager_for_policy_checks.can_model_auto_invoke_skill(
+            world, entity, "lazy-skill"
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_lazy_manager_activate_registers_markdown_prompt_and_tools_after_index(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent import SkillManager
+    from ecs_agent.components import SystemPromptComponent
+    from ecs_agent.skills.discovery import DiscoveryManager
+
+    skill_name = _write_markdown_skill_fixture(tmp_path)
+    world = World()
+    entity = world.create_entity()
+    manager = SkillManager()
+
+    await DiscoveryManager().auto_discover_and_install(
+        world,
+        entity,
+        manager,
+        directories=[tmp_path],
+    )
+
+    manager.activate(world, entity, skill_name)
+
+    skill_comp = world.get_component(entity, SkillComponent)
+    assert skill_comp is not None
+    metadata = skill_comp.skills[skill_name]
+    assert metadata.activated is True
+
+    registry = world.get_component(entity, ToolRegistryComponent)
+    assert registry is not None
+    assert "hello" in registry.tools
+    assert "load_skill_details" in registry.tools
+
+    prompt = world.get_component(entity, SystemPromptComponent)
+    assert prompt is not None
+    assert "Do not eagerly activate this skill." in prompt.content

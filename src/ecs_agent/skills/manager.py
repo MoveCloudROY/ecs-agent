@@ -121,9 +121,20 @@ class SkillManager:
             else:
                 prompt_component.content = prompt
 
-        metadata.has_system_prompt = bool(prompt)
-        metadata.activated = True
         skill.install(world, entity_id)
+
+        refreshed_skill_component = world.get_component(entity_id, SkillComponent)
+        refreshed_metadata = (
+            None
+            if refreshed_skill_component is None
+            else refreshed_skill_component.skills.get(skill_name)
+        )
+        if refreshed_metadata is None:
+            metadata.has_system_prompt = bool(prompt)
+            metadata.activated = True
+        else:
+            refreshed_metadata.has_system_prompt = bool(prompt)
+            refreshed_metadata.activated = True
 
         # Publish SkillInstalledEvent
         self._publish_event(
