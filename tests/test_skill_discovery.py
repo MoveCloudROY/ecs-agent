@@ -5,9 +5,9 @@ from pathlib import Path
 import pytest
 
 from ecs_agent.core.world import World
-from ecs_agent.skills.discovery import SkillDiscovery
+from ecs_agent.skills.discovery import SkillDiscovery, discover_markdown_skills
 from ecs_agent.skills.manager import SkillManager
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.markdown_skill import MarkdownSkill
 from ecs_agent.components import SkillComponent
 
 
@@ -305,3 +305,72 @@ class InitSkill(Skill):
     skills = discovery.discover()
 
     assert skills == []
+
+
+def test_discover_markdown_skills_returns_metadata_without_eager_system_prompt_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    skill_dir = tmp_path / ".claude" / "skills" / "lazy"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_bytes(
+        (b"---\nname: lazy\ndescription: metadata only\n---\n# Body\n\xff\xfe\x00\x00")
+    )
+
+    def _raise_if_called(_: MarkdownSkill) -> str:
+        raise AssertionError("system_prompt() must not be called during discovery")
+
+    monkeypatch.setattr(MarkdownSkill, "system_prompt", _raise_if_called)
+
+    skills = discover_markdown_skills([tmp_path])
+
+    assert len(skills) == 1
+    assert skills[0].name == "lazy"
+    assert skills[0].description == "metadata only"
+
+
+def test_discover_markdown_skills_skips_invalid_file_and_keeps_valid_skills(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    valid_dir = tmp_path / ".claude" / "skills" / "valid"
+    valid_dir.mkdir(parents=True)
+    (valid_dir / "SKILL.md").write_text(
+        "---\nname: valid\ndescription: valid description\n---\nValid body"
+    )
+
+    invalid_dir = tmp_path / ".claude" / "skills" / "broken"
+    invalid_dir.mkdir(parents=True)
+    (invalid_dir / "SKILL.md").write_text(
+        "---\nname: broken\ndescription: [unterminated\n---\nBroken body"
+    )
+
+    caplog.set_level("WARNING")
+    skills = discover_markdown_skills([tmp_path])
+
+    assert [skill.name for skill in skills] == ["valid"]
+    assert any(
+        "markdown_skill_invalid" in record.getMessage()
+        or "invalid_yaml" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_discover_markdown_skills_duplicate_name_conflict_is_deterministic_last_wins(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / ".claude" / "skills" / "a-first"
+    first.mkdir(parents=True)
+    (first / "SKILL.md").write_text(
+        "---\nname: duplicate\ndescription: first\n---\nBody"
+    )
+
+    second = tmp_path / ".claude" / "skills" / "z-second"
+    second.mkdir(parents=True)
+    (second / "SKILL.md").write_text(
+        "---\nname: duplicate\ndescription: second\n---\nBody"
+    )
+
+    skills = discover_markdown_skills([tmp_path])
+
+    assert len(skills) == 1
+    assert skills[0].name == "duplicate"
+    assert skills[0].description == "second"

@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
@@ -211,14 +211,18 @@ class DiscoveryManager:
 
                     await world.event_bus.publish(
                         SkillDiscoveryEvent(
-                            source=source, skills_found=md_source_installed, errors=md_source_errors
+                            source=source,
+                            skills_found=md_source_installed,
+                            errors=md_source_errors,
                         )
                     )
                 except Exception as exc:
                     error = str(exc)
                     report.failed_sources.append((source, error))
                     await world.event_bus.publish(
-                        SkillDiscoveryEvent(source=source, skills_found=[], errors=[error])
+                        SkillDiscoveryEvent(
+                            source=source, skills_found=[], errors=[error]
+                        )
                     )
 
         for mcp_config in self.mcp_configs:
@@ -294,7 +298,8 @@ def discover_markdown_skills(directories: list[Path]) -> list[Skill]:
     """
     from ecs_agent.skills.markdown_skill import MarkdownSkill
 
-    skills: list[Skill] = []
+    discovered_by_name: dict[str, Skill] = {}
+    discovered_path_by_name: dict[str, str] = {}
 
     for base_dir in directories:
         if not base_dir.exists():
@@ -302,9 +307,8 @@ def discover_markdown_skills(directories: list[Path]) -> list[Skill]:
             continue
 
         # Recursively find all SKILL.md files
-        for skill_file in base_dir.rglob("SKILL.md"):
+        for skill_file in sorted(base_dir.rglob("SKILL.md")):
             try:
-                from typing import cast
                 skill = MarkdownSkill(skill_file)
                 if not skill.valid:
                     logger.warning(
@@ -313,11 +317,21 @@ def discover_markdown_skills(directories: list[Path]) -> list[Skill]:
                         skill_name=skill.name,
                     )
                     continue
-                skills.append(cast(Skill, skill))
+                skill_name = skill.name
+                if skill_name in discovered_by_name:
+                    logger.warning(
+                        "markdown_skill_name_conflict",
+                        skill_name=skill_name,
+                        kept_path=discovered_path_by_name[skill_name],
+                        overriding_path=str(skill_file),
+                    )
+
+                discovered_by_name[skill_name] = cast(Skill, skill)
+                discovered_path_by_name[skill_name] = str(skill_file)
                 logger.info(
                     "markdown_skill_discovered",
                     path=str(skill_file),
-                    skill_name=skill.name,
+                    skill_name=skill_name,
                 )
             except Exception as exc:
                 logger.warning(
@@ -325,4 +339,4 @@ def discover_markdown_skills(directories: list[Path]) -> list[Skill]:
                     path=str(skill_file),
                     error=str(exc),
                 )
-    return skills
+    return list(discovered_by_name.values())
