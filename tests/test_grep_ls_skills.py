@@ -12,7 +12,7 @@ class TestGrepSkillProtocol:
 
     async def test_grep_skill_satisfies_protocol(self) -> None:
         """GrepSkill should satisfy Skill protocol."""
-        from examples.skills.grep_skill import GrepSkill
+        from examples.script_skills.grep_skill import GrepSkill
 
         skill = GrepSkill()
         assert isinstance(skill, Skill)
@@ -22,7 +22,7 @@ class TestGrepSkillProtocol:
 
     async def test_grep_skill_has_tools(self) -> None:
         """GrepSkill should provide grep tool."""
-        from examples.skills.grep_skill import GrepSkill
+        from examples.script_skills.grep_skill import GrepSkill
 
         skill = GrepSkill()
         tools = skill.tools()
@@ -37,7 +37,7 @@ class TestGrepSkillFunctionality:
 
     async def test_grep_finds_pattern_in_file(self, tmp_path) -> None:
         """Grep tool should find pattern in file."""
-        from examples.skills.grep_skill import GrepSkill
+        from examples.script_skills.grep_skill import GrepSkill
 
         # Create temp file with content
         test_file = tmp_path / "test.txt"
@@ -54,7 +54,7 @@ class TestGrepSkillFunctionality:
 
     async def test_grep_nonexistent_file_returns_error(self, tmp_path) -> None:
         """Grep tool should handle non-existent file."""
-        from examples.skills.grep_skill import GrepSkill
+        from examples.script_skills.grep_skill import GrepSkill
 
         skill = GrepSkill()
         tools = skill.tools()
@@ -76,7 +76,7 @@ class TestLsSkillProtocol:
 
     async def test_ls_skill_satisfies_protocol(self) -> None:
         """LsSkill should satisfy Skill protocol."""
-        from examples.skills.ls_skill import LsSkill
+        from examples.script_skills.ls_skill import LsSkill
 
         skill = LsSkill()
         assert isinstance(skill, Skill)
@@ -86,7 +86,7 @@ class TestLsSkillProtocol:
 
     async def test_ls_skill_has_tools(self) -> None:
         """LsSkill should provide ls tool."""
-        from examples.skills.ls_skill import LsSkill
+        from examples.script_skills.ls_skill import LsSkill
 
         skill = LsSkill()
         tools = skill.tools()
@@ -101,7 +101,7 @@ class TestLsSkillFunctionality:
 
     async def test_ls_lists_directory(self, tmp_path) -> None:
         """Ls tool should list directory contents."""
-        from examples.skills.ls_skill import LsSkill
+        from examples.script_skills.ls_skill import LsSkill
 
         # Create temp files
         (tmp_path / "a.txt").write_text("content a")
@@ -119,7 +119,7 @@ class TestLsSkillFunctionality:
 
     async def test_ls_nonexistent_dir_returns_error(self, tmp_path) -> None:
         """Ls tool should handle non-existent directory."""
-        from examples.skills.ls_skill import LsSkill
+        from examples.script_skills.ls_skill import LsSkill
 
         skill = LsSkill()
         tools = skill.tools()
@@ -142,7 +142,7 @@ class TestSkillDiscoveryIntegration:
         """SkillDiscovery should find both grep and ls skills."""
         from ecs_agent.skills.discovery import SkillDiscovery
 
-        discovery = SkillDiscovery(skill_paths=["examples/skills"])
+        discovery = SkillDiscovery(skill_paths=["examples/script_skills"])
         skills = discovery.discover()
 
         assert len(skills) >= 2

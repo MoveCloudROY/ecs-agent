@@ -76,4 +76,4 @@ All file tools require a `workspace_root` to be configured. The framework valida
 
 ## Examples
 
-See [`examples/skill_agent.py`](../../examples/skill_agent.py) for a demonstration of these tools in a reasoning loop.
+See [`examples/script_skill_agent.py`](../../examples/script_skill_agent.py) for a demonstration of these tools in a reasoning loop.

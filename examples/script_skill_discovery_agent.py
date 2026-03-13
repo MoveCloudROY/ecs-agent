@@ -32,7 +32,7 @@ async def main() -> None:
 
     # Path to the directory containing skill implementations
     # In this demo, we point to the examples/skills folder
-    skills_path = Path(__file__).parent / "skills"
+    skills_path = Path(__file__).parent / "script_skills"
 
     # 1. Initialize SkillDiscovery
     discovery = SkillDiscovery(skill_paths=[skills_path])

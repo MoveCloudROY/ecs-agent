@@ -303,9 +303,9 @@ class CalculatorSkill:
 - **BuiltinToolsSkill**: Basic file manipulation (`read_file`, `write_file`, `edit_file`) and shell execution (`bash`). See [Built-in Tools](builtin-tools.md).
 
 ## Examples
-- [`examples/skill_agent.py`](../../examples/skill_agent.py): Basic skill demo.
-- [`examples/skill_discovery_agent.py`](../../examples/skill_discovery_agent.py): File-based auto-discovery.
-- [`examples/markdown_skill_agent.py`](../../examples/markdown_skill_agent.py): Markdown skill loading and installation.
+- [`examples/script_skill_agent.py`](../../examples/script_skill_agent.py): Basic script skill demo.
+- [`examples/script_skill_discovery_agent.py`](../../examples/script_skill_discovery_agent.py): File-based auto-discovery.
+- [`examples/skill_agent.py`](../../examples/skill_agent.py): Markdown skill loading and installation.
 
 ## See Also
 - [Tool Discovery & Approval](./tool-discovery.md)

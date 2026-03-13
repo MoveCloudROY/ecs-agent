@@ -186,17 +186,17 @@ class TestMultiAgentDualMode:
 
 
 @pytest.mark.asyncio
-class TestSkillDiscoveryAgentDualMode:
+class TestScriptSkillDiscoveryAgentDualMode:
     async def test_fake_mode(self) -> None:
-        module = _load_example("skill_discovery_agent")
+        module = _load_example("script_skill_discovery_agent")
 
         with patch.dict(os.environ, {}, clear=True):
             with patch(
-                "examples.skill_discovery_agent.FakeProvider",
+                "examples.script_skill_discovery_agent.FakeProvider",
                 return_value=_fake_provider(),
             ) as fake_ctor:
                 with patch(
-                    "examples.skill_discovery_agent.OpenAIProvider", create=True
+                    "examples.script_skill_discovery_agent.OpenAIProvider", create=True
                 ) as openai_ctor:
                     await module.main()
 
@@ -204,14 +204,14 @@ class TestSkillDiscoveryAgentDualMode:
         openai_ctor.assert_not_called()
 
     async def test_real_mode(self) -> None:
-        module = _load_example("skill_discovery_agent")
+        module = _load_example("script_skill_discovery_agent")
 
         with patch.dict(os.environ, {"LLM_API_KEY": "test-api-key"}, clear=True):
             with patch(
-                "examples.skill_discovery_agent.FakeProvider", side_effect=FakeProvider
+                "examples.script_skill_discovery_agent.FakeProvider", side_effect=FakeProvider
             ) as fake_ctor:
                 with patch(
-                    "examples.skill_discovery_agent.OpenAIProvider",
+                    "examples.script_skill_discovery_agent.OpenAIProvider",
                     return_value=_OpenAIProviderStub(),
                     create=True,
                 ) as openai_ctor:
