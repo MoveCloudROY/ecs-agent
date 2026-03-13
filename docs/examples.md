@@ -46,7 +46,7 @@ These 9 examples support dual-mode:
 - `multi_agent.py` — Two agents collaborating
 - `skill_discovery_agent.py` — Skills auto-discovery
 - `permission_agent.py` — Permission-controlled tools
-- `markdown_skill_agent.py` — Markdown skill loading and install
+- `skill_file_agent.py` — SKILL.md-based skill loading and install
 - `subagent_delegation.py` — Parent delegating to child agents
 - `tree_search_agent.py` — MCTS planning
 - `context_management_agent.py` — Checkpoint and undo
@@ -406,11 +406,11 @@ Landmarks:
 
 ---
 
-### Markdown Skill Agent
-- **File:** `examples/markdown_skill_agent.py`
+### Skill File Agent
+- **File:** `examples/skill_file_agent.py`
 - **What it demonstrates:** Loading a markdown skill from `SKILL.md`, auto-discovering script-based tools, and installing it with `SkillManager`.
-- **Run:** `uv run python examples/markdown_skill_agent.py`
-- **Pattern:** `MarkdownSkill` + `SkillManager` + `ReasoningSystem`.
+- **Run:** `uv run python examples/skill_file_agent.py`
+- **Pattern:** `Skill` + `SkillManager` + `ReasoningSystem`.
 
 > **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
 
