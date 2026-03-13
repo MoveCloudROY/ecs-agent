@@ -8,7 +8,7 @@ from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeProvider, OpenAIProvider
 from ecs_agent.skills.manager import SkillManager
-from ecs_agent.skills.markdown_skill import Skill
+from ecs_agent.skills.skill import Skill
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import CompletionResult, Message, ToolCall

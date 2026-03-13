@@ -20,7 +20,7 @@ from ecs_agent.providers import FakeProvider
 from ecs_agent.providers.openai_provider import OpenAIProvider
 from ecs_agent.skills.discovery import DiscoveryManager
 from ecs_agent.skills.manager import SkillManager
-from ecs_agent.skills.markdown_skill import Skill
+from ecs_agent.skills.skill import Skill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem

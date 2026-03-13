@@ -415,7 +415,7 @@ async def test_lazy_manager_activate_registers_markdown_prompt_and_tools_after_i
 def test_import_skill_protocol_is_markdown_class() -> None:
     """After hard switch: `Skill` from ecs_agent must be the markdown class, not Protocol."""
     import ecs_agent
-    from ecs_agent.skills.markdown_skill import Skill as _MarkdownSkill
+    from ecs_agent.skills.skill import Skill as _MarkdownSkill
 
     # After renaming, `Skill` must be the concrete markdown class
     assert ecs_agent.Skill is _MarkdownSkill, (
@@ -452,7 +452,7 @@ def test_markdown_skill_name_not_exported_from_package() -> None:
 def test_legacy_skill_protocol_name_not_in_skills_init() -> None:
     """After hard switch: `Skill` in ecs_agent.skills must be the markdown class, not Protocol."""
     import ecs_agent.skills as skills_module
-    from ecs_agent.skills.markdown_skill import Skill as _MarkdownSkill
+    from ecs_agent.skills.skill import Skill as _MarkdownSkill
 
     # The `Skill` export from ecs_agent.skills must now be the markdown class
     skill_export = getattr(skills_module, "Skill", None)
@@ -467,7 +467,7 @@ def test_legacy_skill_protocol_name_not_in_skills_init() -> None:
 def test_script_skill_in_skills_module_is_the_protocol() -> None:
     """After hard switch: `ScriptSkill` in ecs_agent.skills must be the python Protocol."""
     import ecs_agent.skills as skills_module
-    from ecs_agent.skills.protocol import ScriptSkill as _OldSkillProtocol
+    from ecs_agent.skills.script_skill import ScriptSkill as _OldSkillProtocol
 
     # ScriptSkill must exist in the skills module
     assert hasattr(skills_module, "ScriptSkill"), (
@@ -585,7 +585,7 @@ def test_skill_lifecycle_no_duplicate_tools_after_activate(tmp_path: Path) -> No
     result in duplicate tool entries.
     """
     from ecs_agent import SkillManager
-    from ecs_agent.skills.markdown_skill import Skill
+    from ecs_agent.skills.skill import Skill
 
     skill_md = _write_simple_markdown_skill_fixture(tmp_path)
     skill = Skill(skill_md)
@@ -620,7 +620,7 @@ def test_skill_lifecycle_no_duplicate_prompts_after_activate(tmp_path: Path) -> 
     """
     from ecs_agent import SkillManager
     from ecs_agent.components import SystemPromptComponent
-    from ecs_agent.skills.markdown_skill import Skill
+    from ecs_agent.skills.skill import Skill
 
     skill_md = _write_simple_markdown_skill_fixture(tmp_path)
     skill = Skill(skill_md)
@@ -657,7 +657,7 @@ def test_skill_lifecycle_manager_install_prompt_appears_exactly_once(
     """
     from ecs_agent import SkillManager
     from ecs_agent.components import SystemPromptComponent
-    from ecs_agent.skills.markdown_skill import Skill
+    from ecs_agent.skills.skill import Skill
 
     skill_md = _write_simple_markdown_skill_fixture(tmp_path)
     skill = Skill(skill_md)

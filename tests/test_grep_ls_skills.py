@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from ecs_agent.skills.protocol import ScriptSkill
+from ecs_agent.skills.script_skill import ScriptSkill
 
 
 class TestGrepSkillProtocol:

@@ -20,7 +20,7 @@ from ecs_agent.types import (
     ToolSchema,
 )
 
-from ecs_agent.skills.protocol import ScriptSkill
+from ecs_agent.skills.script_skill import ScriptSkill
 
 
 class SkillManager:

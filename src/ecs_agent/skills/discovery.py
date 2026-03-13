@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
-from ecs_agent.skills.protocol import ScriptSkill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, SkillDiscoveryEvent
 
 try:
@@ -296,14 +296,14 @@ def discover_skills(directories: list[Path]) -> list[ScriptSkill]:
     Returns:
         List of markdown Skill instances found
     """
-    from ecs_agent.skills.markdown_skill import Skill
+    from ecs_agent.skills.skill import Skill
 
     discovered_by_name: dict[str, ScriptSkill] = {}
     discovered_path_by_name: dict[str, str] = {}
 
     for base_dir in directories:
         if not base_dir.exists():
-            logger.warning("markdown_skill_path_not_found", path=str(base_dir))
+            logger.warning("skill_path_not_found", path=str(base_dir))
             continue
 
         # Recursively find all SKILL.md files
@@ -312,7 +312,7 @@ def discover_skills(directories: list[Path]) -> list[ScriptSkill]:
                 skill = Skill(skill_file)
                 if not skill.valid:
                     logger.warning(
-                        "markdown_skill_invalid",
+                        "skill_invalid",
                         path=str(skill_file),
                         skill_name=skill.name,
                     )
@@ -330,7 +330,7 @@ def discover_skills(directories: list[Path]) -> list[ScriptSkill]:
                 discovered_by_name[skill_name] = cast(ScriptSkill, skill)
                 discovered_path_by_name[skill_name] = str(skill_file)
                 logger.info(
-                    "markdown_skill_discovered",
+                    "skill_discovered",
                     path=str(skill_file),
                     skill_name=skill_name,
                 )
@@ -338,7 +338,7 @@ def discover_skills(directories: list[Path]) -> list[ScriptSkill]:
                 raise
             except Exception as exc:
                 logger.warning(
-                    "markdown_skill_load_failed",
+                    "skill_load_failed",
                     path=str(skill_file),
                     error=str(exc),
                 )

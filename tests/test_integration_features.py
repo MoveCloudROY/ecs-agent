@@ -30,7 +30,7 @@ from ecs_agent.logging import configure_logging, get_logger
 from ecs_agent.providers import FakeProvider
 from ecs_agent.providers.openai_provider import OpenAIProvider
 from ecs_agent.serialization import WorldSerializer
-from ecs_agent.skills.markdown_skill import Skill
+from ecs_agent.skills.skill import Skill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem

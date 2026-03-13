@@ -456,7 +456,7 @@ def test_skill_export_from_skills_init_is_not_protocol_class() -> None:
     import tempfile
     from pathlib import Path
     from ecs_agent.skills import Skill
-    from ecs_agent.skills.markdown_skill import Skill as _MarkdownSkill
+    from ecs_agent.skills.skill import Skill as _MarkdownSkill
 
     # After rename: Skill must be MarkdownSkill (concrete markdown implementation)
     assert Skill is _MarkdownSkill, (
@@ -553,7 +553,7 @@ def test_metadata_invalid_frontmatter_gets_graceful_defaults() -> None:
     """
     import tempfile
     from pathlib import Path
-    from ecs_agent.skills.markdown_skill import Skill
+    from ecs_agent.skills.skill import Skill
 
     malformed = "---\nname: bad-yaml\ndescription: [unterminated\n---\nBody"
 

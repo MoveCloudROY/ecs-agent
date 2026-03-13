@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from ecs_agent.core import World
-from ecs_agent.skills.protocol import ScriptSkill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.skills.web_search import WebSearchSkill
 from ecs_agent.types import EntityId
 

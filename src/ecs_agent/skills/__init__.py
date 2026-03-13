@@ -5,8 +5,8 @@ from ecs_agent.skills.discovery import (
     discover_skills,
 )
 from ecs_agent.skills.manager import SkillManager
-from ecs_agent.skills.markdown_skill import Skill
-from ecs_agent.skills.protocol import ScriptSkill
+from ecs_agent.skills.skill import Skill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.skills.web_search import WebSearchSkill
 
 __all__ = [

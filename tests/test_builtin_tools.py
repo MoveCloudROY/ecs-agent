@@ -8,7 +8,7 @@ import pytest
 from ecs_agent.components import ToolRegistryComponent
 from ecs_agent.core import World
 from ecs_agent.skills import SkillManager
-from ecs_agent.skills.protocol import ScriptSkill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.tools.builtins import BuiltinToolsSkill
 from ecs_agent.tools.builtins.bash_tool import bash
 from ecs_agent.tools.builtins.edit_tool import compute_line_hash, edit_file

@@ -1,4 +1,4 @@
-"""Markdown-based skill parser.
+"""Skill parser for Markdown-based skills.
 
 Loads skills from SKILL.md files with YAML frontmatter.
 """
@@ -20,7 +20,7 @@ from ecs_agent.components.definitions import (
     SkillComponent,
 )
 from ecs_agent.logging import get_logger
-from ecs_agent.skills.protocol import ToolHandler
+from ecs_agent.skills.script_skill import ToolHandler
 from ecs_agent.types import EntityId, ToolSchema
 
 logger = get_logger(__name__)
@@ -162,12 +162,12 @@ class Skill:
                     metadata = parsed
             except yaml.YAMLError as exc:
                 logger.warning(
-                    "markdown_skill_invalid_yaml",
+                    "skill_invalid_yaml",
                     skill_path=str(self._skill_path),
                     exception=str(exc),
                 )
                 _stdlib_logger.warning(
-                    "markdown_skill_invalid_yaml: %s", str(self._skill_path)
+                    "skill_invalid_yaml: %s", str(self._skill_path)
                 )
                 self.valid = False
                 self._name = ""
@@ -182,13 +182,13 @@ class Skill:
             if frontmatter_text and (raw_name is None or raw_description is None):
                 # Has frontmatter but missing required fields
                 logger.warning(
-                    "markdown_skill_missing_required_field",
+                    "skill_missing_required_field",
                     skill_path=str(self._skill_path),
                     missing_name=(raw_name is None),
                     missing_description=(raw_description is None),
                 )
                 _stdlib_logger.warning(
-                    "markdown_skill_missing_required_field: required fields missing in %s",
+                    "skill_missing_required_field: required fields missing in %s",
                     str(self._skill_path),
                 )
                 self.valid = False
@@ -199,11 +199,11 @@ class Skill:
                 return
             # No frontmatter — reject per new spec (frontmatter required)
             logger.warning(
-                "markdown_skill_no_frontmatter",
+                "skill_no_frontmatter",
                 skill_path=str(self._skill_path),
             )
             _stdlib_logger.warning(
-                "markdown_skill_no_frontmatter: no YAML frontmatter in %s",
+                "skill_no_frontmatter: no YAML frontmatter in %s",
                 str(self._skill_path),
             )
             self.valid = False
@@ -217,12 +217,12 @@ class Skill:
         # Validate name format
         if not _NAME_RE.fullmatch(name):
             logger.warning(
-                "markdown_skill_invalid_name",
+                "skill_invalid_name",
                 skill_path=str(self._skill_path),
                 name=name,
             )
             _stdlib_logger.warning(
-                "markdown_skill_invalid_name: invalid name format %r in %s",
+                "skill_invalid_name: invalid name format %r in %s",
                 name,
                 str(self._skill_path),
             )
@@ -438,7 +438,7 @@ class Skill:
                 return f"Script execution timed out after {self._sandbox_timeout}s"
             except Exception as exc:
                 logger.error(
-                    "markdown_skill_script_error",
+                    "skill_script_error",
                     script=str(script_path),
                     exception=str(exc),
                 )

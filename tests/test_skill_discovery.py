@@ -7,7 +7,7 @@ import pytest
 from ecs_agent.core.world import World
 from ecs_agent.skills.discovery import SkillDiscovery, discover_skills
 from ecs_agent.skills.manager import SkillManager
-from ecs_agent.skills.markdown_skill import Skill
+from ecs_agent.skills.skill import Skill
 from ecs_agent.components import SkillComponent
 
 
@@ -18,7 +18,7 @@ def test_skill_discovery_finds_valid_skill(tmp_path: Path) -> None:
         """
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import ScriptSkill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
@@ -56,7 +56,7 @@ def test_skill_discovery_skips_non_skill_classes(tmp_path: Path) -> None:
         """
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import ScriptSkill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
@@ -124,7 +124,7 @@ def test_skill_discovery_handles_malformed_python_file(tmp_path: Path) -> None:
         """
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import ScriptSkill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
@@ -165,7 +165,7 @@ def test_skill_discovery_and_install(tmp_path: Path) -> None:
         """
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import ScriptSkill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
@@ -214,7 +214,7 @@ def test_skill_discovery_multiple_paths(tmp_path: Path) -> None:
         """
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import ScriptSkill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
@@ -241,7 +241,7 @@ class Skill1(ScriptSkill):
         """
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import ScriptSkill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
@@ -279,7 +279,7 @@ def test_skill_discovery_skips_init_py(tmp_path: Path) -> None:
 # This file should be skipped
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import ScriptSkill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
@@ -348,7 +348,7 @@ def test_discover_skills_skips_invalid_file_and_keeps_valid_skills(
 
     assert [skill.name for skill in skills] == ["valid"]
     assert any(
-        "markdown_skill_invalid" in record.getMessage()
+        "skill_invalid" in record.getMessage()
         or "invalid_yaml" in record.getMessage()
         for record in caplog.records
     )

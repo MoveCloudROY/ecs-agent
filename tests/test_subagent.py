@@ -544,7 +544,7 @@ async def test_delegate_with_skills_installs_skills() -> None:
     """SubagentConfig with skills list, verify skills installed on child entity."""
     from ecs_agent.systems.subagent import SubagentSystem
     from ecs_agent.components.definitions import SkillComponent
-    from ecs_agent.skills.protocol import ScriptSkill
+    from ecs_agent.skills.script_skill import ScriptSkill
     from ecs_agent.skills.manager import SkillManager
 
     # Create a test skill to verify installation
@@ -1391,7 +1391,7 @@ async def test_subagent_skills_skill_manager_inherited_tools_available() -> None
     """Child can execute tools from inherited skills (SkillManager semantics)."""
     from ecs_agent.systems.subagent import SubagentSystem
     from ecs_agent.skills.manager import SkillManager
-    from ecs_agent.skills.protocol import ScriptSkill
+    from ecs_agent.skills.script_skill import ScriptSkill
 
     # Define a test skill with a tool
     class ParentSkill(ScriptSkill):
@@ -1492,7 +1492,7 @@ async def test_subagent_skills_skill_manager_requested_tools_available() -> None
     """Child can execute tools from requested skills (SubagentConfig.skills)."""
     from ecs_agent.systems.subagent import SubagentSystem
     from ecs_agent.skills.manager import SkillManager
-    from ecs_agent.skills.protocol import ScriptSkill
+    from ecs_agent.skills.script_skill import ScriptSkill
 
     # Define a skill that child requests explicitly
     class RequestedSkill(ScriptSkill):
@@ -1687,7 +1687,7 @@ async def test_subagent_skills_skill_manager_install_uninstall_lifecycle() -> No
     """Skills installed via SkillManager.install(), not manual dict copying."""
     from ecs_agent.systems.subagent import SubagentSystem
     from ecs_agent.skills.manager import SkillManager
-    from ecs_agent.skills.protocol import ScriptSkill
+    from ecs_agent.skills.script_skill import ScriptSkill
     from unittest.mock import patch
 
     # Define a skill to track SkillManager.install() calls

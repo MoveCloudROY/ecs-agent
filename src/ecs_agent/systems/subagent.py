@@ -22,7 +22,7 @@ from ecs_agent.core.runner import Runner
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.skills.manager import SkillManager
-from ecs_agent.skills.protocol import ScriptSkill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem

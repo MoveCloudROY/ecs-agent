@@ -52,11 +52,11 @@ from ecs_agent.tools import (
     tool,
     wrap_sandbox_handler,
 )
-from ecs_agent.skills.protocol import ScriptSkill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.discovery import DiscoveryManager, DiscoveryReport, SkillDiscovery
 from ecs_agent.skills.web_search import WebSearchSkill
-from ecs_agent.skills.markdown_skill import Skill
+from ecs_agent.skills.skill import Skill
 from ecs_agent.components.definitions import SkillComponent, SkillMetadata
 from ecs_agent.tools.builtins import BuiltinToolsSkill
 from ecs_agent.systems.permission import PermissionSystem

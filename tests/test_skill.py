@@ -1,4 +1,4 @@
-"""Tests for MarkdownSkill parser."""
+"""Tests for Skill (markdown-based skill) parser."""
 
 import logging
 import tempfile
@@ -11,8 +11,8 @@ from ecs_agent.components.definitions import (
     ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
-from ecs_agent.skills.markdown_skill import Skill
-from ecs_agent.skills.protocol import ScriptSkill
+from ecs_agent.skills.skill import Skill
+from ecs_agent.skills.script_skill import ScriptSkill
 
 
 def test_markdown_skill_parses_yaml_frontmatter() -> None:
@@ -718,7 +718,7 @@ def test_render_skill_content_substitutes_arguments_placeholder(
     tmp_path: Path,
 ) -> None:
     """$ARGUMENTS is replaced by the entire arguments string."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     result = render_skill_content(
         template="Use this: $ARGUMENTS",
@@ -732,7 +732,7 @@ def test_render_skill_content_substitutes_arguments_indexed(
     tmp_path: Path,
 ) -> None:
     """$ARGUMENTS[N] is replaced by the Nth word (0-indexed)."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     result = render_skill_content(
         template="first=$ARGUMENTS[0] second=$ARGUMENTS[1]",
@@ -746,7 +746,7 @@ def test_render_skill_content_substitutes_dollar_n_shorthand(
     tmp_path: Path,
 ) -> None:
     """$1 and $2 are replaced by first and second words."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     result = render_skill_content(
         template="arg1=$1 arg2=$2",
@@ -760,7 +760,7 @@ def test_render_skill_content_substitutes_session_id(
     tmp_path: Path,
 ) -> None:
     """${CLAUDE_SESSION_ID} is replaced by the literal string '<session-id>'."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     result = render_skill_content(
         template="session=${CLAUDE_SESSION_ID}",
@@ -774,7 +774,7 @@ def test_render_skill_content_substitutes_skill_dir(
     tmp_path: Path,
 ) -> None:
     """${CLAUDE_SKILL_DIR} is replaced by str(skill_dir)."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     result = render_skill_content(
         template="dir=${CLAUDE_SKILL_DIR}",
@@ -788,7 +788,7 @@ def test_render_skill_content_out_of_bounds_arguments_index_returns_empty(
     tmp_path: Path,
 ) -> None:
     """$ARGUMENTS[99] returns empty string when there are fewer than 100 words."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     result = render_skill_content(
         template="word=$ARGUMENTS[99]",
@@ -802,7 +802,7 @@ def test_render_skill_content_out_of_bounds_dollar_n_returns_empty(
     tmp_path: Path,
 ) -> None:
     """$9 returns empty string when fewer than 9 words provided."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     result = render_skill_content(
         template="ninth=$9",
@@ -816,7 +816,7 @@ def test_render_skill_content_unknown_variable_left_unchanged(
     tmp_path: Path,
 ) -> None:
     """${UNKNOWN_VAR} is left as-is (no modification)."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     result = render_skill_content(
         template="x=${UNKNOWN_VAR}",
@@ -830,7 +830,7 @@ def test_render_skill_content_empty_arguments_string(
     tmp_path: Path,
 ) -> None:
     """Empty arguments string: $ARGUMENTS becomes empty, $1 becomes empty."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     result = render_skill_content(
         template="args='$ARGUMENTS' first='$1'",
@@ -844,7 +844,7 @@ def test_render_skill_content_arguments_index_before_full_arguments(
     tmp_path: Path,
 ) -> None:
     """$ARGUMENTS[N] is processed before $ARGUMENTS to avoid partial conflicts."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     # If $ARGUMENTS replaced first, '$ARGUMENTS[0]' becomes 'foo bar[0]' — wrong.
     # Correct order: $ARGUMENTS[0] → 'foo', then $ARGUMENTS → 'foo bar'
@@ -1265,68 +1265,68 @@ def test_markdown_skill_user_invocable_alias_maps_to_user_invocable_field() -> N
 
 
 def test_markdown_skill_name_replaced_by_skill_in_exports() -> None:
-    """After hard switch: `Skill` from ecs_agent.skills.markdown_skill must be importable.
+    """After hard switch: `Skill` from ecs_agent.skills.skill must be importable.
 
     Previously the class was called MarkdownSkill. After the rename it is called Skill.
     """
     import importlib
 
-    module = importlib.import_module("ecs_agent.skills.markdown_skill")
+    module = importlib.import_module("ecs_agent.skills.skill")
 
     # After rename: the module must expose `Skill` (not `MarkdownSkill`)
     assert hasattr(module, "Skill"), (
-        "Naming contract violated: ecs_agent.skills.markdown_skill must export `Skill`. "
+        "Naming contract violated: ecs_agent.skills.skill must export `Skill`. "
         "renamed to Skill — the class formerly known as MarkdownSkill is now called Skill."
     )
 
 
 def test_markdown_skill_class_name_is_skill_after_hard_switch() -> None:
-    """After hard switch: class within markdown_skill.py must be named `Skill`, not `MarkdownSkill`.
+    """After hard switch: class within skill.py must be named `Skill`, not `MarkdownSkill`.
 
     Hard switch: NO alias, the class must be renamed. Code using MarkdownSkill must migrate.
     """
     import importlib
 
-    module = importlib.import_module("ecs_agent.skills.markdown_skill")
+    module = importlib.import_module("ecs_agent.skills.skill")
 
     # After rename: MarkdownSkill class must not exist (hard switch, no alias)
     assert not hasattr(module, "MarkdownSkill"), (
-        "Naming contract violated: `MarkdownSkill` class still exists in markdown_skill.py. "
+        "Naming contract violated: `MarkdownSkill` class still exists in skill.py. "
         "Hard switch complete — the class is now named `Skill`. "
         "Migration: replace all usages of `MarkdownSkill` with `Skill`. "
         "renamed to Skill — no compatibility alias is provided."
     )
 
 
-def test_script_skill_protocol_is_importable_from_protocol_module() -> None:
-    """After hard switch: protocol.py must export `ScriptSkill`, not `Skill`.
+def test_script_skill_protocol_is_importable_from_script_skill_module() -> None:
+    """After hard switch: script_skill.py must export `ScriptSkill`, not `Skill`.
 
-    The current `Skill` Protocol in protocol.py is renamed to `ScriptSkill`.
+    The current `Skill` Protocol in protocol.py is renamed to `ScriptSkill` and moved to script_skill.py.
     """
     import importlib
 
-    module = importlib.import_module("ecs_agent.skills.protocol")
+    module = importlib.import_module("ecs_agent.skills.script_skill")
 
-    # After rename: ScriptSkill must exist in protocol.py
+    # After rename: ScriptSkill must exist in script_skill.py
     assert hasattr(module, "ScriptSkill"), (
-        "Naming contract violated: ecs_agent.skills.protocol must export `ScriptSkill`. "
+        "Naming contract violated: ecs_agent.skills.script_skill must export `ScriptSkill`. "
         "renamed to ScriptSkill — the Protocol class formerly named `Skill` is now `ScriptSkill`. "
-        "Migration: replace all `from ecs_agent.skills.protocol import Skill` with `ScriptSkill`."
+        "Migration: replace all `from ecs_agent.skills.script_skill import Skill` with `ScriptSkill`."
     )
 
 
 def test_protocol_module_skill_name_is_script_skill_no_legacy_alias() -> None:
-    """After hard switch: `Skill` must NOT exist in protocol.py (hard switch, no alias).
+    """After hard switch: `Skill` must NOT exist in script_skill.py (hard switch, no alias).
 
-    The protocol class is renamed to ScriptSkill. No compatibility alias is provided.
+    The protocol class is renamed to ScriptSkill in script_skill.py. No compatibility alias is provided.
     """
     import importlib
 
-    module = importlib.import_module("ecs_agent.skills.protocol")
+    module = importlib.import_module("ecs_agent.skills.script_skill")
 
-    # Hard switch: the name `Skill` must not exist in protocol.py anymore
+    # Hard switch: the name `Skill` must not exist in script_skill.py anymore
     assert not hasattr(module, "Skill"), (
-        "Naming contract violated: `Skill` Protocol class still exists in protocol.py. "
+        "Naming contract violated: `Skill` Protocol class still exists in script_skill.py. "
         "Hard switch complete — the Protocol is now named `ScriptSkill`. "
         "Migration: update all isinstance(x, Skill) checks to isinstance(x, ScriptSkill). "
         "renamed to ScriptSkill — no backward-compatible Skill alias is allowed."
