@@ -1,4 +1,4 @@
-"""Tests for MarkdownSkill parser."""
+"""Tests for Skill (markdown-based skill) parser."""
 
 import logging
 import tempfile
@@ -11,8 +11,8 @@ from ecs_agent.components.definitions import (
     ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
-from ecs_agent.skills.markdown_skill import MarkdownSkill
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.skill import Skill
+from ecs_agent.skills.script_skill import ScriptSkill
 
 
 def test_markdown_skill_parses_yaml_frontmatter() -> None:
@@ -28,7 +28,7 @@ This is the content."""
         skill_path = Path(tmpdir) / "SKILL.md"
         skill_path.write_text(content)
 
-        skill = MarkdownSkill(skill_path)
+        skill = Skill(skill_path)
 
         assert skill.name == "test-skill"
         assert skill.description == "A test skill"
@@ -49,7 +49,7 @@ It has multiple lines."""
         skill_path = Path(tmpdir) / "SKILL.md"
         skill_path.write_text(content)
 
-        skill = MarkdownSkill(skill_path)
+        skill = Skill(skill_path)
         prompt = skill.system_prompt()
 
         assert "# Skill Content" in prompt
@@ -72,9 +72,9 @@ description: Test protocol implementation
         skill_path = Path(tmpdir) / "SKILL.md"
         skill_path.write_text(content)
 
-        skill = MarkdownSkill(skill_path)
+        skill = Skill(skill_path)
 
-        assert isinstance(skill, Skill)
+        assert isinstance(skill, ScriptSkill)
 
 
 def test_markdown_skill_tools_empty_for_prompt_only() -> None:
@@ -89,7 +89,7 @@ description: Prompt-only skill
         skill_path = Path(tmpdir) / "SKILL.md"
         skill_path.write_text(content)
 
-        skill = MarkdownSkill(skill_path)
+        skill = Skill(skill_path)
         tools = skill.tools()
 
         assert tools == {}
@@ -115,7 +115,7 @@ description: Skill with scripts
             "#!/usr/bin/env python3\nprint('hello')"
         )
 
-        skill = MarkdownSkill(skill_path)
+        skill = Skill(skill_path)
         tools = skill.tools()
 
         assert "my_tool" in tools
@@ -138,7 +138,7 @@ description: Test install
 
         world = World()
         entity = world.create_entity()
-        skill = MarkdownSkill(skill_path)
+        skill = Skill(skill_path)
 
         skill.install(world, entity)
 
@@ -161,7 +161,7 @@ description: Test uninstall
 
         world = World()
         entity = world.create_entity()
-        skill = MarkdownSkill(skill_path)
+        skill = Skill(skill_path)
 
         skill.install(world, entity)
         assert world.get_component(entity, SystemPromptComponent) is not None
@@ -184,7 +184,7 @@ Just markdown content without frontmatter."""
         skill_path = Path(tmpdir) / "SKILL.md"
         skill_path.write_text(content)
 
-        skill = MarkdownSkill(skill_path)
+        skill = Skill(skill_path)
 
         # Per new spec: no frontmatter → invalid
         assert skill.valid is False
@@ -217,7 +217,7 @@ print(f"Received: {args['message']}")
 """
         (scripts_dir / "echo_tool.py").write_text(script_content)
 
-        skill = MarkdownSkill(skill_path)
+        skill = Skill(skill_path)
         tools = skill.tools()
 
         assert "echo_tool" in tools
@@ -249,7 +249,7 @@ description: Test tool registration
 
         world = World()
         entity = world.create_entity()
-        skill = MarkdownSkill(skill_path)
+        skill = Skill(skill_path)
 
         skill.install(world, entity)
 
@@ -278,7 +278,7 @@ description: Multiple scripts
         (scripts_dir / "tool_b.py").write_text("#!/usr/bin/env python3")
         (scripts_dir / "tool_c.py").write_text("#!/usr/bin/env python3")
 
-        skill = MarkdownSkill(skill_path)
+        skill = Skill(skill_path)
         tools = skill.tools()
 
         assert len(tools) == 3
@@ -311,7 +311,7 @@ def test_markdown_skill_contract_frontmatter_structure_extracts_body_after_closi
         skill_path = Path(tmpdir) / "SKILL.md"
         skill_path.write_text(frontmatter)
 
-        skill = MarkdownSkill(skill_path)
+        skill = Skill(skill_path)
 
         assert skill.name == expected_name
         assert skill.description == expected_description
@@ -329,7 +329,7 @@ def test_markdown_skill_contract_required_frontmatter_fields_missing_skips_disco
     content: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from ecs_agent.skills.discovery import discover_markdown_skills
+    from ecs_agent.skills.discovery import discover_skills
 
     caplog.set_level(logging.WARNING)
 
@@ -339,7 +339,7 @@ def test_markdown_skill_contract_required_frontmatter_fields_missing_skips_disco
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text(content)
 
-        skills = discover_markdown_skills([base])
+        skills = discover_skills([base])
 
         assert skills == []
         assert any(
@@ -360,7 +360,7 @@ def test_markdown_skill_contract_invalid_name_format_skips_discovery(
     invalid_name: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from ecs_agent.skills.discovery import discover_markdown_skills
+    from ecs_agent.skills.discovery import discover_skills
 
     caplog.set_level(logging.WARNING)
 
@@ -372,7 +372,7 @@ def test_markdown_skill_contract_invalid_name_format_skips_discovery(
             f"---\nname: {invalid_name}\ndescription: bad\n---\nbody"
         )
 
-        skills = discover_markdown_skills([base])
+        skills = discover_skills([base])
 
         assert skills == []
         assert any("name" in record.getMessage().lower() for record in caplog.records)
@@ -381,7 +381,7 @@ def test_markdown_skill_contract_invalid_name_format_skips_discovery(
 def test_markdown_skill_contract_invalid_yaml_skips_skill_without_raising(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from ecs_agent.skills.discovery import discover_markdown_skills
+    from ecs_agent.skills.discovery import discover_skills
 
     caplog.set_level(logging.WARNING)
 
@@ -393,7 +393,7 @@ def test_markdown_skill_contract_invalid_yaml_skips_skill_without_raising(
             "---\nname: broken\ndescription: [unterminated\n---\nBody"
         )
 
-        skills = discover_markdown_skills([base])
+        skills = discover_skills([base])
 
         assert skills == []
         assert any("yaml" in record.getMessage().lower() for record in caplog.records)
@@ -478,7 +478,7 @@ def test_markdown_skill_contract_slash_command_identity_maps_from_name() -> None
 
 
 def test_markdown_skill_contract_lazy_discovery_does_not_read_markdown_body() -> None:
-    from ecs_agent.skills.discovery import discover_markdown_skills
+    from ecs_agent.skills.discovery import discover_skills
 
     with tempfile.TemporaryDirectory() as tmpdir:
         base = Path(tmpdir)
@@ -497,7 +497,7 @@ def test_markdown_skill_contract_lazy_discovery_does_not_read_markdown_body() ->
             )
         )
 
-        skills = discover_markdown_skills([base])
+        skills = discover_skills([base])
 
         assert len(skills) == 1
         assert skills[0].name == "lazy"
@@ -589,7 +589,7 @@ def test_markdown_skill_resolve_supporting_path_resolves_relative_path(
     skill_file = tmp_path / "SKILL.md"
     skill_file.write_text("---\nname: resolver\ndescription: resolver\n---\nPrompt")
 
-    skill = MarkdownSkill(skill_file)
+    skill = Skill(skill_file)
     resolved = skill.resolve_supporting_path("data.json")
 
     assert resolved == (tmp_path / "data.json").resolve()
@@ -603,7 +603,7 @@ def test_markdown_skill_resolve_supporting_path_blocks_traversal(
     skill_file = tmp_path / "SKILL.md"
     skill_file.write_text("---\nname: traversal\ndescription: traversal\n---\nPrompt")
 
-    skill = MarkdownSkill(skill_file)
+    skill = Skill(skill_file)
 
     with pytest.raises(ValueError, match="Path traversal"):
         skill.resolve_supporting_path("../etc/passwd")
@@ -615,7 +615,7 @@ def test_markdown_skill_resolve_supporting_path_blocks_absolute_path(
     skill_file = tmp_path / "SKILL.md"
     skill_file.write_text("---\nname: absolute\ndescription: absolute\n---\nPrompt")
 
-    skill = MarkdownSkill(skill_file)
+    skill = Skill(skill_file)
 
     with pytest.raises(ValueError):
         skill.resolve_supporting_path("/etc/passwd")
@@ -627,7 +627,7 @@ def test_markdown_skill_resolve_supporting_path_allows_nested_relative(
     skill_file = tmp_path / "SKILL.md"
     skill_file.write_text("---\nname: nested\ndescription: nested\n---\nPrompt")
 
-    skill = MarkdownSkill(skill_file)
+    skill = Skill(skill_file)
     resolved = skill.resolve_supporting_path("assets/image.png")
 
     assert resolved == (tmp_path / "assets" / "image.png").resolve()
@@ -643,7 +643,7 @@ def test_markdown_skill_contract_path_traversal_is_blocked_for_supporting_files(
             "---\nname: traversal\ndescription: traversal\n---\nPrompt"
         )
 
-        skill = MarkdownSkill(skill_path)
+        skill = Skill(skill_path)
         resolver = getattr(skill, "resolve_supporting_path", None)
 
         assert callable(resolver)
@@ -664,7 +664,7 @@ def test_markdown_skill_advanced_injection_policy_defaults_to_deny() -> None:
             "---\nname: injection-guard\ndescription: injection guard\n---\nPrompt"
         )
 
-        skill = MarkdownSkill(skill_path)
+        skill = Skill(skill_path)
 
         assert skill.injection_policy == "deny"
 
@@ -684,7 +684,7 @@ def test_markdown_skill_injection_safe_allows_non_shell_patterns(content: str) -
         skill_path = Path(tmpdir) / "SKILL.md"
         skill_path.write_text("---\nname: safe\ndescription: safe\n---\nPrompt")
 
-        skill = MarkdownSkill(skill_path)
+        skill = Skill(skill_path)
 
         assert skill.is_dynamic_injection_safe(content) is True
 
@@ -704,7 +704,7 @@ def test_markdown_skill_injection_blocked_for_shell_backtick_patterns(
         skill_path = Path(tmpdir) / "SKILL.md"
         skill_path.write_text("---\nname: blocked\ndescription: blocked\n---\nPrompt")
 
-        skill = MarkdownSkill(skill_path)
+        skill = Skill(skill_path)
 
         assert skill.is_dynamic_injection_safe(content) is False
 
@@ -718,7 +718,7 @@ def test_render_skill_content_substitutes_arguments_placeholder(
     tmp_path: Path,
 ) -> None:
     """$ARGUMENTS is replaced by the entire arguments string."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     result = render_skill_content(
         template="Use this: $ARGUMENTS",
@@ -732,7 +732,7 @@ def test_render_skill_content_substitutes_arguments_indexed(
     tmp_path: Path,
 ) -> None:
     """$ARGUMENTS[N] is replaced by the Nth word (0-indexed)."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     result = render_skill_content(
         template="first=$ARGUMENTS[0] second=$ARGUMENTS[1]",
@@ -746,7 +746,7 @@ def test_render_skill_content_substitutes_dollar_n_shorthand(
     tmp_path: Path,
 ) -> None:
     """$1 and $2 are replaced by first and second words."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     result = render_skill_content(
         template="arg1=$1 arg2=$2",
@@ -760,7 +760,7 @@ def test_render_skill_content_substitutes_session_id(
     tmp_path: Path,
 ) -> None:
     """${CLAUDE_SESSION_ID} is replaced by the literal string '<session-id>'."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     result = render_skill_content(
         template="session=${CLAUDE_SESSION_ID}",
@@ -774,7 +774,7 @@ def test_render_skill_content_substitutes_skill_dir(
     tmp_path: Path,
 ) -> None:
     """${CLAUDE_SKILL_DIR} is replaced by str(skill_dir)."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     result = render_skill_content(
         template="dir=${CLAUDE_SKILL_DIR}",
@@ -788,7 +788,7 @@ def test_render_skill_content_out_of_bounds_arguments_index_returns_empty(
     tmp_path: Path,
 ) -> None:
     """$ARGUMENTS[99] returns empty string when there are fewer than 100 words."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     result = render_skill_content(
         template="word=$ARGUMENTS[99]",
@@ -802,7 +802,7 @@ def test_render_skill_content_out_of_bounds_dollar_n_returns_empty(
     tmp_path: Path,
 ) -> None:
     """$9 returns empty string when fewer than 9 words provided."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     result = render_skill_content(
         template="ninth=$9",
@@ -816,7 +816,7 @@ def test_render_skill_content_unknown_variable_left_unchanged(
     tmp_path: Path,
 ) -> None:
     """${UNKNOWN_VAR} is left as-is (no modification)."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     result = render_skill_content(
         template="x=${UNKNOWN_VAR}",
@@ -830,7 +830,7 @@ def test_render_skill_content_empty_arguments_string(
     tmp_path: Path,
 ) -> None:
     """Empty arguments string: $ARGUMENTS becomes empty, $1 becomes empty."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     result = render_skill_content(
         template="args='$ARGUMENTS' first='$1'",
@@ -844,7 +844,7 @@ def test_render_skill_content_arguments_index_before_full_arguments(
     tmp_path: Path,
 ) -> None:
     """$ARGUMENTS[N] is processed before $ARGUMENTS to avoid partial conflicts."""
-    from ecs_agent.skills.markdown_skill import render_skill_content
+    from ecs_agent.skills.skill import render_skill_content
 
     # If $ARGUMENTS replaced first, '$ARGUMENTS[0]' becomes 'foo bar[0]' — wrong.
     # Correct order: $ARGUMENTS[0] → 'foo', then $ARGUMENTS → 'foo bar'
@@ -865,7 +865,7 @@ def test_render_with_arguments_uses_skill_dir_path(
         "---\nname: render-test\ndescription: render test\n---\nPrompt"
     )
 
-    skill = MarkdownSkill(skill_file)
+    skill = Skill(skill_file)
     result = skill.render_with_arguments(
         template="dir=${CLAUDE_SKILL_DIR}",
         arguments="",
@@ -880,7 +880,7 @@ def test_render_with_arguments_full_substitution_round_trip(
     skill_file = tmp_path / "SKILL.md"
     skill_file.write_text("---\nname: round-trip\ndescription: round trip\n---\nPrompt")
 
-    skill = MarkdownSkill(skill_file)
+    skill = Skill(skill_file)
     result = skill.render_with_arguments(
         template=(
             "full=$ARGUMENTS indexed=$ARGUMENTS[0] "
@@ -899,11 +899,11 @@ def test_render_with_arguments_full_substitution_round_trip(
 # ---------------------------------------------------------------------------
 
 
-def _install_skill_from_content(content: str, skill_name: str) -> "SkillMetadata":
+def _install_skill_from_content(content: str, skill_name: str) -> object:
     """Helper: write SKILL.md, install via DiscoveryManager, return SkillMetadata."""
     import asyncio
     import tempfile
-    from ecs_agent.components.definitions import SkillComponent, SkillMetadata
+    from ecs_agent.components.definitions import SkillComponent
     from ecs_agent.skills.discovery import DiscoveryManager
     from ecs_agent.skills.manager import SkillManager
 
@@ -1256,3 +1256,78 @@ def test_markdown_skill_user_invocable_alias_maps_to_user_invocable_field() -> N
         assert skill_comp is not None
         metadata = skill_comp.skills["no-user-invoke"]
         assert metadata.user_invocable is False
+
+
+# ---------------------------------------------------------------------------
+# Naming Contract Tests (skills-refactor-v2 hard switch)
+# These tests MUST FAIL until implementation tasks rename the symbols.
+# ---------------------------------------------------------------------------
+
+
+def test_markdown_skill_name_replaced_by_skill_in_exports() -> None:
+    """After hard switch: `Skill` from ecs_agent.skills.skill must be importable.
+
+    Previously the class was called MarkdownSkill. After the rename it is called Skill.
+    """
+    import importlib
+
+    module = importlib.import_module("ecs_agent.skills.skill")
+
+    # After rename: the module must expose `Skill` (not `MarkdownSkill`)
+    assert hasattr(module, "Skill"), (
+        "Naming contract violated: ecs_agent.skills.skill must export `Skill`. "
+        "renamed to Skill — the class formerly known as MarkdownSkill is now called Skill."
+    )
+
+
+def test_markdown_skill_class_name_is_skill_after_hard_switch() -> None:
+    """After hard switch: class within skill.py must be named `Skill`, not `MarkdownSkill`.
+
+    Hard switch: NO alias, the class must be renamed. Code using MarkdownSkill must migrate.
+    """
+    import importlib
+
+    module = importlib.import_module("ecs_agent.skills.skill")
+
+    # After rename: MarkdownSkill class must not exist (hard switch, no alias)
+    assert not hasattr(module, "MarkdownSkill"), (
+        "Naming contract violated: `MarkdownSkill` class still exists in skill.py. "
+        "Hard switch complete — the class is now named `Skill`. "
+        "Migration: replace all usages of `MarkdownSkill` with `Skill`. "
+        "renamed to Skill — no compatibility alias is provided."
+    )
+
+
+def test_script_skill_protocol_is_importable_from_script_skill_module() -> None:
+    """After hard switch: script_skill.py must export `ScriptSkill`, not `Skill`.
+
+    The current `Skill` Protocol in protocol.py is renamed to `ScriptSkill` and moved to script_skill.py.
+    """
+    import importlib
+
+    module = importlib.import_module("ecs_agent.skills.script_skill")
+
+    # After rename: ScriptSkill must exist in script_skill.py
+    assert hasattr(module, "ScriptSkill"), (
+        "Naming contract violated: ecs_agent.skills.script_skill must export `ScriptSkill`. "
+        "renamed to ScriptSkill — the Protocol class formerly named `Skill` is now `ScriptSkill`. "
+        "Migration: replace all `from ecs_agent.skills.script_skill import Skill` with `ScriptSkill`."
+    )
+
+
+def test_protocol_module_skill_name_is_script_skill_no_legacy_alias() -> None:
+    """After hard switch: `Skill` must NOT exist in script_skill.py (hard switch, no alias).
+
+    The protocol class is renamed to ScriptSkill in script_skill.py. No compatibility alias is provided.
+    """
+    import importlib
+
+    module = importlib.import_module("ecs_agent.skills.script_skill")
+
+    # Hard switch: the name `Skill` must not exist in script_skill.py anymore
+    assert not hasattr(module, "Skill"), (
+        "Naming contract violated: `Skill` Protocol class still exists in script_skill.py. "
+        "Hard switch complete — the Protocol is now named `ScriptSkill`. "
+        "Migration: update all isinstance(x, Skill) checks to isinstance(x, ScriptSkill). "
+        "renamed to ScriptSkill — no backward-compatible Skill alias is allowed."
+    )

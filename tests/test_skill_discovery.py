@@ -5,9 +5,9 @@ from pathlib import Path
 import pytest
 
 from ecs_agent.core.world import World
-from ecs_agent.skills.discovery import SkillDiscovery, discover_markdown_skills
+from ecs_agent.skills.discovery import SkillDiscovery, discover_skills
 from ecs_agent.skills.manager import SkillManager
-from ecs_agent.skills.markdown_skill import MarkdownSkill
+from ecs_agent.skills.skill import Skill
 from ecs_agent.components import SkillComponent
 
 
@@ -18,11 +18,11 @@ def test_skill_discovery_finds_valid_skill(tmp_path: Path) -> None:
         """
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
-class DemoSkill(Skill):
+class DemoSkill(ScriptSkill):
     name = "demo"
     description = "Demo skill"
 
@@ -56,11 +56,11 @@ def test_skill_discovery_skips_non_skill_classes(tmp_path: Path) -> None:
         """
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
-class ValidSkill(Skill):
+class ValidSkill(ScriptSkill):
     name = "valid"
     description = "Valid skill"
 
@@ -124,11 +124,11 @@ def test_skill_discovery_handles_malformed_python_file(tmp_path: Path) -> None:
         """
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
-class ValidSkill(Skill):
+class ValidSkill(ScriptSkill):
     name = "valid"
     description = "Valid skill"
 
@@ -165,11 +165,11 @@ def test_skill_discovery_and_install(tmp_path: Path) -> None:
         """
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
-class InstallSkill(Skill):
+class InstallSkill(ScriptSkill):
     name = "install-test"
     description = "Install test skill"
 
@@ -214,11 +214,11 @@ def test_skill_discovery_multiple_paths(tmp_path: Path) -> None:
         """
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
-class Skill1(Skill):
+class Skill1(ScriptSkill):
     name = "skill1"
     description = "First skill"
 
@@ -241,11 +241,11 @@ class Skill1(Skill):
         """
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
-class Skill2(Skill):
+class Skill2(ScriptSkill):
     name = "skill2"
     description = "Second skill"
 
@@ -279,11 +279,11 @@ def test_skill_discovery_skips_init_py(tmp_path: Path) -> None:
 # This file should be skipped
 from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 
-class InitSkill(Skill):
+class InitSkill(ScriptSkill):
     name = "init"
     description = "Init skill"
 
@@ -307,7 +307,7 @@ class InitSkill(Skill):
     assert skills == []
 
 
-def test_discover_markdown_skills_returns_metadata_without_eager_system_prompt_call(
+def test_discover_skills_returns_metadata_without_eager_system_prompt_call(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     skill_dir = tmp_path / ".claude" / "skills" / "lazy"
@@ -316,19 +316,19 @@ def test_discover_markdown_skills_returns_metadata_without_eager_system_prompt_c
         (b"---\nname: lazy\ndescription: metadata only\n---\n# Body\n\xff\xfe\x00\x00")
     )
 
-    def _raise_if_called(_: MarkdownSkill) -> str:
+    def _raise_if_called(_: Skill) -> str:
         raise AssertionError("system_prompt() must not be called during discovery")
 
-    monkeypatch.setattr(MarkdownSkill, "system_prompt", _raise_if_called)
+    monkeypatch.setattr(Skill, "system_prompt", _raise_if_called)
 
-    skills = discover_markdown_skills([tmp_path])
+    skills = discover_skills([tmp_path])
 
     assert len(skills) == 1
     assert skills[0].name == "lazy"
     assert skills[0].description == "metadata only"
 
 
-def test_discover_markdown_skills_skips_invalid_file_and_keeps_valid_skills(
+def test_discover_skills_skips_invalid_file_and_keeps_valid_skills(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     valid_dir = tmp_path / ".claude" / "skills" / "valid"
@@ -344,17 +344,17 @@ def test_discover_markdown_skills_skips_invalid_file_and_keeps_valid_skills(
     )
 
     caplog.set_level("WARNING")
-    skills = discover_markdown_skills([tmp_path])
+    skills = discover_skills([tmp_path])
 
     assert [skill.name for skill in skills] == ["valid"]
     assert any(
-        "markdown_skill_invalid" in record.getMessage()
+        "skill_invalid" in record.getMessage()
         or "invalid_yaml" in record.getMessage()
         for record in caplog.records
     )
 
 
-def test_discover_markdown_skills_duplicate_name_conflict_is_deterministic_last_wins(
+def test_discover_skills_duplicate_name_conflict_raises_value_error(
     tmp_path: Path,
 ) -> None:
     first = tmp_path / ".claude" / "skills" / "a-first"
@@ -369,8 +369,11 @@ def test_discover_markdown_skills_duplicate_name_conflict_is_deterministic_last_
         "---\nname: duplicate\ndescription: second\n---\nBody"
     )
 
-    skills = discover_markdown_skills([tmp_path])
+    with pytest.raises(ValueError) as exc_info:
+        discover_skills([tmp_path])
 
-    assert len(skills) == 1
-    assert skills[0].name == "duplicate"
-    assert skills[0].description == "second"
+    assert str(exc_info.value) == (
+        "Skill name collision: 'duplicate' found at both "
+        f"'{first / 'SKILL.md'}' and '{second / 'SKILL.md'}'. "
+        "Remove one SKILL.md or rename the skill."
+    )

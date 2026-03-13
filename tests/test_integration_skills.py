@@ -404,3 +404,275 @@ async def test_lazy_manager_activate_registers_markdown_prompt_and_tools_after_i
     prompt = world.get_component(entity, SystemPromptComponent)
     assert prompt is not None
     assert "Do not eagerly activate this skill." in prompt.content
+
+
+# ---------------------------------------------------------------------------
+# Naming Contract Tests (skills-refactor-v2 hard switch)
+# Hard switch complete — all tests in this section must pass.
+# ---------------------------------------------------------------------------
+
+
+def test_import_skill_protocol_is_markdown_class() -> None:
+    """After hard switch: `Skill` from ecs_agent must be the markdown class, not Protocol."""
+    import ecs_agent
+    from ecs_agent.skills.skill import Skill as _MarkdownSkill
+
+    # After renaming, `Skill` must be the concrete markdown class
+    assert ecs_agent.Skill is _MarkdownSkill, (
+        "Naming contract violated: `Skill` must be the markdown skill class (formerly `MarkdownSkill`). "
+        "renamed to ScriptSkill — use ScriptSkill for the Python protocol interface."
+    )
+
+
+def test_script_skill_is_exported_as_protocol_interface() -> None:
+    """After hard switch: `ScriptSkill` must exist in ecs_agent and be the Protocol."""
+    import ecs_agent
+
+    # ScriptSkill must be exported from the package
+    assert hasattr(ecs_agent, "ScriptSkill"), (
+        "Naming contract violated: `ScriptSkill` not found in ecs_agent. "
+        "The Python protocol interface (formerly named `Skill`) must be exported as `ScriptSkill`."
+    )
+    script_skill = getattr(ecs_agent, "ScriptSkill")
+    assert script_skill is not None
+
+
+def test_markdown_skill_name_not_exported_from_package() -> None:
+    """After hard switch: `MarkdownSkill` must NOT exist in ecs_agent top-level exports."""
+    import ecs_agent
+
+    # Hard switch: no MarkdownSkill alias, code using MarkdownSkill must migrate to Skill
+    assert not hasattr(ecs_agent, "MarkdownSkill"), (
+        "Naming contract violated: `MarkdownSkill` is still exported from ecs_agent. "
+        "Hard switch complete — remove the MarkdownSkill export. "
+        "Migration: use `Skill` instead (renamed to Skill in skills-refactor-v2)."
+    )
+
+
+def test_legacy_skill_protocol_name_not_in_skills_init() -> None:
+    """After hard switch: `Skill` in ecs_agent.skills must be the markdown class, not Protocol."""
+    import ecs_agent.skills as skills_module
+    from ecs_agent.skills.skill import Skill as _MarkdownSkill
+
+    # The `Skill` export from ecs_agent.skills must now be the markdown class
+    skill_export = getattr(skills_module, "Skill", None)
+    assert skill_export is not None, "Skill must be exported from ecs_agent.skills"
+    assert skill_export is _MarkdownSkill, (
+        "Naming contract violated: ecs_agent.skills.Skill must be the markdown class. "
+        "The old Skill Protocol is now ScriptSkill — use ScriptSkill for duck-typing checks. "
+        "renamed to ScriptSkill — use ScriptSkill for the protocol interface."
+    )
+
+
+def test_script_skill_in_skills_module_is_the_protocol() -> None:
+    """After hard switch: `ScriptSkill` in ecs_agent.skills must be the python Protocol."""
+    import ecs_agent.skills as skills_module
+    from ecs_agent.skills.script_skill import ScriptSkill as _OldSkillProtocol
+
+    # ScriptSkill must exist in the skills module
+    assert hasattr(skills_module, "ScriptSkill"), (
+        "Naming contract violated: `ScriptSkill` not found in ecs_agent.skills. "
+        "The Python protocol (formerly `Skill`) must be re-exported as `ScriptSkill`."
+    )
+    script_skill = getattr(skills_module, "ScriptSkill")
+    # ScriptSkill must be the protocol class (what was Skill before)
+    assert script_skill is _OldSkillProtocol, (
+        "Naming contract violated: ScriptSkill in ecs_agent.skills must be the Protocol class. "
+        "After rename: protocol.py's Skill class becomes ScriptSkill. "
+        "renamed to ScriptSkill — use ScriptSkill for protocol-based isinstance checks."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Hard-switch rejection tests — legacy symbols must raise ImportError
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_markdown_skill_import_raises_import_error() -> None:
+    """Hard-switch: `MarkdownSkill` must NOT be importable from ecs_agent — raises ImportError.
+
+    This is the canonical proof that the hard-switch is enforced: any code that
+    tries to import the old name must fail with ImportError, not silently succeed.
+    """
+    import importlib
+    import sys
+
+    # Remove any cached module state that might have stale exports
+    ecs_agent_mod = sys.modules.get("ecs_agent")
+
+    # Direct attribute access must fail
+    assert ecs_agent_mod is None or not hasattr(ecs_agent_mod, "MarkdownSkill"), (
+        "MarkdownSkill still reachable on already-imported module — hard-switch incomplete"
+    )
+
+    # Import statement must raise ImportError
+    try:
+        from ecs_agent import MarkdownSkill  # type: ignore[attr-defined]  # noqa: F401
+        raise AssertionError(
+            "Expected ImportError when importing MarkdownSkill from ecs_agent, but import succeeded."
+        )
+    except ImportError as exc:
+        assert "MarkdownSkill" in str(exc) or "cannot import" in str(exc).lower(), (
+            f"ImportError raised but message is unexpected: {exc}"
+        )
+
+
+def test_legacy_discover_markdown_skills_not_importable() -> None:
+    """Hard-switch: `discover_markdown_skills` must NOT be importable — raises ImportError.
+
+    After the T5 rename, `discover_markdown_skills` was removed and replaced by
+    `discover_skills`. Any import of the old function must raise ImportError.
+    """
+    try:
+        from ecs_agent.skills.discovery import discover_markdown_skills  # type: ignore[attr-defined]  # noqa: F401
+        raise AssertionError(
+            "Expected ImportError when importing discover_markdown_skills, but import succeeded."
+        )
+    except ImportError as exc:
+        assert "discover_markdown_skills" in str(exc) or "cannot import" in str(exc).lower(), (
+            f"ImportError raised but message is unexpected: {exc}"
+        )
+
+
+def test_canonical_discover_skills_is_importable() -> None:
+    """Canonical API: `discover_skills` must be importable from ecs_agent.skills.discovery.
+
+    Complements the rejection test above — verifies the replacement symbol exists.
+    """
+    from ecs_agent.skills.discovery import discover_skills
+    from ecs_agent.skills import discover_skills as discover_skills_from_init
+
+    assert callable(discover_skills), "discover_skills must be callable"
+    assert discover_skills is discover_skills_from_init, (
+        "discover_skills must be the same object in both discovery module and skills package init"
+    )
+
+# ---------------------------------------------------------------------------
+# T3: Lifecycle idempotency tests — SkillManager as canonical lifecycle owner
+# ---------------------------------------------------------------------------
+
+
+def _write_simple_markdown_skill_fixture(base_dir: Path) -> Path:
+    """Write a minimal SKILL.md with a single tool script for lifecycle testing."""
+    skill_name = "lifecycle-test-skill"
+    skill_dir = base_dir / ".claude" / "skills" / skill_name
+    scripts_dir = skill_dir / "scripts"
+    scripts_dir.mkdir(parents=True)
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text(
+        "---\n"
+        "name: lifecycle-test-skill\n"
+        "description: skill for lifecycle testing\n"
+        "---\n"
+        "You are a lifecycle test skill.",
+        encoding="utf-8",
+    )
+    (scripts_dir / "hello.py").write_text(
+        "import json\n"
+        "import sys\n"
+        "payload = json.loads(sys.stdin.read() or '{}')\n"
+        "print(payload.get('name', 'world'))\n",
+        encoding="utf-8",
+    )
+    return skill_md
+
+
+def test_skill_lifecycle_no_duplicate_tools_after_activate(tmp_path: Path) -> None:
+    """After manager.activate(), skill.install() must not re-add tools.
+
+    SkillManager is the canonical lifecycle owner. When activate() has already
+    registered a skill's tools, a subsequent skill.install() call must NOT
+    result in duplicate tool entries.
+    """
+    from ecs_agent import SkillManager
+    from ecs_agent.skills.skill import Skill
+
+    skill_md = _write_simple_markdown_skill_fixture(tmp_path)
+    skill = Skill(skill_md)
+
+    world = World()
+    entity = world.create_entity()
+    manager = SkillManager()
+
+    # index + activate (activate internally calls skill.install())
+    manager.index(world, entity, skill)
+    manager.activate(world, entity, skill.name)
+
+    registry = world.get_component(entity, ToolRegistryComponent)
+    assert registry is not None
+    tool_count_after_activate = len(registry.tools)
+
+    # Now call skill.install() explicitly — must not add duplicates
+    skill.install(world, entity)
+
+    assert len(registry.tools) == tool_count_after_activate, (
+        f"Tool count changed from {tool_count_after_activate} to {len(registry.tools)}: "
+        "skill.install() re-registered tools already registered by the manager."
+    )
+
+
+def test_skill_lifecycle_no_duplicate_prompts_after_activate(tmp_path: Path) -> None:
+    """After manager.activate(), skill.install() must not double the system prompt.
+
+    SkillManager is the canonical lifecycle owner. When activate() has already
+    injected a skill's system prompt, a subsequent skill.install() call must NOT
+    append the same prompt again.
+    """
+    from ecs_agent import SkillManager
+    from ecs_agent.components import SystemPromptComponent
+    from ecs_agent.skills.skill import Skill
+
+    skill_md = _write_simple_markdown_skill_fixture(tmp_path)
+    skill = Skill(skill_md)
+
+    world = World()
+    entity = world.create_entity()
+    manager = SkillManager()
+
+    # index + activate (activate internally calls skill.install())
+    manager.index(world, entity, skill)
+    manager.activate(world, entity, skill.name)
+
+    prompt_comp = world.get_component(entity, SystemPromptComponent)
+    assert prompt_comp is not None
+    prompt_after_activate = prompt_comp.content
+
+    # Now call skill.install() explicitly — prompt must not be doubled
+    skill.install(world, entity)
+
+    assert prompt_comp.content == prompt_after_activate, (
+        "System prompt was modified by skill.install() after manager already registered it: "
+        "lifecycle ownership not unified in SkillManager."
+    )
+
+
+def test_skill_lifecycle_manager_install_prompt_appears_exactly_once(
+    tmp_path: Path,
+) -> None:
+    """manager.install() must register the system prompt exactly once.
+
+    When manager.install() calls index() then activate(), and activate() calls
+    skill.install() internally, the system prompt must not be doubled.
+    This is the core lifecycle ownership invariant.
+    """
+    from ecs_agent import SkillManager
+    from ecs_agent.components import SystemPromptComponent
+    from ecs_agent.skills.skill import Skill
+
+    skill_md = _write_simple_markdown_skill_fixture(tmp_path)
+    skill = Skill(skill_md)
+
+    world = World()
+    entity = world.create_entity()
+    manager = SkillManager()
+
+    manager.install(world, entity, skill)
+
+    prompt_comp = world.get_component(entity, SystemPromptComponent)
+    assert prompt_comp is not None
+    skill_prompt = skill.system_prompt()
+    occurrences = prompt_comp.content.count(skill_prompt)
+    assert occurrences == 1, (
+        f"System prompt appears {occurrences} times after manager.install() — "", "
+        "expected exactly 1. manager.activate() + skill.install() doubled the prompt."
+    )

@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.tools.discovery import tool
 from ecs_agent.types import EntityId, ToolSchema
 
@@ -55,7 +55,7 @@ async def grep(pattern: str, path: str, recursive: bool = False) -> str:
         return f"error: {str(exc)}"
 
 
-class GrepSkill(Skill):
+class GrepSkill(ScriptSkill):
     """Skill providing grep tool for pattern searching."""
 
     name = "grep"

@@ -7,7 +7,7 @@ import pytest
 from ecs_agent.components import SystemPromptComponent, ToolRegistryComponent
 from ecs_agent.components.definitions import SkillComponent, SkillMetadata
 from ecs_agent.core import World
-from ecs_agent.skills import Skill, SkillManager
+from ecs_agent.skills import ScriptSkill, SkillManager
 from ecs_agent.types import EntityId, ToolSchema
 
 
@@ -61,7 +61,7 @@ class DummySkill:
 
 def test_skill_protocol_duck_typing_compliance() -> None:
     skill = DummySkill("math", "math helpers", {"sum": (_tool("sum"), _sum_handler)})
-    assert isinstance(skill, Skill)
+    assert isinstance(skill, ScriptSkill)
 
 
 def test_skill_component_dataclass_structure() -> None:
@@ -431,3 +431,145 @@ def test_skill_uninstall_one_does_not_affect_another() -> None:
     assert text_meta is not None
     assert text_meta.tool_names == ["title"]
     assert math_meta is None
+
+
+# ---------------------------------------------------------------------------
+# Naming Contract Tests (skills-refactor-v2 hard switch)
+# These tests MUST FAIL until implementation tasks rename the symbols.
+# ---------------------------------------------------------------------------
+
+
+def test_skill_protocol_duck_typing_uses_script_skill_name() -> None:
+    """After hard switch: duck-typing against protocol must use ScriptSkill, not Skill."""
+    from ecs_agent.skills import ScriptSkill
+
+    # ScriptSkill is the protocol interface for Python-based skills
+    skill = DummySkill("math", "math helpers", {"sum": (_tool("sum"), _sum_handler)})
+    assert isinstance(skill, ScriptSkill), (
+        "Naming contract violated: DummySkill must satisfy ScriptSkill protocol. "
+        "renamed to ScriptSkill — use ScriptSkill for duck-typing checks."
+    )
+
+
+def test_skill_export_from_skills_init_is_not_protocol_class() -> None:
+    """After hard switch: `Skill` from ecs_agent.skills is the markdown class, not Protocol."""
+    import tempfile
+    from pathlib import Path
+    from ecs_agent.skills import Skill
+    from ecs_agent.skills.skill import Skill as _MarkdownSkill
+
+    # After rename: Skill must be MarkdownSkill (concrete markdown implementation)
+    assert Skill is _MarkdownSkill, (
+        "Naming contract violated: `Skill` from ecs_agent.skills must be the markdown skill class. "
+        "renamed to ScriptSkill — use ScriptSkill for the protocol interface, "
+        "`Skill` now refers to the markdown-based skill class (formerly MarkdownSkill)."
+    )
+
+    # Also verify we can instantiate it as the markdown class
+    content = "---\nname: contract-test\ndescription: contract test\n---\n# body"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        skill_path = Path(tmpdir) / "SKILL.md"
+        skill_path.write_text(content)
+        instance = Skill(skill_path)
+        assert instance.name == "contract-test"
+
+
+# ---------------------------------------------------------------------------
+# Metadata alignment: uniform invocation controls for ScriptSkill and Skill
+# ---------------------------------------------------------------------------
+
+
+def test_metadata_user_invocable_defaults_true_for_script_skill() -> None:
+    """ScriptSkill without user_invocable attr gets user_invocable=True in SkillMetadata.
+
+    manager.index() uses getattr(skill, 'user_invocable', True) so a plain Python
+    ScriptSkill object that does not declare user_invocable defaults to True — meaning
+    the skill is user-invocable unless explicitly opted-out.
+    """
+    world = World()
+    manager = SkillManager()
+    entity_id = world.create_entity()
+
+    # DummySkill has NO user_invocable attribute — exercises the getattr default path
+    skill = DummySkill(
+        name="no-invocable-attr",
+        description="ScriptSkill without user_invocable",
+        tool_bundle={"t": (_tool("t"), _noop_handler)},
+    )
+    assert not hasattr(skill, "user_invocable"), (
+        "DummySkill must not have user_invocable for this test"
+    )
+
+    manager.index(world, entity_id, skill)
+
+    metadata = manager.get_skill_metadata(world, entity_id, "no-invocable-attr")
+    assert metadata is not None
+    assert metadata.user_invocable is True, (
+        "ScriptSkill without user_invocable attr must default to user_invocable=True"
+    )
+
+
+def test_metadata_disable_model_invocation_defaults_false_for_script_skill() -> None:
+    """ScriptSkill without disable_model_invocation attr gets disable_model_invocation=False.
+
+    manager.index() uses getattr(skill, 'disable_model_invocation', False) so a plain Python
+    ScriptSkill object that does not declare disable_model_invocation defaults to False —
+    meaning model auto-invocation is enabled unless explicitly disabled.
+    """
+    world = World()
+    manager = SkillManager()
+    entity_id = world.create_entity()
+
+    # DummySkill has NO disable_model_invocation attribute — exercises the getattr default path
+    skill = DummySkill(
+        name="no-disable-attr",
+        description="ScriptSkill without disable_model_invocation",
+        tool_bundle={"t": (_tool("t"), _noop_handler)},
+    )
+    assert not hasattr(skill, "disable_model_invocation"), (
+        "DummySkill must not have disable_model_invocation for this test"
+    )
+
+    manager.index(world, entity_id, skill)
+
+    metadata = manager.get_skill_metadata(world, entity_id, "no-disable-attr")
+    assert metadata is not None
+    assert metadata.disable_model_invocation is False, (
+        "ScriptSkill without disable_model_invocation attr must default to disable_model_invocation=False"
+    )
+
+    # Also verify: can_model_auto_invoke_skill returns True (model CAN invoke by default)
+    assert manager.can_model_auto_invoke_skill(world, entity_id, "no-disable-attr") is True, (
+        "can_model_auto_invoke_skill must return True when disable_model_invocation=False"
+    )
+
+
+def test_metadata_invalid_frontmatter_gets_graceful_defaults() -> None:
+    """Markdown skill with malformed/missing frontmatter produces safe metadata defaults.
+
+    When a SKILL.md has invalid YAML (e.g. unterminated bracket), the Skill object has
+    valid=False and the invocation control attributes are NOT set. The properties fall back
+    to safe defaults via getattr: user_invocable=True, disable_model_invocation=False.
+    """
+    import tempfile
+    from pathlib import Path
+    from ecs_agent.skills.skill import Skill
+
+    malformed = "---\nname: bad-yaml\ndescription: [unterminated\n---\nBody"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        skill_path = Path(tmpdir) / "SKILL.md"
+        skill_path.write_text(malformed)
+
+        skill = Skill(skill_path)
+
+        # Confirm the skill is invalid due to malformed frontmatter
+        assert skill.valid is False, "Expected invalid skill for malformed YAML"
+
+        # Invocation control properties must still return safe defaults
+        assert skill.user_invocable is True, (
+            "user_invocable must default to True even for invalid Skill (safe default)"
+        )
+        assert skill.disable_model_invocation is False, (
+            "disable_model_invocation must default to False even for invalid Skill (safe default)"
+        )

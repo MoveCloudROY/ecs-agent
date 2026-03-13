@@ -10,13 +10,13 @@ import httpx
 
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, ToolSchema
 
 logger = get_logger(__name__)
 
 
-class WebSearchSkill(Skill):
+class WebSearchSkill(ScriptSkill):
     """Skill providing web search via Brave Search API."""
 
     name = "web-search"

@@ -8,7 +8,7 @@ from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeProvider, OpenAIProvider
 from ecs_agent.skills.manager import SkillManager
-from ecs_agent.skills.markdown_skill import MarkdownSkill
+from ecs_agent.skills.skill import Skill
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import CompletionResult, Message, ToolCall
@@ -23,7 +23,7 @@ async def main() -> None:
         Path(__file__).parent / "skills" / "ui-ux-reviewer" / "SKILL.md"
     )
     # Load skill object
-    skill = MarkdownSkill(skill_path=skill_path)
+    skill = Skill(skill_path=skill_path)
 
     # Note: manager.install() is a convenience for direct installation.
     # It performs both indexing (metadata) and activation (tools/prompt) in one step.
@@ -100,7 +100,7 @@ async def main() -> None:
     await runner.run(world, max_ticks=6)
 
     skills = manager.list_skills(world, agent)
-    print(f"Installed markdown skills: {[s.name for s in skills]}")
+    print(f"Installed file-based skills: {[s.name for s in skills]}")
 
     conv = world.get_component(agent, ConversationComponent)
     if conv is not None:

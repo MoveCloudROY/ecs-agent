@@ -1,4 +1,4 @@
-"""Markdown-based skill parser.
+"""Skill parser for Markdown-based skills.
 
 Loads skills from SKILL.md files with YAML frontmatter.
 """
@@ -20,7 +20,7 @@ from ecs_agent.components.definitions import (
     SkillComponent,
 )
 from ecs_agent.logging import get_logger
-from ecs_agent.skills.protocol import ToolHandler
+from ecs_agent.skills.script_skill import ToolHandler
 from ecs_agent.types import EntityId, ToolSchema
 
 logger = get_logger(__name__)
@@ -77,7 +77,7 @@ def render_skill_content(template: str, arguments: str, skill_dir: Path) -> str:
     return result
 
 
-class MarkdownSkill:
+class Skill:
     """Skill loaded from a SKILL.md file with YAML frontmatter.
 
     SKILL.md format:
@@ -91,7 +91,7 @@ class MarkdownSkill:
     """
 
     def __init__(self, skill_path: Path, sandbox_timeout: float = 30.0) -> None:
-        """Initialize MarkdownSkill by parsing SKILL.md.
+        """Initialize Skill by parsing SKILL.md.
 
         Args:
             skill_path: Path to SKILL.md file
@@ -162,12 +162,12 @@ class MarkdownSkill:
                     metadata = parsed
             except yaml.YAMLError as exc:
                 logger.warning(
-                    "markdown_skill_invalid_yaml",
+                    "skill_invalid_yaml",
                     skill_path=str(self._skill_path),
                     exception=str(exc),
                 )
                 _stdlib_logger.warning(
-                    "markdown_skill_invalid_yaml: %s", str(self._skill_path)
+                    "skill_invalid_yaml: %s", str(self._skill_path)
                 )
                 self.valid = False
                 self._name = ""
@@ -182,13 +182,13 @@ class MarkdownSkill:
             if frontmatter_text and (raw_name is None or raw_description is None):
                 # Has frontmatter but missing required fields
                 logger.warning(
-                    "markdown_skill_missing_required_field",
+                    "skill_missing_required_field",
                     skill_path=str(self._skill_path),
                     missing_name=(raw_name is None),
                     missing_description=(raw_description is None),
                 )
                 _stdlib_logger.warning(
-                    "markdown_skill_missing_required_field: required fields missing in %s",
+                    "skill_missing_required_field: required fields missing in %s",
                     str(self._skill_path),
                 )
                 self.valid = False
@@ -199,11 +199,11 @@ class MarkdownSkill:
                 return
             # No frontmatter — reject per new spec (frontmatter required)
             logger.warning(
-                "markdown_skill_no_frontmatter",
+                "skill_no_frontmatter",
                 skill_path=str(self._skill_path),
             )
             _stdlib_logger.warning(
-                "markdown_skill_no_frontmatter: no YAML frontmatter in %s",
+                "skill_no_frontmatter: no YAML frontmatter in %s",
                 str(self._skill_path),
             )
             self.valid = False
@@ -217,12 +217,12 @@ class MarkdownSkill:
         # Validate name format
         if not _NAME_RE.fullmatch(name):
             logger.warning(
-                "markdown_skill_invalid_name",
+                "skill_invalid_name",
                 skill_path=str(self._skill_path),
                 name=name,
             )
             _stdlib_logger.warning(
-                "markdown_skill_invalid_name: invalid name format %r in %s",
+                "skill_invalid_name: invalid name format %r in %s",
                 name,
                 str(self._skill_path),
             )
@@ -438,7 +438,7 @@ class MarkdownSkill:
                 return f"Script execution timed out after {self._sandbox_timeout}s"
             except Exception as exc:
                 logger.error(
-                    "markdown_skill_script_error",
+                    "skill_script_error",
                     script=str(script_path),
                     exception=str(exc),
                 )
@@ -449,10 +449,24 @@ class MarkdownSkill:
     def install(self, world: World, entity_id: EntityId) -> None:
         """Install skill by adding system prompt and tools.
 
+        When called after SkillManager.activate() (the canonical lifecycle path),
+        this method is a no-op because the manager has already registered tools
+        and injected the system prompt. Idempotency is checked via SkillComponent:
+        if the manager has indexed or activated this skill, skip all work here to
+        prevent duplicate tool entries and doubled system prompts.
+
         Args:
             world: World instance
             entity_id: Entity to install skill on
         """
+        # Guard: if SkillManager has already indexed (or activated) this skill,
+        # all tool and prompt registration was done by the manager. Skip to avoid
+        # duplicate registrations — SkillManager is the canonical lifecycle owner.
+        skill_comp = world.get_component(entity_id, SkillComponent)
+        if skill_comp is not None and self.name in skill_comp.skills:
+            return
+
+        # Standalone path (no manager): register tools, prompt, and SkillComponent.
         # Add or update SystemPromptComponent
         prompt_comp = world.get_component(entity_id, SystemPromptComponent)
         if prompt_comp is None:
@@ -477,7 +491,6 @@ class MarkdownSkill:
             tool_reg.handlers[tool_name] = handler
 
         # Track installed skill in SkillComponent
-        skill_comp = world.get_component(entity_id, SkillComponent)
         if skill_comp is None:
             skill_comp = SkillComponent(skills={})
             world.add_component(entity_id, skill_comp)
@@ -500,7 +513,6 @@ class MarkdownSkill:
             skill_dir_path=str(self.skill_dir_path),
             slash_command=self.slash_command,
         )
-
     def uninstall(self, world: World, entity_id: EntityId) -> None:
         """Uninstall skill by removing system prompt and tools.
 

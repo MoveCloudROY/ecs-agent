@@ -7,7 +7,7 @@ from pathlib import Path
 
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.tools.discovery import tool
 from ecs_agent.types import EntityId, ToolSchema
 
@@ -64,7 +64,7 @@ async def ls(
         return f"error: {str(exc)}"
 
 
-class LsSkill(Skill):
+class LsSkill(ScriptSkill):
     """Skill providing ls tool for listing directories."""
 
     name = "ls"

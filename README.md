@@ -143,12 +143,12 @@ src/ecs_agent/
 │   │   ├── file_tools.py       # read/write/edit logic
 │   │   ├── bash_tool.py        # Shell execution
 │   │   ├── edit_tool.py        # Hash-anchored editing core
-│   │   └── __init__.py         # BuiltinToolsSkill definition
+│   │   └── __init__.py         # BuiltinTools ScriptSkill definition
 ├── types.py                  # Core types (EntityId, Message, ToolCall, etc.)
 ├── serialization.py          # WorldSerializer for save/load
 └── logging.py                # structlog configuration
 ├── skills/                       # Skills system
-│   ├── protocol.py             # Skill Protocol definition
+│   ├── protocol.py             # ScriptSkill Protocol definition
 │   ├── manager.py              # SkillManager lifecycle handler
 │   ├── discovery.py            # File-based skill discovery
 │   └── web_search.py           # Brave Search integration
@@ -237,10 +237,10 @@ The `examples/` directory contains 24 runnable demos:
 | [`litellm_agent.py`](examples/litellm_agent.py) | LiteLLM unified provider for 100+ models |
 | [`streaming_system_agent.py`](examples/streaming_system_agent.py) | System-level streaming with events |
 | [`context_management_agent.py`](examples/context_management_agent.py) | Checkpoint, undo, and compaction demo (dual-mode) |
-| [`script_skill_agent.py`](examples/script_skill_agent.py) | Script skill system and BuiltinToolsSkill (read/write/edit) lifecycle |
-| [`script_skill_discovery_agent.py`](examples/script_skill_discovery_agent.py) | File-based script skill loading from folder (dual-mode) |
+| [`skill_agent.py`](examples/skill_agent.py) | Skill system and BuiltinTools ScriptSkill (read/write/edit) lifecycle |
+| [`skill_discovery_agent.py`](examples/skill_discovery_agent.py) | File-based skill loading from folder (dual-mode) |
 | [`permission_agent.py`](examples/permission_agent.py) | Permission-restricted agent with tool filtering (dual-mode) |
-| [`skill_agent.py`](examples/skill_agent.py) | Load a SKILL.md markdown skill and install it on an agent (dual-mode) |
+| [`skill_agent.py`](examples/skill_agent.py) | Load a SKILL.md Skill and install it on an agent (dual-mode) |
 | [`mcp_agent.py`](examples/mcp_agent.py) | MCP server integration and namespaced tool usage |
 | [`agent_dsl_json.py`](examples/agent_dsl_json.py) | Load multi-agent configuration from JSON file using Agent DSL (dual-mode) |
 | [`agent_dsl_markdown.py`](examples/agent_dsl_markdown.py) | Load agent from Markdown file with YAML frontmatter using Agent DSL (dual-mode) |
@@ -320,6 +320,17 @@ uv run pytest -k "streaming"
 # Verbose output
 uv run pytest -v
 ```
+### Real-LLM Integration Test
+
+To verify the integration with a real LLM (e.g., DashScope), run the following command. It uses environment variables to avoid exposing API keys and skips gracefully if `LLM_API_KEY` is not set:
+
+```bash
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
+  LLM_MODEL=qwen3.5-flash \
+  LLM_API_KEY="$LLM_API_KEY" \
+  uv run pytest tests/test_real_llm_integration.py -v
+```
+
 
 ### Type Checking
 

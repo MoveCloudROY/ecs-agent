@@ -9,7 +9,7 @@ from ecs_agent.components import ToolRegistryComponent
 from ecs_agent.components.definitions import SkillComponent
 from ecs_agent.core.world import World
 from ecs_agent.skills.manager import SkillManager
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import (
     EntityId,
     MCPConnectedEvent,
@@ -46,7 +46,7 @@ def mcp_tool_to_ecs_tool(
     return schema, handler
 
 
-class MCPSkillAdapter(Skill):
+class MCPSkillAdapter(ScriptSkill):
     def __init__(
         self,
         mcp_client: MCPClient,

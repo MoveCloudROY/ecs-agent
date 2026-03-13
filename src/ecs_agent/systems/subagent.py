@@ -22,7 +22,7 @@ from ecs_agent.core.runner import Runner
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.skills.manager import SkillManager
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -83,14 +83,18 @@ class SubagentSystem:
     4. Publishes delegation events to the event bus
     """
 
-    def __init__(self, priority: int = -1, default_timeout: float | None = None) -> None:
+    def __init__(
+        self, priority: int = -1, default_timeout: float | None = None
+    ) -> None:
         self.priority = priority
         self._runtime_manager = SubagentRuntimeManager()
         self._default_timeout = default_timeout
 
     def _resolve_timeout(self, per_call_timeout: float | None) -> float | None:
         """Resolve timeout with precedence: per-call > global > None."""
-        return per_call_timeout if per_call_timeout is not None else self._default_timeout
+        return (
+            per_call_timeout if per_call_timeout is not None else self._default_timeout
+        )
 
     def _wrap_retry_provider_if_needed(self, provider: LLMProvider) -> LLMProvider:
         """Wrap provider with RetryProvider if not already wrapped.
@@ -245,15 +249,17 @@ class SubagentSystem:
     ) -> None:
         """Install all three subagent control tools: status, result, cancel."""
         from ecs_agent.components.definitions import SubagentSessionTableComponent
-        
+
         table = world.get_component(entity_id, SubagentSessionTableComponent)
         if table is None:
-            raise ValueError(f"Entity {entity_id} missing SubagentSessionTableComponent")
-        
+            raise ValueError(
+                f"Entity {entity_id} missing SubagentSessionTableComponent"
+            )
+
         tool_registry = world.get_component(entity_id, ToolRegistryComponent)
         if tool_registry is None:
             raise ValueError(f"Entity {entity_id} missing ToolRegistryComponent")
-        
+
         # Install subagent_status tool
         tool_registry.tools["subagent_status"] = ToolSchema(
             name="subagent_status",
@@ -269,8 +275,10 @@ class SubagentSystem:
                 "required": [],
             },
         )
-        tool_registry.handlers["subagent_status"] = self._make_status_handler(world, entity_id)
-        
+        tool_registry.handlers["subagent_status"] = self._make_status_handler(
+            world, entity_id
+        )
+
         # Install subagent_result tool
         tool_registry.tools["subagent_result"] = ToolSchema(
             name="subagent_result",
@@ -290,8 +298,10 @@ class SubagentSystem:
                 "required": ["session_id"],
             },
         )
-        tool_registry.handlers["subagent_result"] = self._make_result_handler(world, entity_id)
-        
+        tool_registry.handlers["subagent_result"] = self._make_result_handler(
+            world, entity_id
+        )
+
         # Install subagent_cancel tool
         tool_registry.tools["subagent_cancel"] = ToolSchema(
             name="subagent_cancel",
@@ -307,148 +317,180 @@ class SubagentSystem:
                 "required": ["session_id"],
             },
         )
-        tool_registry.handlers["subagent_cancel"] = self._make_cancel_handler(world, entity_id)
-        
+        tool_registry.handlers["subagent_cancel"] = self._make_cancel_handler(
+            world, entity_id
+        )
+
         logger.info("subagent_control_tools_installed", entity_id=entity_id)
 
     def _make_status_handler(self, world: World, parent_entity_id: EntityId) -> Any:
         """Create handler for subagent_status tool."""
-        
+
         async def status_handler(session_id: str | None = None) -> str:
             from ecs_agent.components.definitions import SubagentSessionTableComponent
-            from ecs_agent.systems.subagent_runtime import render_subagent_session_reminder_table
-            
+            from ecs_agent.systems.subagent_runtime import (
+                render_subagent_session_reminder_table,
+            )
+
             table = world.get_component(parent_entity_id, SubagentSessionTableComponent)
             if table is None:
                 return json.dumps({"error": "SubagentSessionTableComponent not found"})
-            
+
             if session_id is None:
                 table_text = render_subagent_session_reminder_table(table.sessions)
-                return json.dumps({
-                    "status": "ok",
-                    "session_count": len(table.sessions),
-                    "summary_table": table_text
-                })
-            
+                return json.dumps(
+                    {
+                        "status": "ok",
+                        "session_count": len(table.sessions),
+                        "summary_table": table_text,
+                    }
+                )
+
             session = table.sessions.get(session_id)
             if session is None:
-                return json.dumps({
-                    "error": f"Session not found: {session_id}",
-                    "session_id": session_id
-                })
-            
-            return json.dumps({
-                "status": "ok",
-                "session_id": session.session_id,
-                "category": session.category,
-                "lifecycle_status": session.status,
-                "created_at": session.created_at,
-                "updated_at": session.updated_at,
-                "result_excerpt": session.result_excerpt,
-                "error": session.error,
-            })
-        
+                return json.dumps(
+                    {
+                        "error": f"Session not found: {session_id}",
+                        "session_id": session_id,
+                    }
+                )
+
+            return json.dumps(
+                {
+                    "status": "ok",
+                    "session_id": session.session_id,
+                    "category": session.category,
+                    "lifecycle_status": session.status,
+                    "created_at": session.created_at,
+                    "updated_at": session.updated_at,
+                    "result_excerpt": session.result_excerpt,
+                    "error": session.error,
+                }
+            )
+
         return status_handler
 
     def _make_result_handler(self, world: World, parent_entity_id: EntityId) -> Any:
         """Create handler for subagent_result tool."""
-        
+
         async def result_handler(session_id: str, timeout: float | None = None) -> str:
             session = await self._runtime_manager.get_session(session_id)
             if session is None:
-                return json.dumps({
-                    "error": f"Session not found: {session_id}",
-                    "session_id": session_id
-                })
-            
+                return json.dumps(
+                    {
+                        "error": f"Session not found: {session_id}",
+                        "session_id": session_id,
+                    }
+                )
+
             if session.status in ("Dead", "Timeout", "Cancelled"):
-                return json.dumps({
-                    "status": "terminal",
-                    "session_id": session_id,
-                    "lifecycle_status": session.status,
-                    "result_excerpt": session.result_excerpt,
-                    "error": session.error,
-                })
-            
+                return json.dumps(
+                    {
+                        "status": "terminal",
+                        "session_id": session_id,
+                        "lifecycle_status": session.status,
+                        "result_excerpt": session.result_excerpt,
+                        "error": session.error,
+                    }
+                )
+
             if session.status == "Idle":
-                return json.dumps({
-                    "status": "success",
-                    "session_id": session_id,
-                    "lifecycle_status": session.status,
-                    "result_excerpt": session.result_excerpt,
-                })
-            
+                return json.dumps(
+                    {
+                        "status": "success",
+                        "session_id": session_id,
+                        "lifecycle_status": session.status,
+                        "result_excerpt": session.result_excerpt,
+                    }
+                )
+
             task = await self._runtime_manager.get_task(session_id)
             if task is None:
-                return json.dumps({
-                    "error": f"Task handle not found for session: {session_id}",
-                    "session_id": session_id
-                })
-            
+                return json.dumps(
+                    {
+                        "error": f"Task handle not found for session: {session_id}",
+                        "session_id": session_id,
+                    }
+                )
+
             try:
                 if timeout is not None:
                     await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
                 else:
                     await asyncio.shield(task)
-                
+
                 session = await self._runtime_manager.get_session(session_id)
                 if session is None:
-                    return json.dumps({
-                        "error": f"Session disappeared after await: {session_id}",
-                        "session_id": session_id
-                    })
-                
-                return json.dumps({
-                    "status": "completed",
-                    "session_id": session_id,
-                    "lifecycle_status": session.status,
-                    "result_excerpt": session.result_excerpt,
-                    "error": session.error,
-                })
-                
+                    return json.dumps(
+                        {
+                            "error": f"Session disappeared after await: {session_id}",
+                            "session_id": session_id,
+                        }
+                    )
+
+                return json.dumps(
+                    {
+                        "status": "completed",
+                        "session_id": session_id,
+                        "lifecycle_status": session.status,
+                        "result_excerpt": session.result_excerpt,
+                        "error": session.error,
+                    }
+                )
+
             except asyncio.TimeoutError:
-                return json.dumps({
-                    "error": f"Timeout waiting for session result after {timeout}s",
-                    "session_id": session_id,
-                    "timeout": timeout
-                })
+                return json.dumps(
+                    {
+                        "error": f"Timeout waiting for session result after {timeout}s",
+                        "session_id": session_id,
+                        "timeout": timeout,
+                    }
+                )
             except asyncio.CancelledError:
-                return json.dumps({
-                    "error": f"Session was cancelled: {session_id}",
-                    "session_id": session_id
-                })
-        
+                return json.dumps(
+                    {
+                        "error": f"Session was cancelled: {session_id}",
+                        "session_id": session_id,
+                    }
+                )
+
         return result_handler
 
     def _make_cancel_handler(self, world: World, parent_entity_id: EntityId) -> Any:
         """Create handler for subagent_cancel tool."""
-        
+
         async def cancel_handler(session_id: str) -> str:
             session = await self._runtime_manager.get_session(session_id)
             if session is None:
-                return json.dumps({
-                    "error": f"Session not found: {session_id}",
-                    "session_id": session_id
-                })
-            
+                return json.dumps(
+                    {
+                        "error": f"Session not found: {session_id}",
+                        "session_id": session_id,
+                    }
+                )
+
             if session.status in ("Dead", "Timeout", "Cancelled"):
-                return json.dumps({
-                    "error": f"Session already terminal: {session.status}",
-                    "session_id": session_id,
-                    "lifecycle_status": session.status
-                })
-            
+                return json.dumps(
+                    {
+                        "error": f"Session already terminal: {session.status}",
+                        "session_id": session_id,
+                        "lifecycle_status": session.status,
+                    }
+                )
+
             await self._runtime_manager.cancel_session(session_id)
             await self._runtime_manager.sync_to_component(world, parent_entity_id)
-            
+
             session = await self._runtime_manager.get_session(session_id)
-            
-            return json.dumps({
-                "status": "cancelled",
-                "session_id": session_id,
-                "lifecycle_status": session.status if session else "Cancelled"
-            })
-        
+
+            return json.dumps(
+                {
+                    "status": "cancelled",
+                    "session_id": session_id,
+                    "lifecycle_status": session.status if session else "Cancelled",
+                }
+            )
+
         return cancel_handler
 
     def _build_delegate_tool_schema(self, subagent_names: list[str]) -> dict[str, Any]:
@@ -533,8 +575,10 @@ class SubagentSystem:
             )
 
             # Resolve timeout and call shared execution core with timeout wrapping
-            resolved_timeout = self._resolve_timeout(None)  # delegate uses global default only
-            
+            resolved_timeout = self._resolve_timeout(
+                None
+            )  # delegate uses global default only
+
             try:
                 if resolved_timeout is not None:
                     result, success, error = await asyncio.wait_for(
@@ -546,7 +590,7 @@ class SubagentSystem:
                             correlation_id,
                             traceparent,
                         ),
-                        timeout=resolved_timeout
+                        timeout=resolved_timeout,
                     )
                 else:
                     result, success, error = await self._execute_subagent_core(
@@ -559,7 +603,11 @@ class SubagentSystem:
                     )
             except asyncio.TimeoutError:
                 error_msg = f"Error: Subagent timeout after {resolved_timeout}s"
-                logger.error("delegation_timeout", timeout=resolved_timeout, subagent=subagent_name)
+                logger.error(
+                    "delegation_timeout",
+                    timeout=resolved_timeout,
+                    subagent=subagent_name,
+                )
                 # Emit completion event with error
                 await world.event_bus.publish(
                     DelegationCompletedEvent(
@@ -640,7 +688,9 @@ class SubagentSystem:
                         result, _, _ = await execute_with_effective_skills()
                 except asyncio.TimeoutError:
                     error_msg = f"Error: Subagent timeout after {resolved_timeout}s"
-                    logger.error("subagent_timeout", timeout=resolved_timeout, category=category)
+                    logger.error(
+                        "subagent_timeout", timeout=resolved_timeout, category=category
+                    )
                     result = error_msg
                 return result
 
@@ -671,13 +721,19 @@ class SubagentSystem:
                         result, success, error = await execute_with_effective_skills()
                 except asyncio.TimeoutError:
                     error_msg = f"Error: Subagent timeout after {resolved_timeout}s"
-                    logger.error("subagent_background_timeout", timeout=resolved_timeout, category=category)
+                    logger.error(
+                        "subagent_background_timeout",
+                        timeout=resolved_timeout,
+                        category=category,
+                    )
                     # Update session to Timeout status
                     await self._runtime_manager.update_timeout(session_id, error_msg)
                     # Hook: Sync to component after timeout
-                    await self._runtime_manager.sync_to_component(world, parent_entity_id)
+                    await self._runtime_manager.sync_to_component(
+                        world, parent_entity_id
+                    )
                     return
-                
+
                 metadata.updated_at = (
                     datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                 )
@@ -919,10 +975,10 @@ class SubagentSystem:
             raise ValueError(
                 f"Error: Unknown subagent '{subagent_name}'. Available subagents: {list(registry.subagents.keys())}"
             )
-        
+
         # Task 9: Wrap provider with RetryProvider by default
         wrapped_provider = self._wrap_retry_provider_if_needed(config.provider)
-        
+
         # Return config with wrapped provider (use replace to preserve other fields)
         return replace(config, provider=wrapped_provider)
 
@@ -1050,7 +1106,7 @@ class SubagentSystem:
         )
         required_skills = list(dict.fromkeys(explicit_skills + inherited_skills))
 
-        resolved_skills: list[Skill] = []
+        resolved_skills: list[ScriptSkill] = []
         for skill_name in required_skills:
             skill = self._resolve_parent_skill(
                 parent_entity,
@@ -1132,7 +1188,7 @@ class SubagentSystem:
         parent_skills: SkillComponent | None,
         parent_tools: ToolRegistryComponent | None,
         policy: InheritancePolicy,
-    ) -> Skill | None:
+    ) -> ScriptSkill | None:
         if parent_skills is None or parent_tools is None:
             return self._handle_missing_skill(parent_entity, skill_name, policy)
 
@@ -1154,7 +1210,7 @@ class SubagentSystem:
         parent_entity: EntityId,
         skill_name: str,
         policy: InheritancePolicy,
-    ) -> Skill | None:
+    ) -> ScriptSkill | None:
         message = f"Missing skill '{skill_name}' on parent entity {parent_entity} during subagent delegation"
         if policy.missing_skill_policy == "error":
             raise ValueError(message)

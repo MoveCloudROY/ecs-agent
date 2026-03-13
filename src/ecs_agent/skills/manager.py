@@ -20,16 +20,16 @@ from ecs_agent.types import (
     ToolSchema,
 )
 
-from ecs_agent.skills.protocol import Skill
+from ecs_agent.skills.script_skill import ScriptSkill
 
 
 class SkillManager:
     _DETAILS_TOOL_NAME = "load_skill_details"
 
     def __init__(self) -> None:
-        self._installed_skills: dict[tuple[EntityId, str], Skill] = {}
+        self._installed_skills: dict[tuple[EntityId, str], ScriptSkill] = {}
 
-    def index(self, world: World, entity_id: EntityId, skill: Skill) -> None:
+    def index(self, world: World, entity_id: EntityId, skill: ScriptSkill) -> None:
         registry = world.get_component(entity_id, ToolRegistryComponent)
         if registry is None:
             registry = ToolRegistryComponent(tools={}, handlers={})
@@ -147,7 +147,7 @@ class SkillManager:
             ),
         )
 
-    def install(self, world: World, entity_id: EntityId, skill: Skill) -> None:
+    def install(self, world: World, entity_id: EntityId, skill: ScriptSkill) -> None:
         registry = world.get_component(entity_id, ToolRegistryComponent)
         if registry is None:
             registry = ToolRegistryComponent(tools={}, handlers={})

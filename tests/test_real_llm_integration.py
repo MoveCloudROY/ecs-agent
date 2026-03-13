@@ -639,3 +639,28 @@ async def test_real_llm_complete_runtime_workflow() -> None:
     third_leaf = get_active_leaf(conv_tree)
     assert third_leaf is not None
     assert len(conv_tree.messages) > 0
+
+
+@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.asyncio
+async def test_real_provider_smoke_with_dashscope_defaults() -> None:
+    """Smoke test: OpenAIProvider with DashScope-compatible endpoints returns non-empty response.
+
+    This test validates that the provider can successfully communicate with
+    DashScope (or any OpenAI-compatible API) using environment defaults.
+    """
+    provider = OpenAIProvider(
+        api_key=API_KEY,
+        base_url=BASE_URL,
+        model=MODEL,
+    )
+
+    messages = [
+        Message(role="user", content="Say hello"),
+    ]
+
+    result = await provider.complete(messages, stream=False)
+
+    assert isinstance(result, CompletionResult), "Expected CompletionResult"
+    assert result.message.role == "assistant", "Expected assistant role"
+    assert len(result.message.content) > 0, "Expected non-empty response content"

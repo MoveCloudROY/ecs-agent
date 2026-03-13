@@ -24,7 +24,7 @@ def test_all_new_symbols_importable_from_ecs_agent() -> None:
     )
 
     # Skills from markdown_skill.py
-    from ecs_agent import MarkdownSkill
+    from ecs_agent import Skill
 
     # Functions from conversation_tree.py
     from ecs_agent import (
@@ -48,7 +48,7 @@ def test_all_new_symbols_importable_from_ecs_agent() -> None:
     assert ResponsesAPIStateComponent is not None
     assert ConversationTreeComponent is not None
     assert SubagentRegistryComponent is not None
-    assert MarkdownSkill is not None
+    assert Skill is not None
     assert add_message is not None
     assert linearize is not None
     assert create_branch is not None

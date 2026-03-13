@@ -8,6 +8,7 @@ import pytest
 from ecs_agent.components import ToolRegistryComponent
 from ecs_agent.core import World
 from ecs_agent.skills import SkillManager
+from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.tools.builtins import BuiltinToolsSkill
 from ecs_agent.tools.builtins.bash_tool import bash
 from ecs_agent.tools.builtins.edit_tool import compute_line_hash, edit_file
@@ -251,3 +252,16 @@ def test_builtin_skill_install() -> None:
         "bash",
         "load_skill_details",
     }
+
+
+def test_builtin_tools_skill_satisfies_protocol() -> None:
+    """BuiltinToolsSkill should satisfy ScriptSkill protocol."""
+    skill = BuiltinToolsSkill()
+    assert isinstance(skill, ScriptSkill)
+    assert skill.name == "builtin-tools"
+    assert skill.description is not None
+    assert len(skill.description) > 0
+    assert callable(skill.tools)
+    assert callable(skill.system_prompt)
+    assert callable(skill.install)
+    assert callable(skill.uninstall)
