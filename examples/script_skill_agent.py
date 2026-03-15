@@ -37,8 +37,8 @@ async def main() -> None:
         if api_key:
             provider = OpenAIProvider(
                 api_key=api_key,
-                base_url=os.getenv("LLM_BASE_URL", "https://api.openai.com/v1"),
-                model=os.getenv("LLM_MODEL", "gpt-4o"),
+                base_url=os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+                model=os.getenv("LLM_MODEL", "qwen3.5-flash"),
             )
         else:
             # Fake responses for the demo
@@ -105,18 +105,9 @@ async def main() -> None:
         # 3. Install Skills
         manager = SkillManager()
 
-        # The built-in file tools require a 'workspace_root' parameter.
-        # We wrap the handlers to inject the workspace_root automatically.
+        # Bind workspace_root so the LLM doesn't need to provide it.
         skill = BuiltinToolsSkill()
-        original_tools = skill.tools()
-        wrapped_tools = {}
-        for name, (schema, handler) in original_tools.items():
-            async def wrapped_handler(h=handler, **kwargs):
-                return await h(workspace_root=str(workspace), **kwargs)
-            wrapped_tools[name] = (schema, wrapped_handler)
-        
-        # Patch the skill instance for the demo
-        skill.tools = lambda: wrapped_tools
+        skill.bind_workspace(str(workspace))
         manager.install(world, agent, skill)
 
         # Register systems
