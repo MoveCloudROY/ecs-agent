@@ -86,20 +86,15 @@ async def main() -> None:
     ui_prompt_skill = Skill(
         skill_path=Path(__file__).parent / ".claude/skills/ui-prompt/SKILL.md"
     )
+    workspace_root = str(Path(__file__).parent)
+    ui_navigator_skill.resolve_path_references(workspace_root)
+    ui_prompt_skill.resolve_path_references(workspace_root)
     manager.install(world, agent_id, ui_navigator_skill)  # type: ignore[arg-type]
     manager.install(world, agent_id, ui_prompt_skill)  # type: ignore[arg-type]
 
     # Install builtin file tools so the agent can write output files.
-    # Handlers require workspace_root — wrap to inject automatically.
-    workspace_root = str(Path(__file__).parent)
     builtin_skill = BuiltinToolsSkill()
-    original_tools = builtin_skill.tools()
-    wrapped_tools = {}
-    for tool_name, (schema, handler) in original_tools.items():
-        async def _wrapped(h=handler, **kwargs):  # type: ignore[no-untyped-def]
-            return await h(workspace_root=workspace_root, **kwargs)
-        wrapped_tools[tool_name] = (schema, _wrapped)
-    builtin_skill.tools = lambda: wrapped_tools  # type: ignore[assignment]
+    builtin_skill.bind_workspace(str(Path(__file__).parent))
     manager.install(world, agent_id, builtin_skill)
 
     # Read initial prompt from file
