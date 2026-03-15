@@ -5,10 +5,11 @@ agent using ECS-based composition with dual-mode provider selection.
 
 Tasks:
 - Create World with ReasoningSystem, ToolExecutionSystem, and error handling
-- Install ui-navigator and ui-prompt skills
+- Install ui-navigator and ui-prompt markdown skills (pure prompt, no script tools)
+- Install BuiltinToolsSkill for read_file, write_file, edit_file, bash
 - Setup interactive input handling via UserInputSystem
 - Execute agent loop until TerminalComponent or max_ticks
-- Output results to ui-design/ directory via artifacts module
+- Output results to ui-design/ directory via builtin write_file tool
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import CompletionResult, Message
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.skill import Skill
+from ecs_agent.tools.builtins import BuiltinToolsSkill
 
 from runtime import setup_interactive_input
 from artifacts import ensure_output_layout
@@ -76,7 +78,7 @@ async def main() -> None:
     # Create Agent Entity
     agent_id = world.create_entity()
 
-    # Install skills BEFORE registering systems
+    # Install markdown skills BEFORE registering systems
     manager = SkillManager()
     ui_navigator_skill = Skill(
         skill_path=Path(__file__).parent / ".claude/skills/ui-navigator/SKILL.md"
@@ -86,6 +88,19 @@ async def main() -> None:
     )
     manager.install(world, agent_id, ui_navigator_skill)  # type: ignore[arg-type]
     manager.install(world, agent_id, ui_prompt_skill)  # type: ignore[arg-type]
+
+    # Install builtin file tools so the agent can write output files.
+    # Handlers require workspace_root — wrap to inject automatically.
+    workspace_root = str(Path(__file__).parent)
+    builtin_skill = BuiltinToolsSkill()
+    original_tools = builtin_skill.tools()
+    wrapped_tools = {}
+    for tool_name, (schema, handler) in original_tools.items():
+        async def _wrapped(h=handler, **kwargs):  # type: ignore[no-untyped-def]
+            return await h(workspace_root=workspace_root, **kwargs)
+        wrapped_tools[tool_name] = (schema, _wrapped)
+    builtin_skill.tools = lambda: wrapped_tools  # type: ignore[assignment]
+    manager.install(world, agent_id, builtin_skill)
 
     # Read initial prompt from file
     prompt_path = Path(__file__).parent / "assets/prompt.txt"

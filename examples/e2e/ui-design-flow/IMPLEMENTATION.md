@@ -23,7 +23,7 @@ Systems are registered with specific priorities to ensure correct data flow with
 |--------|----------|---------|
 | **UserInputSystem** | -5 | Processes `UserInputComponent` and triggers `UserInputRequestedEvent`. |
 | **ReasoningSystem** | 0 | Calls the LLM provider to generate the next response or tool call. |
-| **ToolExecutionSystem** | 5 | Dispatches pending tool calls to their respective skill scripts. |
+| **ToolExecutionSystem** | 5 | Dispatches pending tool calls to builtin file tools (read_file, write_file, etc.). |
 | **MemorySystem** | 10 | Updates conversation history and manages context window. |
 | **ErrorHandlingSystem** | 99 | Captures exceptions from other systems and attaches `ErrorComponent`. |
 
@@ -39,19 +39,25 @@ Interactive input is achieved through an event-driven adapter in `runtime.py`.
 
 ## Skill Installation Lifecycle
 
-Skills are loaded from Markdown files (`SKILL.md`) using the `MarkdownSkill` class and installed via `SkillManager`.
+Skills are loaded from Markdown files (`SKILL.md`) using the `Skill` class and installed via `SkillManager`.
+Built-in file tools are provided by `BuiltinToolsSkill` with `workspace_root` injection.
 
 ```python
 manager = SkillManager()
-ui_nav = MarkdownSkill(skill_path=Path("path/to/SKILL.md"))
+ui_nav = Skill(skill_path=Path("path/to/SKILL.md"))
 manager.install(world, agent_id, ui_nav)
+
+# Install builtin file tools with workspace_root injection
+builtin = BuiltinToolsSkill()
+# ... wrap handlers to inject workspace_root ...
+manager.install(world, agent_id, builtin)
 ```
 
 **Critical Timing**: Skills must be installed after the agent entity is created but *before* systems are registered. This ensures the `ToolRegistryComponent` is available for the `ReasoningSystem` during the first tick.
 
 ## Artifact Management & Security
 
-Artifacts are managed by the `artifacts.py` module, which provides a safe abstraction over filesystem operations.
+Artifacts are managed by the `artifacts.py` module for output directory setup, and by the `BuiltinToolsSkill` (`write_file` tool) for actual file writing by the agent.
 
 - **Output Layout**: `ensure_output_layout()` creates the `ui-design/` directory and returns a dataclass with absolute paths to `draft.md` and `nano-banana-prompts.md`.
 - **Path Traversal Protection**: Every read/write operation is validated against the base output directory using `Path.resolve()` and prefix checking. Any attempt to use `../` to escape the sandbox raises a `ValueError`.
