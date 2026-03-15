@@ -35,6 +35,7 @@ _DOLLAR_N_RE = re.compile(r"\$([1-9])(?!\w)")
 _SESSION_ID_RE = re.compile(r"\$\{CLAUDE_SESSION_ID\}")
 _SKILL_DIR_RE = re.compile(r"\$\{CLAUDE_SKILL_DIR\}")
 _DYNAMIC_INJECTION_RE = re.compile(r"!`[^`]*`")
+_AT_PATH_RE = re.compile(r"@((?:\.\.?/)+[^\s,，;；、]+)")
 
 
 def render_skill_content(template: str, arguments: str, skill_dir: Path) -> str:
@@ -359,8 +360,44 @@ class Skill:
         return _DYNAMIC_INJECTION_RE.search(content) is None
 
     def system_prompt(self) -> str:
-        """Return markdown body as system prompt."""
+        """Return markdown body as system prompt.
+
+        If ``resolve_path_references`` has been called, ``@``-prefixed
+        relative paths in the body will have been rewritten to
+        workspace-relative paths.
+        """
         return self._body_bytes.decode("utf-8", errors="replace").strip()
+
+
+    def resolve_path_references(self, workspace_root: str | Path) -> None:
+        """Resolve ``@``-prefixed relative paths in the skill body.
+
+        Paths of the form ``@../../../some/file.md`` are interpreted relative
+        to the SKILL.md file location.  Each such path is resolved to an
+        absolute filesystem path and then re-expressed relative to
+        *workspace_root*, so that downstream tools (e.g. ``write_file``)
+        receive paths they can validate against the workspace.
+
+        Args:
+            workspace_root: Workspace root directory.  Resolved paths that
+                fall outside this directory are left unchanged.
+        """
+        workspace = Path(workspace_root).resolve()
+        skill_dir = self._skill_path.parent.resolve()
+        body = self._body_bytes.decode("utf-8", errors="replace")
+
+        def _resolve_at_path(match: re.Match[str]) -> str:
+            raw_path = match.group(1)
+            resolved = (skill_dir / raw_path).resolve()
+            try:
+                rel = resolved.relative_to(workspace)
+                return str(rel)
+            except ValueError:
+                # Outside workspace — leave the original reference intact.
+                return match.group(0)
+
+        body = _AT_PATH_RE.sub(_resolve_at_path, body)
+        self._body_bytes = body.encode("utf-8")
 
     def tools(self) -> dict[str, tuple[ToolSchema, ToolHandler]]:
         """Discover tools from scripts/ directory.

@@ -1331,3 +1331,118 @@ def test_protocol_module_skill_name_is_script_skill_no_legacy_alias() -> None:
         "Migration: update all isinstance(x, Skill) checks to isinstance(x, ScriptSkill). "
         "renamed to ScriptSkill — no backward-compatible Skill alias is allowed."
     )
+
+
+# ── resolve_path_references tests ──
+
+
+def test_resolve_path_references_rewrites_relative_at_path() -> None:
+    """@../../../file.md is resolved relative to SKILL.md and re-expressed relative to workspace."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "project"
+        skill_dir = workspace / "a" / "b" / "c"
+        skill_dir.mkdir(parents=True)
+        skill_path = skill_dir / "SKILL.md"
+        skill_path.write_text("""---
+name: nav
+description: nav skill
+---
+Write to @../../../output.md please.
+""")
+
+        skill = Skill(skill_path)
+        skill.resolve_path_references(str(workspace))
+        prompt = skill.system_prompt()
+
+        assert "output.md" in prompt
+        # The @../../.. prefix should be gone
+        assert "@../../../output.md" not in prompt
+
+
+def test_resolve_path_references_preserves_non_relative_at() -> None:
+    """@ signs not followed by ./ or ../ are left untouched."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "project"
+        skill_dir = workspace / "skills" / "s1"
+        skill_dir.mkdir(parents=True)
+        skill_path = skill_dir / "SKILL.md"
+        skill_path.write_text("""---
+name: plain
+description: test
+---
+Contact @admin for help.
+""")
+
+        skill = Skill(skill_path)
+        skill.resolve_path_references(str(workspace))
+        prompt = skill.system_prompt()
+
+        assert "@admin" in prompt
+
+
+def test_resolve_path_references_leaves_outside_workspace_intact() -> None:
+    """Paths resolving outside workspace are left as-is."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "project"
+        skill_dir = workspace / "deep" / "nested"
+        skill_dir.mkdir(parents=True)
+        skill_path = skill_dir / "SKILL.md"
+        # ../../../escape.md resolves to tmpdir/escape.md — outside workspace
+        skill_path.write_text("""---
+name: escape
+description: test
+---
+See @../../../escape.md for details.
+""")
+
+        skill = Skill(skill_path)
+        skill.resolve_path_references(str(workspace))
+        prompt = skill.system_prompt()
+
+        # Original @-reference preserved since it escapes workspace
+        assert "@../../../escape.md" in prompt
+
+
+def test_resolve_path_references_multiple_paths() -> None:
+    """Multiple @ references in one body are all resolved."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "project"
+        skill_dir = workspace / "a" / "b" / "c"
+        skill_dir.mkdir(parents=True)
+        skill_path = skill_dir / "SKILL.md"
+        skill_path.write_text("""---
+name: multi
+description: multi paths
+---
+Write draft to @../../../ui/draft.md and prompts to @../../../ui/prompts.md.
+""")
+
+        skill = Skill(skill_path)
+        skill.resolve_path_references(str(workspace))
+        prompt = skill.system_prompt()
+
+        assert "ui/draft.md" in prompt
+        assert "ui/prompts.md" in prompt
+        assert "@../" not in prompt
+
+
+def test_resolve_path_references_dot_slash() -> None:
+    """@./local.md is resolved relative to skill dir."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "project"
+        skill_dir = workspace / "skills" / "s1"
+        skill_dir.mkdir(parents=True)
+        skill_path = skill_dir / "SKILL.md"
+        skill_path.write_text("""---
+name: dotslash
+description: local ref
+---
+Read @./notes.txt for context.
+""")
+
+        skill = Skill(skill_path)
+        skill.resolve_path_references(str(workspace))
+        prompt = skill.system_prompt()
+
+        assert "skills/s1/notes.txt" in prompt
+        assert "@./notes.txt" not in prompt
