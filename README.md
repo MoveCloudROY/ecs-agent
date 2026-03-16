@@ -30,32 +30,37 @@ uv pip install -e ".[mcp]"
 
 ```python
 import asyncio
+import os
 
 from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import OpenAIProvider
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.types import CompletionResult, Message
+from ecs_agent.types import Message
 
 
 async def main() -> None:
     world = World()
 
-    # Create a provider (FakeProvider for demo; swap to OpenAIProvider for real LLMs)
-    provider = FakeProvider(
-        responses=[
-            CompletionResult(
-                message=Message(role="assistant", content="Hello! How can I help you?")
-            )
-        ]
+    # Create a provider (any OpenAI-compatible API works)
+    provider = OpenAIProvider(
+        api_key=os.environ["LLM_API_KEY"],
+        base_url=os.getenv("LLM_BASE_URL", "https://api.openai.com/v1"),
+        model=os.getenv("LLM_MODEL", "gpt-4o"),
     )
 
     # Create an agent entity and attach components
     agent = world.create_entity()
-    world.add_component(agent, LLMComponent(provider=provider, model="fake", system_prompt="You are a helpful assistant."))
-    world.add_component(agent, ConversationComponent(messages=[Message(role="user", content="Hi there!")]))
+    world.add_component(agent, LLMComponent(
+        provider=provider,
+        model=provider.model,
+        system_prompt="You are a helpful assistant.",
+    ))
+    world.add_component(agent, ConversationComponent(
+        messages=[Message(role="user", content="Hi there!")],
+    ))
 
     # Register systems (priority controls execution order)
     world.register_system(ReasoningSystem(priority=0), priority=0)
