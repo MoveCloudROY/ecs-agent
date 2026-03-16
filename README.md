@@ -15,7 +15,7 @@ Build modular, testable LLM agents by composing behavior from dataclass componen
 
 ```bash
 # Clone and install with uv
-git clone https://github.com/your-org/ecs-agent.git
+git clone https://github.com/MoveCloudROY/ecs-agent.git
 cd ecs-agent
 uv sync --group dev
 # Install with embeddings support (optional)
@@ -79,7 +79,7 @@ asyncio.run(main())
 ## Features
 
 ### Composition-First Architecture
-Mix 30+ components to build custom agents without inheritance bloat. The Entity-Component-System (ECS) pattern keeps logic and data strictly separated, making agents modular, serializable, and easy to test. Fully type-safe with strict mypy and `dataclass(slots=True)`.
+Mix 35+ components to build custom agents without inheritance bloat. The Entity-Component-System (ECS) pattern keeps logic and data strictly separated, making agents modular, serializable, and easy to test. Fully type-safe with strict mypy and `dataclass(slots=True)`.
 
 ### Multi-Agent Orchestration
 - **Subagent Delegation** — Spawn child agents for subtasks with skill and permission inheritance.
@@ -89,12 +89,24 @@ Mix 30+ components to build custom agents without inheritance bloat. The Entity-
 ### Advanced Reasoning & Tree Search
 - **Tree Conversations** — Branch reasoning paths, navigate multiple strategies, and linearize history for LLM compatibility.
 - **Planning & ReAct** — Multi-step reasoning with dynamic replanning on errors or unexpected tool results.
-- **MCTS Optimization** — Find optimal execution paths using Monte Carlo Tree Search for complex goals.
+- **MCTS Optimization** *(experimental)* — Find optimal execution paths using Monte Carlo Tree Search for complex goals.
+
+### Task Orchestration
+- **TaskComponent** — Structured multi-step task definitions with description, expected output, agent assignment, tool lists, and context dependencies.
+- **Priority & Retries** — Priority-based ordering and configurable retry limits for robust execution.
+- **Output Schema** — Optional JSON schema validation for task outputs.
+
+### Two-Tier Skill System
+- **Markdown Skills** — Define agent capabilities via `SKILL.md` files with YAML frontmatter. System prompts are injected automatically, and `@`-prefixed relative paths are resolved to workspace-safe paths at load time.
+- **Script Skills** — Extend markdown skills with Python tool handlers in a `scripts/` directory, executed as sandboxed subprocesses.
+- **Built-in Tools** — `BuiltinToolsSkill` provides `read_file`, `write_file`, `edit_file`, and `bash` with workspace binding, path traversal protection, and hash-anchored editing.
+- **Skill Discovery** — File-based skill loading from directories with metadata-first activation and lifecycle management via `SkillManager`.
 
 ### Production Infrastructure
 - **5 LLM Providers + Streaming** — OpenAI, Claude, LiteLLM (100+ models), Fake, and Retry providers with real-time SSE token delivery.
 - **Context Management** — Checkpoints (undo/resume), conversation compaction (compression), and memory windowing.
-- **Tool Ecosystem** — Auto-discovery, manual approval flows, secure `bwrap` sandboxing, and composable skills.
+- **Tool Ecosystem** — Auto-discovery via `@tool` decorator, manual approval flows, secure `bwrap` sandboxing, and composable skills.
+- **MCP Integration** — Connect to external MCP tool servers via stdio, SSE, or HTTP transports with namespaced tool mapping.
 
 ## Architecture
 
