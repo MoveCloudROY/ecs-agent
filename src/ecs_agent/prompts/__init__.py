@@ -6,10 +6,12 @@ from ecs_agent.prompts.contracts import (
     PromptSectionSpec,
     PromptTemplate,
 )
+from ecs_agent.prompts.registry import PromptRegistry
 
 __all__ = [
     "PromptInjectionArtifact",
     "PromptRenderContext",
     "PromptSectionSpec",
     "PromptTemplate",
+    "PromptRegistry",
 ]
