@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any
 
 import pytest
 
 from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
+    PromptConfigComponent,
     StreamingComponent,
     SystemPromptComponent,
 )
@@ -437,6 +439,70 @@ def get_real_provider() -> OpenAIProvider:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
 
     return OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+
+
+class RecordingProvider:
+    def __init__(self, provider: OpenAIProvider) -> None:
+        self._provider = provider
+        self.last_messages: list[Message] = []
+
+    async def complete(
+        self,
+        messages: list[Message],
+        tools: list[Any] | None = None,
+        stream: bool = False,
+        response_format: dict[str, Any] | None = None,
+    ) -> CompletionResult | Any:
+        self.last_messages = list(messages)
+        return await self._provider.complete(
+            messages,
+            tools=tools,
+            stream=stream,
+            response_format=response_format,
+        )
+
+
+@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.asyncio
+async def test_real_llm_prompt_keyword_injection_smoke() -> None:
+    world = World()
+    runner = Runner()
+
+    model = os.getenv("LLM_MODEL", "qwen3.5-flash")
+    provider = RecordingProvider(get_real_provider())
+
+    entity = world.create_entity()
+    world.add_component(entity, LLMComponent(provider=provider, model=model))
+    world.add_component(
+        entity,
+        ConversationComponent(
+            messages=[
+                Message(role="user", content="Need @code help in one short sentence")
+            ]
+        ),
+    )
+    world.add_component(
+        entity,
+        PromptConfigComponent(keyword_templates={"@code": "KEYWORD_TEMPLATE_BLOCK"}),
+    )
+
+    world.register_system(ReasoningSystem(priority=0), priority=0)
+    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
+
+    await runner.run(world, max_ticks=1)
+
+    assert len(provider.last_messages) >= 1
+    outbound_user = provider.last_messages[-1]
+    assert outbound_user.role == "user"
+    assert outbound_user.content.startswith(
+        "[PROMPT_INJECT:@code]\nKEYWORD_TEMPLATE_BLOCK\n\n"
+    )
+    assert outbound_user.content.endswith("Need @code help in one short sentence")
+
+    conv = world.get_component(entity, ConversationComponent)
+    assert conv is not None
+    assert conv.messages[-1].role == "assistant"
+    assert len(conv.messages[-1].content) > 0
 
 
 @pytest.mark.skipif(os.getenv("LLM_API_KEY") is None, reason="LLM_API_KEY not set")
