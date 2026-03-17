@@ -18,10 +18,13 @@ from ecs_agent.components import (
     MessageBusConfigComponent,
     MessageBusConversationComponent,
     MessageBusSubscriptionComponent,
+    OneShotContextPoolComponent,
     OwnerComponent,
     PendingToolCallsComponent,
     PlanComponent,
     PlanSearchComponent,
+    PromptConfigComponent,
+    PromptContributionsComponent,
     RAGTriggerComponent,
     RunnerStateComponent,
     ResponsesAPIStateComponent,
@@ -37,6 +40,7 @@ from ecs_agent.components import (
     ToolApprovalComponent,
     ToolRegistryComponent,
     ToolResultsComponent,
+    TurnStateComponent,
     VectorStoreComponent,
 )
 from ecs_agent.core.world import World
@@ -77,6 +81,10 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     ScratchbookIndexComponent.__name__: ScratchbookIndexComponent,
     ScratchbookRefComponent.__name__: ScratchbookRefComponent,
     TaskComponent.__name__: TaskComponent,
+    PromptConfigComponent.__name__: PromptConfigComponent,
+    PromptContributionsComponent.__name__: PromptContributionsComponent,
+    OneShotContextPoolComponent.__name__: OneShotContextPoolComponent,
+    TurnStateComponent.__name__: TurnStateComponent,
 }
 
 
@@ -404,6 +412,19 @@ class WorldSerializer:
                     # Already a SubagentSessionRecord object
                     sessions_dict[session_id] = session_data
             normalized_data["sessions"] = sessions_dict
+
+        # PromptContributionsComponent: reconstruct PromptSectionSpec objects in sections list
+        if component_name == PromptContributionsComponent.__name__:
+            from ecs_agent.prompts.contracts import PromptSectionSpec
+            sections_list = []
+            for section_data in normalized_data.get("sections", []):
+                # If section_data is a dict, reconstruct it as PromptSectionSpec
+                if isinstance(section_data, dict):
+                    sections_list.append(PromptSectionSpec(**section_data))
+                else:
+                    # Already a PromptSectionSpec object
+                    sections_list.append(section_data)
+            normalized_data["sections"] = sections_list
 
         return normalized_data
 
