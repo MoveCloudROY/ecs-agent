@@ -6,8 +6,10 @@ from ecs_agent.components import (
     ConversationComponent,
     ErrorComponent,
     LLMComponent,
+    OneShotContextPoolComponent,
     PendingToolCallsComponent,
     PlanComponent,
+    PromptConfigComponent,
     SystemPromptComponent,
     TerminalComponent,
 )
@@ -204,7 +206,6 @@ async def test_marks_plan_completed_after_final_step() -> None:
     assert plan.completed is True
 
 
-
 @pytest.mark.asyncio
 async def test_provider_exhaustion_adds_terminal_component() -> None:
     world = World()
@@ -239,7 +240,9 @@ async def test_generic_exception_adds_error_component() -> None:
 
     world = World()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=ExplodingProvider(), model="fake"))  # type: ignore[arg-type]
+    world.add_component(
+        entity_id, LLMComponent(provider=ExplodingProvider(), model="fake")
+    )  # type: ignore[arg-type]
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="start")]),
@@ -255,3 +258,43 @@ async def test_generic_exception_adds_error_component() -> None:
     terminal = world.get_component(entity_id, TerminalComponent)
     assert terminal is not None
     assert terminal.reason == "planning_error"
+
+
+@pytest.mark.asyncio
+async def test_prompt_context_injection_is_transient_for_planning_provider_call() -> (
+    None
+):
+    world = World()
+    provider = RecordingFakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, SystemPromptComponent(content="You are concise"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Plan this")]),
+    )
+    world.add_component(
+        entity_id, PlanComponent(steps=["inspect state"], current_step=0)
+    )
+    world.add_component(entity_id, PromptConfigComponent(enable_context_pool=True))
+    world.add_component(
+        entity_id,
+        OneShotContextPoolComponent(
+            items=[(30, 0, "tool:search", "source: tool\nresult: evidence")]
+        ),
+    )
+
+    await PlanningSystem().process(world)
+
+    sent = provider.calls[0]
+    assert sent[0] == Message(role="system", content="You are concise")
+    assert sent[1] == Message(role="system", content="Step 1/1: inspect state")
+    assert sent[2].role == "user"
+    assert "[PROMPT_CONTEXT_POOL]" in sent[2].content
+    assert sent[2].content.endswith("Plan this")
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages[0].content == "Plan this"

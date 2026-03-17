@@ -6,23 +6,28 @@ from ecs_agent.components import (
     ConversationComponent,
     ErrorComponent,
     LLMComponent,
+    OneShotContextPoolComponent,
     PendingToolCallsComponent,
     PlanComponent,
+    PromptConfigComponent,
     ScratchbookIndexComponent,
     SystemPromptComponent,
     TerminalComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
-from ecs_agent.types import CompletionResult, Message, PlanStepCompletedEvent
-from ecs_agent.scratchbook import ScratchbookService
 from ecs_agent.logging import get_logger
+from ecs_agent.prompts.message_assembly import assemble_messages, build_keyword_registry
+from ecs_agent.scratchbook import ScratchbookService
+from ecs_agent.types import CompletionResult, Message, PlanStepCompletedEvent
 
 logger = get_logger(__name__)
 
 
 class PlanningSystem:
-    def __init__(self, priority: int = 0, service: ScratchbookService | None = None) -> None:
+    def __init__(
+        self, priority: int = 0, service: ScratchbookService | None = None
+    ) -> None:
         self.priority = priority
         self.service = service
 
@@ -48,14 +53,30 @@ class PlanningSystem:
                 content=f"Step {plan.current_step + 1}/{len(plan.steps)}: {step_description}",
             )
 
-            messages: list[Message] = []
-
             system_prompt = world.get_component(entity_id, SystemPromptComponent)
-            if system_prompt is not None:
-                messages.append(Message(role="system", content=system_prompt.content))
-
-            messages.append(plan_context)
-            messages.extend(conversation.messages)
+            prompt_config = world.get_component(entity_id, PromptConfigComponent)
+            context_pool = world.get_component(entity_id, OneShotContextPoolComponent)
+            keyword_registry = (
+                build_keyword_registry(prompt_config.keyword_templates)
+                if prompt_config is not None and prompt_config.keyword_templates
+                else None
+            )
+            messages = assemble_messages(
+                system_prompt=system_prompt.content
+                if system_prompt is not None
+                else None,
+                prefix_messages=[plan_context],
+                conversation_messages=conversation.messages,
+                enable_context_pool=(
+                    prompt_config.enable_context_pool
+                    if prompt_config is not None
+                    else False
+                ),
+                context_pool_items=context_pool.items
+                if context_pool is not None
+                else None,
+                keyword_registry=keyword_registry,
+            )
 
             tool_registry = world.get_component(entity_id, ToolRegistryComponent)
             tools = list(tool_registry.tools.values()) if tool_registry else None
@@ -78,13 +99,15 @@ class PlanningSystem:
 
                 plan.current_step += 1
                 completed_step_index = plan.current_step - 1
-                
+
                 if self.service is not None:
                     scratchbook_index = world.get_component(
                         entity_id, ScratchbookIndexComponent
                     )
                     if scratchbook_index is not None:
-                        artifact_id = f"plan-snapshot-{entity_id}-step-{completed_step_index}"
+                        artifact_id = (
+                            f"plan-snapshot-{entity_id}-step-{completed_step_index}"
+                        )
                         snapshot_data = {
                             "entity_id": entity_id,
                             "step_index": completed_step_index,
@@ -95,7 +118,7 @@ class PlanningSystem:
                         self.service.write_artifact(
                             artifact_id, category="planning", data=snapshot_data
                         )
-                
+
                 duration_ms = (time.monotonic() - start_time) * 1000
                 logger.info(
                     "planning_step_completed",
@@ -103,7 +126,7 @@ class PlanningSystem:
                     step_description=plan.steps[completed_step_index],
                     duration_ms=duration_ms,
                 )
-                
+
                 await world.event_bus.publish(
                     PlanStepCompletedEvent(
                         entity_id=entity_id,

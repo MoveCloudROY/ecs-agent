@@ -7,6 +7,8 @@ import pytest
 from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
+    OneShotContextPoolComponent,
+    PromptConfigComponent,
     SubagentRegistryComponent,
     ToolRegistryComponent,
 )
@@ -22,6 +24,20 @@ from ecs_agent.types import (
     ToolCall,
     ToolSchema,
 )
+
+
+class RecordingFakeProvider(FakeProvider):
+    def __init__(self, responses: list[CompletionResult]) -> None:
+        super().__init__(responses=responses)
+        self.calls: list[list[Message]] = []
+
+    async def complete(
+        self,
+        messages: list[Message],
+        tools: list[object] | None = None,
+    ) -> CompletionResult:
+        self.calls.append(list(messages))
+        return await super().complete(messages, tools=tools)
 
 
 @pytest.mark.asyncio
@@ -451,3 +467,52 @@ async def test_normalized_results_both_backends() -> None:
     assert subagent_result.backend_type == "subagent"
     assert subagent_result.success is True
     assert hasattr(subagent_result, "result_content")
+
+
+@pytest.mark.asyncio
+async def test_local_backend_prompt_context_injection_is_transient() -> None:
+    world = World()
+    executor = TaskExecutor()
+    agent = world.create_entity()
+
+    provider = RecordingFakeProvider(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="Local OK"))
+        ]
+    )
+    world.add_component(
+        agent,
+        LLMComponent(provider=provider, model="fake", system_prompt=""),
+    )
+    world.add_component(agent, ConversationComponent(messages=[]))
+    world.add_component(agent, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(agent, PromptConfigComponent(enable_context_pool=True))
+    world.add_component(
+        agent,
+        OneShotContextPoolComponent(
+            items=[(30, 0, "tool:search", "source: tool\nresult: local facts")]
+        ),
+    )
+
+    request = DispatchRequest(
+        task_id="local-context",
+        wave_number=0,
+        sequence_number=0,
+        description="Do local work",
+        expected_output="Output",
+        assigned_agent=None,
+        tools=tuple(),
+        context_dependencies=tuple(),
+        priority=0,
+    )
+
+    _ = await executor.execute_dispatch_request(world, agent, request)
+
+    sent_messages = provider.calls[0]
+    assert sent_messages[-1].role == "user"
+    assert "[PROMPT_CONTEXT_POOL]" in sent_messages[-1].content
+    assert sent_messages[-1].content.endswith("Do local work")
+
+    conversation = world.get_component(agent, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages[0].content == "Do local work"

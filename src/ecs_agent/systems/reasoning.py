@@ -12,7 +12,9 @@ from ecs_agent.components import (
     ErrorComponent,
     InterruptionComponent,
     LLMComponent,
+    OneShotContextPoolComponent,
     PendingToolCallsComponent,
+    PromptConfigComponent,
     StreamingComponent,
     SystemPromptComponent,
     TerminalComponent,
@@ -21,6 +23,10 @@ from ecs_agent.components import (
 from ecs_agent.core.world import World
 from ecs_agent.conversation_tree import get_active_leaf, linearize
 from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.prompts.message_assembly import (
+    assemble_messages,
+    build_keyword_registry,
+)
 from ecs_agent.types import (
     CompletionResult,
     Message,
@@ -62,28 +68,48 @@ class ReasoningSystem:
                 llm_component.model = llm_component.pending_model
                 llm_component.pending_model = None
 
-            messages: list[Message] = []
-
             system_prompt = world.get_component(entity_id, SystemPromptComponent)
-            if system_prompt is not None:
-                messages.append(Message(role="system", content=system_prompt.content))
-
             # Check for tree first, fallback to flat conversation
             tree = world.get_component(entity_id, ConversationTreeComponent)
             conversation = world.get_component(entity_id, ConversationComponent)
+            prompt_config = world.get_component(entity_id, PromptConfigComponent)
+            context_pool = world.get_component(entity_id, OneShotContextPoolComponent)
+            keyword_registry = (
+                build_keyword_registry(prompt_config.keyword_templates)
+                if prompt_config is not None and prompt_config.keyword_templates
+                else None
+            )
+
+            conversation_messages: list[Message] = []
 
             if tree is not None:
                 # Use tree-based conversation if available
                 active_leaf_id = get_active_leaf(tree)
                 if active_leaf_id is not None:
                     tree_messages = linearize(tree, active_leaf_id)
-                    messages.extend(tree_messages)
+                    conversation_messages.extend(tree_messages)
             elif conversation is not None:
                 # Fallback to flat conversation (backward compatibility)
-                messages.extend(conversation.messages)
+                conversation_messages.extend(conversation.messages)
             else:
                 # Skip entities without either tree or flat conversation
                 continue
+
+            messages = assemble_messages(
+                system_prompt=system_prompt.content
+                if system_prompt is not None
+                else None,
+                conversation_messages=conversation_messages,
+                enable_context_pool=(
+                    prompt_config.enable_context_pool
+                    if prompt_config is not None
+                    else False
+                ),
+                context_pool_items=context_pool.items
+                if context_pool is not None
+                else None,
+                keyword_registry=keyword_registry,
+            )
 
             tools: list[ToolSchema] | None = None
             tool_registry = world.get_component(entity_id, ToolRegistryComponent)

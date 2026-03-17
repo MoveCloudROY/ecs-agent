@@ -4,7 +4,9 @@ from ecs_agent.components import (
     ConversationComponent,
     ErrorComponent,
     LLMComponent,
+    OneShotContextPoolComponent,
     PendingToolCallsComponent,
+    PromptConfigComponent,
     SystemPromptComponent,
     TerminalComponent,
     ToolRegistryComponent,
@@ -485,3 +487,44 @@ async def test_per_entity_model_override() -> None:
     # provider_override should be called, not provider_default
     assert len(provider_default.calls) == 0
     assert len(provider_override.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_prompt_context_injection_is_transient_for_reasoning_provider_call() -> (
+    None
+):
+    world = World()
+    provider = RecordingFakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Need summary")]),
+    )
+    world.add_component(entity_id, PromptConfigComponent(enable_context_pool=True))
+    world.add_component(
+        entity_id,
+        OneShotContextPoolComponent(
+            items=[
+                (20, 1, "subagent:writer", "source: subagent\nresult: drafted"),
+                (30, 0, "tool:search", "source: tool\nresult: found facts"),
+            ]
+        ),
+    )
+
+    await ReasoningSystem().process(world)
+
+    sent_messages, _ = provider.calls[0]
+    transient_user = sent_messages[-1]
+    assert transient_user.role == "user"
+    assert "[PROMPT_CONTEXT_POOL]" in transient_user.content
+    assert transient_user.content.index("source: tool") < transient_user.content.index(
+        "source: subagent"
+    )
+    assert transient_user.content.endswith("Need summary")
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages[0].content == "Need summary"

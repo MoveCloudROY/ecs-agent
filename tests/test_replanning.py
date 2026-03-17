@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from ecs_agent.components import ConversationComponent, LLMComponent, PlanComponent
+from ecs_agent.components import (
+    ConversationComponent,
+    LLMComponent,
+    OneShotContextPoolComponent,
+    PlanComponent,
+    PromptConfigComponent,
+)
 from ecs_agent.core import World
 from ecs_agent.providers import FakeProvider
 from ecs_agent.systems.replanning import ReplanningSystem
@@ -283,3 +289,42 @@ async def test_parse_revised_steps_returns_none_for_empty() -> None:
     revised = ReplanningSystem._parse_revised_steps("")
 
     assert revised is None
+
+
+async def test_prompt_context_injection_is_transient_for_replanning_provider_call() -> (
+    None
+):
+    world = World()
+    provider = RecordingFakeProvider(
+        responses=[
+            CompletionResult(
+                message=Message(
+                    role="assistant", content='{"revised_steps": ["step 2"]}'
+                )
+            )
+        ]
+    )
+    entity_id = _create_entity(
+        world,
+        provider,
+        steps=["step 1", "step 2"],
+        current_step=1,
+    )
+    world.add_component(entity_id, PromptConfigComponent(enable_context_pool=True))
+    world.add_component(
+        entity_id,
+        OneShotContextPoolComponent(
+            items=[(30, 0, "tool:search", "source: tool\nresult: citations")]
+        ),
+    )
+
+    await ReplanningSystem().process(world)
+
+    sent = provider.calls[0]
+    assert sent[-1].role == "user"
+    assert "[PROMPT_CONTEXT_POOL]" in sent[-1].content
+    assert "source: tool" in sent[-1].content
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages[0].content == "objective"

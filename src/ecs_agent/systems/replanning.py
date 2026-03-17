@@ -11,13 +11,16 @@ import json
 from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
+    OneShotContextPoolComponent,
     PlanComponent,
+    PromptConfigComponent,
     ScratchbookIndexComponent,
     SystemPromptComponent,
 )
 from ecs_agent.core.world import World
-from ecs_agent.types import CompletionResult, EntityId, Message, PlanRevisedEvent
+from ecs_agent.prompts.message_assembly import assemble_messages, build_keyword_registry
 from ecs_agent.scratchbook import ScratchbookService
+from ecs_agent.types import CompletionResult, EntityId, Message, PlanRevisedEvent
 
 
 class ReplanningSystem:
@@ -35,7 +38,9 @@ class ReplanningSystem:
     after tools have executed but before memory truncation.
     """
 
-    def __init__(self, priority: int = 7, service: ScratchbookService | None = None) -> None:
+    def __init__(
+        self, priority: int = 7, service: ScratchbookService | None = None
+    ) -> None:
         self.priority = priority
         self._last_replanned: dict[EntityId, int] = {}
         self.service = service
@@ -87,7 +92,9 @@ class ReplanningSystem:
                                 entity_id, ScratchbookIndexComponent
                             )
                             if scratchbook_index is not None:
-                                artifact_id = f"replan-delta-{entity_id}-step-{plan.current_step}"
+                                artifact_id = (
+                                    f"replan-delta-{entity_id}-step-{plan.current_step}"
+                                )
                                 delta_data = {
                                     "entity_id": entity_id,
                                     "replanned_at_step": plan.current_step,
@@ -97,7 +104,7 @@ class ReplanningSystem:
                                 self.service.write_artifact(
                                     artifact_id, category="replanning", data=delta_data
                                 )
-                        
+
                         await world.event_bus.publish(
                             PlanRevisedEvent(
                                 entity_id=entity_id,
@@ -122,7 +129,7 @@ class ReplanningSystem:
         conversation: ConversationComponent,
     ) -> list[Message]:
         """Build the message list for the replanning LLM call."""
-        messages: list[Message] = []
+        conversation_messages: list[Message] = []
 
         # Extract original objective from first user message
         objective = ""
@@ -147,19 +154,20 @@ class ReplanningSystem:
 
         # System prompt
         system_prompt = world.get_component(entity_id, SystemPromptComponent)
-        if system_prompt is not None:
-            messages.append(Message(role="system", content=system_prompt.content))
+        prompt_config = world.get_component(entity_id, PromptConfigComponent)
+        context_pool = world.get_component(entity_id, OneShotContextPoolComponent)
+        keyword_registry = (
+            build_keyword_registry(prompt_config.keyword_templates)
+            if prompt_config is not None and prompt_config.keyword_templates
+            else None
+        )
 
         replanning_prompt = (
             "You are a planning revision agent. Review the execution so far "
             "and revise remaining steps if needed.\n\n"
             f"## Original Objective:\n{objective}\n\n"
-            f"## Completed Steps:\n"
-            + "\n".join(completed_lines)
-            + "\n\n"
-            "## Remaining Steps:\n"
-            + "\n".join(remaining_lines)
-            + "\n\n"
+            f"## Completed Steps:\n" + "\n".join(completed_lines) + "\n\n"
+            "## Remaining Steps:\n" + "\n".join(remaining_lines) + "\n\n"
             "## Instructions:\n"
             "Based on what you've learned from completed steps, revise the "
             "remaining steps if needed. You may add, remove, reorder, or "
@@ -169,8 +177,18 @@ class ReplanningSystem:
             "Do NOT include completed steps in revised_steps."
         )
 
-        messages.append(Message(role="user", content=replanning_prompt))
-        return messages
+        conversation_messages.append(Message(role="user", content=replanning_prompt))
+        return assemble_messages(
+            system_prompt=system_prompt.content if system_prompt is not None else None,
+            conversation_messages=conversation_messages,
+            enable_context_pool=(
+                prompt_config.enable_context_pool
+                if prompt_config is not None
+                else False
+            ),
+            context_pool_items=context_pool.items if context_pool is not None else None,
+            keyword_registry=keyword_registry,
+        )
 
     def _find_step_result(
         self, conversation: ConversationComponent, step_index: int

@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
+    OneShotContextPoolComponent,
     PendingToolCallsComponent,
+    PromptConfigComponent,
     SubagentRegistryComponent,
     ToolRegistryComponent,
     ToolResultsComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
+from ecs_agent.prompts.message_assembly import assemble_messages, build_keyword_registry
 from ecs_agent.task.fetching_unit import DispatchRequest
 from ecs_agent.types import CompletionResult, EntityId, Message, ToolCall
 
@@ -226,10 +228,28 @@ class TaskExecutor:
         task_message = Message(role="user", content=request.description)
         conv.messages.append(task_message)
 
+        prompt_config = world.get_component(entity_id, PromptConfigComponent)
+        context_pool = world.get_component(entity_id, OneShotContextPoolComponent)
+        keyword_registry = (
+            build_keyword_registry(prompt_config.keyword_templates)
+            if prompt_config is not None and prompt_config.keyword_templates
+            else None
+        )
+        outbound_messages = assemble_messages(
+            conversation_messages=conv.messages,
+            enable_context_pool=(
+                prompt_config.enable_context_pool
+                if prompt_config is not None
+                else False
+            ),
+            context_pool_items=context_pool.items if context_pool is not None else None,
+            keyword_registry=keyword_registry,
+        )
+
         # Execute LLM reasoning step to get tool calls
         try:
             completion_result = await llm_component.provider.complete(
-                messages=conv.messages,
+                messages=outbound_messages,
                 tools=[schema for schema in tool_registry.tools.values()],
             )
 
@@ -250,7 +270,9 @@ class TaskExecutor:
                 # Set up pending tool calls for ToolExecutionSystem
                 world.add_component(
                     entity_id,
-                    PendingToolCallsComponent(tool_calls=completion_result.message.tool_calls),
+                    PendingToolCallsComponent(
+                        tool_calls=completion_result.message.tool_calls
+                    ),
                 )
 
                 # Execute tools via handlers (inline execution, not via ToolExecutionSystem tick)
