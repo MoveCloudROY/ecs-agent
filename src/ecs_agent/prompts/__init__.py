@@ -7,6 +7,9 @@ from ecs_agent.prompts.contracts import (
     PromptTemplate,
 )
 from ecs_agent.prompts.registry import PromptRegistry
+from ecs_agent.prompts.keyword_injection import inject_keywords
+from ecs_agent.prompts.renderers import render_string, render_table
+from ecs_agent.prompts.sections import render_sections
 
 __all__ = [
     "PromptInjectionArtifact",
@@ -14,4 +17,8 @@ __all__ = [
     "PromptSectionSpec",
     "PromptTemplate",
     "PromptRegistry",
+    "inject_keywords",
+    "render_string",
+    "render_table",
+    "render_sections",
 ]
