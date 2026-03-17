@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from typing import Any
 
 from ecs_agent.logging import get_logger
@@ -18,6 +19,7 @@ from ecs_agent.components import (
     StreamingComponent,
     SystemPromptComponent,
     TerminalComponent,
+    TurnStateComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
@@ -26,6 +28,8 @@ from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.prompts.message_assembly import (
     assemble_messages,
     build_keyword_registry,
+    commit_context_pool_reservation,
+    reserve_context_pool_items,
 )
 from ecs_agent.types import (
     CompletionResult,
@@ -74,11 +78,31 @@ class ReasoningSystem:
             conversation = world.get_component(entity_id, ConversationComponent)
             prompt_config = world.get_component(entity_id, PromptConfigComponent)
             context_pool = world.get_component(entity_id, OneShotContextPoolComponent)
+            turn_state = world.get_component(entity_id, TurnStateComponent)
             keyword_registry = (
                 build_keyword_registry(prompt_config.keyword_templates)
                 if prompt_config is not None and prompt_config.keyword_templates
                 else None
             )
+
+            context_pool_enabled = (
+                prompt_config.enable_context_pool
+                if prompt_config is not None
+                else False
+            )
+            turn_id = ""
+            reserved_context_pool_items: list[tuple[int, int, str, str]] | None = None
+            if context_pool_enabled and context_pool is not None:
+                if turn_state is None:
+                    turn_state = TurnStateComponent()
+                    world.add_component(entity_id, turn_state)
+                if not turn_state.current_turn_id:
+                    turn_state.current_turn_id = uuid.uuid4().hex
+                turn_id = turn_state.current_turn_id
+                reserved_context_pool_items = reserve_context_pool_items(
+                    pool=context_pool,
+                    turn_id=turn_id,
+                )
 
             conversation_messages: list[Message] = []
 
@@ -100,14 +124,8 @@ class ReasoningSystem:
                 if system_prompt is not None
                 else None,
                 conversation_messages=conversation_messages,
-                enable_context_pool=(
-                    prompt_config.enable_context_pool
-                    if prompt_config is not None
-                    else False
-                ),
-                context_pool_items=context_pool.items
-                if context_pool is not None
-                else None,
+                enable_context_pool=context_pool_enabled,
+                context_pool_items=reserved_context_pool_items,
                 keyword_registry=keyword_registry,
             )
 
@@ -149,6 +167,12 @@ class ReasoningSystem:
                             "Provider returned stream iterator in non-streaming mode"
                         )
                     result = non_stream_result
+
+                if context_pool_enabled and context_pool is not None and turn_id:
+                    commit_context_pool_reservation(pool=context_pool, turn_id=turn_id)
+                    if turn_state is not None:
+                        turn_state.last_injected_turn_id = turn_id
+                        turn_state.current_turn_id = ""
 
                 # Append result to conversation (tree not yet supported for writing)
                 if conversation is not None:

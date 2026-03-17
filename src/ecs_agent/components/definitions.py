@@ -438,6 +438,8 @@ class OneShotContextPoolComponent:
     state: str = "idle"
     # turn id that made the current reservation
     reserved_turn_id: str = ""
+    reserved_counter_snapshot: int = -1
+    reserved_items: list[tuple[int, int, str, str]] = field(default_factory=list)
     # monotonically increasing counter for registration order
     _counter: int = field(default=0)
 
