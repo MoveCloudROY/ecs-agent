@@ -21,6 +21,7 @@ The table below summarizes the recommended priorities for each system. Priority 
 | :--- | :--- | :--- |
 | UserInputSystem | -10 | Captures async user input before reasoning. |
 | RAGSystem | -10 | Retrieves context via vector search before reasoning. |
+| PromptContextCollectorSystem | -15 | Collects tool/subagent results into the context pool. |
 | ToolApprovalSystem | -5 | Filters pending tool calls before execution. |
 | ReasoningSystem | 0 | Generates responses using an LLM. |
 | PlanningSystem | 0 | Manages step-by-step execution of a plan. |
@@ -456,6 +457,7 @@ The following code demonstrates how to register all built-in systems with their 
 from ecs_agent.core import World
 from ecs_agent.systems.user_input import UserInputSystem
 from ecs_agent.systems.rag import RAGSystem
+from ecs_agent.systems.prompt_context_collector import PromptContextCollectorSystem
 from ecs_agent.systems.tool_approval import ToolApprovalSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.planning import PlanningSystem
@@ -475,6 +477,7 @@ world = World()
 # Input and Context
 world.register_system(UserInputSystem(priority=-10), priority=-10)
 world.register_system(RAGSystem(priority=-10), priority=-10)
+world.register_system(PromptContextCollectorSystem(priority=-15), priority=-15)
 
 # Safety and Filtering
 world.register_system(ToolApprovalSystem(priority=-5), priority=-5)

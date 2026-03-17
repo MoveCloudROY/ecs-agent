@@ -189,6 +189,46 @@ if conv and conv.messages:
 - **System Lifecycle**: Operations queued until tick boundary, applied in FIFO order
 - **Model Switching**: Takes effect at next request start, sampled values stable for entire request
 - **Graceful Interruption**: CancelledError must be re-raised after partial content preservation
+## Prompt Normalization & Injection
+
+Dynamic prompt enhancement via keyword expansion and one-shot context collection.
+
+### Components
+
+- **`PromptConfigComponent`**: Opt-in configuration.
+  - `enable_context_pool: bool` — Enable automatic context collection.
+  - `keyword_templates: dict[str, str]` — Mapping of `@keyword` to template content.
+  - `context_pool_max_chars: int` — Maximum size of the context block.
+- **`OneShotContextPoolComponent`**: Transient storage for collected context items.
+
+### Behavior
+
+1. **Opt-in Only**: Behavior is only active if `PromptConfigComponent` is attached to the entity.
+2. **Injection Order**: When a user message is processed:
+   - `[PROMPT_INJECT:keyword]` marker is added if a keyword is detected.
+   - The corresponding keyword template block is injected.
+   - The context pool block (tool results, etc.) is injected.
+   - The original user text follows.
+3. **One-Shot Lifecycle**:
+   - **Reserve**: Items are reserved for the current turn ID.
+   - **Retry**: If a request fails and retries, the same reserved payload is reused.
+   - **Commit**: The pool is cleared only after a successful LLM response is received.
+4. **Transient Injection**: Injected content is sent to the provider but **not persisted** in the `ConversationComponent` history, keeping the long-term context clean.
+
+### Example
+
+```python
+from ecs_agent.components import PromptConfigComponent, OneShotContextPoolComponent
+
+world.add_component(agent, PromptConfigComponent(
+    keyword_templates={"@code": "Use PEP8 style and include docstrings."},
+    enable_context_pool=True
+))
+world.add_component(agent, OneShotContextPoolComponent())
+
+# User message: "@code Refactor this function"
+# Sent to LLM: 1) [PROMPT_INJECT:@code] 2) Template 3) Context Pool 4) User Text
+```
 
 ## See Also
 

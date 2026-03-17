@@ -101,6 +101,12 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **Priority & Retries** — Priority-based ordering and configurable retry limits for robust execution.
 - **Output Schema** — Optional JSON schema validation for task outputs.
 
+### Prompt Normalization & Injection
+- **Keyword Templates** — Define `@keyword` triggers that inject pre-defined prompt blocks into user messages.
+- **One-Shot Context Pool** — Automatically collect tool results and subagent outputs into a transient context block for the next LLM turn.
+- **Stable Injection Order** — `[PROMPT_INJECT:keyword]` marker → keyword block → context pool block → original user text.
+- **Transient Lifecycle** — Injections are provider-call only and not persisted in conversation history. Context pool clears only on successful LLM turn.
+
 ### Two-Tier Skill System
 - **Markdown Skills** — Define agent capabilities via `SKILL.md` files with YAML frontmatter. System prompts are injected automatically, and `@`-prefixed relative paths are resolved to workspace-safe paths at load time.
 - **Script Skills** — Extend markdown skills with Python tool handlers in a `scripts/` directory, executed as sandboxed subprocesses.
@@ -338,6 +344,16 @@ uv run pytest -k "streaming"
 uv run pytest -v
 ```
 ### Real-LLM Integration Test
+
+To verify the integration with a real LLM (e.g., DashScope), run the following command. It uses environment variables to avoid exposing API keys and skips gracefully if `LLM_API_KEY` is not set:
+
+```bash
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
+  LLM_MODEL=qwen3.5-flash \
+  LLM_API_KEY="$LLM_API_KEY" \
+  uv run pytest tests/test_real_llm_integration.py -k "prompt" -v
+```
+
 
 To verify the integration with a real LLM (e.g., DashScope), run the following command. It uses environment variables to avoid exposing API keys and skips gracefully if `LLM_API_KEY` is not set:
 

@@ -659,3 +659,20 @@ from ecs_agent.components import ScratchbookIndexComponent
 
 world.add_component(agent, ScratchbookIndexComponent(artifacts={}))
 ```
+### PromptConfigComponent
+Configures opt-in prompt normalization and keyword injection.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `enable_context_pool` | `bool` | `False` | Enable one-shot context collection |
+| `keyword_templates` | `dict[str, str]` | `{}` | Mapping of `@keyword` to template content |
+| `context_pool_max_chars` | `int` | `4000` | Maximum characters for context block |
+
+### OneShotContextPoolComponent
+Transient storage for context items (tool results, subagent outputs) to be injected into the next turn.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `items` | `list` | `[]` | Collected context items |
+| `state` | `str` | `"idle"` | Reservation state (`idle`, `reserved`, `committed`) |
+

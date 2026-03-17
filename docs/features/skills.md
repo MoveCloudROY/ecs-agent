@@ -120,6 +120,9 @@ path = skill.resolve_supporting_path("data/config.json")
 path = skill.resolve_supporting_path("../../../etc/passwd")
 ```
 
+### Keyword Templates
+Skills can define keyword templates that are automatically registered if the agent has a `PromptConfigComponent`. These keywords (e.g., `@help`) trigger the injection of specific prompt blocks when detected in user messages.
+
 ## Script Skills (Advanced)
 
 Script Skills are Python classes that implement the `ScriptSkill` protocol. Use these when you need complex tool handlers, precise schema definitions, or custom installation logic.

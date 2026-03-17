@@ -9,6 +9,8 @@ The `BuiltinToolsSkill` includes four primary tools:
 -   `write_file`: Create or overwrite files.
 -   `edit_file`: Perform precise, hash-anchored line edits.
 -   `bash`: Execute shell commands in a sandboxed-ready environment.
+Tool results from `BuiltinToolsSkill` are automatically collected into the **One-Shot Context Pool** if enabled, providing immediate context for the next reasoning turn without polluting the permanent conversation history.
+
 
 ## Installation
 
