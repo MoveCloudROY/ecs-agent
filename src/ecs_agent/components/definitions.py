@@ -400,3 +400,51 @@ class SubagentSessionTableComponent:
     """Table of active and recent subagent sessions."""
 
     sessions: dict[str, "SubagentSessionRecord"] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Prompt normalization components (Task-1)
+# ---------------------------------------------------------------------------
+
+from ecs_agent.prompts.contracts import PromptSectionSpec  # noqa: E402
+
+
+@dataclass(slots=True)
+class PromptConfigComponent:
+    """Opts an entity into the prompt normalization pipeline."""
+
+    # keyword -> template_id mapping for stage-1 injection
+    keyword_templates: dict[str, str] = field(default_factory=dict)
+    # whether to enable stage-2 context pool injection
+    enable_context_pool: bool = False
+    # max characters for context pool rendering (overflow = drop lowest priority)
+    context_pool_max_chars: int = 8192
+
+
+@dataclass(slots=True)
+class PromptContributionsComponent:
+    """Holds pending named sections to be assembled into system prompt."""
+
+    sections: list[PromptSectionSpec] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class OneShotContextPoolComponent:
+    """Session-scoped one-shot context injection pool."""
+
+    # items: list of (priority, registration_order, source_label, content)
+    items: list[tuple[int, int, str, str]] = field(default_factory=list)
+    # reservation state: "idle" | "reserved" | "committed"
+    state: str = "idle"
+    # turn id that made the current reservation
+    reserved_turn_id: str = ""
+    # monotonically increasing counter for registration order
+    _counter: int = field(default=0)
+
+
+@dataclass(slots=True)
+class TurnStateComponent:
+    """Tracks per-turn ID for idempotency and injection dedup."""
+
+    current_turn_id: str = ""
+    last_injected_turn_id: str = ""
