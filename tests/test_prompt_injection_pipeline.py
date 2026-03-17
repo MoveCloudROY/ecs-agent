@@ -13,8 +13,15 @@ from ecs_agent.prompts.message_assembly import (
     reserve_context_pool_items,
 )
 from ecs_agent.providers import FakeProvider
+from ecs_agent.systems.prompt_context_collector import PromptContextCollectorSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
-from ecs_agent.types import CompletionResult, Message, ToolSchema
+from ecs_agent.types import (
+    CompletionResult,
+    DelegationCompletedEvent,
+    Message,
+    ToolExecutionCompletedEvent,
+    ToolSchema,
+)
 
 
 class FlakyRecordingProvider(FakeProvider):
@@ -37,6 +44,25 @@ class FlakyRecordingProvider(FakeProvider):
         self._attempt += 1
         if self._attempt == 1:
             raise RuntimeError("provider exploded")
+        return await super().complete(messages, tools)
+
+
+class RecordingProvider(FakeProvider):
+    def __init__(self) -> None:
+        super().__init__(
+            responses=[
+                CompletionResult(message=Message(role="assistant", content="ok")),
+            ]
+        )
+        self.calls: list[list[Message]] = []
+
+    async def complete(
+        self,
+        messages: list[Message],
+        tools: list[ToolSchema] | None = None,
+    ) -> CompletionResult:
+        _ = tools
+        self.calls.append(list(messages))
         return await super().complete(messages, tools)
 
 
@@ -83,9 +109,17 @@ async def test_retry_uses_reserved_payload_then_commit_clears_once_on_success() 
     world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
     world.add_component(
         entity_id,
-        ConversationComponent(messages=[Message(role="user", content="Need summary")]),
+        ConversationComponent(
+            messages=[Message(role="user", content="@code Need summary")]
+        ),
     )
-    world.add_component(entity_id, PromptConfigComponent(enable_context_pool=True))
+    world.add_component(
+        entity_id,
+        PromptConfigComponent(
+            keyword_templates={"@code": "Use code-first reasoning"},
+            enable_context_pool=True,
+        ),
+    )
     world.add_component(
         entity_id,
         OneShotContextPoolComponent(
@@ -110,7 +144,116 @@ async def test_retry_uses_reserved_payload_then_commit_clears_once_on_success() 
     first_user = provider.calls[0][-1].content
     second_user = provider.calls[1][-1].content
     assert first_user == second_user
+    assert first_user.startswith("[PROMPT_INJECT:@code]\nUse code-first reasoning")
+    assert "[PROMPT_CONTEXT_POOL]" in first_user
+    assert first_user.endswith("@code Need summary")
+    assert first_user.index("source: tool") < first_user.index("@code Need summary")
     assert "source: subagent" not in second_user
 
     assert pool.items == []
     assert pool.state == "committed"
+
+
+@pytest.mark.asyncio
+async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() -> None:
+    world = World()
+    provider = RecordingProvider()
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[Message(role="user", content="Please @code summarize findings")]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        PromptConfigComponent(
+            keyword_templates={"@code": "Use code-first reasoning"},
+            enable_context_pool=True,
+            context_pool_max_chars=10000,
+        ),
+    )
+    world.add_component(entity_id, OneShotContextPoolComponent())
+    world.add_component(entity_id, TurnStateComponent(current_turn_id="turn-ctx-1"))
+
+    collector = PromptContextCollectorSystem()
+    await collector.process(world)
+    await world.event_bus.publish(
+        ToolExecutionCompletedEvent(
+            entity_id=entity_id,
+            tool_call_id="tool-1",
+            result="tool facts",
+            success=True,
+        )
+    )
+    await world.event_bus.publish(
+        DelegationCompletedEvent(
+            entity_id=entity_id,
+            subagent_name="researcher",
+            result="subagent synthesis",
+            success=True,
+        )
+    )
+    await collector.process(world)
+
+    await ReasoningSystem().process(world)
+
+    sent_user = provider.calls[0][-1].content
+    assert sent_user.startswith("[PROMPT_INJECT:@code]\nUse code-first reasoning")
+    assert sent_user.index("Use code-first reasoning") < sent_user.index(
+        "[PROMPT_CONTEXT_POOL]"
+    )
+    assert sent_user.index("source: tool:tool-1") < sent_user.index(
+        "source: subagent:researcher"
+    )
+    assert sent_user.endswith("Please @code summarize findings")
+
+    pool = world.get_component(entity_id, OneShotContextPoolComponent)
+    assert pool is not None
+    assert pool.state == "committed"
+    assert pool.items == []
+
+    turn_state = world.get_component(entity_id, TurnStateComponent)
+    assert turn_state is not None
+    assert turn_state.last_injected_turn_id == "turn-ctx-1"
+    assert turn_state.current_turn_id == ""
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages[0].content == "Please @code summarize findings"
+
+
+@pytest.mark.asyncio
+async def test_non_opt_in_reasoning_path_leaves_user_prompt_and_pool_unchanged() -> (
+    None
+):
+    world = World()
+    provider = RecordingProvider()
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[Message(role="user", content="Please @code summarize findings")]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        OneShotContextPoolComponent(
+            items=[(30, 0, "tool:seed", "source: tool\nresult: keep")],
+            state="idle",
+        ),
+    )
+
+    await ReasoningSystem().process(world)
+
+    sent_user = provider.calls[0][-1].content
+    assert sent_user == "Please @code summarize findings"
+    assert "[PROMPT_INJECT:" not in sent_user
+    assert "[PROMPT_CONTEXT_POOL]" not in sent_user
+
+    pool = world.get_component(entity_id, OneShotContextPoolComponent)
+    assert pool is not None
+    assert pool.state == "idle"
+    assert len(pool.items) == 1

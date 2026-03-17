@@ -157,3 +157,37 @@ async def test_collector_does_not_clear_pool_state_or_items() -> None:
     assert pool.state == "reserved"
     assert pool.reserved_turn_id == "turn-123"
     assert original_item in pool.items
+
+
+@pytest.mark.asyncio
+async def test_collector_non_opt_in_entity_is_unchanged() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    original_item = (1, 0, "baseline", "keep-me")
+    world.add_component(
+        entity_id,
+        PromptConfigComponent(enable_context_pool=False, context_pool_max_chars=10000),
+    )
+    world.add_component(
+        entity_id,
+        OneShotContextPoolComponent(items=[original_item], _counter=1),
+    )
+
+    system = PromptContextCollectorSystem(
+        now_provider=lambda: datetime(2026, 3, 18, 0, 0, 0, tzinfo=timezone.utc)
+    )
+    await system.process(world)
+    await world.event_bus.publish(
+        ToolExecutionCompletedEvent(
+            entity_id=entity_id,
+            tool_call_id="tool-1",
+            result="ignored",
+            success=True,
+        )
+    )
+    await system.process(world)
+
+    pool = world.get_component(entity_id, OneShotContextPoolComponent)
+    assert pool is not None
+    assert pool.items == [original_item]
+    assert pool._counter == 1
