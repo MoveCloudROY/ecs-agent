@@ -10,6 +10,7 @@ from ecs_agent.components import (
     OneShotContextPoolComponent,
     PromptConfigComponent,
     SubagentRegistryComponent,
+    TurnStateComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
@@ -18,7 +19,6 @@ from ecs_agent.task.executor import ExecutionResult, TaskExecutor
 from ecs_agent.task.fetching_unit import DispatchRequest
 from ecs_agent.types import (
     CompletionResult,
-    InheritancePolicy,
     Message,
     SubagentConfig,
     ToolCall,
@@ -37,6 +37,28 @@ class RecordingFakeProvider(FakeProvider):
         tools: list[object] | None = None,
     ) -> CompletionResult:
         self.calls.append(list(messages))
+        return await super().complete(messages, tools=tools)
+
+
+class FlakyRecordingProvider(FakeProvider):
+    def __init__(self) -> None:
+        super().__init__(
+            responses=[
+                CompletionResult(message=Message(role="assistant", content="Local OK"))
+            ]
+        )
+        self.calls: list[list[Message]] = []
+        self._attempt = 0
+
+    async def complete(
+        self,
+        messages: list[Message],
+        tools: list[object] | None = None,
+    ) -> CompletionResult:
+        self.calls.append(list(messages))
+        self._attempt += 1
+        if self._attempt == 1:
+            raise RuntimeError("provider exploded")
         return await super().complete(messages, tools=tools)
 
 
@@ -516,3 +538,63 @@ async def test_local_backend_prompt_context_injection_is_transient() -> None:
     conversation = world.get_component(agent, ConversationComponent)
     assert conversation is not None
     assert conversation.messages[0].content == "Do local work"
+
+
+@pytest.mark.asyncio
+async def test_local_backend_retry_reuses_reserved_context_then_commits_on_success() -> (
+    None
+):
+    world = World()
+    executor = TaskExecutor()
+    agent = world.create_entity()
+
+    provider = FlakyRecordingProvider()
+    world.add_component(
+        agent,
+        LLMComponent(provider=provider, model="fake", system_prompt=""),
+    )
+    world.add_component(agent, ConversationComponent(messages=[]))
+    world.add_component(agent, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(agent, PromptConfigComponent(enable_context_pool=True))
+    world.add_component(
+        agent,
+        OneShotContextPoolComponent(
+            items=[(30, 0, "tool:search", "source: tool\nresult: local facts")],
+            _counter=1,
+        ),
+    )
+    world.add_component(agent, TurnStateComponent(current_turn_id="turn-1"))
+
+    request = DispatchRequest(
+        task_id="local-context-retry",
+        wave_number=0,
+        sequence_number=0,
+        description="Do local work",
+        expected_output="Output",
+        assigned_agent=None,
+        tools=tuple(),
+        context_dependencies=tuple(),
+        priority=0,
+    )
+
+    first = await executor.execute_dispatch_request(world, agent, request)
+    assert first.success is False
+
+    pool = world.get_component(agent, OneShotContextPoolComponent)
+    assert pool is not None
+    assert pool.state == "reserved"
+    assert pool.items != []
+
+    pool.items.append((20, 1, "subagent:writer", "source: subagent\nresult: draft"))
+    pool._counter += 1
+
+    second = await executor.execute_dispatch_request(world, agent, request)
+    assert second.success is True
+
+    first_user = provider.calls[0][-1].content
+    second_user = provider.calls[1][-1].content
+    assert first_user == second_user
+    assert "source: subagent" not in second_user
+
+    assert pool.items == []
+    assert pool.state == "committed"

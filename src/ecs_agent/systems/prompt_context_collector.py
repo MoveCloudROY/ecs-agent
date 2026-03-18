@@ -17,9 +17,12 @@ from ecs_agent.types import (
 )
 
 CONTEXT_ENTRY_DELIMITER = "\n\n---\n\n"
+CONTEXT_POOL_OVERFLOW_SOURCE = "context_pool:overflow"
+CONTEXT_POOL_OVERFLOW_FOOTER_PREFIX = "context_pool_overflow"
 TOOL_CONTEXT_PRIORITY = 30
 SUBAGENT_CONTEXT_PRIORITY = 20
 STRUCTURED_OUTPUT_CONTEXT_PRIORITY = 10
+OVERFLOW_FOOTER_PRIORITY = -1
 
 
 class PromptContextCollectorSystem:
@@ -54,7 +57,14 @@ class PromptContextCollectorSystem:
                 pool.items.append((priority, pool._counter, source, content))
                 pool._counter += 1
 
-            sorted_items = sorted(pool.items, key=lambda item: (-item[0], item[1]))
+            sorted_items = sorted(
+                [
+                    item
+                    for item in pool.items
+                    if item[2] != CONTEXT_POOL_OVERFLOW_SOURCE
+                ],
+                key=lambda item: (-item[0], item[1]),
+            )
             pool.items = self._truncate(sorted_items, config.context_pool_max_chars)
 
     def _ensure_subscribed(self, world: World) -> None:
@@ -159,9 +169,32 @@ class PromptContextCollectorSystem:
             return []
 
         kept = list(items)
+        dropped_count = 0
         while kept and self._rendered_length(kept) > max_chars:
             kept.pop()
-        return kept
+            dropped_count += 1
+
+        if dropped_count == 0:
+            return kept
+
+        while True:
+            footer = self._overflow_footer(dropped_count)
+            footer_item = (
+                OVERFLOW_FOOTER_PRIORITY,
+                0,
+                CONTEXT_POOL_OVERFLOW_SOURCE,
+                footer,
+            )
+            with_footer = [*kept, footer_item]
+            if self._rendered_length(with_footer) <= max_chars:
+                return with_footer
+            if not kept:
+                return []
+            kept.pop()
+            dropped_count += 1
+
+    def _overflow_footer(self, dropped_count: int) -> str:
+        return f"{CONTEXT_POOL_OVERFLOW_FOOTER_PREFIX} dropped_entries={dropped_count}"
 
     def _rendered_length(self, items: list[tuple[int, int, str, str]]) -> int:
         if not items:
@@ -173,6 +206,9 @@ class PromptContextCollectorSystem:
 
 __all__ = [
     "CONTEXT_ENTRY_DELIMITER",
+    "CONTEXT_POOL_OVERFLOW_FOOTER_PREFIX",
+    "CONTEXT_POOL_OVERFLOW_SOURCE",
+    "OVERFLOW_FOOTER_PRIORITY",
     "PromptContextCollectorSystem",
     "STRUCTURED_OUTPUT_CONTEXT_PRIORITY",
     "SUBAGENT_CONTEXT_PRIORITY",

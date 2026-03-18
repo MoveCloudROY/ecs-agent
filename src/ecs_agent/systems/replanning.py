@@ -7,6 +7,7 @@ execution results and revise remaining steps if needed.
 from __future__ import annotations
 
 import json
+import uuid
 
 from ecs_agent.components import (
     ConversationComponent,
@@ -16,9 +17,15 @@ from ecs_agent.components import (
     PromptConfigComponent,
     ScratchbookIndexComponent,
     SystemPromptComponent,
+    TurnStateComponent,
 )
 from ecs_agent.core.world import World
-from ecs_agent.prompts.message_assembly import assemble_messages, build_keyword_registry
+from ecs_agent.prompts.message_assembly import (
+    assemble_messages,
+    build_keyword_registry,
+    commit_context_pool_reservation,
+    reserve_context_pool_items,
+)
 from ecs_agent.scratchbook import ScratchbookService
 from ecs_agent.types import CompletionResult, EntityId, Message, PlanRevisedEvent
 
@@ -69,8 +76,35 @@ class ReplanningSystem:
                 continue
 
             # Build replanning prompt
+            prompt_config = world.get_component(entity_id, PromptConfigComponent)
+            context_pool = world.get_component(entity_id, OneShotContextPoolComponent)
+            turn_state = world.get_component(entity_id, TurnStateComponent)
+            context_pool_enabled = (
+                prompt_config.enable_context_pool
+                if prompt_config is not None
+                else False
+            )
+            turn_id = ""
+            reserved_context_pool_items: list[tuple[int, int, str, str]] | None = None
+            if context_pool_enabled and context_pool is not None:
+                if turn_state is None:
+                    turn_state = TurnStateComponent()
+                    world.add_component(entity_id, turn_state)
+                if not turn_state.current_turn_id:
+                    turn_state.current_turn_id = uuid.uuid4().hex
+                turn_id = turn_state.current_turn_id
+                reserved_context_pool_items = reserve_context_pool_items(
+                    pool=context_pool,
+                    turn_id=turn_id,
+                )
             messages = self._build_replanning_messages(
-                world, entity_id, plan, conversation
+                world,
+                entity_id,
+                plan,
+                conversation,
+                prompt_config=prompt_config,
+                context_pool_enabled=context_pool_enabled,
+                context_pool_items=reserved_context_pool_items,
             )
 
             try:
@@ -79,6 +113,11 @@ class ReplanningSystem:
                     raise RuntimeError(
                         "Provider returned stream iterator in non-streaming mode"
                     )
+                if context_pool_enabled and context_pool is not None and turn_id:
+                    commit_context_pool_reservation(pool=context_pool, turn_id=turn_id)
+                    if turn_state is not None:
+                        turn_state.last_injected_turn_id = turn_id
+                        turn_state.current_turn_id = ""
                 revised = self._parse_revised_steps(result.message.content)
 
                 if revised is not None:
@@ -118,8 +157,7 @@ class ReplanningSystem:
                 # Provider exhausted — skip replanning silently
                 self._last_replanned[entity_id] = plan.current_step
             except Exception:
-                # Replanning failure is non-fatal — keep existing plan
-                self._last_replanned[entity_id] = plan.current_step
+                continue
 
     def _build_replanning_messages(
         self,
@@ -127,6 +165,10 @@ class ReplanningSystem:
         entity_id: EntityId,
         plan: PlanComponent,
         conversation: ConversationComponent,
+        *,
+        prompt_config: PromptConfigComponent | None,
+        context_pool_enabled: bool,
+        context_pool_items: list[tuple[int, int, str, str]] | None,
     ) -> list[Message]:
         """Build the message list for the replanning LLM call."""
         conversation_messages: list[Message] = []
@@ -154,8 +196,6 @@ class ReplanningSystem:
 
         # System prompt
         system_prompt = world.get_component(entity_id, SystemPromptComponent)
-        prompt_config = world.get_component(entity_id, PromptConfigComponent)
-        context_pool = world.get_component(entity_id, OneShotContextPoolComponent)
         keyword_registry = (
             build_keyword_registry(prompt_config.keyword_templates)
             if prompt_config is not None and prompt_config.keyword_templates
@@ -181,12 +221,8 @@ class ReplanningSystem:
         return assemble_messages(
             system_prompt=system_prompt.content if system_prompt is not None else None,
             conversation_messages=conversation_messages,
-            enable_context_pool=(
-                prompt_config.enable_context_pool
-                if prompt_config is not None
-                else False
-            ),
-            context_pool_items=context_pool.items if context_pool is not None else None,
+            enable_context_pool=context_pool_enabled,
+            context_pool_items=context_pool_items,
             keyword_registry=keyword_registry,
         )
 

@@ -5,6 +5,7 @@ from ecs_agent.components import (
     LLMComponent,
     OneShotContextPoolComponent,
     PromptConfigComponent,
+    ToolResultsComponent,
     TurnStateComponent,
 )
 from ecs_agent.core import World
@@ -13,7 +14,11 @@ from ecs_agent.prompts.message_assembly import (
     reserve_context_pool_items,
 )
 from ecs_agent.providers import FakeProvider
-from ecs_agent.systems.prompt_context_collector import PromptContextCollectorSystem
+from ecs_agent.systems.prompt_context_collector import (
+    CONTEXT_ENTRY_DELIMITER,
+    CONTEXT_POOL_OVERFLOW_FOOTER_PREFIX,
+    PromptContextCollectorSystem,
+)
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import (
     CompletionResult,
@@ -257,3 +262,55 @@ async def test_non_opt_in_reasoning_path_leaves_user_prompt_and_pool_unchanged()
     assert pool is not None
     assert pool.state == "idle"
     assert len(pool.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_overflow_footer_is_injected_when_context_pool_entries_are_dropped() -> (
+    None
+):
+    world = World()
+    provider = RecordingProvider()
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Need summary")]),
+    )
+    keep_entry = "source: tool:keep\nresult: keep"
+    footer = f"{CONTEXT_POOL_OVERFLOW_FOOTER_PREFIX} dropped_entries=2"
+    max_chars = len(keep_entry) + len(CONTEXT_ENTRY_DELIMITER) + len(footer)
+    world.add_component(
+        entity_id,
+        PromptConfigComponent(
+            enable_context_pool=True,
+            context_pool_max_chars=max_chars,
+        ),
+    )
+    world.add_component(
+        entity_id,
+        OneShotContextPoolComponent(
+            items=[
+                (30, 0, "tool:keep", keep_entry),
+                (20, 1, "subagent:drop", "source: subagent:drop\nresult: drop"),
+            ],
+            _counter=2,
+        ),
+    )
+    world.add_component(
+        entity_id, ToolResultsComponent(results={"result-1": "drop-me"})
+    )
+    world.add_component(
+        entity_id, TurnStateComponent(current_turn_id="turn-overflow-1")
+    )
+
+    collector = PromptContextCollectorSystem()
+    await collector.process(world)
+    await ReasoningSystem().process(world)
+
+    sent_user = provider.calls[0][-1].content
+    assert "[PROMPT_CONTEXT_POOL]" in sent_user
+    assert "source: tool:keep" in sent_user
+    assert "source: subagent:drop" not in sent_user
+    assert "structured_output:result-1" not in sent_user
+    assert footer in sent_user
+    assert sent_user.endswith("Need summary")

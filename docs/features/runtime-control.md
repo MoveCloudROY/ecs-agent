@@ -213,7 +213,7 @@ Dynamic prompt enhancement via keyword expansion and one-shot context collection
    - **Reserve**: Items are reserved for the current turn ID.
    - **Retry**: If a request fails and retries, the same reserved payload is reused.
    - **Commit**: The pool is cleared only after a successful LLM response is received.
-4. **Transient Injection**: Injected content is sent to the provider but **not persisted** in the `ConversationComponent` history, keeping the long-term context clean.
+4. **Transient Injection**: Injected content is sent to the provider but **does not mutate stored conversation history**, keeping the long-term context clean.
 
 ### Example
 

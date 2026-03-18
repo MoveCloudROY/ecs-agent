@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 
 from ecs_agent.components import (
     ConversationComponent,
@@ -13,11 +14,17 @@ from ecs_agent.components import (
     ScratchbookIndexComponent,
     SystemPromptComponent,
     TerminalComponent,
+    TurnStateComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
-from ecs_agent.prompts.message_assembly import assemble_messages, build_keyword_registry
+from ecs_agent.prompts.message_assembly import (
+    assemble_messages,
+    build_keyword_registry,
+    commit_context_pool_reservation,
+    reserve_context_pool_items,
+)
 from ecs_agent.scratchbook import ScratchbookService
 from ecs_agent.types import CompletionResult, Message, PlanStepCompletedEvent
 
@@ -56,25 +63,38 @@ class PlanningSystem:
             system_prompt = world.get_component(entity_id, SystemPromptComponent)
             prompt_config = world.get_component(entity_id, PromptConfigComponent)
             context_pool = world.get_component(entity_id, OneShotContextPoolComponent)
+            turn_state = world.get_component(entity_id, TurnStateComponent)
             keyword_registry = (
                 build_keyword_registry(prompt_config.keyword_templates)
                 if prompt_config is not None and prompt_config.keyword_templates
                 else None
             )
+            context_pool_enabled = (
+                prompt_config.enable_context_pool
+                if prompt_config is not None
+                else False
+            )
+            turn_id = ""
+            reserved_context_pool_items: list[tuple[int, int, str, str]] | None = None
+            if context_pool_enabled and context_pool is not None:
+                if turn_state is None:
+                    turn_state = TurnStateComponent()
+                    world.add_component(entity_id, turn_state)
+                if not turn_state.current_turn_id:
+                    turn_state.current_turn_id = uuid.uuid4().hex
+                turn_id = turn_state.current_turn_id
+                reserved_context_pool_items = reserve_context_pool_items(
+                    pool=context_pool,
+                    turn_id=turn_id,
+                )
             messages = assemble_messages(
                 system_prompt=system_prompt.content
                 if system_prompt is not None
                 else None,
                 prefix_messages=[plan_context],
                 conversation_messages=conversation.messages,
-                enable_context_pool=(
-                    prompt_config.enable_context_pool
-                    if prompt_config is not None
-                    else False
-                ),
-                context_pool_items=context_pool.items
-                if context_pool is not None
-                else None,
+                enable_context_pool=context_pool_enabled,
+                context_pool_items=reserved_context_pool_items,
                 keyword_registry=keyword_registry,
             )
 
@@ -89,6 +109,11 @@ class PlanningSystem:
                     raise RuntimeError(
                         "Provider returned stream iterator in non-streaming mode"
                     )
+                if context_pool_enabled and context_pool is not None and turn_id:
+                    commit_context_pool_reservation(pool=context_pool, turn_id=turn_id)
+                    if turn_state is not None:
+                        turn_state.last_injected_turn_id = turn_id
+                        turn_state.current_turn_id = ""
                 # Add the step description to the conversation history
                 conversation.messages.append(result.message)
                 if result.message.tool_calls:

@@ -413,7 +413,7 @@ from ecs_agent.prompts.contracts import PromptSectionSpec  # noqa: E402
 class PromptConfigComponent:
     """Opts an entity into the prompt normalization pipeline."""
 
-    # keyword -> template_id mapping for stage-1 injection
+    # keyword -> template content mapping for stage-1 injection
     keyword_templates: dict[str, str] = field(default_factory=dict)
     # whether to enable stage-2 context pool injection
     enable_context_pool: bool = False

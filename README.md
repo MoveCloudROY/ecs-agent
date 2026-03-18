@@ -355,16 +355,6 @@ LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
 ```
 
 
-To verify the integration with a real LLM (e.g., DashScope), run the following command. It uses environment variables to avoid exposing API keys and skips gracefully if `LLM_API_KEY` is not set:
-
-```bash
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
-  LLM_MODEL=qwen3.5-flash \
-  LLM_API_KEY="$LLM_API_KEY" \
-  uv run pytest tests/test_real_llm_integration.py -v
-```
-
-
 ### Type Checking
 
 ```bash

@@ -8,6 +8,7 @@ from ecs_agent.components import (
     OneShotContextPoolComponent,
     PlanComponent,
     PromptConfigComponent,
+    TurnStateComponent,
 )
 from ecs_agent.core import World
 from ecs_agent.providers import FakeProvider
@@ -29,6 +30,33 @@ class RecordingFakeProvider(FakeProvider):
     ) -> CompletionResult:
         _ = tools
         self.calls.append(list(messages))
+        return await super().complete(messages, tools=None)
+
+
+class FlakyRecordingProvider(FakeProvider):
+    def __init__(self) -> None:
+        super().__init__(
+            responses=[
+                CompletionResult(
+                    message=Message(
+                        role="assistant", content='{"revised_steps": ["step 2"]}'
+                    )
+                )
+            ]
+        )
+        self.calls: list[list[Message]] = []
+        self._attempt = 0
+
+    async def complete(
+        self,
+        messages: list[Message],
+        tools: list[object] | None = None,
+    ) -> CompletionResult:
+        _ = tools
+        self.calls.append(list(messages))
+        self._attempt += 1
+        if self._attempt == 1:
+            raise RuntimeError("provider exploded")
         return await super().complete(messages, tools=None)
 
 
@@ -328,3 +356,46 @@ async def test_prompt_context_injection_is_transient_for_replanning_provider_cal
     conversation = world.get_component(entity_id, ConversationComponent)
     assert conversation is not None
     assert conversation.messages[0].content == "objective"
+
+
+async def test_replanning_retry_reuses_reserved_context_then_commits_on_success() -> (
+    None
+):
+    world = World()
+    provider = FlakyRecordingProvider()
+    entity_id = _create_entity(
+        world,
+        provider,
+        steps=["step 1", "step 2"],
+        current_step=1,
+    )
+    world.add_component(entity_id, PromptConfigComponent(enable_context_pool=True))
+    world.add_component(
+        entity_id,
+        OneShotContextPoolComponent(
+            items=[(30, 0, "tool:search", "source: tool\nresult: citations")],
+            _counter=1,
+        ),
+    )
+    world.add_component(entity_id, TurnStateComponent(current_turn_id="turn-1"))
+
+    system = ReplanningSystem()
+    await system.process(world)
+
+    pool = world.get_component(entity_id, OneShotContextPoolComponent)
+    assert pool is not None
+    assert pool.state == "reserved"
+    assert pool.items != []
+
+    pool.items.append((20, 1, "subagent:writer", "source: subagent\nresult: draft"))
+    pool._counter += 1
+
+    await system.process(world)
+
+    first_user = provider.calls[0][-1].content
+    second_user = provider.calls[1][-1].content
+    assert first_user == second_user
+    assert "source: subagent" not in second_user
+
+    assert pool.items == []
+    assert pool.state == "committed"

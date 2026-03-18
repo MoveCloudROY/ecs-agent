@@ -666,7 +666,7 @@ Configures opt-in prompt normalization and keyword injection.
 | :--- | :--- | :--- | :--- |
 | `enable_context_pool` | `bool` | `False` | Enable one-shot context collection |
 | `keyword_templates` | `dict[str, str]` | `{}` | Mapping of `@keyword` to template content |
-| `context_pool_max_chars` | `int` | `4000` | Maximum characters for context block |
+| context_pool_max_chars | int | 8192 | Maximum characters for context block |
 
 ### OneShotContextPoolComponent
 Transient storage for context items (tool results, subagent outputs) to be injected into the next turn.

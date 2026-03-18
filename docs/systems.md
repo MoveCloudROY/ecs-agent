@@ -21,7 +21,7 @@ The table below summarizes the recommended priorities for each system. Priority 
 | :--- | :--- | :--- |
 | UserInputSystem | -10 | Captures async user input before reasoning. |
 | RAGSystem | -10 | Retrieves context via vector search before reasoning. |
-| PromptContextCollectorSystem | -15 | Collects tool/subagent results into the context pool. |
+#SK|| PromptContextCollectorSystem | 0 | Collects tool/subagent results into the context pool. |
 | ToolApprovalSystem | -5 | Filters pending tool calls before execution. |
 | ReasoningSystem | 0 | Generates responses using an LLM. |
 | PlanningSystem | 0 | Manages step-by-step execution of a plan. |
@@ -477,7 +477,7 @@ world = World()
 # Input and Context
 world.register_system(UserInputSystem(priority=-10), priority=-10)
 world.register_system(RAGSystem(priority=-10), priority=-10)
-world.register_system(PromptContextCollectorSystem(priority=-15), priority=-15)
+#BH|world.register_system(PromptContextCollectorSystem(priority=0), priority=0)
 
 # Safety and Filtering
 world.register_system(ToolApprovalSystem(priority=-5), priority=-5)
