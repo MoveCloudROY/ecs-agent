@@ -166,7 +166,7 @@ class MessageBusResponseEvent:
 class MessageBusTimeoutEvent:
     entity_id: EntityId
     correlation_id: str
-```
+
 @dataclass(slots=True)
 class PlanStepCompletedEvent:
     entity_id: EntityId
@@ -241,6 +241,7 @@ class RAGRetrievalCompletedEvent:
 class UserInputRequestedEvent:
     entity_id: EntityId
     prompt: str
+```
 
 ---
 
