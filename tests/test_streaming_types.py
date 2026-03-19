@@ -1,11 +1,12 @@
 """Tests for streaming event types."""
 
-import pytest
-
 from ecs_agent.types import (
+    StreamContentStartEvent,
     EntityId,
     StreamStartEvent,
-    StreamDeltaEvent,
+    StreamContentDeltaEvent,
+    StreamReasoningDeltaEvent,
+    StreamReasoningEndEvent,
     StreamEndEvent,
     CheckpointCreatedEvent,
     CheckpointRestoredEvent,
@@ -29,20 +30,42 @@ def test_stream_start_event_has_entity_id_first() -> None:
     assert event.entity_id == EntityId(42)
 
 
-def test_stream_delta_event_instantiation() -> None:
-    """Test StreamDeltaEvent can be instantiated with required fields."""
+def test_stream_content_delta_event_instantiation() -> None:
+    """Test StreamContentDeltaEvent can be instantiated with required fields."""
     entity_id = EntityId(2)
     delta = "Hello, world!"
-    event = StreamDeltaEvent(entity_id=entity_id, delta=delta)
+    event = StreamContentDeltaEvent(entity_id=entity_id, delta=delta)
 
     assert event.entity_id == entity_id
     assert event.delta == delta
 
 
-def test_stream_delta_event_has_entity_id_first() -> None:
-    """Test StreamDeltaEvent has entity_id as first field."""
-    event = StreamDeltaEvent(entity_id=EntityId(99), delta="test")
+def test_stream_content_delta_event_has_entity_id_first() -> None:
+    """Test StreamContentDeltaEvent has entity_id as first field."""
+    event = StreamContentDeltaEvent(entity_id=EntityId(99), delta="test")
     assert event.entity_id == EntityId(99)
+
+
+def test_stream_reasoning_delta_event_instantiation() -> None:
+    entity_id = EntityId(20)
+    event = StreamReasoningDeltaEvent(entity_id=entity_id, reasoning_delta="thinking")
+
+    assert event.entity_id == entity_id
+    assert event.reasoning_delta == "thinking"
+
+
+def test_stream_reasoning_end_event_instantiation() -> None:
+    entity_id = EntityId(21)
+    event = StreamReasoningEndEvent(entity_id=entity_id)
+
+    assert event.entity_id == entity_id
+
+
+def test_stream_content_start_event_instantiation() -> None:
+    entity_id = EntityId(22)
+    event = StreamContentStartEvent(entity_id=entity_id)
+
+    assert event.entity_id == entity_id
 
 
 def test_stream_end_event_instantiation() -> None:
@@ -132,7 +155,12 @@ def test_compaction_complete_event_has_entity_id_first() -> None:
 def test_stream_events_are_dataclasses() -> None:
     """Test that all stream events are proper dataclasses."""
     stream_start = StreamStartEvent(entity_id=EntityId(1), timestamp=100.0)
-    stream_delta = StreamDeltaEvent(entity_id=EntityId(2), delta="x")
+    stream_delta = StreamContentDeltaEvent(entity_id=EntityId(2), delta="x")
+    stream_reasoning_delta = StreamReasoningDeltaEvent(
+        entity_id=EntityId(12), reasoning_delta="thought"
+    )
+    stream_reasoning_end = StreamReasoningEndEvent(entity_id=EntityId(13))
+    stream_content_start = StreamContentStartEvent(entity_id=EntityId(14))
     stream_end = StreamEndEvent(entity_id=EntityId(3), timestamp=200.0)
     checkpoint_created = CheckpointCreatedEvent(
         entity_id=EntityId(4), checkpoint_id=1, timestamp=300.0
@@ -147,6 +175,9 @@ def test_stream_events_are_dataclasses() -> None:
     # All should have __slots__ attribute (dataclass(slots=True))
     assert hasattr(stream_start, "__slots__")
     assert hasattr(stream_delta, "__slots__")
+    assert hasattr(stream_reasoning_delta, "__slots__")
+    assert hasattr(stream_reasoning_end, "__slots__")
+    assert hasattr(stream_content_start, "__slots__")
     assert hasattr(stream_end, "__slots__")
     assert hasattr(checkpoint_created, "__slots__")
     assert hasattr(checkpoint_restored, "__slots__")
@@ -161,9 +192,9 @@ def test_stream_start_event_repr() -> None:
     assert "entity_id" in repr_str or "7" in repr_str
 
 
-def test_stream_delta_event_with_empty_delta() -> None:
-    """Test StreamDeltaEvent can have empty delta string."""
-    event = StreamDeltaEvent(entity_id=EntityId(8), delta="")
+def test_stream_content_delta_event_with_empty_delta() -> None:
+    """Test StreamContentDeltaEvent can have empty delta string."""
+    event = StreamContentDeltaEvent(entity_id=EntityId(8), delta="")
     assert event.delta == ""
 
 

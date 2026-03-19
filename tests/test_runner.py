@@ -24,7 +24,7 @@ from ecs_agent.types import (
     InterruptionReason,
     Message,
     StreamDelta,
-    StreamDeltaEvent,
+    StreamContentDeltaEvent,
     SystemHandle,
 )
 
@@ -443,7 +443,7 @@ class TestRunner:
         )
         world.add_component(entity_id, StreamingComponent(enabled=True))
 
-        async def interrupt_on_first_delta(event: StreamDeltaEvent) -> None:
+        async def interrupt_on_first_delta(event: StreamContentDeltaEvent) -> None:
             if event.entity_id != entity_id or event.delta != "A":
                 return
             world.add_component(
@@ -454,7 +454,7 @@ class TestRunner:
                 ),
             )
 
-        world.event_bus.subscribe(StreamDeltaEvent, interrupt_on_first_delta)
+        world.event_bus.subscribe(StreamContentDeltaEvent, interrupt_on_first_delta)
         world.register_system(ReasoningSystem(), priority=0)
 
         await runner.run(world, max_ticks=5)

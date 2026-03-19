@@ -21,6 +21,7 @@ async def complete(
 Each chunk emitted by the iterator is a `StreamDelta` object with the following fields:
 
 - `content: str | None`: The partial text content of the response.
+- `reasoning_content: str | None`: The streamed reasoning/thinking text when provider exposes it.
 - `tool_calls: list[ToolCall] | None`: Partial tool calls (accumulated by `OpenAIProvider`).
 - `finish_reason: str | None`: The reason why the generation stopped (e.g., `"stop"`, `"tool_calls"`).
 - `usage: Usage | None`: Usage statistics, typically only provided in the final delta.
@@ -85,31 +86,54 @@ When an entity has `StreamingComponent(enabled=True)`, the `ReasoningSystem` aut
 
 1. Calls `provider.complete(stream=True)` instead of the standard call.
 2. Publishes `StreamStartEvent(entity_id)`.
-3. For each content chunk, publishes `StreamDeltaEvent(entity_id, delta)`.
-4. On completion, publishes `StreamEndEvent(entity_id, result)`.
-5. Accumulates all chunks into a final `CompletionResult` as normal.
+3. Publishes `StreamReasoningDeltaEvent(entity_id, reasoning_delta)` for reasoning chunks (if present).
+4. Publishes `StreamReasoningEndEvent(entity_id)` when reasoning phase ends.
+5. Publishes `StreamContentStartEvent(entity_id)` when assistant content phase starts.
+6. For each content chunk, publishes `StreamContentDeltaEvent(entity_id, delta)`.
+7. On completion, publishes `StreamEndEvent(entity_id, timestamp)`.
+8. Accumulates all chunks into a final `CompletionResult` as normal.
 
 ### Subscribing to Stream Events
 
 ```python
-from ecs_agent.types import StreamStartEvent, StreamDeltaEvent, StreamEndEvent
+from ecs_agent.types import (
+    StreamContentDeltaEvent,
+    StreamContentStartEvent,
+    StreamEndEvent,
+    StreamReasoningDeltaEvent,
+    StreamReasoningEndEvent,
+    StreamStartEvent,
+)
 
 async def on_start(event: StreamStartEvent):
     print("Streaming started...")
 
-async def on_delta(event: StreamDeltaEvent):
-    if event.delta.content:
-        print(event.delta.content, end="", flush=True)
+async def on_reasoning_delta(event: StreamReasoningDeltaEvent):
+    print(f"[think:{event.reasoning_delta}]", end="", flush=True)
+
+async def on_reasoning_end(event: StreamReasoningEndEvent):
+    print("\n[reasoning ended]")
+
+async def on_content_start(event: StreamContentStartEvent):
+    print("[content started]")
+
+async def on_delta(event: StreamContentDeltaEvent):
+    if event.delta:
+        print(event.delta, end="", flush=True)
 
 async def on_end(event: StreamEndEvent):
     print("\nStreaming complete.")
 
 world.event_bus.subscribe(StreamStartEvent, on_start)
-world.event_bus.subscribe(StreamDeltaEvent, on_delta)
+world.event_bus.subscribe(StreamReasoningDeltaEvent, on_reasoning_delta)
+world.event_bus.subscribe(StreamReasoningEndEvent, on_reasoning_end)
+world.event_bus.subscribe(StreamContentStartEvent, on_content_start)
+world.event_bus.subscribe(StreamContentDeltaEvent, on_delta)
 world.event_bus.subscribe(StreamEndEvent, on_end)
 ```
 
 This approach decouples streaming consumers from the provider, allowing multiple subscribers to react to streaming events independently.
 
 ### Example
-,
+
+See `examples/streaming_system_agent.py` for a runnable end-to-end system-level streaming demo.

@@ -97,7 +97,7 @@ Common event types include:
 - `PlanRevisedEvent`: Triggered when an agent changes its strategy.
 - `ToolApprovalRequestedEvent`, `ToolApprovedEvent`, `ToolDeniedEvent`: Tool approval workflow.
 - `MCTSNodeScoredEvent`: Tree search scoring.
-- `StreamStartEvent`, `StreamDeltaEvent`, `StreamEndEvent`: System-level streaming.
+- `StreamStartEvent`, `StreamReasoningDeltaEvent`, `StreamReasoningEndEvent`, `StreamContentStartEvent`, `StreamContentDeltaEvent`, `StreamEndEvent`: System-level streaming phases.
 - `CheckpointCreatedEvent`, `CheckpointRestoredEvent`: Checkpoint lifecycle.
 - `CompactionCompleteEvent`: Conversation compaction.
 - `RAGRetrievalCompletedEvent`: RAG retrieval.

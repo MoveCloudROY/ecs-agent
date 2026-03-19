@@ -109,14 +109,14 @@ The ReasoningSystem serves as the primary cognitive engine for an entity. It coo
 - **Queries**: `LLMComponent`, `ConversationComponent`
 - **Optional Components**: `SystemPromptComponent`, `ToolRegistryComponent`, `StreamingComponent`
 - **Modifies**: `ConversationComponent.messages` (appends the LLM response), potentially adds `PendingToolCallsComponent`.
-- **Events Published**: `StreamStartEvent`, `StreamDeltaEvent`, `StreamEndEvent` (when streaming is enabled)
+- **Events Published**: `StreamStartEvent`, `StreamReasoningDeltaEvent`, `StreamReasoningEndEvent`, `StreamContentStartEvent`, `StreamContentDeltaEvent`, `StreamEndEvent` (when streaming is enabled)
 - **Recommended Priority**: 0
 
 ### Behavior
 The system gathers the system prompt and conversation history to build a complete message list. It then calls `provider.complete` using the entity's LLM configuration and any registered tools. The resulting message is appended to the conversation. If the LLM requests specific tools, the system attaches a `PendingToolCallsComponent` to the entity.
 
 ### Streaming Mode
-When entity has `StreamingComponent(enabled=True)`, the system calls `provider.complete(stream=True)`, publishes `StreamStartEvent`, iterates deltas publishing `StreamDeltaEvent` for each content chunk, publishes `StreamEndEvent` at end. Content chunks and tool calls are accumulated, and the final `CompletionResult` is returned as normal.
+When entity has `StreamingComponent(enabled=True)`, the system calls `provider.complete(stream=True)`, publishes `StreamStartEvent`, emits reasoning-phase events (`StreamReasoningDeltaEvent` -> `StreamReasoningEndEvent`) when reasoning chunks exist, emits `StreamContentStartEvent` before the first assistant content chunk, publishes `StreamContentDeltaEvent` for each content chunk, and finally publishes `StreamEndEvent`. Content chunks and tool calls are accumulated, and the final `CompletionResult` is returned as normal.
 
 ### Error Handling
 If the LLM provider throws an `IndexError` or `StopIteration`, the system assumes the provider is exhausted and adds a `TerminalComponent(reason="provider_exhausted")`. Any other exceptions result in an `ErrorComponent` being attached to the entity.

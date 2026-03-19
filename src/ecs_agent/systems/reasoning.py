@@ -34,10 +34,13 @@ from ecs_agent.prompts.message_assembly import (
     reserve_context_pool_items,
 )
 from ecs_agent.types import (
+    StreamContentStartEvent,
     CompletionResult,
     Message,
-    StreamDeltaEvent,
+    StreamContentDeltaEvent,
     StreamEndEvent,
+    StreamReasoningDeltaEvent,
+    StreamReasoningEndEvent,
     StreamStartEvent,
     EntityId,
     ToolCall,
@@ -148,12 +151,17 @@ class ReasoningSystem:
             streaming_enabled = (
                 streaming_component is not None and streaming_component.enabled
             )
+            non_blocking_delta_publish = (
+                streaming_component is not None
+                and streaming_component.non_blocking_delta_publish
+            )
 
             logger.info(
                 "reasoning_start",
                 entity_id=int(entity_id),
                 model=active_model,
                 streaming=streaming_enabled,
+                non_blocking_delta_publish=non_blocking_delta_publish,
                 system="ReasoningSystem",
             )
 
@@ -167,6 +175,7 @@ class ReasoningSystem:
                         conversation,
                         messages,
                         tools,
+                        non_blocking_delta_publish,
                     )
                 else:
                     non_stream_result = await active_provider.complete(
@@ -247,6 +256,7 @@ class ReasoningSystem:
         conversation: ConversationComponent | None,
         messages: list[Message],
         tools: list[ToolSchema] | None,
+        non_blocking_delta_publish: bool,
     ) -> CompletionResult:
         stream_result = await active_provider.complete(
             messages,
@@ -260,21 +270,117 @@ class ReasoningSystem:
         content_chunks: list[str] = []
         tool_call_buffers: dict[str, dict[str, Any]] = {}
         usage = None
+        stream_started_at = time.perf_counter()
+        first_sse_seen = False
+        first_content_delta_seen = False
+        reasoning_phase_active = False
+        reasoning_end_emitted = False
 
         await world.event_bus.publish(
             StreamStartEvent(entity_id=entity_id, timestamp=time.time())
         )
+        stream_start_published_at = time.perf_counter()
 
         try:
             async for delta in stream:
                 if world.get_component(entity_id, InterruptionComponent) is not None:
                     raise asyncio.CancelledError()
 
-                if delta.content is not None:
-                    content_chunks.append(delta.content)
-                    await world.event_bus.publish(
-                        StreamDeltaEvent(entity_id=entity_id, delta=delta.content)
+                if not first_sse_seen:
+                    first_sse_seen = True
+                    first_sse_at = time.perf_counter()
+                    logger.info(
+                        "reasoning_stream_first_sse_event",
+                        entity_id=int(entity_id),
+                        model=active_model,
+                        stream_setup_ms=round(
+                            (stream_start_published_at - stream_started_at) * 1000,
+                            2,
+                        ),
+                        time_to_first_sse_event_ms=round(
+                            (first_sse_at - stream_start_published_at) * 1000,
+                            2,
+                        ),
+                        total_to_first_sse_event_ms=round(
+                            (first_sse_at - stream_started_at) * 1000,
+                            2,
+                        ),
                     )
+
+                if delta.reasoning_content is not None:
+                    reasoning_phase_active = True
+                    if non_blocking_delta_publish:
+                        self._publish_stream_reasoning_delta_non_blocking(
+                            world=world,
+                            entity_id=entity_id,
+                            reasoning_delta=delta.reasoning_content,
+                        )
+                    else:
+                        await world.event_bus.publish(
+                            StreamReasoningDeltaEvent(
+                                entity_id=entity_id,
+                                reasoning_delta=delta.reasoning_content,
+                            )
+                        )
+
+                if delta.content is not None:
+                    if reasoning_phase_active and not reasoning_end_emitted:
+                        await world.event_bus.publish(
+                            StreamReasoningEndEvent(entity_id=entity_id)
+                        )
+                        reasoning_end_emitted = True
+                        reasoning_phase_active = False
+
+                    if not first_content_delta_seen:
+                        await world.event_bus.publish(
+                            StreamContentStartEvent(entity_id=entity_id)
+                        )
+
+                    content_chunks.append(delta.content)
+                    if not first_content_delta_seen:
+                        first_content_delta_seen = True
+                        first_content_delta_at = time.perf_counter()
+                        logger.info(
+                            "reasoning_stream_first_content_delta",
+                            entity_id=int(entity_id),
+                            model=active_model,
+                            stream_setup_ms=round(
+                                (stream_start_published_at - stream_started_at) * 1000,
+                                2,
+                            ),
+                            time_to_first_content_delta_ms=round(
+                                (first_content_delta_at - stream_start_published_at)
+                                * 1000,
+                                2,
+                            ),
+                            total_to_first_content_delta_ms=round(
+                                (first_content_delta_at - stream_started_at) * 1000,
+                                2,
+                            ),
+                            start_to_first_delta_ms=round(
+                                (first_content_delta_at - stream_start_published_at)
+                                * 1000,
+                                2,
+                            ),
+                            total_to_first_delta_ms=round(
+                                (first_content_delta_at - stream_started_at) * 1000,
+                                2,
+                            ),
+                        )
+
+                    if non_blocking_delta_publish:
+                        self._publish_stream_delta_non_blocking(
+                            world=world,
+                            entity_id=entity_id,
+                            delta_content=delta.content,
+                        )
+                    else:
+                        await world.event_bus.publish(
+                            StreamContentDeltaEvent(
+                                entity_id=entity_id,
+                                delta=delta.content,
+                            )
+                        )
 
                 self._merge_stream_tool_calls(tool_call_buffers, delta.tool_calls)
 
@@ -334,6 +440,83 @@ class ReasoningSystem:
                 tool_calls=self._finalize_tool_calls(tool_call_buffers),
             ),
             usage=usage,
+        )
+
+    def _publish_stream_delta_non_blocking(
+        self,
+        world: World,
+        entity_id: EntityId,
+        delta_content: str,
+    ) -> None:
+        task = asyncio.create_task(
+            world.event_bus.publish(
+                StreamContentDeltaEvent(entity_id=entity_id, delta=delta_content)
+            )
+        )
+        task.add_done_callback(
+            lambda publish_task: self._log_non_blocking_delta_error(
+                publish_task=publish_task,
+                entity_id=entity_id,
+            )
+        )
+
+    def _log_non_blocking_delta_error(
+        self,
+        publish_task: asyncio.Task[None],
+        entity_id: EntityId,
+    ) -> None:
+        if publish_task.cancelled():
+            return
+
+        error = publish_task.exception()
+        if error is None:
+            return
+
+        logger.error(
+            "reasoning_stream_delta_publish_error",
+            entity_id=int(entity_id),
+            error=str(error),
+            system="ReasoningSystem",
+        )
+
+    def _publish_stream_reasoning_delta_non_blocking(
+        self,
+        world: World,
+        entity_id: EntityId,
+        reasoning_delta: str,
+    ) -> None:
+        task = asyncio.create_task(
+            world.event_bus.publish(
+                StreamReasoningDeltaEvent(
+                    entity_id=entity_id,
+                    reasoning_delta=reasoning_delta,
+                )
+            )
+        )
+        task.add_done_callback(
+            lambda publish_task: self._log_non_blocking_reasoning_delta_error(
+                publish_task=publish_task,
+                entity_id=entity_id,
+            )
+        )
+
+    def _log_non_blocking_reasoning_delta_error(
+        self,
+        publish_task: asyncio.Task[None],
+        entity_id: EntityId,
+    ) -> None:
+        if publish_task.cancelled():
+            return
+
+        error = publish_task.exception()
+        if error is None:
+            return
+
+        logger.error(
+            "reasoning_stream_reasoning_delta_publish_error",
+            entity_id=int(entity_id),
+            error=str(error),
+            system="ReasoningSystem",
         )
 
     def _merge_stream_tool_calls(

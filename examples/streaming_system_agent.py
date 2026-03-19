@@ -3,8 +3,9 @@
 This example shows system-level streaming (different from provider-level streaming):
 - Creates an agent entity with StreamingComponent(enabled=True)
 - ReasoningSystem detects the streaming flag and publishes EventBus events
-- Subscribes to StreamStartEvent, StreamDeltaEvent, StreamEndEvent
-- Prints each token as it arrives in real-time
+- Subscribes to StreamStartEvent, StreamReasoningDeltaEvent, StreamReasoningEndEvent,
+  StreamContentStartEvent, StreamContentDeltaEvent, StreamEndEvent
+- Prints reasoning chunks and final content chunks in distinct phases
 - Uses OpenAIProvider with DashScope (env: LLM_API_KEY, LLM_BASE_URL, LLM_MODEL)
 - Falls back to FakeProvider for demo without API key
 
@@ -30,8 +31,11 @@ from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import (
     CompletionResult,
     Message,
-    StreamDeltaEvent,
+    StreamContentStartEvent,
+    StreamContentDeltaEvent,
     StreamEndEvent,
+    StreamReasoningDeltaEvent,
+    StreamReasoningEndEvent,
     StreamStartEvent,
     Usage,
 )
@@ -47,7 +51,7 @@ async def main() -> None:
     base_url = os.environ.get(
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
-    model = os.environ.get("LLM_MODEL", "qwen3.5-plus")
+    model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
 
     # --- Create LLM provider ---
     provider: LLMProvider
@@ -103,16 +107,20 @@ async def main() -> None:
     )
 
     # Add StreamingComponent to enable system-level streaming
-    world.add_component(agent_id, StreamingComponent(enabled=True))
+    world.add_component(
+        agent_id,
+        StreamingComponent(enabled=True, non_blocking_delta_publish=True),
+    )
 
     # --- Subscribe to streaming events ---
     streamed_content = []
+    reasoning_seen = False
 
     async def on_stream_start(event: StreamStartEvent) -> None:
         """Called when streaming starts."""
         print("\n[Streaming started]")
 
-    async def on_stream_delta(event: StreamDeltaEvent) -> None:
+    async def on_stream_delta(event: StreamContentDeltaEvent) -> None:
         """Called for each streamed delta (token/chunk)."""
         if event.delta:  # delta is a string, not an object
             # Print delta without newline for real-time effect
@@ -120,13 +128,32 @@ async def main() -> None:
             sys.stdout.flush()
             streamed_content.append(event.delta)
 
+    async def on_stream_reasoning_delta(event: StreamReasoningDeltaEvent) -> None:
+        nonlocal reasoning_seen
+        if event.reasoning_delta:
+            reasoning_seen = True
+            sys.stdout.write(event.reasoning_delta)
+            sys.stdout.flush()
+
+    async def on_stream_reasoning_end(event: StreamReasoningEndEvent) -> None:
+        _ = event
+        if reasoning_seen:
+            print("\n[Reasoning ended]")
+
+    async def on_stream_content_start(event: StreamContentStartEvent) -> None:
+        _ = event
+        print("[Content started]")
+
     async def on_stream_end(event: StreamEndEvent) -> None:
         """Called when streaming ends."""
         print("\n[Streaming ended]")
 
     # Register event handlers
     world.event_bus.subscribe(StreamStartEvent, on_stream_start)
-    world.event_bus.subscribe(StreamDeltaEvent, on_stream_delta)
+    world.event_bus.subscribe(StreamContentDeltaEvent, on_stream_delta)
+    world.event_bus.subscribe(StreamReasoningDeltaEvent, on_stream_reasoning_delta)
+    world.event_bus.subscribe(StreamReasoningEndEvent, on_stream_reasoning_end)
+    world.event_bus.subscribe(StreamContentStartEvent, on_stream_content_start)
     world.event_bus.subscribe(StreamEndEvent, on_stream_end)
 
     # --- Register systems ---

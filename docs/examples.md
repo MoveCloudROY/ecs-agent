@@ -499,7 +499,7 @@ world.register_system(SubagentSystem(priority=-1), priority=-1)
 - **File:** `examples/streaming_system_agent.py`
 - **What it demonstrates:** System-level streaming using the event bus.
 - **Run:** `uv run python examples/streaming_system_agent.py`
-- **Pattern:** `StreamingComponent` + `StreamStartEvent` + `StreamDeltaEvent` + `StreamEndEvent`.
+- **Pattern:** `StreamingComponent` + `StreamStartEvent` + `StreamReasoningDeltaEvent` + `StreamReasoningEndEvent` + `StreamContentStartEvent` + `StreamContentDeltaEvent` + `StreamEndEvent`.
 
 ---
 

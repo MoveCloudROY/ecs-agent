@@ -53,7 +53,7 @@ from ecs_agent.types import (
     InterruptionReason,
     Message,
     StreamDelta,
-    StreamDeltaEvent,
+    StreamContentDeltaEvent,
 )
 
 # DashScope API configuration from environment variables
@@ -108,12 +108,12 @@ async def test_real_openai_streaming_produces_deltas() -> None:
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
 
-    deltas: list[StreamDeltaEvent] = []
+    deltas: list[StreamContentDeltaEvent] = []
 
-    async def capture_delta(event: StreamDeltaEvent) -> None:
+    async def capture_delta(event: StreamContentDeltaEvent) -> None:
         deltas.append(event)
 
-    world.event_bus.subscribe(StreamDeltaEvent, capture_delta)
+    world.event_bus.subscribe(StreamContentDeltaEvent, capture_delta)
 
     await world.process()
 
@@ -208,12 +208,12 @@ async def test_real_full_agent_loop_streaming() -> None:
     world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
-    deltas: list[StreamDeltaEvent] = []
+    deltas: list[StreamContentDeltaEvent] = []
 
-    async def capture_delta(event: StreamDeltaEvent) -> None:
+    async def capture_delta(event: StreamContentDeltaEvent) -> None:
         deltas.append(event)
 
-    world.event_bus.subscribe(StreamDeltaEvent, capture_delta)
+    world.event_bus.subscribe(StreamContentDeltaEvent, capture_delta)
 
     runner = Runner()
     await runner.run(world, max_ticks=1)
@@ -569,12 +569,12 @@ async def test_real_llm_prompt_keyword_injection_smoke() -> None:
     assert outbound_user.content.startswith(
         "[PROMPT_INJECT:@code]\nKEYWORD_TEMPLATE_BLOCK\n\n"
     )
-    assert outbound_user.index("[PROMPT_INJECT:@code]") < outbound_user.index(
-        "[PROMPT_CONTEXT_POOL]"
-    )
-    assert outbound_user.index("source: tool:search") < outbound_user.index(
-        "source: subagent:researcher"
-    )
+    assert outbound_user.content.index(
+        "[PROMPT_INJECT:@code]"
+    ) < outbound_user.content.index("[PROMPT_CONTEXT_POOL]")
+    assert outbound_user.content.index(
+        "source: tool:search"
+    ) < outbound_user.content.index("source: subagent:researcher")
     assert "[PROMPT_CONTEXT_POOL]" in outbound_user.content
     assert outbound_user.content.endswith("Need @code help in one short sentence")
 

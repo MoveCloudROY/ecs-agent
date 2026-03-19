@@ -190,6 +190,7 @@ class TestStreamDelta:
         """Test StreamDelta with default None values."""
         delta = StreamDelta()
         assert delta.content is None
+        assert delta.reasoning_content is None
         assert delta.tool_calls is None
         assert delta.finish_reason is None
         assert delta.usage is None
@@ -198,6 +199,7 @@ class TestStreamDelta:
         """Test StreamDelta with content."""
         delta = StreamDelta(content="Hello ")
         assert delta.content == "Hello "
+        assert delta.reasoning_content is None
         assert delta.tool_calls is None
         assert delta.finish_reason is None
         assert delta.usage is None
@@ -207,6 +209,7 @@ class TestStreamDelta:
         tc = ToolCall(id="call_1", name="search", arguments={"q": "test"})
         delta = StreamDelta(tool_calls=[tc], finish_reason="stop")
         assert delta.content is None
+        assert delta.reasoning_content is None
         assert delta.tool_calls == [tc]
         assert delta.finish_reason == "stop"
         assert delta.usage is None
@@ -246,12 +249,14 @@ class TestSystemHandle:
     def test_systemhandle_is_newtype(self) -> None:
         """Test that SystemHandle is a valid NewType."""
         from ecs_agent.types import SystemHandle
+
         handle = SystemHandle("reasoning_system_1")
         assert handle == "reasoning_system_1"
 
     def test_systemhandle_with_various_values(self) -> None:
         """Test SystemHandle with different string values."""
         from ecs_agent.types import SystemHandle
+
         h1 = SystemHandle("sys_001")
         h2 = SystemHandle("planning_v2")
         h3 = SystemHandle("tool_exec_primary")
@@ -276,21 +281,25 @@ class TestInterruptionReason:
     def test_interruption_reason_user_requested(self) -> None:
         """Test USER_REQUESTED enum value."""
         from ecs_agent.types import InterruptionReason
+
         assert InterruptionReason.USER_REQUESTED.value == "user_requested"
 
     def test_interruption_reason_system_pause(self) -> None:
         """Test SYSTEM_PAUSE enum value."""
         from ecs_agent.types import InterruptionReason
+
         assert InterruptionReason.SYSTEM_PAUSE.value == "system_pause"
 
     def test_interruption_reason_error(self) -> None:
         """Test ERROR enum value."""
         from ecs_agent.types import InterruptionReason
+
         assert InterruptionReason.ERROR.value == "error"
 
     def test_interruption_reason_completion(self) -> None:
         """Test COMPLETION enum value."""
         from ecs_agent.types import InterruptionReason
+
         assert InterruptionReason.COMPLETION.value == "completion"
 
 
@@ -300,6 +309,7 @@ class TestRevertRequest:
     def test_revert_request_basic(self) -> None:
         """Test RevertRequest with target branch."""
         from ecs_agent.types import RevertRequest, EntityId
+
         req = RevertRequest(
             entity_id=EntityId(42),
             target_branch_id="branch_v1",
@@ -310,6 +320,7 @@ class TestRevertRequest:
     def test_revert_request_slots(self) -> None:
         """Test RevertRequest uses slots."""
         from ecs_agent.types import RevertRequest, EntityId
+
         req = RevertRequest(entity_id=EntityId(1), target_branch_id="main")
         assert hasattr(type(req), "__slots__")
 
@@ -320,6 +331,7 @@ class TestRevertResult:
     def test_revert_result_success(self) -> None:
         """Test RevertResult for successful revert."""
         from ecs_agent.types import RevertResult, EntityId
+
         result = RevertResult(
             entity_id=EntityId(99),
             success=True,
@@ -334,6 +346,7 @@ class TestRevertResult:
     def test_revert_result_failure(self) -> None:
         """Test RevertResult for failed revert."""
         from ecs_agent.types import RevertResult, EntityId
+
         result = RevertResult(
             entity_id=EntityId(10),
             success=False,
@@ -347,11 +360,13 @@ class TestRevertResult:
     def test_revert_result_default_message(self) -> None:
         """Test RevertResult with default empty message."""
         from ecs_agent.types import RevertResult, EntityId
+
         result = RevertResult(entity_id=EntityId(1), success=True)
         assert result.message == ""
 
     def test_revert_result_slots(self) -> None:
         """Test RevertResult uses slots."""
         from ecs_agent.types import RevertResult, EntityId
+
         result = RevertResult(entity_id=EntityId(1), success=True)
         assert hasattr(type(result), "__slots__")

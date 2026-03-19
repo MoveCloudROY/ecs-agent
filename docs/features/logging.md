@@ -134,6 +134,8 @@ except Exception as exc:
 ### Reasoning System
 ```json
 {"event": "reasoning_start", "entity_id": 1, "model": "gpt-4", "system": "ReasoningSystem", "level": "info", "timestamp": "2026-03-05T00:00:00Z"}
+{"event": "reasoning_stream_first_sse_event", "entity_id": 1, "model": "gpt-4", "stream_setup_ms": 12.34, "time_to_first_sse_event_ms": 245.67, "total_to_first_sse_event_ms": 258.01, "level": "info", "timestamp": "2026-03-05T00:00:00Z"}
+{"event": "reasoning_stream_first_content_delta", "entity_id": 1, "model": "gpt-4", "stream_setup_ms": 12.34, "time_to_first_content_delta_ms": 1850.42, "total_to_first_content_delta_ms": 1862.76, "level": "info", "timestamp": "2026-03-05T00:00:02Z"}
 {"event": "reasoning_complete", "entity_id": 1, "model": "gpt-4", "system": "ReasoningSystem", "level": "info", "timestamp": "2026-03-05T00:00:05Z"}
 ```
 

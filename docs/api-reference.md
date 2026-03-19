@@ -19,7 +19,7 @@ The following types and classes are re-exported for convenience:
 - `LiteLLMProvider` from `ecs_agent.providers.litellm_provider`
 - `OpenAIEmbeddingProvider`, `FakeEmbeddingProvider` from `ecs_agent.providers`
 - `MessageBusSystem`, `RAGSystem`, `TreeSearchSystem`, `ToolApprovalSystem`, `CheckpointSystem`, `CompactionSystem`, `UserInputSystem`, `SubagentSystem` from `ecs_agent.systems`
-- `StreamStartEvent`, `StreamDeltaEvent`, `StreamEndEvent`, `CheckpointCreatedEvent`, `CheckpointRestoredEvent`, `CompactionCompleteEvent`, `ToolApprovalRequestedEvent`, `ToolApprovedEvent`, `ToolDeniedEvent`, `RAGRetrievalCompletedEvent`, `UserInputRequestedEvent`, `MCTSNodeScoredEvent`, `MessageBusPublishedEvent`, `MessageBusDeliveredEvent`, `MessageBusResponseEvent`, `MessageBusTimeoutEvent` from `ecs_agent.types`
+- `StreamStartEvent`, `StreamReasoningDeltaEvent`, `StreamReasoningEndEvent`, `StreamContentStartEvent`, `StreamContentDeltaEvent`, `StreamEndEvent`, `CheckpointCreatedEvent`, `CheckpointRestoredEvent`, `CompactionCompleteEvent`, `ToolApprovalRequestedEvent`, `ToolApprovedEvent`, `ToolDeniedEvent`, `RAGRetrievalCompletedEvent`, `UserInputRequestedEvent`, `MCTSNodeScoredEvent`, `MessageBusPublishedEvent`, `MessageBusDeliveredEvent`, `MessageBusResponseEvent`, `MessageBusTimeoutEvent` from `ecs_agent.types`
 - `scan_module`, `sandboxed_execute`, `tool` from `ecs_agent.tools`
 - `TaskStatus`, `TaskComponent`, `ScratchbookRef`, `ScratchbookRefComponent`, `ScratchbookIndexComponent` from `ecs_agent.types` and `ecs_agent.components`
 - `SubagentConfig`, `SubagentLifecycleStatus`, `SubagentSessionRecord`, `InheritancePolicy` from `ecs_agent.types`
@@ -75,6 +75,7 @@ class CompletionResult:
 @dataclass(slots=True)
 class StreamDelta:
     content: str | None = None
+    reasoning_content: str | None = None
     tool_calls: list[ToolCall] | None = None
     finish_reason: str | None = None
     usage: Usage | None = None
@@ -204,16 +205,30 @@ class MCTSNodeScoredEvent:
 @dataclass(slots=True)
 class StreamStartEvent:
     entity_id: EntityId
+    timestamp: float
 
 @dataclass(slots=True)
-class StreamDeltaEvent:
+class StreamReasoningDeltaEvent:
     entity_id: EntityId
-    delta: StreamDelta
+    reasoning_delta: str
+
+@dataclass(slots=True)
+class StreamReasoningEndEvent:
+    entity_id: EntityId
+
+@dataclass(slots=True)
+class StreamContentStartEvent:
+    entity_id: EntityId
+
+@dataclass(slots=True)
+class StreamContentDeltaEvent:
+    entity_id: EntityId
+    delta: str
 
 @dataclass(slots=True)
 class StreamEndEvent:
     entity_id: EntityId
-    result: CompletionResult
+    timestamp: float
 
 @dataclass(slots=True)
 class CheckpointCreatedEvent:

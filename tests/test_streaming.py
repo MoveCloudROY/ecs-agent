@@ -21,7 +21,7 @@ from ecs_agent.types import (
     InterruptionReason,
     Message,
     StreamDelta,
-    StreamDeltaEvent,
+    StreamContentDeltaEvent,
     StreamEndEvent,
     StreamStartEvent,
 )
@@ -131,6 +131,57 @@ async def test_streaming_sse_content_chunks() -> None:
     deltas = [delta async for delta in stream_iter]
 
     assert [delta.content for delta in deltas] == ["Hello", " world"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_preserves_reasoning_content_separately_from_content() -> None:
+    stream_lines = [
+        _sse_data(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "content": None,
+                            "reasoning_content": "Thinking",
+                        },
+                        "finish_reason": None,
+                    }
+                ]
+            }
+        ),
+        _sse_data(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "content": "Answer",
+                            "reasoning_content": None,
+                        },
+                        "finish_reason": None,
+                    }
+                ]
+            }
+        ),
+        "data: [DONE]",
+    ]
+    stream_response = _MockStreamResponse(stream_lines)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
+
+    provider = OpenAIProvider(api_key="test-key")
+    provider._client = mock_client
+
+    stream_iter = await provider.complete(
+        [Message(role="user", content="hello")], stream=True
+    )
+    deltas = [delta async for delta in stream_iter]
+
+    assert len(deltas) == 2
+    assert deltas[0].reasoning_content == "Thinking"
+    assert deltas[0].content is None
+    assert deltas[1].content == "Answer"
+    assert deltas[1].reasoning_content is None
 
 
 @pytest.mark.asyncio
@@ -477,7 +528,7 @@ async def test_streaming_interrupt_mid_generation_preserves_partial_and_emits_st
         _ = event
         seen_events.append("start")
 
-    async def on_delta(event: StreamDeltaEvent) -> None:
+    async def on_delta(event: StreamContentDeltaEvent) -> None:
         seen_events.append(f"delta:{event.delta}")
         if event.entity_id == entity_id and event.delta == "A":
             world.add_component(
@@ -493,7 +544,7 @@ async def test_streaming_interrupt_mid_generation_preserves_partial_and_emits_st
         seen_events.append("end")
 
     world.event_bus.subscribe(StreamStartEvent, on_start)
-    world.event_bus.subscribe(StreamDeltaEvent, on_delta)
+    world.event_bus.subscribe(StreamContentDeltaEvent, on_delta)
     world.event_bus.subscribe(StreamEndEvent, on_end)
 
     with pytest.raises(asyncio.CancelledError):

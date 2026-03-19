@@ -454,6 +454,13 @@ class OpenAIProvider:
                     delta = choice.get("delta", {})
 
                     content = delta.get("content")
+                    reasoning_content = delta.get("reasoning_content")
+                    if content is not None and not isinstance(content, str):
+                        content = None
+                    if reasoning_content is not None and not isinstance(
+                        reasoning_content, str
+                    ):
+                        reasoning_content = None
                     finish_reason = choice.get("finish_reason")
                     usage_data = response_json.get("usage")
                     usage: Usage | None = None
@@ -507,6 +514,7 @@ class OpenAIProvider:
 
                     if (
                         content is None
+                        and reasoning_content is None
                         and stream_tool_calls is None
                         and finish_reason is None
                         and usage is None
@@ -515,6 +523,7 @@ class OpenAIProvider:
 
                     yield StreamDelta(
                         content=content,
+                        reasoning_content=reasoning_content,
                         tool_calls=stream_tool_calls,
                         finish_reason=finish_reason,
                         usage=usage,

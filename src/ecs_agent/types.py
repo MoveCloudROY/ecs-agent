@@ -119,6 +119,7 @@ class StreamDelta:
     """Represents a chunk of streamed response data."""
 
     content: str | None = None
+    reasoning_content: str | None = None
     tool_calls: list[ToolCall] | None = None
     finish_reason: str | None = None
     usage: Usage | None = None
@@ -223,11 +224,33 @@ class StreamStartEvent:
 
 
 @dataclass(slots=True)
-class StreamDeltaEvent:
-    """Event emitted when a streaming delta is received."""
+class StreamContentDeltaEvent:
+    """Event emitted when a streaming content delta is received."""
 
     entity_id: EntityId
     delta: str
+
+
+@dataclass(slots=True)
+class StreamReasoningDeltaEvent:
+    """Event emitted when a streaming reasoning delta is received."""
+
+    entity_id: EntityId
+    reasoning_delta: str
+
+
+@dataclass(slots=True)
+class StreamReasoningEndEvent:
+    """Event emitted when reasoning stream phase ends."""
+
+    entity_id: EntityId
+
+
+@dataclass(slots=True)
+class StreamContentStartEvent:
+    """Event emitted when assistant content stream phase starts."""
+
+    entity_id: EntityId
 
 
 @dataclass(slots=True)
@@ -413,7 +436,7 @@ SubagentLifecycleStatus = Literal[
 @dataclass(slots=True)
 class SubagentSessionRecord:
     """Serializable session metadata for a subagent delegation."""
-    
+
     session_id: str
     category: str
     prompt: str
@@ -429,6 +452,7 @@ class SubagentSessionRecord:
     deadline_at: str | None = None  # ISO timestamp
     result_excerpt: str | None = None
     error: str | None = None
+
 
 def validate_subagent_lifecycle_transition(
     current: SubagentLifecycleStatus,
@@ -453,19 +477,21 @@ def render_subagent_session_reminder_table(
     """Render subagent session reminder table rows sorted by updated_at desc, then session_id asc."""
     if not sessions:
         return []
-    
+
     # Sort by updated_at descending, then session_id ascending
     sorted_sessions = sorted(
         sessions.items(),
         key=lambda item: (-_iso_timestamp_to_sortable(item[1].updated_at), item[0]),
     )
-    
+
     rows = []
     for session_id, record in sorted_sessions:
         # Format: session_id | status | category | updated_at
-        row = f"{session_id} | {record.status} | {record.category} | {record.updated_at}"
+        row = (
+            f"{session_id} | {record.status} | {record.category} | {record.updated_at}"
+        )
         rows.append(row)
-    
+
     return rows
 
 
@@ -477,6 +503,7 @@ def _iso_timestamp_to_sortable(timestamp: str) -> float:
     except (ValueError, AttributeError):
         # Invalid timestamp, return 0 so it sorts last
         return 0.0
+
 
 @dataclass(slots=True)
 class DelegationStartedEvent:
@@ -782,7 +809,10 @@ __all__ = [
     "SkillInstalledEvent",
     "SkillUninstalledEvent",
     "StreamDelta",
-    "StreamDeltaEvent",
+    "StreamContentDeltaEvent",
+    "StreamContentStartEvent",
+    "StreamReasoningDeltaEvent",
+    "StreamReasoningEndEvent",
     "StreamEndEvent",
     "StreamStartEvent",
     "SubagentConfig",

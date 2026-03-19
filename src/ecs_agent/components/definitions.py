@@ -248,6 +248,7 @@ class StreamingComponent:
     """Streaming output configuration."""
 
     enabled: bool = False
+    non_blocking_delta_publish: bool = False
 
 
 @dataclass(slots=True)
