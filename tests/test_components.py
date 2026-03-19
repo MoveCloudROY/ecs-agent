@@ -240,7 +240,27 @@ class TestSystemPromptComponent:
         """Test SystemPromptComponent can be instantiated."""
         content = "Be helpful"
         comp = SystemPromptComponent(content=content)
+        assert comp.template == ""
+        assert comp.sections == []
         assert comp.content == content
+
+    def test_template_and_sections(self):
+        """Test SystemPromptComponent accepts prompt assembly inputs."""
+        from ecs_agent.prompts import PromptSectionSpec
+
+        section = PromptSectionSpec(
+            title="Context", lines=["line1", "line2"], priority=1
+        )
+        comp = SystemPromptComponent(
+            template="Core ${toolSelection} ${exploreSection} ${librarianSection}",
+            sections=[section],
+            content="rendered",
+        )
+
+        assert comp.template.startswith("Core")
+        assert len(comp.sections) == 1
+        assert comp.sections[0].title == "Context"
+        assert comp.content == "rendered"
 
     def test_dataclass_slots(self):
         """Test SystemPromptComponent uses slots."""
@@ -418,6 +438,7 @@ class TestEntityRegistryComponent:
     def test_instantiation_with_name_only(self):
         """Test EntityRegistryComponent with name only."""
         from ecs_agent.components import EntityRegistryComponent
+
         entity_id = EntityId(42)
         comp = EntityRegistryComponent(entity_id=entity_id, name="agent_main")
         assert comp.entity_id == entity_id
@@ -428,6 +449,7 @@ class TestEntityRegistryComponent:
     def test_instantiation_with_tags(self):
         """Test EntityRegistryComponent with tags."""
         from ecs_agent.components import EntityRegistryComponent
+
         entity_id = EntityId(99)
         comp = EntityRegistryComponent(
             entity_id=entity_id,
@@ -442,6 +464,7 @@ class TestEntityRegistryComponent:
     def test_instantiation_with_metadata(self):
         """Test EntityRegistryComponent with arbitrary metadata."""
         from ecs_agent.components import EntityRegistryComponent
+
         entity_id = EntityId(123)
         metadata = {"priority": "high", "retries": 3}
         comp = EntityRegistryComponent(
@@ -458,6 +481,7 @@ class TestEntityRegistryComponent:
     def test_mutable_default_independence_tags(self):
         """Test that tag sets are independent instances."""
         from ecs_agent.components import EntityRegistryComponent
+
         comp1 = EntityRegistryComponent(entity_id=EntityId(1), name="a")
         comp2 = EntityRegistryComponent(entity_id=EntityId(2), name="b")
         comp1.tags.add("test")
@@ -466,6 +490,7 @@ class TestEntityRegistryComponent:
     def test_mutable_default_independence_metadata(self):
         """Test that metadata dicts are independent instances."""
         from ecs_agent.components import EntityRegistryComponent
+
         comp1 = EntityRegistryComponent(entity_id=EntityId(1), name="a")
         comp2 = EntityRegistryComponent(entity_id=EntityId(2), name="b")
         comp1.metadata["key"] = "value"
@@ -474,8 +499,8 @@ class TestEntityRegistryComponent:
     def test_dataclass_slots(self):
         """Test EntityRegistryComponent uses slots."""
         from ecs_agent.components import EntityRegistryComponent
-        assert hasattr(EntityRegistryComponent, "__slots__")
 
+        assert hasattr(EntityRegistryComponent, "__slots__")
 
 
 class TestInterruptionComponent:
@@ -485,6 +510,7 @@ class TestInterruptionComponent:
         """Test InterruptionComponent with interruption reason."""
         from ecs_agent.components import InterruptionComponent
         from ecs_agent.types import InterruptionReason
+
         comp = InterruptionComponent(
             reason=InterruptionReason.USER_REQUESTED,
             message="User pressed pause button",
@@ -497,6 +523,7 @@ class TestInterruptionComponent:
         """Test InterruptionComponent for system-initiated pause."""
         from ecs_agent.components import InterruptionComponent
         from ecs_agent.types import InterruptionReason
+
         comp = InterruptionComponent(
             reason=InterruptionReason.SYSTEM_PAUSE,
             message="Awaiting user approval",
@@ -508,12 +535,14 @@ class TestInterruptionComponent:
         """Test that message defaults to empty string."""
         from ecs_agent.components import InterruptionComponent
         from ecs_agent.types import InterruptionReason
+
         comp = InterruptionComponent(reason=InterruptionReason.USER_REQUESTED)
         assert comp.message == ""
 
     def test_dataclass_slots(self):
         """Test InterruptionComponent uses slots."""
         from ecs_agent.components import InterruptionComponent
+
         assert hasattr(InterruptionComponent, "__slots__")
 
 
@@ -524,6 +553,7 @@ class TestTaskComponent:
         """Test TaskComponent with all required fields."""
         from ecs_agent.components import TaskComponent
         from ecs_agent.types import TaskStatus
+
         comp = TaskComponent(
             description="Write unit tests",
             expected_output="All tests passing",
@@ -548,6 +578,7 @@ class TestTaskComponent:
         """Test TaskComponent with EntityId assigned agent."""
         from ecs_agent.components import TaskComponent
         from ecs_agent.types import TaskStatus
+
         agent_id = EntityId(42)
         comp = TaskComponent(
             description="Task",
@@ -564,6 +595,7 @@ class TestTaskComponent:
         """Test TaskComponent with string assigned agent name."""
         from ecs_agent.components import TaskComponent
         from ecs_agent.types import TaskStatus
+
         comp = TaskComponent(
             description="Task",
             expected_output="Done",
@@ -579,6 +611,7 @@ class TestTaskComponent:
         """Test TaskComponent with optional fields set."""
         from ecs_agent.components import TaskComponent
         from ecs_agent.types import TaskStatus
+
         schema = {"type": "object", "properties": {"result": {"type": "string"}}}
         comp = TaskComponent(
             description="Task",
@@ -599,6 +632,7 @@ class TestTaskComponent:
     def test_dataclass_slots(self):
         """Test TaskComponent uses slots."""
         from ecs_agent.components import TaskComponent
+
         assert hasattr(TaskComponent, "__slots__")
 
 
@@ -608,6 +642,7 @@ class TestScratchbookRefComponent:
     def test_instantiation(self):
         """Test ScratchbookRefComponent with artifact metadata."""
         from ecs_agent.components import ScratchbookRefComponent
+
         comp = ScratchbookRefComponent(
             artifact_id="art-456",
             category="plan",
@@ -622,6 +657,7 @@ class TestScratchbookRefComponent:
     def test_dataclass_slots(self):
         """Test ScratchbookRefComponent uses slots."""
         from ecs_agent.components import ScratchbookRefComponent
+
         assert hasattr(ScratchbookRefComponent, "__slots__")
 
 
@@ -631,6 +667,7 @@ class TestScratchbookIndexComponent:
     def test_instantiation_with_empty_index(self):
         """Test ScratchbookIndexComponent with empty artifact index."""
         from ecs_agent.components import ScratchbookIndexComponent
+
         comp = ScratchbookIndexComponent()
         assert comp.artifacts == {}
 
@@ -638,6 +675,7 @@ class TestScratchbookIndexComponent:
         """Test ScratchbookIndexComponent with artifact entries."""
         from ecs_agent.components import ScratchbookIndexComponent
         from ecs_agent.types import ScratchbookRef
+
         ref1 = ScratchbookRef(
             artifact_id="a1",
             category="plan",
@@ -659,6 +697,7 @@ class TestScratchbookIndexComponent:
         """Test that artifact dicts are independent instances."""
         from ecs_agent.components import ScratchbookIndexComponent
         from ecs_agent.types import ScratchbookRef
+
         comp1 = ScratchbookIndexComponent()
         comp2 = ScratchbookIndexComponent()
         ref = ScratchbookRef(
@@ -673,6 +712,7 @@ class TestScratchbookIndexComponent:
     def test_dataclass_slots(self):
         """Test ScratchbookIndexComponent uses slots."""
         from ecs_agent.components import ScratchbookIndexComponent
+
         assert hasattr(ScratchbookIndexComponent, "__slots__")
 
 
@@ -680,82 +720,60 @@ class TestScratchbookIndexComponent:
 # Prompt normalization components (Task-1)
 # ---------------------------------------------------------------------------
 
+
 class TestPromptConfigComponent:
     """Tests for PromptConfigComponent."""
 
     def test_instantiation_defaults(self):
         """Test PromptConfigComponent defaults."""
         from ecs_agent.components import PromptConfigComponent
+
         comp = PromptConfigComponent()
-        assert comp.keyword_templates == {}
+        assert comp.trigger_templates == {}
         assert comp.enable_context_pool is False
         assert comp.context_pool_max_chars == 8192
 
-    def test_keyword_templates(self):
-        """Test PromptConfigComponent with keyword_templates."""
+    def test_trigger_templates(self):
+        """Test PromptConfigComponent with trigger_templates."""
         from ecs_agent.components import PromptConfigComponent
-        comp = PromptConfigComponent(keyword_templates={"code": "coding-assistant"})
-        assert comp.keyword_templates == {"code": "coding-assistant"}
+
+        comp = PromptConfigComponent(trigger_templates={"code": "coding-assistant"})
+        assert comp.trigger_templates == {"code": "coding-assistant"}
 
     def test_enable_context_pool(self):
         """Test PromptConfigComponent with enable_context_pool=True."""
         from ecs_agent.components import PromptConfigComponent
+
         comp = PromptConfigComponent(enable_context_pool=True)
         assert comp.enable_context_pool is True
 
     def test_context_pool_max_chars_custom(self):
         """Test PromptConfigComponent with custom context_pool_max_chars."""
         from ecs_agent.components import PromptConfigComponent
+
         comp = PromptConfigComponent(context_pool_max_chars=4096)
         assert comp.context_pool_max_chars == 4096
 
     def test_dataclass_slots(self):
         """Test PromptConfigComponent uses slots."""
         from ecs_agent.components import PromptConfigComponent
+
         assert hasattr(PromptConfigComponent, "__slots__")
 
     def test_mutable_default_independence(self):
-        """Test that keyword_templates are independent instances."""
+        """Test that trigger_templates are independent instances."""
         from ecs_agent.components import PromptConfigComponent
+
         comp1 = PromptConfigComponent()
         comp2 = PromptConfigComponent()
-        comp1.keyword_templates["x"] = "y"
-        assert "x" not in comp2.keyword_templates
+        comp1.trigger_templates["x"] = "y"
+        assert "x" not in comp2.trigger_templates
 
 
-class TestPromptContributionsComponent:
-    """Tests for PromptContributionsComponent."""
+def test_prompt_contributions_component_removed_from_exports() -> None:
+    from ecs_agent import components
 
-    def test_instantiation_defaults(self):
-        """Test PromptContributionsComponent defaults to empty sections."""
-        from ecs_agent.components import PromptContributionsComponent
-        comp = PromptContributionsComponent()
-        assert comp.sections == []
-
-    def test_sections_with_prompt_section_spec(self):
-        """Test PromptContributionsComponent accepts PromptSectionSpec items."""
-        from ecs_agent.components import PromptContributionsComponent
-        from ecs_agent.prompts import PromptSectionSpec
-        section = PromptSectionSpec(title="Context", lines=["line1", "line2"], priority=1)
-        comp = PromptContributionsComponent(sections=[section])
-        assert len(comp.sections) == 1
-        assert comp.sections[0].title == "Context"
-        assert comp.sections[0].lines == ["line1", "line2"]
-        assert comp.sections[0].priority == 1
-
-    def test_dataclass_slots(self):
-        """Test PromptContributionsComponent uses slots."""
-        from ecs_agent.components import PromptContributionsComponent
-        assert hasattr(PromptContributionsComponent, "__slots__")
-
-    def test_mutable_default_independence(self):
-        """Test that sections lists are independent instances."""
-        from ecs_agent.components import PromptContributionsComponent
-        from ecs_agent.prompts import PromptSectionSpec
-        comp1 = PromptContributionsComponent()
-        comp2 = PromptContributionsComponent()
-        comp1.sections.append(PromptSectionSpec(title="test"))
-        assert len(comp2.sections) == 0
+    assert not hasattr(components, "PromptContributionsComponent")
 
 
 class TestOneShotContextPoolComponent:
@@ -764,6 +782,7 @@ class TestOneShotContextPoolComponent:
     def test_instantiation_defaults(self):
         """Test OneShotContextPoolComponent defaults."""
         from ecs_agent.components import OneShotContextPoolComponent
+
         comp = OneShotContextPoolComponent()
         assert comp.items == []
         assert comp.state == "idle"
@@ -773,6 +792,7 @@ class TestOneShotContextPoolComponent:
     def test_items_field(self):
         """Test OneShotContextPoolComponent items field."""
         from ecs_agent.components import OneShotContextPoolComponent
+
         item = (10, 0, "test-source", "some content")
         comp = OneShotContextPoolComponent(items=[item])
         assert len(comp.items) == 1
@@ -781,6 +801,7 @@ class TestOneShotContextPoolComponent:
     def test_state_reserved(self):
         """Test OneShotContextPoolComponent with reserved state."""
         from ecs_agent.components import OneShotContextPoolComponent
+
         comp = OneShotContextPoolComponent(state="reserved", reserved_turn_id="turn-1")
         assert comp.state == "reserved"
         assert comp.reserved_turn_id == "turn-1"
@@ -788,11 +809,13 @@ class TestOneShotContextPoolComponent:
     def test_dataclass_slots(self):
         """Test OneShotContextPoolComponent uses slots."""
         from ecs_agent.components import OneShotContextPoolComponent
+
         assert hasattr(OneShotContextPoolComponent, "__slots__")
 
     def test_mutable_default_independence(self):
         """Test that items lists are independent instances."""
         from ecs_agent.components import OneShotContextPoolComponent
+
         comp1 = OneShotContextPoolComponent()
         comp2 = OneShotContextPoolComponent()
         comp1.items.append((1, 0, "src", "text"))
@@ -805,6 +828,7 @@ class TestTurnStateComponent:
     def test_instantiation_defaults(self):
         """Test TurnStateComponent defaults."""
         from ecs_agent.components import TurnStateComponent
+
         comp = TurnStateComponent()
         assert comp.current_turn_id == ""
         assert comp.last_injected_turn_id == ""
@@ -812,18 +836,21 @@ class TestTurnStateComponent:
     def test_current_turn_id_set(self):
         """Test TurnStateComponent with current_turn_id."""
         from ecs_agent.components import TurnStateComponent
+
         comp = TurnStateComponent(current_turn_id="turn-42")
         assert comp.current_turn_id == "turn-42"
 
     def test_last_injected_turn_id_set(self):
         """Test TurnStateComponent with last_injected_turn_id."""
         from ecs_agent.components import TurnStateComponent
+
         comp = TurnStateComponent(last_injected_turn_id="turn-41")
         assert comp.last_injected_turn_id == "turn-41"
 
     def test_dataclass_slots(self):
         """Test TurnStateComponent uses slots."""
         from ecs_agent.components import TurnStateComponent
+
         assert hasattr(TurnStateComponent, "__slots__")
 
 
@@ -833,7 +860,10 @@ class TestPromptContractsModule:
     def test_prompt_template_instantiation(self):
         """Test PromptTemplate can be instantiated."""
         from ecs_agent.prompts import PromptTemplate
-        tmpl = PromptTemplate(template_id="coding-assistant", content="You are a coder.")
+
+        tmpl = PromptTemplate(
+            template_id="coding-assistant", content="You are a coder."
+        )
         assert tmpl.template_id == "coding-assistant"
         assert tmpl.content == "You are a coder."
         assert tmpl.description == ""
@@ -842,6 +872,7 @@ class TestPromptContractsModule:
     def test_prompt_template_with_metadata(self):
         """Test PromptTemplate with metadata."""
         from ecs_agent.prompts import PromptTemplate
+
         tmpl = PromptTemplate(
             template_id="test",
             content="content",
@@ -854,6 +885,7 @@ class TestPromptContractsModule:
     def test_prompt_section_spec_instantiation(self):
         """Test PromptSectionSpec can be instantiated."""
         from ecs_agent.prompts import PromptSectionSpec
+
         spec = PromptSectionSpec(title="Rules")
         assert spec.title == "Rules"
         assert spec.lines == []
@@ -862,6 +894,7 @@ class TestPromptContractsModule:
     def test_prompt_section_spec_with_lines(self):
         """Test PromptSectionSpec with lines and priority."""
         from ecs_agent.prompts import PromptSectionSpec
+
         spec = PromptSectionSpec(title="Rules", lines=["Rule 1", "Rule 2"], priority=5)
         assert spec.lines == ["Rule 1", "Rule 2"]
         assert spec.priority == 5
@@ -869,6 +902,7 @@ class TestPromptContractsModule:
     def test_prompt_render_context_instantiation(self):
         """Test PromptRenderContext can be instantiated."""
         from ecs_agent.prompts import PromptRenderContext
+
         ctx = PromptRenderContext()
         assert ctx.variables == {}
         assert ctx.entity_id is None
@@ -876,6 +910,7 @@ class TestPromptContractsModule:
     def test_prompt_render_context_with_values(self):
         """Test PromptRenderContext with variables and entity_id."""
         from ecs_agent.prompts import PromptRenderContext
+
         ctx = PromptRenderContext(variables={"name": "Alice"}, entity_id=42)
         assert ctx.variables == {"name": "Alice"}
         assert ctx.entity_id == 42
@@ -883,6 +918,7 @@ class TestPromptContractsModule:
     def test_prompt_injection_artifact_instantiation(self):
         """Test PromptInjectionArtifact can be instantiated."""
         from ecs_agent.prompts import PromptInjectionArtifact
+
         artifact = PromptInjectionArtifact(
             keyword="code",
             block="You are a coder.",
@@ -895,6 +931,7 @@ class TestPromptContractsModule:
     def test_prompt_template_metadata_independence(self):
         """Test PromptTemplate metadata dicts are independent."""
         from ecs_agent.prompts import PromptTemplate
+
         tmpl1 = PromptTemplate(template_id="a", content="c")
         tmpl2 = PromptTemplate(template_id="b", content="d")
         tmpl1.metadata["key"] = "val"
@@ -903,9 +940,11 @@ class TestPromptContractsModule:
     def test_prompt_section_spec_slots(self):
         """Test PromptSectionSpec uses slots."""
         from ecs_agent.prompts import PromptSectionSpec
+
         assert hasattr(PromptSectionSpec, "__slots__")
 
     def test_prompt_template_slots(self):
         """Test PromptTemplate uses slots."""
         from ecs_agent.prompts import PromptTemplate
+
         assert hasattr(PromptTemplate, "__slots__")

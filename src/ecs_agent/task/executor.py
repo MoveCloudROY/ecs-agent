@@ -21,7 +21,9 @@ from ecs_agent.logging import get_logger
 from ecs_agent.prompts.message_assembly import (
     assemble_messages,
     build_keyword_registry,
+    build_trigger_specs,
     commit_context_pool_reservation,
+    collect_active_events,
     reserve_context_pool_items,
 )
 from ecs_agent.task.fetching_unit import DispatchRequest
@@ -239,8 +241,13 @@ class TaskExecutor:
         context_pool = world.get_component(entity_id, OneShotContextPoolComponent)
         turn_state = world.get_component(entity_id, TurnStateComponent)
         keyword_registry = (
-            build_keyword_registry(prompt_config.keyword_templates)
-            if prompt_config is not None and prompt_config.keyword_templates
+            build_keyword_registry(prompt_config.trigger_templates)
+            if prompt_config is not None and prompt_config.trigger_templates
+            else None
+        )
+        trigger_specs = (
+            build_trigger_specs(prompt_config.trigger_templates)
+            if prompt_config is not None and prompt_config.trigger_templates
             else None
         )
         context_pool_enabled = (
@@ -259,11 +266,14 @@ class TaskExecutor:
                 pool=context_pool,
                 turn_id=turn_id,
             )
+        active_events = collect_active_events(reserved_context_pool_items)
         outbound_messages = assemble_messages(
             conversation_messages=conv.messages,
             enable_context_pool=context_pool_enabled,
             context_pool_items=reserved_context_pool_items,
             keyword_registry=keyword_registry,
+            trigger_specs=trigger_specs,
+            active_events=active_events,
         )
 
         # Execute LLM reasoning step to get tool calls

@@ -22,7 +22,9 @@ from ecs_agent.logging import get_logger
 from ecs_agent.prompts.message_assembly import (
     assemble_messages,
     build_keyword_registry,
+    build_trigger_specs,
     commit_context_pool_reservation,
+    collect_active_events,
     reserve_context_pool_items,
 )
 from ecs_agent.scratchbook import ScratchbookService
@@ -65,8 +67,13 @@ class PlanningSystem:
             context_pool = world.get_component(entity_id, OneShotContextPoolComponent)
             turn_state = world.get_component(entity_id, TurnStateComponent)
             keyword_registry = (
-                build_keyword_registry(prompt_config.keyword_templates)
-                if prompt_config is not None and prompt_config.keyword_templates
+                build_keyword_registry(prompt_config.trigger_templates)
+                if prompt_config is not None and prompt_config.trigger_templates
+                else None
+            )
+            trigger_specs = (
+                build_trigger_specs(prompt_config.trigger_templates)
+                if prompt_config is not None and prompt_config.trigger_templates
                 else None
             )
             context_pool_enabled = (
@@ -87,6 +94,7 @@ class PlanningSystem:
                     pool=context_pool,
                     turn_id=turn_id,
                 )
+            active_events = collect_active_events(reserved_context_pool_items)
             messages = assemble_messages(
                 system_prompt=system_prompt.content
                 if system_prompt is not None
@@ -96,6 +104,8 @@ class PlanningSystem:
                 enable_context_pool=context_pool_enabled,
                 context_pool_items=reserved_context_pool_items,
                 keyword_registry=keyword_registry,
+                trigger_specs=trigger_specs,
+                active_events=active_events,
             )
 
             tool_registry = world.get_component(entity_id, ToolRegistryComponent)

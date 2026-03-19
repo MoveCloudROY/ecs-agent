@@ -25,9 +25,11 @@ import pytest
 from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
+    OneShotContextPoolComponent,
     PromptConfigComponent,
     StreamingComponent,
     SystemPromptComponent,
+    TurnStateComponent,
 )
 from ecs_agent.components.definitions import InterruptionComponent, TerminalComponent
 from ecs_agent.conversation_tree import (
@@ -40,10 +42,12 @@ from ecs_agent.conversation_tree import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import FORBIDDEN_FIELDS
+from ecs_agent.prompts.contracts import PromptSectionSpec
 from ecs_agent.providers import OpenAIProvider
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.system_prompt_assembly import SystemPromptAssemblySystem
 from ecs_agent.types import (
     CompletionResult,
     InterruptionReason,
@@ -483,8 +487,148 @@ async def test_real_llm_prompt_keyword_injection_smoke() -> None:
     )
     world.add_component(
         entity,
-        PromptConfigComponent(keyword_templates={"@code": "KEYWORD_TEMPLATE_BLOCK"}),
+        PromptConfigComponent(
+            trigger_templates={"@code": "KEYWORD_TEMPLATE_BLOCK"},
+            enable_context_pool=True,
+        ),
     )
+    world.add_component(
+        entity,
+        OneShotContextPoolComponent(
+            items=[
+                (
+                    30,
+                    0,
+                    "tool:search",
+                    "source: tool:search\nstatus: success\nresult: citations\nerror: ",
+                ),
+                (
+                    20,
+                    1,
+                    "subagent:researcher",
+                    "source: subagent:researcher\nstatus: success\nresult: synthesis\nerror: ",
+                ),
+            ],
+            _counter=2,
+        ),
+    )
+    world.add_component(
+        entity, TurnStateComponent(current_turn_id="turn-real-keyword-1")
+    )
+    world.add_component(
+        entity,
+        SystemPromptComponent(
+            template=(
+                "# Markdown Linked Prompt\n\n"
+                "${toolSelection}\n\n"
+                "${exploreSection}\n\n"
+                "${librarianSection}"
+            ),
+            sections=[
+                PromptSectionSpec(
+                    title="toolSelection",
+                    lines=["Follow the workflow from markdown-linked skills."],
+                    priority=30,
+                ),
+                PromptSectionSpec(
+                    title="exploreSection",
+                    lines=["Use evidence from context pool entries first."],
+                    priority=20,
+                ),
+                PromptSectionSpec(
+                    title="librarianSection",
+                    lines=["Preserve concrete citations in responses."],
+                    priority=10,
+                ),
+            ],
+            content="",
+        ),
+    )
+
+    await SystemPromptAssemblySystem().process(world)
+
+    world.register_system(ReasoningSystem(priority=0), priority=0)
+    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
+
+    await runner.run(world, max_ticks=1)
+
+    assert len(provider.last_messages) >= 1
+    outbound_system = provider.last_messages[0]
+    outbound_user = provider.last_messages[-1]
+    assert outbound_system.role == "system"
+    assert outbound_system.content == (
+        "# Markdown Linked Prompt\n\n"
+        "## toolSelection\n\n"
+        "Follow the workflow from markdown-linked skills.\n\n"
+        "## exploreSection\n\n"
+        "Use evidence from context pool entries first.\n\n"
+        "## librarianSection\n\n"
+        "Preserve concrete citations in responses."
+    )
+    assert outbound_user.role == "user"
+    assert outbound_user.content.startswith(
+        "[PROMPT_INJECT:@code]\nKEYWORD_TEMPLATE_BLOCK\n\n"
+    )
+    assert outbound_user.index("[PROMPT_INJECT:@code]") < outbound_user.index(
+        "[PROMPT_CONTEXT_POOL]"
+    )
+    assert outbound_user.index("source: tool:search") < outbound_user.index(
+        "source: subagent:researcher"
+    )
+    assert "[PROMPT_CONTEXT_POOL]" in outbound_user.content
+    assert outbound_user.content.endswith("Need @code help in one short sentence")
+
+    conv = world.get_component(entity, ConversationComponent)
+    assert conv is not None
+    assert conv.messages[-1].role == "assistant"
+    assert len(conv.messages[-1].content) > 0
+
+
+@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.asyncio
+async def test_real_llm_prompt_event_injection_smoke() -> None:
+    world = World()
+    runner = Runner()
+
+    model = os.getenv("LLM_MODEL", "qwen3.5-flash")
+    provider = RecordingProvider(get_real_provider())
+
+    entity = world.create_entity()
+    world.add_component(entity, LLMComponent(provider=provider, model=model))
+    world.add_component(
+        entity,
+        ConversationComponent(
+            messages=[Message(role="user", content="Need concise summary")]
+        ),
+    )
+    world.add_component(
+        entity,
+        PromptConfigComponent(
+            trigger_templates={"event:tool_success": "EVENT_TEMPLATE_BLOCK"},
+            enable_context_pool=True,
+        ),
+    )
+    world.add_component(
+        entity,
+        OneShotContextPoolComponent(
+            items=[
+                (
+                    30,
+                    0,
+                    "tool:search",
+                    "source: tool:search\nstatus: success\nresult: citations\nerror: ",
+                ),
+                (
+                    20,
+                    1,
+                    "subagent:researcher",
+                    "source: subagent:researcher\nstatus: success\nresult: synthesis\nerror: ",
+                ),
+            ],
+            _counter=2,
+        ),
+    )
+    world.add_component(entity, TurnStateComponent(current_turn_id="turn-real-event-1"))
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
@@ -495,9 +639,15 @@ async def test_real_llm_prompt_keyword_injection_smoke() -> None:
     outbound_user = provider.last_messages[-1]
     assert outbound_user.role == "user"
     assert outbound_user.content.startswith(
-        "[PROMPT_INJECT:@code]\nKEYWORD_TEMPLATE_BLOCK\n\n"
+        "[PROMPT_INJECT:event:tool_success]\nEVENT_TEMPLATE_BLOCK\n\n"
     )
-    assert outbound_user.content.endswith("Need @code help in one short sentence")
+    assert outbound_user.content.index(
+        "[PROMPT_INJECT:event:tool_success]"
+    ) < outbound_user.content.index("[PROMPT_CONTEXT_POOL]")
+    assert outbound_user.content.index(
+        "source: tool:search"
+    ) < outbound_user.content.index("source: subagent:researcher")
+    assert outbound_user.content.endswith("Need concise summary")
 
     conv = world.get_component(entity, ConversationComponent)
     assert conv is not None

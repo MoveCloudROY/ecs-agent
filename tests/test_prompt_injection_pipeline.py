@@ -5,10 +5,12 @@ from ecs_agent.components import (
     LLMComponent,
     OneShotContextPoolComponent,
     PromptConfigComponent,
+    SystemPromptComponent,
     ToolResultsComponent,
     TurnStateComponent,
 )
 from ecs_agent.core import World
+from ecs_agent.prompts.contracts import PromptSectionSpec
 from ecs_agent.prompts.message_assembly import (
     commit_context_pool_reservation,
     reserve_context_pool_items,
@@ -20,6 +22,7 @@ from ecs_agent.systems.prompt_context_collector import (
     PromptContextCollectorSystem,
 )
 from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.system_prompt_assembly import SystemPromptAssemblySystem
 from ecs_agent.types import (
     CompletionResult,
     DelegationCompletedEvent,
@@ -121,7 +124,7 @@ async def test_retry_uses_reserved_payload_then_commit_clears_once_on_success() 
     world.add_component(
         entity_id,
         PromptConfigComponent(
-            keyword_templates={"@code": "Use code-first reasoning"},
+            trigger_templates={"@code": "Use code-first reasoning"},
             enable_context_pool=True,
         ),
     )
@@ -174,13 +177,47 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
     world.add_component(
         entity_id,
         PromptConfigComponent(
-            keyword_templates={"@code": "Use code-first reasoning"},
+            trigger_templates={
+                "@code": "Use code-first reasoning",
+                "event:tool_success": "Prioritize successful tool evidence",
+            },
             enable_context_pool=True,
             context_pool_max_chars=10000,
         ),
     )
+    world.add_component(
+        entity_id,
+        SystemPromptComponent(
+            template=(
+                "# Markdown System Prompt\n\n"
+                "${toolSelection}\n\n"
+                "${exploreSection}\n\n"
+                "${librarianSection}"
+            ),
+            sections=[
+                PromptSectionSpec(
+                    title="toolSelection",
+                    lines=["Prefer deterministic tool-first synthesis."],
+                    priority=30,
+                ),
+                PromptSectionSpec(
+                    title="exploreSection",
+                    lines=["Capture concrete evidence from tool outputs."],
+                    priority=20,
+                ),
+                PromptSectionSpec(
+                    title="librarianSection",
+                    lines=["Reference exact snippets in final answer."],
+                    priority=10,
+                ),
+            ],
+            content="",
+        ),
+    )
     world.add_component(entity_id, OneShotContextPoolComponent())
     world.add_component(entity_id, TurnStateComponent(current_turn_id="turn-ctx-1"))
+
+    await SystemPromptAssemblySystem().process(world)
 
     collector = PromptContextCollectorSystem()
     await collector.process(world)
@@ -214,6 +251,18 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
     )
     assert sent_user.endswith("Please @code summarize findings")
 
+    sent_system = provider.calls[0][0]
+    assert sent_system.role == "system"
+    assert sent_system.content == (
+        "# Markdown System Prompt\n\n"
+        "## toolSelection\n\n"
+        "Prefer deterministic tool-first synthesis.\n\n"
+        "## exploreSection\n\n"
+        "Capture concrete evidence from tool outputs.\n\n"
+        "## librarianSection\n\n"
+        "Reference exact snippets in final answer."
+    )
+
     pool = world.get_component(entity_id, OneShotContextPoolComponent)
     assert pool is not None
     assert pool.state == "committed"
@@ -227,6 +276,64 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
     conversation = world.get_component(entity_id, ConversationComponent)
     assert conversation is not None
     assert conversation.messages[0].content == "Please @code summarize findings"
+
+
+@pytest.mark.asyncio
+async def test_event_trigger_injection_uses_context_signal_and_preserves_user_tail() -> (
+    None
+):
+    world = World()
+    provider = RecordingProvider()
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[Message(role="user", content="Need concise summary")]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        PromptConfigComponent(
+            trigger_templates={"event:tool_success": "Prefer successful tool context"},
+            enable_context_pool=True,
+        ),
+    )
+    world.add_component(
+        entity_id,
+        OneShotContextPoolComponent(
+            items=[
+                (
+                    30,
+                    0,
+                    "tool:search",
+                    "source: tool:search\nstatus: success\nresult: citations\nerror: ",
+                ),
+                (
+                    20,
+                    1,
+                    "subagent:researcher",
+                    "source: subagent:researcher\nstatus: success\nresult: synthesis\nerror: ",
+                ),
+            ],
+            _counter=2,
+        ),
+    )
+    world.add_component(entity_id, TurnStateComponent(current_turn_id="turn-event-1"))
+
+    await ReasoningSystem().process(world)
+
+    sent_user = provider.calls[0][-1].content
+    assert sent_user.startswith(
+        "[PROMPT_INJECT:event:tool_success]\nPrefer successful tool context"
+    )
+    assert sent_user.index("[PROMPT_INJECT:event:tool_success]") < sent_user.index(
+        "[PROMPT_CONTEXT_POOL]"
+    )
+    assert sent_user.index("source: tool:search") < sent_user.index(
+        "source: subagent:researcher"
+    )
+    assert sent_user.endswith("Need concise summary")
 
 
 @pytest.mark.asyncio

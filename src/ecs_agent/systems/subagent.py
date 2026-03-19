@@ -15,6 +15,7 @@ from ecs_agent.components import (
     OwnerComponent,
     PermissionComponent,
     SubagentRegistryComponent,
+    SystemPromptComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.components.definitions import SkillComponent, SkillMetadata
@@ -1063,6 +1064,13 @@ class SubagentSystem:
         )
         child_world.add_component(
             child_world_entity_id,
+            SystemPromptComponent(
+                template=effective_system_prompt,
+                content=effective_system_prompt,
+            ),
+        )
+        child_world.add_component(
+            child_world_entity_id,
             ConversationComponent(messages=[]),
         )
         child_world.add_component(
@@ -1077,6 +1085,13 @@ class SubagentSystem:
                     provider=config.provider,
                     model=config.model,
                     system_prompt=effective_system_prompt,
+                ),
+            )
+            parent_world.add_component(
+                parent_child_entity,
+                SystemPromptComponent(
+                    template=effective_system_prompt,
+                    content=effective_system_prompt,
                 ),
             )
 

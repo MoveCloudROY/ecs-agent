@@ -199,7 +199,7 @@ primary_entity, world = compile_agent_specs(resolved, provider_factory)
 
 **5. compile_agent_specs(specs: dict[str, AgentSpec], factory) → tuple[EntityId, World]**
 - Creates exactly ONE runnable primary entity
-- Attaches `LLMComponent`, `PermissionComponent`, `SubagentRegistryComponent`
+- Attaches `LLMComponent`, `SystemPromptComponent`, `PermissionComponent`, `SubagentRegistryComponent`
 - Subagents become `SubagentConfig` in registry
 - Raises `ValueError` if zero or multiple primaries
 

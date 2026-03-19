@@ -23,7 +23,9 @@ from ecs_agent.core.world import World
 from ecs_agent.prompts.message_assembly import (
     assemble_messages,
     build_keyword_registry,
+    build_trigger_specs,
     commit_context_pool_reservation,
+    collect_active_events,
     reserve_context_pool_items,
 )
 from ecs_agent.scratchbook import ScratchbookService
@@ -105,6 +107,7 @@ class ReplanningSystem:
                 prompt_config=prompt_config,
                 context_pool_enabled=context_pool_enabled,
                 context_pool_items=reserved_context_pool_items,
+                active_events=collect_active_events(reserved_context_pool_items),
             )
 
             try:
@@ -169,6 +172,7 @@ class ReplanningSystem:
         prompt_config: PromptConfigComponent | None,
         context_pool_enabled: bool,
         context_pool_items: list[tuple[int, int, str, str]] | None,
+        active_events: set[str],
     ) -> list[Message]:
         """Build the message list for the replanning LLM call."""
         conversation_messages: list[Message] = []
@@ -197,8 +201,13 @@ class ReplanningSystem:
         # System prompt
         system_prompt = world.get_component(entity_id, SystemPromptComponent)
         keyword_registry = (
-            build_keyword_registry(prompt_config.keyword_templates)
-            if prompt_config is not None and prompt_config.keyword_templates
+            build_keyword_registry(prompt_config.trigger_templates)
+            if prompt_config is not None and prompt_config.trigger_templates
+            else None
+        )
+        trigger_specs = (
+            build_trigger_specs(prompt_config.trigger_templates)
+            if prompt_config is not None and prompt_config.trigger_templates
             else None
         )
 
@@ -224,6 +233,8 @@ class ReplanningSystem:
             enable_context_pool=context_pool_enabled,
             context_pool_items=context_pool_items,
             keyword_registry=keyword_registry,
+            trigger_specs=trigger_specs,
+            active_events=active_events,
         )
 
     def _find_step_result(

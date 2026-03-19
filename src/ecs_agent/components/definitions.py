@@ -169,9 +169,11 @@ class TerminalComponent:
 
 @dataclass(slots=True)
 class SystemPromptComponent:
-    """LLM system prompt."""
+    """System prompt assembly inputs and rendered output."""
 
-    content: str
+    template: str = ""
+    sections: list["PromptSectionSpec"] = field(default_factory=list)
+    content: str = ""
 
 
 @dataclass(slots=True)
@@ -413,19 +415,11 @@ from ecs_agent.prompts.contracts import PromptSectionSpec  # noqa: E402
 class PromptConfigComponent:
     """Opts an entity into the prompt normalization pipeline."""
 
-    # keyword -> template content mapping for stage-1 injection
-    keyword_templates: dict[str, str] = field(default_factory=dict)
+    trigger_templates: dict[str, str] = field(default_factory=dict)
     # whether to enable stage-2 context pool injection
     enable_context_pool: bool = False
     # max characters for context pool rendering (overflow = drop lowest priority)
     context_pool_max_chars: int = 8192
-
-
-@dataclass(slots=True)
-class PromptContributionsComponent:
-    """Holds pending named sections to be assembled into system prompt."""
-
-    sections: list[PromptSectionSpec] = field(default_factory=list)
 
 
 @dataclass(slots=True)

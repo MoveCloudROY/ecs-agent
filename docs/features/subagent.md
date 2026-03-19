@@ -10,7 +10,7 @@ Subagent delegation provides:
 - **Isolated Execution**: Each subagent runs in its own `World` with independent state
 - **Automatic Result Aggregation**: Results flow back to parent via tool result messages.
 - **Event Tracking**: Monitor delegation lifecycle with `DelegationStartedEvent` and `DelegationCompletedEvent`.
-- **Skill Inheritance**: Subagents can inherit specific skills, system prompts, and tools from their parent agent via `InheritancePolicy`.
+- **Skill Inheritance**: Subagents can inherit specific skills, system prompts (via `SystemPromptComponent`), and tools from their parent agent via `InheritancePolicy`.
 - **Sync and Background Modes**: Execute tasks immediately or as background sessions with ID tracking.
 - **Lifecycle Management**: Track background sessions through `Idle`, `Working`, `Dead`, `Timeout`, and `Cancelled` states.
 - **Control Tools**: Tools to query status, retrieve results, and cancel background sessions.
@@ -139,8 +139,8 @@ world.register_system(SubagentSystem(priority=-1), priority=-1)
 ### Basic Delegation
 
 1. **Register subagents** with `SubagentRegistryComponent`
-2. **Add ToolRegistryComponent** to enable delegate tool auto-registration
-3. **Register SubagentSystem** (priority -1, before ReasoningSystem)
+2. **Register SubagentSystem** (priority -1, before ReasoningSystem)
+3. **SubagentSystem creates a new child entity** with the subagent's provider, model, and `SystemPromptComponent` (template/content from effective system prompt)
 4. **LLM calls delegate tool** to invoke subagent
 5. **SubagentSystem executes** child and returns result
 ```python

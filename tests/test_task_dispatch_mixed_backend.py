@@ -598,3 +598,67 @@ async def test_local_backend_retry_reuses_reserved_context_then_commits_on_succe
 
     assert pool.items == []
     assert pool.state == "committed"
+
+
+@pytest.mark.asyncio
+async def test_local_backend_event_trigger_injection_is_transient() -> None:
+    world = World()
+    executor = TaskExecutor()
+    agent = world.create_entity()
+
+    provider = RecordingFakeProvider(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="Local OK"))
+        ]
+    )
+    world.add_component(
+        agent,
+        LLMComponent(provider=provider, model="fake", system_prompt=""),
+    )
+    world.add_component(agent, ConversationComponent(messages=[]))
+    world.add_component(agent, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(
+        agent,
+        PromptConfigComponent(
+            trigger_templates={"event:tool_success": "Prefer successful tool outputs"},
+            enable_context_pool=True,
+        ),
+    )
+    world.add_component(
+        agent,
+        OneShotContextPoolComponent(
+            items=[
+                (
+                    30,
+                    0,
+                    "tool:search",
+                    "source: tool:search\nstatus: success\nresult: local facts\nerror: ",
+                )
+            ]
+        ),
+    )
+
+    request = DispatchRequest(
+        task_id="local-context-event",
+        wave_number=0,
+        sequence_number=0,
+        description="Do local work",
+        expected_output="Output",
+        assigned_agent=None,
+        tools=tuple(),
+        context_dependencies=tuple(),
+        priority=0,
+    )
+
+    _ = await executor.execute_dispatch_request(world, agent, request)
+
+    sent_messages = provider.calls[0]
+    assert sent_messages[-1].role == "user"
+    assert sent_messages[-1].content.startswith(
+        "[PROMPT_INJECT:event:tool_success]\nPrefer successful tool outputs"
+    )
+    assert sent_messages[-1].content.endswith("Do local work")
+
+    conversation = world.get_component(agent, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages[0].content == "Do local work"

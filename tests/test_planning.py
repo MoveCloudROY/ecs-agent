@@ -366,3 +366,56 @@ async def test_planning_retry_reuses_reserved_context_then_commits_on_success() 
 
     assert pool.items == []
     assert pool.state == "committed"
+
+
+@pytest.mark.asyncio
+async def test_event_trigger_injection_is_transient_for_planning_provider_call() -> (
+    None
+):
+    world = World()
+    provider = RecordingFakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, SystemPromptComponent(content="You are concise"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Plan this")]),
+    )
+    world.add_component(
+        entity_id, PlanComponent(steps=["inspect state"], current_step=0)
+    )
+    world.add_component(
+        entity_id,
+        PromptConfigComponent(
+            trigger_templates={"event:tool_success": "Prefer successful tool context"},
+            enable_context_pool=True,
+        ),
+    )
+    world.add_component(
+        entity_id,
+        OneShotContextPoolComponent(
+            items=[
+                (
+                    30,
+                    0,
+                    "tool:search",
+                    "source: tool:search\nstatus: success\nresult: evidence\nerror: ",
+                )
+            ]
+        ),
+    )
+
+    await PlanningSystem().process(world)
+
+    sent = provider.calls[0]
+    assert sent[2].role == "user"
+    assert sent[2].content.startswith(
+        "[PROMPT_INJECT:event:tool_success]\nPrefer successful tool context"
+    )
+    assert sent[2].content.endswith("Plan this")
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages[0].content == "Plan this"

@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from ecs_agent.components import LLMComponent, PermissionComponent, SubagentRegistryComponent
+from ecs_agent.components import (
+    LLMComponent,
+    PermissionComponent,
+    SubagentRegistryComponent,
+    SystemPromptComponent,
+)
 from ecs_agent.core import World
 from ecs_agent.dsl.schema import AgentSpec
 from ecs_agent.logging import get_logger
@@ -45,10 +50,19 @@ def compile_agent_specs(
             system_prompt=primary_spec.prompt,
         ),
     )
+    world.add_component(
+        primary_entity,
+        SystemPromptComponent(
+            template=primary_spec.prompt,
+            content=primary_spec.prompt,
+        ),
+    )
 
     # Add permission component if tools are specified
     if primary_spec.tools:
-        allowed_tools = [tool for tool, enabled in primary_spec.tools.items() if enabled]
+        allowed_tools = [
+            tool for tool, enabled in primary_spec.tools.items() if enabled
+        ]
         world.add_component(
             primary_entity,
             PermissionComponent(allowed_tools=allowed_tools, denied_tools=[]),

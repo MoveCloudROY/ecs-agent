@@ -1,7 +1,21 @@
 """Prompt contract dataclasses for the prompt normalization pipeline."""
 
 from dataclasses import dataclass, field
+from typing import Literal
 from typing import Any
+
+
+CORE_PLACEHOLDER_KEYS: tuple[str, str, str] = (
+    "toolSelection",
+    "exploreSection",
+    "librarianSection",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PlaceholderContract:
+    key: str
+    is_core: bool = False
 
 
 @dataclass(slots=True)
@@ -29,6 +43,18 @@ class PromptRenderContext:
 
     variables: dict[str, str] = field(default_factory=dict)
     entity_id: int | None = None
+
+
+PromptTriggerKind = Literal["keyword", "event"]
+
+
+@dataclass(frozen=True, slots=True)
+class PromptTriggerSpec:
+    kind: PromptTriggerKind
+    trigger: str
+    template_id: str
+    priority: int = 0
+    registration_order: int = 0
 
 
 @dataclass(slots=True)

@@ -54,15 +54,21 @@ Defines the base system prompt used to guide LLM behavior.
 
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `content` | `str` | (none) | The system prompt text |
+| `template` | `str` | `""` | Base system prompt template with placeholders |
+| `sections` | `list[PromptSectionSpec]` | `[]` | List of prompt sections to inject into placeholders |
+| `content` | `str` | `""` | Rendered system prompt output |
 
 **Used by:** `ReasoningSystem`, `PlanningSystem`, `ReplanningSystem`
 
 **Usage:**
 ```python
 from ecs_agent.components import SystemPromptComponent
-world.add_component(agent, SystemPromptComponent(content="You are a specialized code reviewer."))
-```
+from ecs_agent.prompts.contracts import PromptSectionSpec
+
+world.add_component(agent, SystemPromptComponent(
+    template="You are a specialized code reviewer.\n\n$toolSelection",
+    sections=[PromptSectionSpec(title="toolSelection", lines=["Use PEP8 style."])]
+))
 
 ### `EntityRegistryComponent`
 
@@ -664,15 +670,23 @@ Configures opt-in prompt normalization and keyword injection.
 
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
+| `trigger_templates` | `dict[str, str]` | `{}` | Mapping of `@keyword` or `event:<name>` to template content |
 | `enable_context_pool` | `bool` | `False` | Enable one-shot context collection |
-| `keyword_templates` | `dict[str, str]` | `{}` | Mapping of `@keyword` to template content |
-| context_pool_max_chars | int | 8192 | Maximum characters for context block |
+| `context_pool_max_chars` | `int` | `8192` | Maximum characters for context block |
 
 ### OneShotContextPoolComponent
 Transient storage for context items (tool results, subagent outputs) to be injected into the next turn.
 
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `items` | `list` | `[]` | Collected context items |
+| `items` | `list[tuple]` | `[]` | Collected context items (priority, order, label, content) |
 | `state` | `str` | `"idle"` | Reservation state (`idle`, `reserved`, `committed`) |
+| `reserved_turn_id` | `str` | `""` | Turn ID that made the current reservation |
 
+### TurnStateComponent
+Tracks per-turn ID for idempotency and injection deduplication.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `current_turn_id` | `str` | `""` | Current turn identifier |
+| `last_injected_turn_id` | `str` | `""` | Last turn ID that received injection |

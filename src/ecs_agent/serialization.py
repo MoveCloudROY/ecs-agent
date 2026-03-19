@@ -24,7 +24,6 @@ from ecs_agent.components import (
     PlanComponent,
     PlanSearchComponent,
     PromptConfigComponent,
-    PromptContributionsComponent,
     RAGTriggerComponent,
     RunnerStateComponent,
     ResponsesAPIStateComponent,
@@ -82,7 +81,6 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     ScratchbookRefComponent.__name__: ScratchbookRefComponent,
     TaskComponent.__name__: TaskComponent,
     PromptConfigComponent.__name__: PromptConfigComponent,
-    PromptContributionsComponent.__name__: PromptContributionsComponent,
     OneShotContextPoolComponent.__name__: OneShotContextPoolComponent,
     TurnStateComponent.__name__: TurnStateComponent,
 }
@@ -110,7 +108,7 @@ class WorldSerializer:
             entities[str(int(entity_id))] = serialized_components
 
         next_entity_id = world._entity_gen._counter + 1
-        
+
         # Serialize entity registry
         entity_registry = {
             name: int(entity_id) for name, entity_id in world._entity_registry.items()
@@ -119,7 +117,7 @@ class WorldSerializer:
             tag: sorted([int(eid) for eid in entity_ids])
             for tag, entity_ids in world._entity_tags.items()
         }
-        
+
         return {
             "next_entity_id": next_entity_id,
             "entities": entities,
@@ -153,19 +151,19 @@ class WorldSerializer:
 
         next_entity_id = int(data.get("next_entity_id", 1))
         world._entity_gen._counter = max(0, next_entity_id - 1)
-        
+
         # Restore entity registry (backward compatible)
         entity_registry_data = data.get("_entity_registry", {})
         world._entity_registry = {
             name: EntityId(int(eid)) for name, eid in entity_registry_data.items()
         }
-        
+
         entity_tags_data = data.get("_entity_tags", {})
         world._entity_tags = {
             tag: set(EntityId(int(eid)) for eid in eids)
             for tag, eids in entity_tags_data.items()
         }
-        
+
         return world
 
     @staticmethod
@@ -223,11 +221,15 @@ class WorldSerializer:
         if isinstance(component, TaskComponent):
             # Convert assigned_agent if it's an EntityId (which is an int at runtime)
             assigned_agent = serialized.get("assigned_agent")
-            if assigned_agent is not None and isinstance(assigned_agent, int) and not isinstance(assigned_agent, bool):
+            if (
+                assigned_agent is not None
+                and isinstance(assigned_agent, int)
+                and not isinstance(assigned_agent, bool)
+            ):
                 # It's an EntityId (NewType over int), keep as int for JSON
                 pass
             # If string or None, leave as-is (JSON-serializable)
-            
+
             # Convert TaskStatus enum to string
             status = serialized.get("status")
             if status is not None and hasattr(status, "value"):  # Enum
@@ -301,6 +303,19 @@ class WorldSerializer:
             if isinstance(policy_value, str):
                 normalized_data["policy"] = ApprovalPolicy(policy_value)
 
+        if component_name == PromptConfigComponent.__name__:
+            allowed_fields = {
+                "trigger_templates",
+                "enable_context_pool",
+                "context_pool_max_chars",
+            }
+            unknown_fields = sorted(set(normalized_data.keys()) - allowed_fields)
+            if unknown_fields:
+                raise ValueError(
+                    "PromptConfigComponent contains unsupported fields: "
+                    f"{', '.join(unknown_fields)}"
+                )
+
         if component_name == LLMComponent.__name__:
             provider_value = normalized_data.get("provider")
             if provider_value == NON_SERIALIZABLE_PLACEHOLDER:
@@ -333,12 +348,13 @@ class WorldSerializer:
         # SubagentRegistryComponent: reconstruct SubagentConfig and InheritancePolicy
         if component_name == SubagentRegistryComponent.__name__:
             from ecs_agent.types import SubagentConfig, InheritancePolicy
+
             subagents_dict = {}
             for name, config_data in normalized_data.get("subagents", {}).items():
                 # Reconstruct InheritancePolicy from dict
                 policy_data = config_data.get("inheritance_policy", {})
                 inheritance_policy = InheritancePolicy(**policy_data)
-                
+
                 # Reconstruct SubagentConfig with InheritancePolicy
                 # Provider needs to be resolved (currently dict or placeholder)
                 provider_value = config_data.get("provider")
@@ -353,7 +369,7 @@ class WorldSerializer:
                         )
                 else:
                     provider = provider_value
-                
+
                 subagent_config = SubagentConfig(
                     name=config_data["name"],
                     provider=provider,
@@ -373,11 +389,12 @@ class WorldSerializer:
                 # EntityId stored as int, reconstruct it
                 normalized_data["assigned_agent"] = EntityId(assigned_agent_value)
             # If string or None, leave as-is
-            
+
             # Convert status string to TaskStatus enum if needed
             status_value = normalized_data.get("status")
             if isinstance(status_value, str):
                 from ecs_agent.types import TaskStatus
+
                 normalized_data["status"] = TaskStatus(status_value)
 
         # ScratchbookRefComponent: no special handling needed (all fields are primitives)
@@ -386,8 +403,11 @@ class WorldSerializer:
         # ScratchbookIndexComponent: reconstruct ScratchbookRef objects in artifacts dict
         if component_name == ScratchbookIndexComponent.__name__:
             from ecs_agent.types import ScratchbookRef
+
             artifacts_dict = {}
-            for artifact_id, artifact_data in normalized_data.get("artifacts", {}).items():
+            for artifact_id, artifact_data in normalized_data.get(
+                "artifacts", {}
+            ).items():
                 # If artifact_data is a dict, reconstruct it as ScratchbookRef
                 if isinstance(artifact_data, dict):
                     artifacts_dict[artifact_id] = ScratchbookRef(**artifact_data)
@@ -399,6 +419,7 @@ class WorldSerializer:
         # SubagentSessionTableComponent: reconstruct SubagentSessionRecord objects in sessions dict
         if component_name == SubagentSessionTableComponent.__name__:
             from ecs_agent.types import SubagentSessionRecord
+
             sessions_dict = {}
             for session_id, session_data in normalized_data.get("sessions", {}).items():
                 # If session_data is a dict, reconstruct it as SubagentSessionRecord
@@ -406,23 +427,23 @@ class WorldSerializer:
                     # Convert parent_entity_id if it's an int
                     parent_entity_id_value = session_data.get("parent_entity_id")
                     if isinstance(parent_entity_id_value, int):
-                        session_data["parent_entity_id"] = EntityId(parent_entity_id_value)
+                        session_data["parent_entity_id"] = EntityId(
+                            parent_entity_id_value
+                        )
                     sessions_dict[session_id] = SubagentSessionRecord(**session_data)
                 else:
                     # Already a SubagentSessionRecord object
                     sessions_dict[session_id] = session_data
             normalized_data["sessions"] = sessions_dict
 
-        # PromptContributionsComponent: reconstruct PromptSectionSpec objects in sections list
-        if component_name == PromptContributionsComponent.__name__:
+        if component_name == SystemPromptComponent.__name__:
             from ecs_agent.prompts.contracts import PromptSectionSpec
+
             sections_list = []
             for section_data in normalized_data.get("sections", []):
-                # If section_data is a dict, reconstruct it as PromptSectionSpec
                 if isinstance(section_data, dict):
                     sections_list.append(PromptSectionSpec(**section_data))
                 else:
-                    # Already a PromptSectionSpec object
                     sections_list.append(section_data)
             normalized_data["sections"] = sections_list
 

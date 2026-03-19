@@ -102,9 +102,9 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **Output Schema** — Optional JSON schema validation for task outputs.
 
 ### Prompt Normalization & Injection
-- **Keyword Templates** — Define `@keyword` triggers that inject pre-defined prompt blocks into user messages.
+- **Trigger Templates** — Define `@keyword` or `event:<name>` triggers that inject pre-defined prompt blocks into user messages.
 - **One-Shot Context Pool** — Automatically collect tool results and subagent outputs into a transient context block for the next LLM turn.
-- **Stable Injection Order** — `[PROMPT_INJECT:keyword]` marker → keyword block → context pool block → original user text.
+- **Stable Injection Order** — `[PROMPT_INJECT:...]` marker → trigger block → context pool block → original user text.
 - **Transient Lifecycle** — Injections are provider-call only and not persisted in conversation history. Context pool clears only on successful LLM turn.
 
 ### Two-Tier Skill System
@@ -209,7 +209,7 @@ World
 | `MessageBusConfigComponent` | Configuration for messaging (timeouts, queue sizes) |
 | `MessageBusSubscriptionComponent` | Registry of topic subscriptions for an entity |
 | `MessageBusConversationComponent` | Tracks active request-response conversations |
-| `SystemPromptComponent` | Dedicated system prompt storage |
+| `SystemPromptComponent` | Single source for system prompt assembly (template + sections) |
 | `KVStoreComponent` | Generic key-value scratch space |
 | `ErrorComponent` | Error details for failed operations |
 | `TerminalComponent` | Signals agent completion |

@@ -5,7 +5,7 @@ from __future__ import annotations
 from ecs_agent.components import (
     OneShotContextPoolComponent,
     PromptConfigComponent,
-    PromptContributionsComponent,
+    SystemPromptComponent,
     TurnStateComponent,
 )
 from ecs_agent.core.world import World
@@ -26,7 +26,7 @@ def test_prompt_config_component_roundtrip() -> None:
 
     # Create a PromptConfigComponent with all fields
     config = PromptConfigComponent(
-        keyword_templates={
+        trigger_templates={
             "inject_coding": "template-1",
             "inject_context": "template-2",
         },
@@ -46,7 +46,7 @@ def test_prompt_config_component_roundtrip() -> None:
     # Verify roundtrip
     config2 = world2.get_component(entity, PromptConfigComponent)
     assert config2 is not None
-    assert config2.keyword_templates == {
+    assert config2.trigger_templates == {
         "inject_coding": "template-1",
         "inject_context": "template-2",
     }
@@ -54,18 +54,21 @@ def test_prompt_config_component_roundtrip() -> None:
     assert config2.context_pool_max_chars == 16384
 
 
-def test_prompt_contributions_component_roundtrip() -> None:
-    """PromptContributionsComponent with nested PromptSectionSpec serializes correctly."""
+def test_system_prompt_component_roundtrip() -> None:
+    """SystemPromptComponent with nested PromptSectionSpec serializes correctly."""
     world = World()
     entity = world.create_entity()
 
-    # Create a PromptContributionsComponent with sections
     sections = [
         PromptSectionSpec(title="Context", lines=["line1", "line2"], priority=10),
         PromptSectionSpec(title="Rules", lines=["rule1"], priority=5),
     ]
-    contributions = PromptContributionsComponent(sections=sections)
-    world.add_component(entity, contributions)
+    system_prompt = SystemPromptComponent(
+        template="Core ${toolSelection} ${exploreSection} ${librarianSection}",
+        sections=sections,
+        content="rendered content",
+    )
+    world.add_component(entity, system_prompt)
 
     # Serialize and deserialize
     data = WorldSerializer.to_dict(world)
@@ -76,19 +79,21 @@ def test_prompt_contributions_component_roundtrip() -> None:
     )
 
     # Verify roundtrip
-    contributions2 = world2.get_component(entity, PromptContributionsComponent)
-    assert contributions2 is not None
-    assert len(contributions2.sections) == 2
+    system_prompt2 = world2.get_component(entity, SystemPromptComponent)
+    assert system_prompt2 is not None
+    assert system_prompt2.template == system_prompt.template
+    assert system_prompt2.content == "rendered content"
+    assert len(system_prompt2.sections) == 2
 
     # First section
-    assert contributions2.sections[0].title == "Context"
-    assert contributions2.sections[0].lines == ["line1", "line2"]
-    assert contributions2.sections[0].priority == 10
+    assert system_prompt2.sections[0].title == "Context"
+    assert system_prompt2.sections[0].lines == ["line1", "line2"]
+    assert system_prompt2.sections[0].priority == 10
 
     # Second section
-    assert contributions2.sections[1].title == "Rules"
-    assert contributions2.sections[1].lines == ["rule1"]
-    assert contributions2.sections[1].priority == 5
+    assert system_prompt2.sections[1].title == "Rules"
+    assert system_prompt2.sections[1].lines == ["rule1"]
+    assert system_prompt2.sections[1].priority == 5
 
 
 def test_oneshot_context_pool_component_roundtrip() -> None:
@@ -156,10 +161,10 @@ def test_turn_state_component_roundtrip() -> None:
 
 
 def test_prompt_components_serializer_registered() -> None:
-    """All 4 new prompt components are registered in COMPONENT_REGISTRY."""
+    """All prompt components are registered in COMPONENT_REGISTRY."""
     component_names = {
         PromptConfigComponent.__name__,
-        PromptContributionsComponent.__name__,
+        SystemPromptComponent.__name__,
         OneShotContextPoolComponent.__name__,
         TurnStateComponent.__name__,
     }

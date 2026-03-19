@@ -21,7 +21,8 @@ The table below summarizes the recommended priorities for each system. Priority 
 | :--- | :--- | :--- |
 | UserInputSystem | -10 | Captures async user input before reasoning. |
 | RAGSystem | -10 | Retrieves context via vector search before reasoning. |
-#SK|| PromptContextCollectorSystem | 0 | Collects tool/subagent results into the context pool. |
+| SystemPromptAssemblySystem | 0 | Assembles system prompt from template and sections. |
+| PromptContextCollectorSystem | 0 | Collects tool/subagent results into the context pool. |
 | ToolApprovalSystem | -5 | Filters pending tool calls before execution. |
 | ReasoningSystem | 0 | Generates responses using an LLM. |
 | PlanningSystem | 0 | Manages step-by-step execution of a plan. |
@@ -80,7 +81,27 @@ world.replace_system(handle, NewSystem(), priority=5)
 This ensures deterministic system execution and prevents mid-tick mutations.
 
 ---
-## 1. ReasoningSystem
+## 1. SystemPromptAssemblySystem
+
+The SystemPromptAssemblySystem is responsible for rendering the final system prompt content from a template and multiple sections. It ensures that core placeholders are populated and extension sections are included.
+
+- **Constructor**: `__init__(self, priority: int = 0)`
+- **Queries**: `PromptConfigComponent`, `SystemPromptComponent`
+- **Modifies**: `SystemPromptComponent.content` (rendered output).
+- **Recommended Priority**: 0
+
+### Behavior
+The system treats `SystemPromptComponent.template` as the source of truth. It validates required core placeholders (`$toolSelection`, `$exploreSection`, `$librarianSection`, including `${...}` form), registers extension placeholders from matching section titles, and renders with strict `string.Template` substitution. Unknown placeholders in the template raise `ValueError`.
+
+### Usage Example
+```python
+from ecs_agent.systems.system_prompt_assembly import SystemPromptAssemblySystem
+world.register_system(SystemPromptAssemblySystem(priority=0), priority=0)
+```
+
+---
+
+## 2. ReasoningSystem
 
 The ReasoningSystem serves as the primary cognitive engine for an entity. It coordinates with an LLM provider to generate text responses and identify necessary tool interactions.
 
@@ -395,7 +416,7 @@ world.register_system(UserInputSystem(priority=-10), priority=-10)
 
 The SubagentSystem manages subagent delegation, allowing parent agents to spawn child agents for subtask execution with isolated contexts and automatic result aggregation.
 
-- **Constructor**: `__init__(self, priority: int = 0)`
+- **Constructor**: `__init__(self, priority: int = -1)`
 - **Queries**: `SubagentRegistryComponent`, `ToolRegistryComponent`
 - **Modifies**: `ToolRegistryComponent.tools` (registers `delegate` tool), `ToolRegistryComponent.handlers` (registers delegate handler).
 - **Events Published**: `DelegationStartedEvent(parent_entity, child_entity, subagent_name, task)`, `DelegationCompletedEvent(parent_entity, child_entity, subagent_name, result)`
@@ -502,4 +523,21 @@ world.register_system(CompactionSystem(bisect_ratio=0.5), priority=20)
 
 # Global error handling (always run last)
 world.register_system(ErrorHandlingSystem(priority=99), priority=99)
+```
+## 15. PromptContextCollectorSystem
+
+The PromptContextCollectorSystem automatically gathers results from tool executions and subagent completions, storing them in the `OneShotContextPoolComponent` for transient injection into the next LLM turn.
+
+- **Constructor**: `__init__(self, priority: int = 0)`
+- **Queries**: `OneShotContextPoolComponent`, `ToolResultsComponent`, `SubagentSessionTableComponent`
+- **Modifies**: `OneShotContextPoolComponent.items`.
+- **Recommended Priority**: 0
+
+### Behavior
+The system monitors for new tool results or completed subagent sessions. It extracts the content, assigns a priority based on the source, and adds it to the context pool. Items are marked with a registration order to ensure deterministic rendering.
+
+### Usage Example
+```python
+from ecs_agent.systems.prompt_context_collector import PromptContextCollectorSystem
+world.register_system(PromptContextCollectorSystem(priority=0), priority=0)
 ```

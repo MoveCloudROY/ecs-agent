@@ -197,7 +197,7 @@ Dynamic prompt enhancement via keyword expansion and one-shot context collection
 
 - **`PromptConfigComponent`**: Opt-in configuration.
   - `enable_context_pool: bool` — Enable automatic context collection.
-  - `keyword_templates: dict[str, str]` — Mapping of `@keyword` to template content.
+  - `trigger_templates: dict[str, str]` — Mapping of `@keyword` or `event:<name>` to template content.
   - `context_pool_max_chars: int` — Maximum size of the context block.
 - **`OneShotContextPoolComponent`**: Transient storage for collected context items.
 
@@ -205,15 +205,16 @@ Dynamic prompt enhancement via keyword expansion and one-shot context collection
 
 1. **Opt-in Only**: Behavior is only active if `PromptConfigComponent` is attached to the entity.
 2. **Injection Order**: When a user message is processed:
-   - `[PROMPT_INJECT:keyword]` marker is added if a keyword is detected.
-   - The corresponding keyword template block is injected.
+   - `[PROMPT_INJECT:...]` marker is added if a keyword or event is detected.
+   - The corresponding trigger template block is injected.
    - The context pool block (tool results, etc.) is injected.
    - The original user text follows.
-3. **One-Shot Lifecycle**:
+3. **Deterministic Selection**: Triggers are resolved by `priority DESC`, then `registration_order ASC`, first-match.
+4. **One-Shot Lifecycle**:
    - **Reserve**: Items are reserved for the current turn ID.
    - **Retry**: If a request fails and retries, the same reserved payload is reused.
    - **Commit**: The pool is cleared only after a successful LLM response is received.
-4. **Transient Injection**: Injected content is sent to the provider but **does not mutate stored conversation history**, keeping the long-term context clean.
+5. **Transient Injection**: Injected content is sent to the provider but **does not mutate stored conversation history**, keeping the long-term context clean.
 
 ### Example
 
@@ -221,7 +222,10 @@ Dynamic prompt enhancement via keyword expansion and one-shot context collection
 from ecs_agent.components import PromptConfigComponent, OneShotContextPoolComponent
 
 world.add_component(agent, PromptConfigComponent(
-    keyword_templates={"@code": "Use PEP8 style and include docstrings."},
+    trigger_templates={
+        "@code": "Use PEP8 style and include docstrings.",
+        "event:tool_success": "Great job on the tool execution!"
+    },
     enable_context_pool=True
 ))
 world.add_component(agent, OneShotContextPoolComponent())

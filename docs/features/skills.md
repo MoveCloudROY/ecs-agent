@@ -33,7 +33,7 @@ A Skill is a package of functionality that includes:
 To remain token-efficient, the `SkillManager` supports a two-phase loading process:
 
 1.  **Index**: Register skill metadata (name, description, tool names) into the `SkillComponent`. No tools are registered in the `ToolRegistryComponent` yet, and the system prompt is not loaded. `SkillMetadata.activated` is `False`.
-2.  **Activate**: Load the skill's system prompt into the `SystemPromptComponent` and register tools into the `ToolRegistryComponent`. `SkillMetadata.activated` is `True`.
+2.  **Activate**: Load the skill's system prompt into the `SystemPromptComponent.sections` and register tools into the `ToolRegistryComponent`. `SkillMetadata.activated` is `True`.
 
 `manager.install()` is a convenience method that performs both `index()` and `activate()` in one call.
 
@@ -120,9 +120,8 @@ path = skill.resolve_supporting_path("data/config.json")
 path = skill.resolve_supporting_path("../../../etc/passwd")
 ```
 
-### Keyword Templates
-Skills can define keyword templates that are automatically registered if the agent has a `PromptConfigComponent`. These keywords (e.g., `@help`) trigger the injection of specific prompt blocks when detected in user messages.
-
+### Trigger Templates
+Skills can define trigger templates (keywords or events) that are automatically registered if the agent has a `PromptConfigComponent`. These triggers (e.g., `@help` or `event:tool_success`) trigger the injection of specific prompt blocks when detected in user messages or runtime state.
 ## Script Skills (Advanced)
 
 Script Skills are Python classes that implement the `ScriptSkill` protocol. Use these when you need complex tool handlers, precise schema definitions, or custom installation logic.

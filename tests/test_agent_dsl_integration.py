@@ -16,6 +16,7 @@ from ecs_agent.components import (
     LLMComponent,
     PermissionComponent,
     SubagentRegistryComponent,
+    SystemPromptComponent,
 )
 from ecs_agent.core import Runner
 from ecs_agent.dsl import (
@@ -25,8 +26,10 @@ from ecs_agent.dsl import (
     load_markdown_agent,
     resolve_agent_specs,
 )
+from ecs_agent.dsl.schema import AgentSpec
 from ecs_agent.providers import FakeProvider
 from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.types import CompletionResult, Message
 
 
@@ -174,6 +177,45 @@ You are a code reviewer. Provide constructive feedback.
         assert conv is not None
         assert len(conv.messages) == 2
         assert conv.messages[1].content == "Code looks good overall."
+
+
+def test_subagent_runtime_prompt_component_uses_compiled_prompt_template() -> None:
+    resolved = resolve_agent_specs(
+        [
+            AgentSpec(
+                name="orchestrator",
+                mode="primary",
+                model="primary-model",
+                prompt="Primary prompt",
+            ),
+            AgentSpec(
+                name="researcher",
+                mode="subagent",
+                model="research-model",
+                prompt="Research prompt from DSL",
+            ),
+        ]
+    )
+    primary_entity, world = compile_agent_specs(
+        resolved,
+        create_fake_provider_factory([]),
+    )
+
+    registry = world.get_component(primary_entity, SubagentRegistryComponent)
+    assert registry is not None
+    config = registry.subagents["researcher"]
+
+    subagent_system = SubagentSystem()
+    child_world, child_entity = subagent_system._assemble_child_world(
+        world,
+        primary_entity,
+        config,
+    )
+
+    child_prompt = child_world.get_component(child_entity, SystemPromptComponent)
+    assert child_prompt is not None
+    assert child_prompt.template == "Research prompt from DSL"
+    assert child_prompt.content == "Research prompt from DSL"
 
 
 # ============================================================================

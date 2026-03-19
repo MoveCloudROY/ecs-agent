@@ -1,6 +1,16 @@
-"""Centralized registry for named prompt templates with keyword mapping."""
+"""Centralized registries for prompt templates and placeholder contracts."""
 
-from ecs_agent.prompts.contracts import PromptTemplate
+from __future__ import annotations
+
+import re
+
+from ecs_agent.prompts.contracts import (
+    CORE_PLACEHOLDER_KEYS,
+    PlaceholderContract,
+    PromptTemplate,
+)
+
+_PLACEHOLDER_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class PromptRegistry:
@@ -67,3 +77,78 @@ class PromptRegistry:
     def list_keywords(self) -> list[str]:
         """Return registered keywords in stable insertion order."""
         return list(self._keyword_map.keys())
+
+
+class PlaceholderRegistry:
+    """Registry for strict core placeholders and validated extension placeholders."""
+
+    def __init__(self) -> None:
+        self._extensions: dict[str, PlaceholderContract] = {}
+
+    def register_extension(self, key: str) -> None:
+        """Register a non-core placeholder key.
+
+        Args:
+            key: Placeholder key following string.Template identifier grammar.
+        """
+        _validate_placeholder_identifier(key)
+        if key in CORE_PLACEHOLDER_KEYS:
+            raise ValueError(f"Cannot override core placeholder: {key!r}")
+        if key in self._extensions:
+            raise ValueError(f"Extension placeholder already registered: {key!r}")
+        self._extensions[key] = PlaceholderContract(key=key, is_core=False)
+
+    def register_extensions(self, keys: list[str]) -> None:
+        """Register multiple extension placeholder keys."""
+        for key in keys:
+            self.register_extension(key)
+
+    def contains(self, key: str) -> bool:
+        """Return whether key is known as core or extension placeholder."""
+        return key in CORE_PLACEHOLDER_KEYS or key in self._extensions
+
+    def core_keys(self) -> tuple[str, ...]:
+        """Return strict core placeholder keys in canonical order."""
+        return CORE_PLACEHOLDER_KEYS
+
+    def extension_keys(self) -> tuple[str, ...]:
+        """Return extension keys sorted lexicographically for deterministic ordering."""
+        return tuple(sorted(self._extensions))
+
+    def ordered_keys(self) -> tuple[str, ...]:
+        """Return deterministic key order: core first, extensions sorted."""
+        return (*CORE_PLACEHOLDER_KEYS, *self.extension_keys())
+
+    def contracts(self) -> tuple[PlaceholderContract, ...]:
+        """Return deterministic list of all placeholder contracts."""
+        core_contracts = tuple(
+            PlaceholderContract(key=key, is_core=True) for key in CORE_PLACEHOLDER_KEYS
+        )
+        extension_contracts = tuple(
+            self._extensions[key] for key in self.extension_keys()
+        )
+        return (*core_contracts, *extension_contracts)
+
+    def validate_core_placeholders(self, template: str) -> None:
+        """Raise ValueError if any required core placeholder is missing from template."""
+        missing = [
+            key
+            for key in CORE_PLACEHOLDER_KEYS
+            if not _template_contains_placeholder(template, key)
+        ]
+        if missing:
+            missing_fields = "|".join(missing)
+            raise ValueError(f"missing required core placeholders: {missing_fields}")
+
+
+def _template_contains_placeholder(template: str, placeholder_key: str) -> bool:
+    return f"${{{placeholder_key}}}" in template or f"${placeholder_key}" in template
+
+
+def _validate_placeholder_identifier(key: str) -> None:
+    if not key:
+        raise ValueError("Placeholder key cannot be empty")
+    if not _PLACEHOLDER_IDENTIFIER_PATTERN.match(key):
+        raise ValueError(
+            f"Invalid placeholder key {key!r}: must match [A-Za-z_][A-Za-z0-9_]*"
+        )

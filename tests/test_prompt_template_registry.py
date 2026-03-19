@@ -2,7 +2,12 @@
 
 import pytest
 
-from ecs_agent.prompts import PromptRegistry, PromptTemplate
+from ecs_agent.prompts import (
+    CORE_PLACEHOLDER_KEYS,
+    PlaceholderRegistry,
+    PromptRegistry,
+    PromptTemplate,
+)
 
 
 def _make_template(template_id: str, content: str = "Hello {name}") -> PromptTemplate:
@@ -134,3 +139,80 @@ class TestPromptRegistry:
         assert got.content == "content here"
         assert got.description == "desc"
         assert got.metadata == {"key": "val"}
+
+
+class TestPlaceholderRegistry:
+    def test_core_keys_are_strict_and_canonical(self) -> None:
+        registry = PlaceholderRegistry()
+        assert registry.core_keys() == CORE_PLACEHOLDER_KEYS
+
+    def test_extension_keys_use_deterministic_sorted_order(self) -> None:
+        registry = PlaceholderRegistry()
+        registry.register_extension("zeta")
+        registry.register_extension("alpha")
+        registry.register_extension("mid")
+
+        assert registry.extension_keys() == ("alpha", "mid", "zeta")
+        assert registry.ordered_keys() == (
+            "toolSelection",
+            "exploreSection",
+            "librarianSection",
+            "alpha",
+            "mid",
+            "zeta",
+        )
+
+    def test_contracts_emit_deterministic_order_for_core_and_extensions(self) -> None:
+        registry = PlaceholderRegistry()
+        registry.register_extensions(["zeta", "alpha"])
+
+        contracts = registry.contracts()
+        keys = tuple(contract.key for contract in contracts)
+        core_flags = tuple(contract.is_core for contract in contracts)
+
+        assert keys == (
+            "toolSelection",
+            "exploreSection",
+            "librarianSection",
+            "alpha",
+            "zeta",
+        )
+        assert core_flags == (True, True, True, False, False)
+
+    def test_register_extension_rejects_duplicates(self) -> None:
+        registry = PlaceholderRegistry()
+        registry.register_extension("customSection")
+
+        with pytest.raises(ValueError, match="already registered"):
+            registry.register_extension("customSection")
+
+    def test_register_extension_rejects_core_collisions(self) -> None:
+        registry = PlaceholderRegistry()
+
+        with pytest.raises(ValueError, match="override core"):
+            registry.register_extension("toolSelection")
+
+    @pytest.mark.parametrize(
+        "key",
+        ["", "bad-key", "has space", "1starts_with_digit"],
+    )
+    def test_register_extension_rejects_illegal_identifiers(self, key: str) -> None:
+        registry = PlaceholderRegistry()
+
+        with pytest.raises(ValueError, match="Invalid placeholder key|cannot be empty"):
+            registry.register_extension(key)
+
+    def test_validate_core_placeholders_accepts_braced_and_unbraced(self) -> None:
+        registry = PlaceholderRegistry()
+        registry.validate_core_placeholders(
+            "${toolSelection}\n$exploreSection\n${librarianSection}"
+        )
+
+    def test_validate_core_placeholders_rejects_missing(self) -> None:
+        registry = PlaceholderRegistry()
+
+        with pytest.raises(
+            ValueError,
+            match="toolSelection|exploreSection|librarianSection",
+        ):
+            registry.validate_core_placeholders("$toolSelection")

@@ -399,3 +399,56 @@ async def test_replanning_retry_reuses_reserved_context_then_commits_on_success(
 
     assert pool.items == []
     assert pool.state == "committed"
+
+
+async def test_event_trigger_injection_is_transient_for_replanning_provider_call() -> (
+    None
+):
+    world = World()
+    provider = RecordingFakeProvider(
+        responses=[
+            CompletionResult(
+                message=Message(
+                    role="assistant", content='{"revised_steps": ["step 2"]}'
+                )
+            )
+        ]
+    )
+    entity_id = _create_entity(
+        world,
+        provider,
+        steps=["step 1", "step 2"],
+        current_step=1,
+    )
+    world.add_component(
+        entity_id,
+        PromptConfigComponent(
+            trigger_templates={"event:tool_success": "Prefer successful tool context"},
+            enable_context_pool=True,
+        ),
+    )
+    world.add_component(
+        entity_id,
+        OneShotContextPoolComponent(
+            items=[
+                (
+                    30,
+                    0,
+                    "tool:search",
+                    "source: tool:search\nstatus: success\nresult: citations\nerror: ",
+                )
+            ]
+        ),
+    )
+
+    await ReplanningSystem().process(world)
+
+    sent = provider.calls[0]
+    assert sent[-1].role == "user"
+    assert sent[-1].content.startswith(
+        "[PROMPT_INJECT:event:tool_success]\nPrefer successful tool context"
+    )
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages[0].content == "objective"

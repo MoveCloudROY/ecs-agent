@@ -528,3 +528,55 @@ async def test_prompt_context_injection_is_transient_for_reasoning_provider_call
     conversation = world.get_component(entity_id, ConversationComponent)
     assert conversation is not None
     assert conversation.messages[0].content == "Need summary"
+
+
+@pytest.mark.asyncio
+async def test_event_trigger_injection_is_transient_for_reasoning_provider_call() -> (
+    None
+):
+    world = World()
+    provider = RecordingFakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Need summary")]),
+    )
+    world.add_component(
+        entity_id,
+        PromptConfigComponent(
+            trigger_templates={
+                "event:tool_success": "Prefer using successful tool evidence"
+            },
+            enable_context_pool=True,
+        ),
+    )
+    world.add_component(
+        entity_id,
+        OneShotContextPoolComponent(
+            items=[
+                (
+                    30,
+                    0,
+                    "tool:search",
+                    "source: tool:search\nstatus: success\nresult: found facts\nerror: ",
+                )
+            ]
+        ),
+    )
+
+    await ReasoningSystem().process(world)
+
+    sent_messages, _ = provider.calls[0]
+    transient_user = sent_messages[-1]
+    assert transient_user.role == "user"
+    assert transient_user.content.startswith(
+        "[PROMPT_INJECT:event:tool_success]\nPrefer using successful tool evidence"
+    )
+    assert transient_user.content.endswith("Need summary")
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages[0].content == "Need summary"
