@@ -18,6 +18,7 @@ from ecs_agent.core.runner import Runner
 from ecs_agent.core.world import World
 from ecs_agent.providers import FakeProvider
 from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.terminal_cleanup import TerminalCleanupSystem
 from ecs_agent.types import (
     CompletionResult,
     EntityId,
@@ -152,6 +153,21 @@ class CountUninterruptedEntitiesSystem:
                 world.create_entity(),
                 TerminalComponent(reason="uninterrupted_complete"),
             )
+
+
+class TerminalReasonAuditSystem:
+    def __init__(self) -> None:
+        self.observed: list[tuple[int, list[str]]] = []
+
+    async def process(self, world: World) -> None:
+        runner_state_entities = list(world.query(RunnerStateComponent))
+        _, (runner_state,) = runner_state_entities[0]
+        reasons = [
+            terminal.reason
+            for _, (terminal,) in world.query(TerminalComponent)
+            if isinstance(terminal, TerminalComponent)
+        ]
+        self.observed.append((runner_state.current_tick, sorted(reasons)))
 
 
 class TestRunner:
@@ -470,6 +486,69 @@ class TestRunner:
         assert interruption.reason == InterruptionReason.SYSTEM_PAUSE
         assert terminal is None
         assert error is None
+
+    @pytest.mark.asyncio
+    async def test_reasoning_complete_stops_runner_end_of_tick_without_cleanup(
+        self, world: World, runner: Runner
+    ) -> None:
+        provider = FakeProvider(
+            responses=[
+                CompletionResult(message=Message(role="assistant", content="done")),
+            ]
+        )
+        entity_id = world.create_entity()
+        world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+        world.add_component(
+            entity_id,
+            ConversationComponent(messages=[Message(role="user", content="hello")]),
+        )
+        tick_counter = CounterSystem(priority=2)
+        terminal_audit = TerminalReasonAuditSystem()
+        world.register_system(ReasoningSystem(priority=0), priority=0)
+        world.register_system(tick_counter, priority=2)
+        world.register_system(terminal_audit, priority=2)
+
+        await runner.run(world, max_ticks=5)
+
+        assert tick_counter.run_count == 1
+        assert terminal_audit.observed == [(0, ["reasoning_complete"])]
+        runner_state_entities = list(world.query(RunnerStateComponent))
+        _, (runner_state,) = runner_state_entities[0]
+        assert runner_state.current_tick == 1
+        terminal = world.get_component(entity_id, TerminalComponent)
+        assert terminal is not None
+        assert terminal.reason == "reasoning_complete"
+
+    @pytest.mark.asyncio
+    async def test_terminal_cleanup_prevents_premature_stop_on_reasoning_complete(
+        self, world: World, runner: Runner
+    ) -> None:
+        provider = FakeProvider(
+            responses=[
+                CompletionResult(message=Message(role="assistant", content="done")),
+                CompletionResult(message=Message(role="assistant", content="done")),
+                CompletionResult(message=Message(role="assistant", content="done")),
+            ]
+        )
+        entity_id = world.create_entity()
+        world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+        world.add_component(
+            entity_id,
+            ConversationComponent(messages=[Message(role="user", content="hello")]),
+        )
+        tick_counter = CounterSystem(priority=2)
+        terminal_audit = TerminalReasonAuditSystem()
+        world.register_system(ReasoningSystem(priority=0), priority=0)
+        world.register_system(TerminalCleanupSystem(priority=1), priority=1)
+        world.register_system(tick_counter, priority=2)
+        world.register_system(terminal_audit, priority=2)
+
+        await runner.run(world, max_ticks=3)
+
+        assert tick_counter.run_count == 3
+        assert terminal_audit.observed == [(0, []), (1, []), (2, [])]
+        terminal = world.get_component(entity_id, TerminalComponent)
+        assert terminal is None
 
 
 class TestRunnerLogging:
