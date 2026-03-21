@@ -275,7 +275,7 @@ Stored in the `SkillComponent` for each installed skill.
 | `substitution_variables` | Supported variables for this skill. |
 
 ## Built-in Skills
-- **BuiltinToolsSkill**: Basic file manipulation (`read_file`, `write_file`, `edit_file`) and shell execution (`bash`). See [Built-in Tools](builtin-tools.md).
+- **BuiltinToolsSkill**: Basic file manipulation (`read_file`, `write_file`, `edit_file`, `glob`) and shell execution (`bash`). See [Built-in Tools](builtin-tools.md).
 
 ## See Also
 - [Tool Discovery & Approval](./tool-discovery.md)
