@@ -5,7 +5,7 @@ This example shows how to:
 1. Initialize a World and an agent entity.
 2. Install the BuiltinToolsSkill using SkillManager.
 3. Configure the agent with Reasoning and ToolExecution systems.
-4. Run a loop where the agent uses read_file and write_file.
+4. Run a loop where the agent uses read_file, write_file, and glob.
 """
 
 import asyncio
@@ -53,7 +53,7 @@ async def main() -> None:
                                 ToolCall(
                                     id="call_1",
                                     name="read_file",
-                                    arguments={"path": "hello.txt"},
+                                    arguments={"file_path": "hello.txt"},
                                 )
                             ],
                         )
@@ -67,12 +67,26 @@ async def main() -> None:
                                 ToolCall(
                                     id="call_2",
                                     name="write_file",
-                                    arguments={"path": "hello.txt", "content": "Updated content!"},
+                                    arguments={"file_path": "hello.txt", "content": "Updated content!"},
                                 )
                             ],
                         )
                     ),
-                    # Third response: finish
+                    # Third response: call glob to list workspace files
+                    CompletionResult(
+                        message=Message(
+                            role="assistant",
+                            content="Let me check what files are in the workspace.",
+                            tool_calls=[
+                                ToolCall(
+                                    id="call_3",
+                                    name="glob",
+                                    arguments={"pattern": "*.txt", "base_path": "."},
+                                )
+                            ],
+                        )
+                    ),
+                    # Fourth response: finish
                     CompletionResult(
                         message=Message(
                             role="assistant", content="All done! I've updated the file."

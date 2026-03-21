@@ -143,7 +143,7 @@ def test_full_skill_lifecycle() -> None:
     # Verify tools are registered
     registry = world.get_component(entity, ToolRegistryComponent)
     assert registry is not None
-    assert len(registry.tools) == 5  # 4 builtin tools + 1 meta-tool
+    assert len(registry.tools) == 6  # 5 builtin tools + 1 meta-tool
     tool_names = set(registry.tools.keys())
     assert "read_file" in tool_names
     assert "write_file" in tool_names
@@ -157,7 +157,7 @@ def test_full_skill_lifecycle() -> None:
     assert len(skill_comp.skills) == 1
     metadata = skill_comp.skills["builtin-tools"]
     assert metadata.name == "builtin-tools"
-    assert set(metadata.tool_names) == {"read_file", "write_file", "edit_file", "bash"}
+    assert set(metadata.tool_names) == {"read_file", "write_file", "edit_file", "bash", "glob"}
 
     # Uninstall skill
     manager.uninstall(world, entity, "builtin-tools")
@@ -192,7 +192,7 @@ def test_multiple_skills_on_same_entity() -> None:
     # Verify both skills' tools are present
     registry = world.get_component(entity, ToolRegistryComponent)
     assert registry is not None
-    assert len(registry.tools) == 6  # 4 builtin + 1 test + 1 meta-tool
+    assert len(registry.tools) == 7  # 5 builtin + 1 test + 1 meta-tool
     tool_names = set(registry.tools.keys())
     assert "read_file" in tool_names
     assert "write_file" in tool_names
@@ -298,7 +298,7 @@ def test_skill_manager_duplicate_installation_raises_error() -> None:
     # Verify tools are not duplicated
     registry = world.get_component(entity, ToolRegistryComponent)
     assert registry is not None
-    assert len(registry.tools) == 5  # 4 builtin + 1 meta-tool
+    assert len(registry.tools) == 6  # 5 builtin + 1 meta-tool
 
 
 def _write_markdown_skill_fixture(base_dir: Path) -> str:
