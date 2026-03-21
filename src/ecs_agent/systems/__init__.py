@@ -4,6 +4,7 @@ from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.planning import PlanningSystem
 from ecs_agent.systems.permission import PermissionSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.terminal_cleanup import TerminalCleanupSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.message_bus import MessageBusSystem
@@ -28,6 +29,7 @@ __all__ = [
     "ReplanningSystem",
     "PromptContextCollectorSystem",
     "SystemPromptAssemblySystem",
+    "TerminalCleanupSystem",
     "ToolApprovalSystem",
     "ToolExecutionSystem",
     "TreeSearchSystem",
