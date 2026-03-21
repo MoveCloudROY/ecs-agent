@@ -67,7 +67,7 @@ class BuiltinToolsSkill(ScriptSkill):
             bound[tool_name] = (new_schema, _bound)
 
         # Replace tools() to return the bound versions.
-        self.tools = lambda: bound  # type: ignore[method-assign]
+        self.tools = lambda: bound  # type: ignore[method-assign]  # mypy cannot narrow lambda assignment to instance method slot
 
     def system_prompt(self) -> str:
         return ""
