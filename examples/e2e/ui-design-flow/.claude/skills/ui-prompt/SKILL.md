@@ -1,6 +1,6 @@
 ---
 name: ui-prompt
-description: '根据用户提供的界面需求草稿，结构化地生成适用于 Nano Banana (以及 Nano Banana 2) 的英文图像生成提示词，帮助用户快速生成高质量的UI设计视觉稿。在用户需要从UI设计草稿生成视觉稿时使用。
+description: '根据用户提供的界面需求草稿，结构化地生成适用于 Nano Banana (以及 Nano Banana 2) 的英文图像生成提示词，帮助用户快速生成高质量的UI设计视觉稿。在用户需要从UI设计草稿生成视觉稿时使用。'
 user-invokable: true
 metadata: {"version": "0.0.1", "updated": "2026-03-09", "author":"Mancitrus"}
 ---

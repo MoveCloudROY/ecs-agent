@@ -83,9 +83,15 @@ async def main() -> None:
     ui_navigator_skill = Skill(
         skill_path=Path(__file__).parent / ".claude/skills/ui-navigator/SKILL.md"
     )
+    if not ui_navigator_skill.valid:
+        logger.error("skill_invalid", skill_path=str(Path(__file__).parent / ".claude/skills/ui-navigator/SKILL.md"))
+        raise ValueError(f"Skill at {Path(__file__).parent / '.claude/skills/ui-navigator/SKILL.md'} is invalid and cannot be installed")
     ui_prompt_skill = Skill(
         skill_path=Path(__file__).parent / ".claude/skills/ui-prompt/SKILL.md"
     )
+    if not ui_prompt_skill.valid:
+        logger.error("skill_invalid", skill_path=str(Path(__file__).parent / ".claude/skills/ui-prompt/SKILL.md"))
+        raise ValueError(f"Skill at {Path(__file__).parent / '.claude/skills/ui-prompt/SKILL.md'} is invalid and cannot be installed")
     workspace_root = str(Path(__file__).parent)
     ui_navigator_skill.resolve_path_references(workspace_root)
     ui_prompt_skill.resolve_path_references(workspace_root)
