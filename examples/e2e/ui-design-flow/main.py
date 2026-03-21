@@ -34,7 +34,6 @@ from ecs_agent.skills.manager import SkillManager
 from ecs_agent.tools.builtins import BuiltinToolsSkill
 
 from runtime import setup_interactive_input
-from artifacts import ensure_output_layout
 
 logger = get_logger(__name__)
 
@@ -56,9 +55,6 @@ async def main() -> None:
 
     if debug_mode:
         logger.info("debug_mode_enabled")
-
-    # Create output directory structure
-    ensure_output_layout()
 
     # Create World
     world = World()

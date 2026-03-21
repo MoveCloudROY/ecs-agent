@@ -15,7 +15,7 @@ The agent acts as a UI design expert that can:
 - **Dual-Mode Provider**: Seamlessly switches between `FakeProvider` (for testing/offline development) and `OpenAIProvider` (for real LLM inference).
 - **Interactive Input**: Real-time async stdin handling using `UserInputSystem` and `UserInputRequestedEvent`.
 - **Skill-Based Capabilities**: Extends agent behavior using `MarkdownSkill` to install specialized tools.
-- **Path-Safe Artifacts**: Secure filesystem operations with traversal protection for all generated files.
+- **Agent-Authored, Path-Safe Artifacts**: Artifacts are created lazily by agent `write_file` tool calls, with workspace-bounded path traversal protection.
 - **Event-Driven Architecture**: Uses the internal `EventBus` to bridge the gap between ECS systems and interactive user input.
 
 ## Installation & Setup

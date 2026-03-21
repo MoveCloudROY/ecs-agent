@@ -41,16 +41,17 @@ Interactive input is achieved through an event-driven adapter in `runtime.py`.
 
 ## Skill Installation Lifecycle
 
-Skills are loaded from Markdown files (`SKILL.md`) using the `Skill` class and installed via `SkillManager`.
+Skills are auto-discovered from Markdown files (`SKILL.md`) under `.claude/skills/` and installed via `SkillManager`.
 Built-in file tools are provided by `BuiltinToolsSkill` with `workspace_root` injection.
 
 ```python
 manager = SkillManager()
-ui_nav = Skill(skill_path=Path("path/to/SKILL.md"))
-if not ui_nav.valid:
-    raise ValueError(f"Skill at {ui_nav.skill_path} is invalid (malformed YAML frontmatter)")
-ui_nav.resolve_path_references(workspace_root)
-manager.install(world, agent_id, ui_nav)
+skills = discover_skills([Path(".claude/skills")])
+skill_map = {skill.name: skill for skill in skills}
+for name in ("ui-navigator", "ui-prompt"):
+    skill = skill_map[name]
+    skill.resolve_path_references(workspace_root)
+    manager.install(world, agent_id, skill)
 
 # Install builtin file tools with workspace_root injection
 builtin = BuiltinToolsSkill()
@@ -63,10 +64,10 @@ Invalid skills (malformed YAML frontmatter, e.g. unclosed single-quoted strings)
 
 ## Artifact Management & Security
 
-Artifacts are managed by the `artifacts.py` module for output directory setup, and by the `BuiltinToolsSkill` (`write_file` tool) for actual file writing by the agent.
+Artifacts are created entirely by agent tool execution via `BuiltinToolsSkill` (`write_file` tool).
 
-- **Output Layout**: `ensure_output_layout()` creates the `ui-design/` directory and returns a dataclass with absolute paths to `draft.md` and `nano-banana-prompts.md`.
-- **Path Traversal Protection**: Every read/write operation is validated against the base output directory using `Path.resolve()` and prefix checking. Any attempt to use `../` to escape the sandbox raises a `ValueError`.
+- **Output Layout**: The `ui-design/` directory and artifact files are created lazily when the model calls `write_file`.
+- **Path Traversal Protection**: Builtin file tools validate all paths against `workspace_root` using `Path.resolve()`. Any attempt to escape the workspace raises `ValueError`.
 - **Deterministic Resets**: In testing, the output directory is recreated to ensure a clean state for each run.
 - **Explicit File Authoring**: The `ui-prompt` skill explicitly instructs the LLM to call the builtin `write_file` tool to save the generated prompt set to `ui-design/nano-banana-prompts.md`. This prevents chat-only responses from being mistaken for successful artifact authoring.
 
