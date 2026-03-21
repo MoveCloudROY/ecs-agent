@@ -47,6 +47,9 @@ Built-in file tools are provided by `BuiltinToolsSkill` with `workspace_root` in
 ```python
 manager = SkillManager()
 ui_nav = Skill(skill_path=Path("path/to/SKILL.md"))
+if not ui_nav.valid:
+    raise ValueError(f"Skill at {ui_nav.skill_path} is invalid (malformed YAML frontmatter)")
+ui_nav.resolve_path_references(workspace_root)
 manager.install(world, agent_id, ui_nav)
 
 # Install builtin file tools with workspace_root injection
@@ -54,6 +57,7 @@ builtin = BuiltinToolsSkill()
 # ... wrap handlers to inject workspace_root ...
 manager.install(world, agent_id, builtin)
 ```
+Invalid skills (malformed YAML frontmatter, e.g. unclosed single-quoted strings) are rejected with `ValueError` before installation.
 
 **Critical Timing**: Skills must be installed after the agent entity is created but *before* systems are registered. This ensures the `ToolRegistryComponent` is available for the `ReasoningSystem` during the first tick.
 
@@ -64,6 +68,7 @@ Artifacts are managed by the `artifacts.py` module for output directory setup, a
 - **Output Layout**: `ensure_output_layout()` creates the `ui-design/` directory and returns a dataclass with absolute paths to `draft.md` and `nano-banana-prompts.md`.
 - **Path Traversal Protection**: Every read/write operation is validated against the base output directory using `Path.resolve()` and prefix checking. Any attempt to use `../` to escape the sandbox raises a `ValueError`.
 - **Deterministic Resets**: In testing, the output directory is recreated to ensure a clean state for each run.
+- **Explicit File Authoring**: The `ui-prompt` skill explicitly instructs the LLM to call the builtin `write_file` tool to save the generated prompt set to `ui-design/nano-banana-prompts.md`. This prevents chat-only responses from being mistaken for successful artifact authoring.
 
 ## Testing Strategy
 
@@ -72,7 +77,7 @@ The implementation is verified through a tiered testing approach in `tests/integ
 1. **Deterministic E2E (FakeProvider)**: Validates the entire system loop, system priorities, and event-driven input using a mocked LLM.
 2. **Error Boundary Tests**: Ensures the orchestrator handles missing prompt files or invalid skill paths gracefully without crashing.
 3. **CLI Automation Tests**: Uses `subprocess` to verify that the example can be run as a standalone script with piped input.
-4. **Real-LLM Gated Tests**: Optional integration tests for OpenAI-compatible providers, skipped automatically if `LLM_API_KEY` is missing.
+4. **Real-LLM Gated Tests**: Optional integration tests using `OpenAIProvider` (DashScope/OpenAI-compatible). Skipped automatically when `LLM_API_KEY` is absent. When run, installs both markdown skills and `BuiltinToolsSkill` in an isolated `tmp_path` workspace, then asserts tool execution evidence (conversation `tool` messages) and artifact mutation (`ui-design/nano-banana-prompts.md` written to disk).
 
 ## Known Limitations & Future Work
 
