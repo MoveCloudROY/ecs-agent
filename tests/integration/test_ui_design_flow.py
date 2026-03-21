@@ -478,3 +478,63 @@ async def test_ui_design_flow_contract_model_auto_activation_semantics(
 
     assert callable(can_auto_invoke)
     assert can_auto_invoke(world, entity, "ui-design") is expected
+
+
+@pytest.mark.asyncio
+async def test_ui_design_flow_ui_prompt_invalid_yaml() -> None:
+    """Characterization: current ui-prompt skill YAML is invalid and parses as empty metadata."""
+    skill_file = (
+        Path(__file__).parent.parent.parent
+        / "examples"
+        / "e2e"
+        / "ui-design-flow"
+        / ".claude"
+        / "skills"
+        / "ui-prompt"
+        / "SKILL.md"
+    )
+
+    skill = Skill(skill_path=skill_file)
+
+    assert skill.valid is False
+    assert skill.name == ""
+    assert skill.description == ""
+
+
+@pytest.mark.asyncio
+async def test_ui_design_flow_ui_prompt_invalid_install_rejected(
+    tmp_path: Path,
+) -> None:
+    """Regression: malformed skills should be rejected by install() instead of being installed."""
+    malformed_skill_dir = tmp_path / ".claude" / "skills" / "invalid-ui-prompt"
+    malformed_skill_dir.mkdir(parents=True)
+    malformed_skill_file = malformed_skill_dir / "SKILL.md"
+    malformed_skill_file.write_text(
+        "---\n"
+        "name: invalid-ui-prompt\n"
+        "description: 'unterminated description\n"
+        "---\n"
+        "# invalid-ui-prompt\n"
+        "body\n",
+        encoding="utf-8",
+    )
+
+    world = World()
+    entity_id = world.create_entity()
+    manager = SkillManager()
+    skill = Skill(skill_path=malformed_skill_file)
+
+    assert skill.valid is False
+
+    try:
+        manager.install(world, entity_id, skill)  # type: ignore[arg-type]
+    except (ValueError, RuntimeError):
+        return
+
+    from ecs_agent.components.definitions import SkillComponent
+
+    skill_component = world.get_component(entity_id, SkillComponent)
+    assert skill_component is None or skill.name not in skill_component.skills, (
+        "Invalid skill installation must be rejected: raise ValueError/RuntimeError "
+        "or skip adding SkillComponent metadata"
+    )
