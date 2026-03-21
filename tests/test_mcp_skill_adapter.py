@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import asynccontextmanager
 import importlib
 import sys
 import types
@@ -40,15 +41,24 @@ def _install_fake_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
     sse_module = types.ModuleType("mcp.client.sse")
     streamable_http_module = types.ModuleType("mcp.client.streamable_http")
 
-    async def stdio_client(_: dict[str, object]) -> tuple[object, object]:
-        return object(), object()
+    @dataclass(slots=True)
+    class FakeStdioServerParameters:
+        command: str
+        args: list[str]
 
-    async def sse_client(_: str) -> tuple[object, object]:
-        return object(), object()
+    @asynccontextmanager
+    async def stdio_client(_: FakeStdioServerParameters) -> types.AsyncGeneratorType:
+        yield object(), object()
 
-    async def streamablehttp_client(_: str) -> tuple[object, object]:
-        return object(), object()
+    @asynccontextmanager
+    async def sse_client(_: str) -> types.AsyncGeneratorType:
+        yield object(), object()
 
+    @asynccontextmanager
+    async def streamablehttp_client(_: str) -> types.AsyncGeneratorType:
+        yield object(), object(), (lambda: None)
+
+    stdio_module.StdioServerParameters = FakeStdioServerParameters  # type: ignore[attr-defined]
     stdio_module.stdio_client = stdio_client  # type: ignore[attr-defined]
     sse_module.sse_client = sse_client  # type: ignore[attr-defined]
     streamable_http_module.streamablehttp_client = streamablehttp_client  # type: ignore[attr-defined]

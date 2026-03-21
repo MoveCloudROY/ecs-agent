@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 try:
-    import mcp  # type: ignore[import-not-found]
+    import mcp
 except ImportError as exc:
     raise ImportError(
         "MCP support requires the 'mcp' package. "

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import builtins
+from contextlib import asynccontextmanager
 import importlib
 import sys
 import types
+from dataclasses import dataclass, field
 from unittest.mock import AsyncMock
 
 import pytest
@@ -53,24 +55,39 @@ def _install_fake_mcp(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     sse_module = types.ModuleType("mcp.client.sse")
     streamable_http_module = types.ModuleType("mcp.client.streamable_http")
 
-    async def stdio_client(config: dict[str, object]) -> tuple[object, object]:
+    @dataclass(slots=True)
+    class FakeStdioServerParameters:
+        command: str
+        args: list[str] = field(default_factory=list)
+        env: dict[str, str] | None = None
+        cwd: str | None = None
+        encoding: str = "utf-8"
+        encoding_error_handler: str = "strict"
+
+    @asynccontextmanager
+    async def stdio_client(
+        config: FakeStdioServerParameters,
+    ) -> types.AsyncGeneratorType:
         mock = state["stdio_client"]
         assert isinstance(mock, AsyncMock)
         await mock(config)
-        return object(), object()
+        yield object(), object()
 
-    async def sse_client(url: str) -> tuple[object, object]:
+    @asynccontextmanager
+    async def sse_client(url: str) -> types.AsyncGeneratorType:
         mock = state["sse_client"]
         assert isinstance(mock, AsyncMock)
         await mock(url)
-        return object(), object()
+        yield object(), object()
 
-    async def streamablehttp_client(url: str) -> tuple[object, object]:
+    @asynccontextmanager
+    async def streamablehttp_client(url: str) -> types.AsyncGeneratorType:
         mock = state["streamablehttp_client"]
         assert isinstance(mock, AsyncMock)
         await mock(url)
-        return object(), object()
+        yield object(), object(), (lambda: None)
 
+    stdio_module.StdioServerParameters = FakeStdioServerParameters  # type: ignore[attr-defined]
     stdio_module.stdio_client = stdio_client  # type: ignore[attr-defined]
     sse_module.sse_client = sse_client  # type: ignore[attr-defined]
     streamable_http_module.streamablehttp_client = streamablehttp_client  # type: ignore[attr-defined]
@@ -130,7 +147,10 @@ async def test_connect_stdio(monkeypatch: pytest.MonkeyPatch) -> None:
     initialize_mock = state["initialize"]
     assert isinstance(stdio_mock, AsyncMock)
     assert isinstance(initialize_mock, AsyncMock)
-    stdio_mock.assert_awaited_once_with(config.config)
+    stdio_mock.assert_awaited_once()
+    params = stdio_mock.await_args.args[0]
+    assert getattr(params, "command") == "uvx"
+    assert getattr(params, "args") == ["mcp-server"]
     initialize_mock.assert_awaited_once()
     assert client.is_connected is True
 

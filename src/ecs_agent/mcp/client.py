@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from typing import Any
 from collections.abc import Awaitable
+from contextlib import AsyncExitStack
 import inspect
-from typing import cast
+from typing import Any
 
-from mcp import ClientSession  # type: ignore[import-not-found]
-from mcp.client.stdio import stdio_client  # type: ignore[import-not-found]
-from mcp.client.sse import sse_client  # type: ignore[import-not-found]
-from mcp.client.streamable_http import streamablehttp_client  # type: ignore[import-not-found]
+from mcp import ClientSession
+from mcp.client.sse import sse_client
+from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.client.streamable_http import streamablehttp_client
 
 from ecs_agent.logging import get_logger
 from ecs_agent.mcp.components import MCPConfigComponent
@@ -22,6 +22,7 @@ class MCPClient:
         self.transport_type = config.transport_type
         self.config = config.config
         self._session: ClientSession | None = None
+        self._transport_exit_stack: AsyncExitStack | None = None
         self._tools_cache: list[dict[str, Any]] = []
 
     @property
@@ -32,17 +33,20 @@ class MCPClient:
         if self.is_connected:
             return
 
+        transport_exit_stack = AsyncExitStack()
         try:
-            read, write = await self._create_transport_streams()
+            read, write = await self._create_transport_streams(transport_exit_stack)
             session = ClientSession(read, write)
             await session.initialize()
             self._session = session
+            self._transport_exit_stack = transport_exit_stack
             logger.info(
                 "mcp_connect",
                 server=self.server_name,
                 transport=self.transport_type,
             )
         except Exception as exc:
+            await transport_exit_stack.aclose()
             logger.error(
                 "mcp_connect_failed",
                 server=self.server_name,
@@ -62,6 +66,10 @@ class MCPClient:
             close_result = close()
             if isinstance(close_result, Awaitable) or inspect.isawaitable(close_result):
                 await close_result
+
+        if self._transport_exit_stack is not None:
+            await self._transport_exit_stack.aclose()
+            self._transport_exit_stack = None
 
         self._session = None
         self._tools_cache = []
@@ -100,20 +108,27 @@ class MCPClient:
 
         return str(first)
 
-    async def _create_transport_streams(self) -> tuple[Any, Any]:
+    async def _create_transport_streams(
+        self, transport_exit_stack: AsyncExitStack
+    ) -> tuple[Any, Any]:
         if self.transport_type == "stdio":
-            streams = await stdio_client(self.config)
-            return cast(tuple[Any, Any], streams)
+            params = self._create_stdio_server_parameters()
+            streams = await transport_exit_stack.enter_async_context(
+                stdio_client(params)
+            )
+            return self._extract_stream_pair(streams)
 
         if self.transport_type == "sse":
             url = self._require_config_key("url")
-            streams = await sse_client(url)
-            return cast(tuple[Any, Any], streams)
+            streams = await transport_exit_stack.enter_async_context(sse_client(url))
+            return self._extract_stream_pair(streams)
 
         if self.transport_type == "http":
             url = self._require_config_key("url")
-            streams = await streamablehttp_client(url)
-            return cast(tuple[Any, Any], streams)
+            streams = await transport_exit_stack.enter_async_context(
+                streamablehttp_client(url)
+            )
+            return self._extract_stream_pair(streams)
 
         raise ValueError(f"Unknown transport type: {self.transport_type}")
 
@@ -127,6 +142,40 @@ class MCPClient:
         if not isinstance(value, str) or not value:
             raise ValueError(f"Missing required MCP config key '{key}'")
         return value
+
+    def _create_stdio_server_parameters(self) -> StdioServerParameters:
+        command = self._require_config_key("command")
+
+        raw_args = self.config.get("args", [])
+        if not isinstance(raw_args, list) or not all(
+            isinstance(item, str) for item in raw_args
+        ):
+            raise ValueError("MCP stdio config key 'args' must be a list[str]")
+        args = list(raw_args)
+
+        raw_env = self.config.get("env")
+        env: dict[str, str] | None
+        if raw_env is None:
+            env = None
+        elif isinstance(raw_env, dict) and all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in raw_env.items()
+        ):
+            env = {key: value for key, value in raw_env.items()}
+        else:
+            raise ValueError("MCP stdio config key 'env' must be a dict[str, str]")
+
+        raw_cwd = self.config.get("cwd")
+        if raw_cwd is not None and not isinstance(raw_cwd, str):
+            raise ValueError("MCP stdio config key 'cwd' must be a string")
+        cwd = raw_cwd
+
+        return StdioServerParameters(command=command, args=args, env=env, cwd=cwd)
+
+    def _extract_stream_pair(self, streams: tuple[Any, ...]) -> tuple[Any, Any]:
+        if len(streams) < 2:
+            raise RuntimeError("MCP transport did not provide read/write streams")
+        return streams[0], streams[1]
 
     def _serialize_tool(self, tool: Any) -> dict[str, Any]:
         if isinstance(tool, dict):
