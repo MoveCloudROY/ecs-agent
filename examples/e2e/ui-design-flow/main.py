@@ -29,8 +29,8 @@ from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import CompletionResult, Message
+from ecs_agent.skills.discovery import discover_skills
 from ecs_agent.skills.manager import SkillManager
-from ecs_agent.skills.skill import Skill
 from ecs_agent.tools.builtins import BuiltinToolsSkill
 
 from runtime import setup_interactive_input
@@ -41,7 +41,7 @@ logger = get_logger(__name__)
 
 async def main() -> None:
     """Run the UI Design Flow E2E example.
-    
+
     Environment Variables:
         LLM_API_KEY: OpenAI-compatible API key (uses FakeProvider if not set)
         LLM_BASE_URL: API base URL (default: DashScope)
@@ -56,10 +56,9 @@ async def main() -> None:
 
     if debug_mode:
         logger.info("debug_mode_enabled")
-    
+
     # Create output directory structure
     ensure_output_layout()
-    
 
     # Create World
     world = World()
@@ -93,29 +92,39 @@ async def main() -> None:
     # Create Agent Entity
     agent_id = world.create_entity()
 
-    # Install markdown skills BEFORE registering systems
     manager = SkillManager()
-    ui_navigator_skill = Skill(
-        skill_path=Path(__file__).parent / ".claude/skills/ui-navigator/SKILL.md"
-    )
-    if not ui_navigator_skill.valid:
-        logger.error("skill_invalid", skill_path=str(Path(__file__).parent / ".claude/skills/ui-navigator/SKILL.md"))
-        raise ValueError(f"Skill at {Path(__file__).parent / '.claude/skills/ui-navigator/SKILL.md'} is invalid and cannot be installed")
-    ui_prompt_skill = Skill(
-        skill_path=Path(__file__).parent / ".claude/skills/ui-prompt/SKILL.md"
-    )
-    if not ui_prompt_skill.valid:
-        logger.error("skill_invalid", skill_path=str(Path(__file__).parent / ".claude/skills/ui-prompt/SKILL.md"))
-        raise ValueError(f"Skill at {Path(__file__).parent / '.claude/skills/ui-prompt/SKILL.md'} is invalid and cannot be installed")
-    workspace_root = str(Path(__file__).parent)
-    ui_navigator_skill.resolve_path_references(workspace_root)
-    ui_prompt_skill.resolve_path_references(workspace_root)
-    manager.install(world, agent_id, ui_navigator_skill)  # type: ignore[arg-type]
-    manager.install(world, agent_id, ui_prompt_skill)  # type: ignore[arg-type]
+    workspace_dir = Path(__file__).parent
+    skills_root = workspace_dir / ".claude" / "skills"
+    discovered_skills = discover_skills([skills_root])
+    discovered_by_name = {skill.name: skill for skill in discovered_skills}
+    required_skill_names = ("ui-navigator", "ui-prompt")
+
+    missing_skills = [
+        skill_name
+        for skill_name in required_skill_names
+        if skill_name not in discovered_by_name
+    ]
+    if missing_skills:
+        logger.error(
+            "required_skills_missing_or_invalid",
+            missing_skills=missing_skills,
+            skills_root=str(skills_root),
+        )
+        missing_list = ", ".join(missing_skills)
+        raise ValueError(
+            "Required skills are missing or invalid under "
+            f"{skills_root}: {missing_list}"
+        )
+
+    workspace_root = str(workspace_dir)
+    for skill_name in required_skill_names:
+        skill = discovered_by_name[skill_name]
+        skill.resolve_path_references(workspace_root)
+        manager.install(world, agent_id, skill)
 
     # Install builtin file tools so the agent can write output files.
     builtin_skill = BuiltinToolsSkill()
-    builtin_skill.bind_workspace(str(Path(__file__).parent))
+    builtin_skill.bind_workspace(str(workspace_dir))
     manager.install(world, agent_id, builtin_skill)
 
     # Read initial prompt from file
