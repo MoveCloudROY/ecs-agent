@@ -10,7 +10,7 @@ from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.tools.discovery import scan_module
 from ecs_agent.types import EntityId, ToolSchema
 
-from ecs_agent.tools.builtins import bash_tool, edit_tool, file_tools
+from ecs_agent.tools.builtins import bash_tool, edit_tool, file_tools, glob_tool
 
 logger = get_logger(__name__)
 
@@ -23,7 +23,7 @@ class BuiltinToolsSkill(ScriptSkill):
 
     def tools(self) -> dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]]:
         discovered: dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]] = {}
-        for module in (file_tools, bash_tool, edit_tool):
+        for module in (file_tools, bash_tool, edit_tool, glob_tool):
             discovered.update(scan_module(module))
         return discovered
 
