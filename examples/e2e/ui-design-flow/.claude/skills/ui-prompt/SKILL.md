@@ -63,6 +63,11 @@ metadata: {"version": "0.0.1", "updated": "2026-03-09", "author":"Mancitrus"}
 
 ## 交付格式 (Output Format)
 输出到 @../../../ui-design/nano-banana-prompts.md，格式如下：
+
+**IMPORTANT — Builtin File Tool Required**: When all pages are complete, you MUST call the builtin `write_file` tool to save the prompt set to the target file. Do NOT only respond with text in the chat — file authoring is the deliverable. Call `write_file` with:
+- `file_path`: `ui-design/nano-banana-prompts.md`
+- `content`: the full formatted markdown following the template below
+
 ```
 ### 页面 [N]：[页面名称，例如：首页 Dashboard]
 

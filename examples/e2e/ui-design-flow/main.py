@@ -40,11 +40,26 @@ logger = get_logger(__name__)
 
 
 async def main() -> None:
-    """Run the UI Design Flow E2E example."""
+    """Run the UI Design Flow E2E example.
+    
+    Environment Variables:
+        LLM_API_KEY: OpenAI-compatible API key (uses FakeProvider if not set)
+        LLM_BASE_URL: API base URL (default: DashScope)
+        LLM_MODEL: Model name (default: qwen3.5-flash)
+        DEBUG: Set to '1' or 'true' to enable debug-level logging
+        UI_DESIGN_FLOW_INTERACTIVE: Set to '0' or 'false' to disable interactive input.
+            When not set, auto-detects based on whether stdin is a TTY.
+    """
+    # Configure logging
+    debug_mode = os.environ.get("DEBUG", "").lower() in ("1", "true")
     configure_logging(json_output=False)
 
+    if debug_mode:
+        logger.info("debug_mode_enabled")
+    
     # Create output directory structure
     ensure_output_layout()
+    
 
     # Create World
     world = World()
@@ -132,9 +147,19 @@ async def main() -> None:
     world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
-    # Setup interactive input handling
-    # Setup interactive input handling (implemented in Task 3)
-    await setup_interactive_input(world, agent_id)
+    # Setup interactive input handling (optional, based on env var)
+    # Default: enabled for backward compatibility with piped input
+    # Set UI_DESIGN_FLOW_INTERACTIVE=0 or false to disable for truly automated CI runs
+    interactive_mode_str = os.environ.get("UI_DESIGN_FLOW_INTERACTIVE", "1")
+    if interactive_mode_str.lower() in ("0", "false"):
+        # Explicitly disabled via env var
+        if debug_mode:
+            logger.info("interactive_input_disabled", reason="env_var_set")
+    else:
+        # Enabled (default, or explicitly set to 1/true)
+        if debug_mode:
+            logger.info("interactive_input_enabled", reason="default_or_env_var_set")
+        await setup_interactive_input(world, agent_id)
 
     # Run agent loop
     runner = Runner()
