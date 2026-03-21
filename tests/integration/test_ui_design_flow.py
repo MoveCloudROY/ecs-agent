@@ -6,6 +6,7 @@ error handling without LLM_API_KEY requirement. All tests are offline.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -246,7 +247,10 @@ This is a test skill.
 
 @pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
 @pytest.mark.asyncio
-async def test_ui_design_flow_real_llm(tmp_path: Path) -> None:
+async def test_ui_design_flow_real_llm(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Full E2E test with real OpenAI-compatible provider (DashScope)."""
     # Setup: Copy example structure to tmp_path
     example_base = tmp_path / "ui-design-flow"
@@ -297,39 +301,59 @@ async def test_ui_design_flow_real_llm(tmp_path: Path) -> None:
     world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
-    # Setup interactive input simulation
-    input_responses = ["continue", "continue", "exit"]
-    input_index = 0
+    input_responses = iter(["continue with more detail", "exit"])
 
-    async def provide_input(event: UserInputRequestedEvent) -> None:
-        nonlocal input_index
-        if input_index < len(input_responses):
-            user_text = input_responses[input_index]
-            input_index += 1
-        else:
-            user_text = "exit"
+    def fake_input(_prompt: str) -> str:
+        return next(input_responses, "exit")
 
-        normalized = user_text.lower().strip()
-        if normalized in ("exit", "quit"):
-            world.add_component(
-                event.entity_id,
-                TerminalComponent(reason="user_exit_command"),
-            )
+    monkeypatch.setattr("builtins.input", fake_input)
 
-        if not event.input_future.done():
-            event.input_future.set_result(user_text)
-
-    world.event_bus.subscribe(UserInputRequestedEvent, provide_input)
-    world.register_system(UserInputSystem(priority=-5), priority=-5)
+    runtime_path = (
+        Path(__file__).parent.parent.parent
+        / "examples"
+        / "e2e"
+        / "ui-design-flow"
+        / "runtime.py"
+    )
+    spec = importlib.util.spec_from_file_location("ui_design_runtime", runtime_path)
+    assert spec is not None and spec.loader is not None
+    runtime_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runtime_module)
+    setup_interactive_input = getattr(runtime_module, "setup_interactive_input", None)
+    assert callable(setup_interactive_input)
+    await setup_interactive_input(world, agent_id)
 
     # Run agent loop
     runner = Runner()
     await runner.run(world, max_ticks=10)
 
-    # Verify conversation happened (LLM may or may not call tools)
     conv = world.get_component(agent_id, ConversationComponent)
     assert conv is not None
-    assert len(conv.messages) > 1, "Expected conversation to have occurred"
+    assistant_indices = [
+        idx
+        for idx, msg in enumerate(conv.messages)
+        if msg.role == "assistant" and msg.content.strip()
+    ]
+    assert assistant_indices, "Expected at least one assistant completion"
+
+    follow_up_users = [
+        msg
+        for msg in conv.messages
+        if msg.role == "user" and msg.content.strip().lower() not in ("exit", "quit")
+    ]
+    assert len(assistant_indices) >= 2, (
+        "Expected cleanup-enabled runtime to continue into at least a second assistant completion"
+    )
+    assert len(follow_up_users) >= 2, (
+        "Expected at least one non-exit follow-up user turn in addition to the initial prompt"
+    )
+
+    terminal_reasons = [
+        terminal.reason
+        for _, (terminal,) in world.query(TerminalComponent)
+        if isinstance(terminal, TerminalComponent)
+    ]
+    assert terminal_reasons, "Expected run to terminate with a terminal reason"
 
 
 @pytest.mark.asyncio
@@ -363,6 +387,20 @@ async def test_ui_design_flow_cli_automation() -> None:
     assert "assistant" in output.lower() or "conversation" in output.lower(), (
         f"Expected conversation evidence in output. Got:\n{output}"
     )
+
+    assert "user: continue" in output.lower(), (
+        f"Expected one follow-up user turn before exit. Got output:\n{output}"
+    )
+
+    runtime_source = (
+        Path(__file__).parent.parent.parent
+        / "examples"
+        / "e2e"
+        / "ui-design-flow"
+        / "runtime.py"
+    ).read_text(encoding="utf-8")
+    assert "class ClearTerminalForInputSystem" not in runtime_source
+    assert "TerminalCleanupSystem" in runtime_source
 
 
 # Master's contract tests
