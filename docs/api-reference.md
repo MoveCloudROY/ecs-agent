@@ -18,7 +18,7 @@ The following types and classes are re-exported for convenience:
 - `ClaudeProvider` from `ecs_agent.providers.claude_provider`
 - `LiteLLMProvider` from `ecs_agent.providers.litellm_provider`
 - `OpenAIEmbeddingProvider`, `FakeEmbeddingProvider` from `ecs_agent.providers`
-- `MessageBusSystem`, `RAGSystem`, `TreeSearchSystem`, `ToolApprovalSystem`, `CheckpointSystem`, `CompactionSystem`, `UserInputSystem`, `SubagentSystem` from `ecs_agent.systems`
+- `MessageBusSystem`, `RAGSystem`, `TreeSearchSystem`, `ToolApprovalSystem`, `CheckpointSystem`, `CompactionSystem`, `UserInputSystem`, `TerminalCleanupSystem`, `SubagentSystem` from `ecs_agent.systems`
 - `StreamStartEvent`, `StreamReasoningDeltaEvent`, `StreamReasoningEndEvent`, `StreamContentStartEvent`, `StreamContentDeltaEvent`, `StreamEndEvent`, `CheckpointCreatedEvent`, `CheckpointRestoredEvent`, `CompactionCompleteEvent`, `ToolApprovalRequestedEvent`, `ToolApprovedEvent`, `ToolDeniedEvent`, `RAGRetrievalCompletedEvent`, `UserInputRequestedEvent`, `MCTSNodeScoredEvent`, `MessageBusPublishedEvent`, `MessageBusDeliveredEvent`, `MessageBusResponseEvent`, `MessageBusTimeoutEvent` from `ecs_agent.types`
 - `scan_module`, `sandboxed_execute`, `tool` from `ecs_agent.tools`
 - `TaskStatus`, `TaskComponent`, `ScratchbookRef`, `ScratchbookRefComponent`, `ScratchbookIndexComponent` from `ecs_agent.types` and `ecs_agent.components`
@@ -545,6 +545,15 @@ class CompactionSystem(bisect_ratio: float = 0.5):
 class UserInputSystem(priority: int = -10):
     async def process(self, world: World) -> None: ...
 ```
+
+### TerminalCleanupSystem
+
+```python
+class TerminalCleanupSystem(priority: int = 1, clear_reasons: tuple[str, ...] = ("reasoning_complete",), include_owned_entities: bool = False):
+    async def process(self, world: World) -> None: ...
+```
+
+opt-in helper for interactive runtimes. It clears selected `TerminalComponent` reasons after terminal-producing systems run. Default behavior clears only `reasoning_complete` and skips owned entities unless explicitly configured otherwise.
 
 ### SubagentSystem
 

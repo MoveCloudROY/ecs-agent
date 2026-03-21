@@ -2,6 +2,8 @@
 
 The `UserInputSystem` enables agents to request and wait for human input during execution, supporting both timed and infinite waits.
 
+For multi-turn interactive agents, `UserInputSystem` is often paired with the opt-in `TerminalCleanupSystem`. This keeps `UserInputSystem` focused on input futures while allowing interactive runtimes to clear `TerminalComponent(reason="reasoning_complete")` after reasoning completes.
+
 ## Components
 
 ### UserInputComponent
@@ -39,6 +41,19 @@ world.add_component(agent, UserInputComponent(
 # Register system
 world.register_system(UserInputSystem(priority=-10), priority=-10)
 ```
+
+## Pairing with TerminalCleanupSystem
+
+`TerminalCleanupSystem` is the recommended helper for interactive continuations that must continue after a successful reasoning turn. Register it after reasoning, typically with `priority=1`, so it can clear `reasoning_complete` before the next tick's Runner stop check.
+
+```python
+from ecs_agent.systems import TerminalCleanupSystem
+
+world.register_system(TerminalCleanupSystem(priority=1), priority=1)
+world.register_system(UserInputSystem(priority=-10), priority=-10)
+```
+
+This behavior is **opt-in**. Runner still stops on top-level `TerminalComponent` unless a cleanup system removes a selected reason first.
 
 ## Providing Input
 

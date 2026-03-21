@@ -13,7 +13,7 @@ The example follows a strict ECS pattern where data (Components) is separated fr
 - **UserInputComponent**: Indicates that the agent is waiting for external input from the user.
 - **SkillComponent**: Holds metadata for installed skills (`/ui-navigator`, `/ui-prompt`).
 - **ToolRegistryComponent**: (Internal) Map of tool names to their execution logic, populated by installed skills.
-- **TerminalComponent**: Attached when the user sends an "exit" command or the agent completes its task.
+- **TerminalComponent**: Attached when the user sends an "exit" command or when reasoning completes; the runtime now pairs this with the opt-in `TerminalCleanupSystem` so `reasoning_complete` does not prematurely end interactive continuation.
 
 ### System Execution Order
 
@@ -23,6 +23,7 @@ Systems are registered with specific priorities to ensure correct data flow with
 |--------|----------|---------|
 | **UserInputSystem** | -5 | Processes `UserInputComponent` and triggers `UserInputRequestedEvent`. |
 | **ReasoningSystem** | 0 | Calls the LLM provider to generate the next response or tool call. |
+| **TerminalCleanupSystem** | 1 | Clears `TerminalComponent(reason="reasoning_complete")` so interactive turns can continue. |
 | **ToolExecutionSystem** | 5 | Dispatches pending tool calls to builtin file tools (read_file, write_file, etc.). |
 | **MemorySystem** | 10 | Updates conversation history and manages context window. |
 | **ErrorHandlingSystem** | 99 | Captures exceptions from other systems and attaches `ErrorComponent`. |
@@ -36,6 +37,7 @@ Interactive input is achieved through an event-driven adapter in `runtime.py`.
 3. **Async Stdin**: The subscriber uses `asyncio.run_in_executor` to call the blocking `input()` function without freezing the event loop.
 4. **Resolution**: Once input is received, the subscriber resolves the event's `input_future`, allowing the system tick to complete.
 5. **Termination**: Typing "exit" or "quit" attaches a `TerminalComponent` to the agent, signaling the `Runner` to stop.
+6. **Opt-in Cleanup**: `TerminalCleanupSystem(priority=1, clear_reasons=("reasoning_complete",))` removes only the successful-reasoning terminal marker so multi-turn interaction can continue without changing Runner semantics.
 
 ## Skill Installation Lifecycle
 

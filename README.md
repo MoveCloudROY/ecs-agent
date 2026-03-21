@@ -184,6 +184,8 @@ The **Runner** repeatedly ticks the **World** until a `TerminalComponent` is att
 2. Those at the same priority level run concurrently.
 3. Logical operations read or write components on entities. This represents the entire data flow.
 
+For interactive agents that must continue after a successful reasoning turn, register the opt-in `TerminalCleanupSystem` after reasoning (recommended `priority=1`). It clears selected terminal reasons—by default only `reasoning_complete`—without changing Runner's core stop semantics.
+
 ```
 World
  ├── Entity 0 ── [LLMComponent, ConversationComponent, PlanComponent, ...]
@@ -352,6 +354,15 @@ LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
   LLM_MODEL=qwen3.5-flash \
   LLM_API_KEY="$LLM_API_KEY" \
   uv run pytest tests/test_real_llm_integration.py -k "prompt" -v
+```
+
+To verify cleanup-enabled interactive continuation in the UI Design Flow example, run:
+
+```bash
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
+  LLM_MODEL=qwen3.5-flash \
+  LLM_API_KEY="$LLM_API_KEY" \
+  uv run pytest tests/integration/test_ui_design_flow.py -k "real_llm" -v
 ```
 
 

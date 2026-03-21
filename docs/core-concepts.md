@@ -118,6 +118,8 @@ The `Runner` automates the execution of the `World`'s processing cycle.
 
 The loop stops if an entity with a `TerminalComponent` is found or if `max_ticks` is reached. If the loop hits the tick limit, it creates a new entity with a `TerminalComponent(reason="max_ticks")`.
 
+`TerminalCleanupSystem` does **not** change this Runner behavior. It is an **opt-in** post-reasoning helper for interactive flows that need to clear selected terminal reasons before the next tick continues. The recommended registration is `priority=1`, after `ReasoningSystem(priority=0)`, and its default cleared reason is `reasoning_complete`.
+
 ### Usage Example
 ```python
 from ecs_agent.core import World, Runner

@@ -268,6 +268,8 @@ A marker component that signifies the agent has finished its task.
 
 **Checked by:** Runner loop to determine when to stop execution.
 
+In interactive flows, a `TerminalComponent` can also be handled by the opt-in `TerminalCleanupSystem`, which clears selected reasons after terminal-producing systems run. By default, that helper only clears `reasoning_complete` and leaves other terminal reasons intact.
+
 **Usage:**
 ```python
 from ecs_agent.components import TerminalComponent

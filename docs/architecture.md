@@ -71,6 +71,8 @@ Typical tick cycle steps:
 5. After processing logic, systems update data in the `ComponentStore` or trigger events through the `EventBus`.
 6. The Runner checks for a `TerminalComponent` at the end of every tick to decide whether to stop the execution loop.
 
+Interactive runtimes can use the opt-in `TerminalCleanupSystem` to clear specific terminal reasons after reasoning and before the next tick proceeds. This helper does not change core Runner semantics; it is a scoped system-level policy that is typically registered at `priority=1` and defaults to clearing only `reasoning_complete`.
+
 ## System Execution Order
 
 Systems run based on their priority. Lower numbers execute first. We recommend the following priority ordering for agent workflows:
@@ -78,6 +80,7 @@ Systems run based on their priority. Lower numbers execute first. We recommend t
 - **Priority -10**: `RAGSystem`, `UserInputSystem`. Pre-processing: vector search retrieval and user input before reasoning.
 - **Priority -5**: `ToolApprovalSystem`. Filters tool calls before execution.
 - **Priority 0**: `ReasoningSystem` or `PlanningSystem`. These systems usually handle LLM calls to decide the next action.
+- **Priority 1**: `TerminalCleanupSystem`. Optional post-reasoning cleanup for interactive flows that must continue after `reasoning_complete`.
 - **Priority 5**: `ToolExecutionSystem` or `MessageBusSystem`. These handle the actual work or interactions with other agents.
 - **Priority 7**: `ReplanningSystem`. This checks results and updates the plan if needed.
 - **Priority 10**: `MemorySystem`. This persists important information to long-term storage.
