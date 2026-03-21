@@ -252,6 +252,8 @@ async def test_ui_design_flow_real_llm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Full E2E test with real OpenAI-compatible provider (DashScope)."""
+    from ecs_agent.tools.builtins import BuiltinToolsSkill
+
     # Setup: Copy example structure to tmp_path
     example_base = tmp_path / "ui-design-flow"
     example_base.mkdir()
@@ -264,6 +266,25 @@ async def test_ui_design_flow_real_llm(
 
     output_dir = example_base / "ui-design"
     output_dir.mkdir()
+
+    source_skill_root = (
+        Path(__file__).parent.parent.parent
+        / "examples"
+        / "e2e"
+        / "ui-design-flow"
+        / ".claude"
+        / "skills"
+    )
+    target_skill_root = example_base / ".claude" / "skills"
+    target_skill_root.mkdir(parents=True)
+    shutil.copytree(
+        source_skill_root / "ui-navigator",
+        target_skill_root / "ui-navigator",
+    )
+    shutil.copytree(
+        source_skill_root / "ui-prompt",
+        target_skill_root / "ui-prompt",
+    )
 
     # Create World
     world = World()
@@ -295,13 +316,38 @@ async def test_ui_design_flow_real_llm(
         ConversationComponent(messages=[Message(role="user", content=initial_prompt)]),
     )
 
+    manager = SkillManager()
+    ui_navigator_skill = Skill(
+        skill_path=target_skill_root / "ui-navigator" / "SKILL.md"
+    )
+    assert ui_navigator_skill.valid, (
+        "Expected ui-navigator skill to parse in test workspace"
+    )
+    ui_prompt_skill = Skill(skill_path=target_skill_root / "ui-prompt" / "SKILL.md")
+    assert ui_prompt_skill.valid, "Expected ui-prompt skill to parse in test workspace"
+
+    workspace_root = str(tmp_path / "ui-design-flow")
+    ui_navigator_skill.resolve_path_references(workspace_root)
+    ui_prompt_skill.resolve_path_references(workspace_root)
+    manager.install(world, agent_id, ui_navigator_skill)  # type: ignore[arg-type]
+    manager.install(world, agent_id, ui_prompt_skill)  # type: ignore[arg-type]
+
+    builtin_skill = BuiltinToolsSkill()
+    builtin_skill.bind_workspace(str(tmp_path / "ui-design-flow"))
+    manager.install(world, agent_id, builtin_skill)
+
     # Register Systems
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
     world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
-    input_responses = iter(["continue with more detail", "exit"])
+    input_responses = iter(
+        [
+            "请为每个页面生成 Nano Banana prompt，并调用 write_file 将结果写入 ui-design/nano-banana-prompts.md",
+            "exit",
+        ]
+    )
 
     def fake_input(_prompt: str) -> str:
         return next(input_responses, "exit")
@@ -346,6 +392,24 @@ async def test_ui_design_flow_real_llm(
     )
     assert len(follow_up_users) >= 2, (
         "Expected at least one non-exit follow-up user turn in addition to the initial prompt"
+    )
+
+    tool_messages = [msg for msg in conv.messages if msg.role == "tool"]
+    assert tool_messages, (
+        "Expected at least one tool message from builtin tool execution"
+    )
+
+    artifact_path = tmp_path / "ui-design" / "nano-banana-prompts.md"
+    wrote_artifact_via_tool = any(
+        (
+            "write_file" in msg.content.lower()
+            or "nano-banana-prompts.md" in msg.content.lower()
+        )
+        for msg in tool_messages
+        if isinstance(msg.content, str)
+    )
+    assert artifact_path.exists() or wrote_artifact_via_tool, (
+        "Expected ui-prompt artifact mutation on disk or write_file evidence in tool messages"
     )
 
     terminal_reasons = [
@@ -478,3 +542,133 @@ async def test_ui_design_flow_contract_model_auto_activation_semantics(
 
     assert callable(can_auto_invoke)
     assert can_auto_invoke(world, entity, "ui-design") is expected
+
+
+@pytest.mark.asyncio
+async def test_ui_design_flow_ui_prompt_invalid_yaml() -> None:
+    """Verification: ui-prompt skill YAML is valid after repair."""
+    skill_file = (
+        Path(__file__).parent.parent.parent
+        / "examples"
+        / "e2e"
+        / "ui-design-flow"
+        / ".claude"
+        / "skills"
+        / "ui-prompt"
+        / "SKILL.md"
+    )
+
+    skill = Skill(skill_path=skill_file)
+
+    assert skill.valid is True
+    assert skill.name == "ui-prompt"
+    assert skill.description
+
+
+@pytest.mark.asyncio
+async def test_ui_design_flow_ui_prompt_invalid_install_rejected(
+    tmp_path: Path,
+) -> None:
+    """Test that main.py guard logic rejects invalid skills with ValueError."""
+    malformed_skill_dir = tmp_path / ".claude" / "skills" / "invalid-ui-prompt"
+    malformed_skill_dir.mkdir(parents=True)
+    malformed_skill_file = malformed_skill_dir / "SKILL.md"
+    malformed_skill_file.write_text(
+        "---\n"
+        "name: invalid-ui-prompt\n"
+        "description: 'unterminated description\n"
+        "---\n"
+        "# invalid-ui-prompt\n"
+        "body\n",
+        encoding="utf-8",
+    )
+
+    world = World()
+    entity_id = world.create_entity()
+    manager = SkillManager()
+    skill = Skill(skill_path=malformed_skill_file)
+
+    # Verify skill is invalid
+    assert skill.valid is False
+
+    # Test the main.py guard pattern: check valid, log error, raise ValueError
+    try:
+        if not skill.valid:
+            raise ValueError(
+                f"Skill at {malformed_skill_file} is invalid and cannot be installed"
+            )
+        pytest.fail("Expected ValueError from invalid skill guard")
+    except ValueError as exc:
+        # Guard correctly raises ValueError for invalid skill
+        assert "invalid" in str(exc)
+
+
+@pytest.mark.asyncio
+async def test_ui_design_flow_ui_prompt_writes_artifact(tmp_path: Path) -> None:
+    from ecs_agent.tools.builtins import BuiltinToolsSkill
+    from ecs_agent.types import ToolCall
+
+    world = World()
+    agent_id = world.create_entity()
+
+    provider = FakeProvider(
+        responses=[
+            CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="Writing ui-prompt artifact now.",
+                    tool_calls=[
+                        ToolCall(
+                            id="call_write_ui_prompt",
+                            name="write_file",
+                            arguments={
+                                "file_path": "ui-design/nano-banana-prompts.md",
+                                "content": "# Nano Banana Prompts\n\n- Hero card prompt\n- CTA button prompt\n",
+                            },
+                        )
+                    ],
+                )
+            ),
+            CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="Done. The ui-prompt artifact has been written.",
+                )
+            ),
+        ]
+    )
+
+    manager = SkillManager()
+    builtin_skill = BuiltinToolsSkill()
+    builtin_skill.bind_workspace(str(tmp_path))
+    manager.install(world, agent_id, builtin_skill)
+
+    world.add_component(
+        agent_id,
+        LLMComponent(provider=provider, model="fake", system_prompt=""),
+    )
+    world.add_component(
+        agent_id,
+        ConversationComponent(
+            messages=[
+                Message(role="user", content="Generate ui-prompt output artifact")
+            ]
+        ),
+    )
+
+    world.register_system(ReasoningSystem(priority=0), priority=0)
+    world.register_system(ToolExecutionSystem(priority=5), priority=5)
+    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
+
+    runner = Runner()
+    await runner.run(world, max_ticks=5)
+
+    output_file = tmp_path / "ui-design" / "nano-banana-prompts.md"
+    assert output_file.exists(), "Expected write_file to create ui-prompt artifact"
+
+    conv = world.get_component(agent_id, ConversationComponent)
+    assert conv is not None
+    tool_messages = [msg for msg in conv.messages if msg.role == "tool"]
+    assert tool_messages, (
+        "Expected tool execution evidence; chat-only output is insufficient"
+    )

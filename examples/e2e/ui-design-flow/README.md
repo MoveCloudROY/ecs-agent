@@ -31,6 +31,8 @@ The agent acts as a UI design expert that can:
    - `LLM_API_KEY`: Your OpenAI-compatible API key.
    - `LLM_BASE_URL`: API base URL (defaults to DashScope).
    - `LLM_MODEL`: The model to use (defaults to `LLM_MODEL=qwen3.5-flash`).
+   - `DEBUG`: Set to `1` or `true` to enable debug-level logging.
+   - `UI_DESIGN_FLOW_INTERACTIVE`: Set to `0` to disable interactive stdin for automated CI runs (default: enabled).
 
 ## Usage
 
@@ -74,7 +76,18 @@ uv run pytest tests/integration/test_ui_design_flow.py -k "fake_provider"
 uv run pytest tests/integration/test_ui_design_flow.py -k "cli_automation"
 
 # Run real LLM integration test (requires LLM_API_KEY)
-LLM_API_KEY=your-api-key uv run pytest tests/integration/test_ui_design_flow.py -k "real_llm"
+# Verifies tool execution evidence and artifact mutation (nano-banana-prompts.md written to disk)
+ECS_AGENT_LOG_LEVEL=DEBUG LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
+  LLM_MODEL=qwen3.5-flash LLM_API_KEY=your-api-key \
+  uv run pytest tests/integration/test_ui_design_flow.py -k "real_llm" -v
+```
+
+### Non-Interactive / CI Mode
+
+Run the example without interactive stdin for automated environments:
+
+```bash
+UI_DESIGN_FLOW_INTERACTIVE=0 uv run python main.py
 ```
 
 ## Known Limitations
