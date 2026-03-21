@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ecs_agent.logging import get_logger
 from ecs_agent.tools.discovery import tool
+from ecs_agent.tools.builtins.edit_tool import format_file_with_hashes
 
 logger = get_logger(__name__)
 
@@ -26,7 +27,8 @@ async def read_file(file_path: str, workspace_root: str) -> str:
     """Read UTF-8 file content from workspace."""
     target = _validate_path(file_path, workspace_root)
     logger.info("read_file", file_path=file_path)
-    return target.read_text(encoding="utf-8")
+    content = target.read_text(encoding="utf-8")
+    return format_file_with_hashes(content)
 
 
 @tool(description="Write UTF-8 content to file in workspace.")

@@ -118,6 +118,42 @@ def test_apply_edits_prepend() -> None:
     assert apply_edits(original, edits) == "top\nbefore-mid\nmid\nbot"
 
 
+def test_apply_edits_line_shift_invalidation() -> None:
+    original = "line1\nline2\nline3"
+    line_1_hash = compute_line_hash(1, "line1")
+    stale_line_2_hash = compute_line_hash(2, "line2")
+
+    shifted = apply_edits(
+        original,
+        [EditOperation(op="prepend", pos=f"1#{line_1_hash}", lines=["new-line0"])],
+    )
+
+    with pytest.raises(ValueError, match="Hash mismatch"):
+        apply_edits(
+            shifted,
+            [
+                EditOperation(
+                    op="replace",
+                    pos=f"2#{stale_line_2_hash}",
+                    lines=["updated-line2"],
+                )
+            ],
+        )
+
+
+def test_apply_edits_crlf_content() -> None:
+    original = "alpha\r\nbeta\r\ngamma"
+    assert compute_line_hash(1, "alpha\r") == compute_line_hash(1, "alpha")
+
+    alpha_hash = compute_line_hash(1, "alpha")
+    updated = apply_edits(
+        original,
+        [EditOperation(op="replace", pos=f"1#{alpha_hash}", lines=["ALPHA"])],
+    )
+
+    assert updated == "ALPHA\nbeta\ngamma"
+
+
 def test_apply_edits_hash_mismatch() -> None:
     original = "a\nb\nc"
     wrong_hash = "ffff"
