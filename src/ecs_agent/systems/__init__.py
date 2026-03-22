@@ -15,6 +15,9 @@ from ecs_agent.systems.tool_approval import ToolApprovalSystem
 from ecs_agent.systems.tree_search import TreeSearchSystem
 from ecs_agent.systems.rag import RAGSystem
 from ecs_agent.systems.user_input import UserInputSystem
+from ecs_agent.systems.user_prompt_normalization_system import (
+    UserPromptNormalizationSystem,
+)
 
 __all__ = [
     "CheckpointSystem",
@@ -34,4 +37,5 @@ __all__ = [
     "ToolExecutionSystem",
     "TreeSearchSystem",
     "UserInputSystem",
+    "UserPromptNormalizationSystem",
 ]
