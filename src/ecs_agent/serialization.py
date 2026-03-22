@@ -45,6 +45,11 @@ from ecs_agent.components import (
     VectorStoreComponent,
 )
 from ecs_agent.core.world import World
+from ecs_agent.prompts.contracts import (
+    PlaceholderSpec,
+    PromptConfigSpec,
+    PromptTemplateSource,
+)
 from ecs_agent.types import ApprovalPolicy, EntityId, Message, ToolCall, ToolSchema
 
 NON_SERIALIZABLE_PLACEHOLDER = "<non-serializable>"
@@ -83,6 +88,7 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     ScratchbookRefComponent.__name__: ScratchbookRefComponent,
     TaskComponent.__name__: TaskComponent,
     PromptConfigComponent.__name__: PromptConfigComponent,
+    PromptConfigSpec.__name__: PromptConfigSpec,
     RenderedSystemPromptComponent.__name__: RenderedSystemPromptComponent,
     RenderedUserPromptComponent.__name__: RenderedUserPromptComponent,
     OneShotContextPoolComponent.__name__: OneShotContextPoolComponent,
@@ -319,6 +325,22 @@ class WorldSerializer:
                     "PromptConfigComponent contains unsupported fields: "
                     f"{', '.join(unknown_fields)}"
                 )
+
+        if component_name == PromptConfigSpec.__name__:
+            template_source_data = normalized_data.get("template_source")
+            if isinstance(template_source_data, dict):
+                normalized_data["template_source"] = PromptTemplateSource(
+                    **template_source_data
+                )
+
+            placeholders_data = normalized_data.get("placeholders", [])
+            normalized_placeholders: list[PlaceholderSpec] = []
+            for placeholder in placeholders_data:
+                if isinstance(placeholder, dict):
+                    normalized_placeholders.append(PlaceholderSpec(**placeholder))
+                else:
+                    normalized_placeholders.append(placeholder)
+            normalized_data["placeholders"] = normalized_placeholders
 
         if component_name == LLMComponent.__name__:
             provider_value = normalized_data.get("provider")

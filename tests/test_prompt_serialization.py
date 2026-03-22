@@ -209,19 +209,22 @@ def test_rendered_user_prompt_component_roundtrip() -> None:
 
 
 def test_prompt_config_spec_static_roundtrip() -> None:
+    world = World()
+    entity = world.create_entity()
+
     config = PromptConfigSpec(
         template_source=PromptTemplateSource(inline="Hello ${name}"),
         placeholders=[PlaceholderSpec(name="name", value="world")],
     )
+    world.add_component(entity, config)
 
-    serialized = WorldSerializer._serialize_component(config)
-    json_data = json.loads(json.dumps(serialized))
+    data = WorldSerializer.to_dict(world)
+    json.loads(json.dumps(data))
+    providers = {"default": DummyProvider()}
+    world2 = WorldSerializer.from_dict(data, providers=providers, tool_handlers={})
 
-    config2 = PromptConfigSpec(
-        template_source=PromptTemplateSource(**json_data["template_source"]),
-        placeholders=[PlaceholderSpec(**item) for item in json_data["placeholders"]],
-    )
-
+    config2 = world2.get_component(entity, PromptConfigSpec)
+    assert config2 is not None
     assert config2.template_source.inline == "Hello ${name}"
     assert config2.template_source.file_path is None
     assert len(config2.placeholders) == 1
@@ -233,6 +236,7 @@ def test_prompt_components_serializer_registered() -> None:
     """All prompt components are registered in COMPONENT_REGISTRY."""
     component_names = {
         PromptConfigComponent.__name__,
+        PromptConfigSpec.__name__,
         SystemPromptComponent.__name__,
         OneShotContextPoolComponent.__name__,
         RenderedSystemPromptComponent.__name__,
@@ -243,5 +247,3 @@ def test_prompt_components_serializer_registered() -> None:
     for name in component_names:
         assert name in COMPONENT_REGISTRY, f"{name} not in COMPONENT_REGISTRY"
         assert COMPONENT_REGISTRY[name] is not None
-
-    assert PromptConfigSpec.__name__ not in COMPONENT_REGISTRY

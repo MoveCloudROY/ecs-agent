@@ -35,7 +35,7 @@ def _load_example(module_name: str) -> Any:
 
 
 @pytest.mark.asyncio
-async def test_prompt_normalization_demo_fake_mode_prints_assembled_markers(
+async def test_prompt_normalization_demo_fake_mode_prints_rendered_markers(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     module = _load_example("prompt_normalization_demo")
@@ -56,15 +56,20 @@ async def test_prompt_normalization_demo_fake_mode_prints_assembled_markers(
 
     stdout = capsys.readouterr().out
     assert "[mode] fake" in stdout
-    assert "=== Assembled System Prompt ===" in stdout
-    assert "# Markdown Linked Prompt" in stdout
+    assert "=== Rendered System Prompt ===" in stdout
+    assert "You are a helpful coding assistant." in stdout
+    assert "Available tools:" in stdout
+    assert "- demo_tool" in stdout
+    assert "${_installed_tools}" not in stdout
     assert "=== Outbound User Message (Injected) ===" in stdout
     assert "[PROMPT_INJECT:@code]" in stdout
     assert "[PROMPT_CONTEXT_POOL]" in stdout
+    assert "Prioritize deterministic code-first reasoning." in stdout
     assert "source: tool:search" in stdout
     assert "source: subagent:researcher" in stdout
     assert "Please @code summarize latest findings" in stdout
     assert "user tail preserved: True" in stdout
+    assert "=== Rendered User Prompt Component ===" in stdout
 
 
 @pytest.mark.asyncio
