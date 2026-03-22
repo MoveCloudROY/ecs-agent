@@ -24,6 +24,8 @@ from ecs_agent.components import (
     PlanComponent,
     PlanSearchComponent,
     PromptConfigComponent,
+    RenderedSystemPromptComponent,
+    RenderedUserPromptComponent,
     RAGTriggerComponent,
     RunnerStateComponent,
     ResponsesAPIStateComponent,
@@ -81,6 +83,8 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     ScratchbookRefComponent.__name__: ScratchbookRefComponent,
     TaskComponent.__name__: TaskComponent,
     PromptConfigComponent.__name__: PromptConfigComponent,
+    RenderedSystemPromptComponent.__name__: RenderedSystemPromptComponent,
+    RenderedUserPromptComponent.__name__: RenderedUserPromptComponent,
     OneShotContextPoolComponent.__name__: OneShotContextPoolComponent,
     TurnStateComponent.__name__: TurnStateComponent,
 }
