@@ -22,6 +22,7 @@ from ecs_agent.prompts.contracts import (
 )
 from ecs_agent.providers import FakeProvider
 from ecs_agent.prompts.registry import resolve_placeholder_values
+import ecs_agent.systems.system_prompt_render_system as render_module
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.types import SubagentConfig, ToolSchema
 
@@ -572,3 +573,294 @@ async def test_render_system_mirrors_to_llm_component() -> None:
     assert rendered is not None
     assert llm is not None
     assert llm.system_prompt == rendered.text
+
+
+@pytest.mark.asyncio
+async def test_render_system_installed_skills_sorted() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        PromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_installed_skills}")
+        ),
+    )
+    world.add_component(
+        entity_id,
+        SkillComponent(
+            skills={
+                "code": SkillMetadata(
+                    name="code",
+                    description="code skill",
+                    tool_names=[],
+                    has_system_prompt=False,
+                ),
+                "analyze": SkillMetadata(
+                    name="analyze",
+                    description="analyze skill",
+                    tool_names=[],
+                    has_system_prompt=False,
+                ),
+            }
+        ),
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text == "- analyze\n- code"
+
+
+@pytest.mark.asyncio
+async def test_render_system_empty_skills_renders_none() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        PromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_installed_skills}")
+        ),
+    )
+    world.add_component(entity_id, SkillComponent(skills={}))
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text == "- none"
+
+
+@pytest.mark.asyncio
+async def test_render_system_no_skill_component_renders_none() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        PromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_installed_skills}")
+        ),
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text == "- none"
+
+
+@pytest.mark.asyncio
+async def test_render_system_installed_subagents_sorted() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        PromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_installed_subagents}")
+        ),
+    )
+    world.add_component(
+        entity_id,
+        SubagentRegistryComponent(
+            subagents={
+                "researcher": SubagentConfig(
+                    name="researcher",
+                    provider=object(),
+                    model="demo",
+                ),
+                "analyst": SubagentConfig(
+                    name="analyst",
+                    provider=object(),
+                    model="demo",
+                ),
+            }
+        ),
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text == "- analyst\n- researcher"
+
+
+@pytest.mark.asyncio
+async def test_render_system_empty_subagents_renders_none() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        PromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_installed_subagents}")
+        ),
+    )
+    world.add_component(entity_id, SubagentRegistryComponent(subagents={}))
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text == "- none"
+
+
+@pytest.mark.asyncio
+async def test_render_system_all_builtins_together(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeMCPClientComponent:
+        def __init__(self, cached_tools: list[dict[str, str]]) -> None:
+            self.cached_tools = cached_tools
+
+    monkeypatch.setattr(
+        render_module,
+        "_MCP_CLIENT_COMPONENT_CLASS",
+        FakeMCPClientComponent,
+    )
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        PromptConfigSpec(
+            template_source=PromptTemplateSource(
+                inline=(
+                    "Tools:\n${_installed_tools}\n"
+                    "Skills:\n${_installed_skills}\n"
+                    "MCPs:\n${_installed_mcps}\n"
+                    "Subagents:\n${_installed_subagents}"
+                )
+            )
+        ),
+    )
+    world.add_component(
+        entity_id,
+        ToolRegistryComponent(
+            tools={
+                "bash": ToolSchema(
+                    name="bash",
+                    description="bash",
+                    parameters={"type": "object", "properties": {}},
+                ),
+                "read": ToolSchema(
+                    name="read",
+                    description="read",
+                    parameters={"type": "object", "properties": {}},
+                ),
+            },
+            handlers={},
+        ),
+    )
+    world.add_component(
+        entity_id,
+        SkillComponent(
+            skills={
+                "python": SkillMetadata(
+                    name="python",
+                    description="python skill",
+                    tool_names=[],
+                    has_system_prompt=False,
+                )
+            }
+        ),
+    )
+    world.add_component(
+        entity_id,
+        SubagentRegistryComponent(
+            subagents={
+                "child": SubagentConfig(name="child", provider=object(), model="demo")
+            }
+        ),
+    )
+
+    world.add_component(
+        entity_id,
+        FakeMCPClientComponent(
+            cached_tools=[
+                {"name": "filesystem.read"},
+                {"name": "filesystem.write"},
+            ]
+        ),
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text == (
+        "Tools:\n- bash\n- read\n"
+        "Skills:\n- python\n"
+        "MCPs:\n- filesystem.read\n- filesystem.write\n"
+        "Subagents:\n- child"
+    )
+
+
+@pytest.mark.asyncio
+async def test_render_system_skill_activate_then_render() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    skill_component = SkillComponent(skills={})
+    world.add_component(entity_id, skill_component)
+    world.add_component(
+        entity_id,
+        PromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_installed_skills}")
+        ),
+    )
+
+    skill_component.skills["python"] = SkillMetadata(
+        name="python",
+        description="python skill",
+        tool_names=[],
+        has_system_prompt=False,
+        activated=True,
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text == "- python"
+
+
+@pytest.mark.asyncio
+async def test_render_system_skill_uninstall_removed_from_snapshot() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    skill_component = SkillComponent(
+        skills={
+            "python": SkillMetadata(
+                name="python",
+                description="python skill",
+                tool_names=[],
+                has_system_prompt=False,
+            ),
+            "shell": SkillMetadata(
+                name="shell",
+                description="shell skill",
+                tool_names=[],
+                has_system_prompt=False,
+            ),
+        }
+    )
+    world.add_component(entity_id, skill_component)
+    world.add_component(
+        entity_id,
+        PromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_installed_skills}")
+        ),
+    )
+
+    await SystemPromptRenderSystem().process(world)
+    first_render = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert first_render is not None
+    assert first_render.text == "- python\n- shell"
+
+    del skill_component.skills["shell"]
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text == "- python"
+    assert "shell" not in rendered.text
+    assert "shell" not in rendered.placeholder_snapshot["_installed_skills"]
