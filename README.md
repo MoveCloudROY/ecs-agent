@@ -102,10 +102,13 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **Output Schema** — Optional JSON schema validation for task outputs.
 
 ### Prompt Normalization & Injection
-- **Trigger Templates** — Define `@keyword` or `event:<name>` triggers that inject pre-defined prompt blocks into user messages.
-- **One-Shot Context Pool** — Automatically collect tool results and subagent outputs into a transient context block for the next LLM turn.
-- **Stable Injection Order** — `[PROMPT_INJECT:...]` marker → trigger block → context pool block → original user text.
-- **Transient Lifecycle** — Injections are provider-call only and not persisted in conversation history. Context pool clears only on successful LLM turn.
+- **`PromptConfigSpec`** — Declare system prompts as `${name}` placeholder templates with static strings, callable resolvers, or file paths as sources.
+- **`SystemPromptRenderSystem`** — ECS system (recommended priority -20) that resolves all `${name}` placeholders and writes a `RenderedSystemPromptComponent` for LLM callers.
+- **`UserPromptNormalizationSystem`** — ECS system (recommended priority -10) that injects trigger templates into outbound user messages and writes a `RenderedUserPromptComponent`.
+- **Built-in Placeholders** — `${_installed_tools}`, `${_installed_skills}`, `${_installed_mcps}`, `${_installed_subagents}` automatically expand to the current inventory.
+- **Callable Placeholders** — Pass a `() -> str` callable as a placeholder resolver for dynamic content; must be side-effect-free and return a string.
+- **Trigger Templates** — `@keyword` or `event:<name>` trigger patterns inject pre-defined prompt blocks into user messages without mutating conversation history.
+- **Strict Errors** — Missing placeholder keys and resolver failures raise immediately; no silent fallbacks.
 
 ### Two-Tier Skill System
 - **Markdown Skills** — Define agent capabilities via `SKILL.md` files with YAML frontmatter. System prompts are injected automatically, and `@`-prefixed relative paths are resolved to workspace-safe paths at load time.
@@ -211,7 +214,10 @@ World
 | `MessageBusConfigComponent` | Configuration for messaging (timeouts, queue sizes) |
 | `MessageBusSubscriptionComponent` | Registry of topic subscriptions for an entity |
 | `MessageBusConversationComponent` | Tracks active request-response conversations |
-| `SystemPromptComponent` | Single source for system prompt assembly (template + sections) |
+| `SystemPromptComponent` | Legacy system prompt storage (template + sections); prefer `PromptConfigSpec` for new agents |
+| `PromptConfigSpec` | New-style prompt spec with `${name}` placeholder templates; resolved by `SystemPromptRenderSystem` |
+| `RenderedSystemPromptComponent` | Rendered system prompt text produced by `SystemPromptRenderSystem` for the current tick |
+| `RenderedUserPromptComponent` | Normalized user prompt text produced by `UserPromptNormalizationSystem` for the current tick |
 | `KVStoreComponent` | Generic key-value scratch space |
 | `ErrorComponent` | Error details for failed operations |
 | `TerminalComponent` | Signals agent completion |
