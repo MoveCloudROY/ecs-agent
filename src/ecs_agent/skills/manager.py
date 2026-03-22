@@ -7,7 +7,6 @@ from collections.abc import Coroutine
 
 from ecs_agent.components import (
     SandboxConfigComponent,
-    SystemPromptComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.components.definitions import SkillComponent, SkillMetadata
@@ -111,14 +110,6 @@ class SkillManager:
             registry.handlers[tool_name] = handler
 
         prompt = skill.system_prompt()
-        if prompt:
-            prompt_component = world.get_component(entity_id, SystemPromptComponent)
-            if prompt_component is None:
-                world.add_component(entity_id, SystemPromptComponent(content=prompt))
-            elif prompt_component.content:
-                prompt_component.content = f"{prompt_component.content}\n\n{prompt}"
-            else:
-                prompt_component.content = prompt
 
         skill.install(world, entity_id)
 

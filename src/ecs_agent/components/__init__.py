@@ -40,6 +40,8 @@ from ecs_agent.components.definitions import (
     UserInputComponent,
     OneShotContextPoolComponent,
     PromptConfigComponent,
+    RenderedSystemPromptComponent,
+    RenderedUserPromptComponent,
     TurnStateComponent,
     VectorStoreComponent,
 )
@@ -85,5 +87,7 @@ __all__ = [
     "VectorStoreComponent",
     "OneShotContextPoolComponent",
     "PromptConfigComponent",
+    "RenderedSystemPromptComponent",
+    "RenderedUserPromptComponent",
     "TurnStateComponent",
 ]

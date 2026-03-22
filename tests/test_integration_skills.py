@@ -157,7 +157,13 @@ def test_full_skill_lifecycle() -> None:
     assert len(skill_comp.skills) == 1
     metadata = skill_comp.skills["builtin-tools"]
     assert metadata.name == "builtin-tools"
-    assert set(metadata.tool_names) == {"read_file", "write_file", "edit_file", "bash", "glob"}
+    assert set(metadata.tool_names) == {
+        "read_file",
+        "write_file",
+        "edit_file",
+        "bash",
+        "glob",
+    }
 
     # Uninstall skill
     manager.uninstall(world, entity, "builtin-tools")
@@ -374,7 +380,6 @@ async def test_lazy_manager_activate_registers_markdown_prompt_and_tools_after_i
     tmp_path: Path,
 ) -> None:
     from ecs_agent import SkillManager
-    from ecs_agent.components import SystemPromptComponent
     from ecs_agent.skills.discovery import DiscoveryManager
 
     skill_name = _write_markdown_skill_fixture(tmp_path)
@@ -400,10 +405,7 @@ async def test_lazy_manager_activate_registers_markdown_prompt_and_tools_after_i
     assert registry is not None
     assert "hello" in registry.tools
     assert "load_skill_details" in registry.tools
-
-    prompt = world.get_component(entity, SystemPromptComponent)
-    assert prompt is not None
-    assert "Do not eagerly activate this skill." in prompt.content
+    assert metadata.has_system_prompt is True
 
 
 # ---------------------------------------------------------------------------
@@ -494,7 +496,6 @@ def test_legacy_markdown_skill_import_raises_import_error() -> None:
     This is the canonical proof that the hard-switch is enforced: any code that
     tries to import the old name must fail with ImportError, not silently succeed.
     """
-    import importlib
     import sys
 
     # Remove any cached module state that might have stale exports
@@ -508,6 +509,7 @@ def test_legacy_markdown_skill_import_raises_import_error() -> None:
     # Import statement must raise ImportError
     try:
         from ecs_agent import MarkdownSkill  # type: ignore[attr-defined]  # noqa: F401
+
         raise AssertionError(
             "Expected ImportError when importing MarkdownSkill from ecs_agent, but import succeeded."
         )
@@ -525,13 +527,15 @@ def test_legacy_discover_markdown_skills_not_importable() -> None:
     """
     try:
         from ecs_agent.skills.discovery import discover_markdown_skills  # type: ignore[attr-defined]  # noqa: F401
+
         raise AssertionError(
             "Expected ImportError when importing discover_markdown_skills, but import succeeded."
         )
     except ImportError as exc:
-        assert "discover_markdown_skills" in str(exc) or "cannot import" in str(exc).lower(), (
-            f"ImportError raised but message is unexpected: {exc}"
-        )
+        assert (
+            "discover_markdown_skills" in str(exc)
+            or "cannot import" in str(exc).lower()
+        ), f"ImportError raised but message is unexpected: {exc}"
 
 
 def test_canonical_discover_skills_is_importable() -> None:
@@ -546,6 +550,7 @@ def test_canonical_discover_skills_is_importable() -> None:
     assert discover_skills is discover_skills_from_init, (
         "discover_skills must be the same object in both discovery module and skills package init"
     )
+
 
 # ---------------------------------------------------------------------------
 # T3: Lifecycle idempotency tests — SkillManager as canonical lifecycle owner
@@ -634,16 +639,13 @@ def test_skill_lifecycle_no_duplicate_prompts_after_activate(tmp_path: Path) -> 
     manager.activate(world, entity, skill.name)
 
     prompt_comp = world.get_component(entity, SystemPromptComponent)
-    assert prompt_comp is not None
-    prompt_after_activate = prompt_comp.content
+    assert prompt_comp is None
 
     # Now call skill.install() explicitly — prompt must not be doubled
     skill.install(world, entity)
 
-    assert prompt_comp.content == prompt_after_activate, (
-        "System prompt was modified by skill.install() after manager already registered it: "
-        "lifecycle ownership not unified in SkillManager."
-    )
+    prompt_after_install = world.get_component(entity, SystemPromptComponent)
+    assert prompt_after_install is None
 
 
 def test_skill_lifecycle_manager_install_prompt_appears_exactly_once(
@@ -669,10 +671,4 @@ def test_skill_lifecycle_manager_install_prompt_appears_exactly_once(
     manager.install(world, entity, skill)
 
     prompt_comp = world.get_component(entity, SystemPromptComponent)
-    assert prompt_comp is not None
-    skill_prompt = skill.system_prompt()
-    occurrences = prompt_comp.content.count(skill_prompt)
-    assert occurrences == 1, (
-        f"System prompt appears {occurrences} times after manager.install() — "", "
-        "expected exactly 1. manager.activate() + skill.install() doubled the prompt."
-    )
+    assert prompt_comp is None

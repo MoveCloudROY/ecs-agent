@@ -160,9 +160,10 @@ def test_skill_activate_loads_prompt_and_tools_after_index() -> None:
     assert set(registry.handlers) == {"sum", "load_skill_details"}
     assert prompts is not None
     assert "base prompt" in prompts.content
-    assert "Use careful arithmetic." in prompts.content
+    assert "Use careful arithmetic." not in prompts.content
     assert metadata is not None
     assert metadata.activated is True
+    assert metadata.has_system_prompt is True
     assert skill.install_calls == 1
 
 
@@ -182,13 +183,13 @@ def test_skill_activate_is_idempotent() -> None:
     manager.activate(world, entity_id, "math")
     manager.activate(world, entity_id, "math")
 
-    prompts = world.get_component(entity_id, SystemPromptComponent)
     metadata = manager.get_skill_metadata(world, entity_id, "math")
 
-    assert prompts is not None
-    assert prompts.content.count("Use careful arithmetic.") == 1
+    prompts = world.get_component(entity_id, SystemPromptComponent)
+    assert prompts is None
     assert metadata is not None
     assert metadata.activated is True
+    assert metadata.has_system_prompt is True
     assert skill.install_calls == 1
 
 
@@ -289,7 +290,7 @@ def test_skill_install_merges_tools() -> None:
     assert callable(registry.handlers["sum"])
     assert prompts is not None
     assert "base prompt" in prompts.content
-    assert "Use careful arithmetic." in prompts.content
+    assert "Use careful arithmetic." not in prompts.content
     assert skills is not None
     assert "math" in skills.skills
     assert skills.skills["math"].tool_names == ["sum", "multiply"]
@@ -315,8 +316,7 @@ def test_skill_install_get_or_create_components() -> None:
     skills = world.get_component(entity_id, SkillComponent)
     assert registry is not None
     assert set(registry.tools) == {"sum", "load_skill_details"}
-    assert prompts is not None
-    assert prompts.content == "Respond with equations."
+    assert prompts is None
     assert skills is not None
     assert list(skills.skills) == ["math"]
 
@@ -539,7 +539,9 @@ def test_metadata_disable_model_invocation_defaults_false_for_script_skill() -> 
     )
 
     # Also verify: can_model_auto_invoke_skill returns True (model CAN invoke by default)
-    assert manager.can_model_auto_invoke_skill(world, entity_id, "no-disable-attr") is True, (
+    assert (
+        manager.can_model_auto_invoke_skill(world, entity_id, "no-disable-attr") is True
+    ), (
         "can_model_auto_invoke_skill must return True when disable_model_invocation=False"
     )
 

@@ -9,7 +9,7 @@ from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.message_bus import MessageBusSystem
 from ecs_agent.systems.replanning import ReplanningSystem
-from ecs_agent.systems.system_prompt_assembly import SystemPromptAssemblySystem
+from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.systems.prompt_context_collector import PromptContextCollectorSystem
 from ecs_agent.systems.tool_approval import ToolApprovalSystem
 from ecs_agent.systems.tree_search import TreeSearchSystem
@@ -28,7 +28,7 @@ __all__ = [
     "ReasoningSystem",
     "ReplanningSystem",
     "PromptContextCollectorSystem",
-    "SystemPromptAssemblySystem",
+    "SystemPromptRenderSystem",
     "TerminalCleanupSystem",
     "ToolApprovalSystem",
     "ToolExecutionSystem",
