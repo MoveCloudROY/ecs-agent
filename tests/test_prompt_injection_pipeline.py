@@ -10,7 +10,6 @@ from ecs_agent.components import (
     TurnStateComponent,
 )
 from ecs_agent.core import World
-from ecs_agent.prompts.contracts import PromptSectionSpec
 from ecs_agent.prompts.message_assembly import (
     commit_context_pool_reservation,
     reserve_context_pool_items,
@@ -22,7 +21,6 @@ from ecs_agent.systems.prompt_context_collector import (
     PromptContextCollectorSystem,
 )
 from ecs_agent.systems.reasoning import ReasoningSystem
-from ecs_agent.systems.system_prompt_assembly import SystemPromptAssemblySystem
 from ecs_agent.types import (
     CompletionResult,
     DelegationCompletedEvent,
@@ -188,36 +186,19 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
     world.add_component(
         entity_id,
         SystemPromptComponent(
-            template=(
+            content=(
                 "# Markdown System Prompt\n\n"
-                "${toolSelection}\n\n"
-                "${exploreSection}\n\n"
-                "${librarianSection}"
+                "## toolSelection\n\n"
+                "Prefer deterministic tool-first synthesis.\n\n"
+                "## exploreSection\n\n"
+                "Capture concrete evidence from tool outputs.\n\n"
+                "## librarianSection\n\n"
+                "Reference exact snippets in final answer."
             ),
-            sections=[
-                PromptSectionSpec(
-                    title="toolSelection",
-                    lines=["Prefer deterministic tool-first synthesis."],
-                    priority=30,
-                ),
-                PromptSectionSpec(
-                    title="exploreSection",
-                    lines=["Capture concrete evidence from tool outputs."],
-                    priority=20,
-                ),
-                PromptSectionSpec(
-                    title="librarianSection",
-                    lines=["Reference exact snippets in final answer."],
-                    priority=10,
-                ),
-            ],
-            content="",
         ),
     )
     world.add_component(entity_id, OneShotContextPoolComponent())
     world.add_component(entity_id, TurnStateComponent(current_turn_id="turn-ctx-1"))
-
-    await SystemPromptAssemblySystem().process(world)
 
     collector = PromptContextCollectorSystem()
     await collector.process(world)

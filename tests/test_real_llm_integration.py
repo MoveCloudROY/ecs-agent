@@ -42,12 +42,10 @@ from ecs_agent.conversation_tree import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import FORBIDDEN_FIELDS
-from ecs_agent.prompts.contracts import PromptSectionSpec
 from ecs_agent.providers import OpenAIProvider
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
-from ecs_agent.systems.system_prompt_assembly import SystemPromptAssemblySystem
 from ecs_agent.types import (
     CompletionResult,
     InterruptionReason,
@@ -518,34 +516,17 @@ async def test_real_llm_prompt_keyword_injection_smoke() -> None:
     world.add_component(
         entity,
         SystemPromptComponent(
-            template=(
+            content=(
                 "# Markdown Linked Prompt\n\n"
-                "${toolSelection}\n\n"
-                "${exploreSection}\n\n"
-                "${librarianSection}"
+                "## toolSelection\n\n"
+                "Follow the workflow from markdown-linked skills.\n\n"
+                "## exploreSection\n\n"
+                "Use evidence from context pool entries first.\n\n"
+                "## librarianSection\n\n"
+                "Preserve concrete citations in responses."
             ),
-            sections=[
-                PromptSectionSpec(
-                    title="toolSelection",
-                    lines=["Follow the workflow from markdown-linked skills."],
-                    priority=30,
-                ),
-                PromptSectionSpec(
-                    title="exploreSection",
-                    lines=["Use evidence from context pool entries first."],
-                    priority=20,
-                ),
-                PromptSectionSpec(
-                    title="librarianSection",
-                    lines=["Preserve concrete citations in responses."],
-                    priority=10,
-                ),
-            ],
-            content="",
         ),
     )
-
-    await SystemPromptAssemblySystem().process(world)
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)

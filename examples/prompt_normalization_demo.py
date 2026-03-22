@@ -12,12 +12,10 @@ from ecs_agent.components import (
     TurnStateComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.prompts.contracts import PromptSectionSpec
 from ecs_agent.providers import FakeProvider, OpenAIProvider
 from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
-from ecs_agent.systems.system_prompt_assembly import SystemPromptAssemblySystem
 from ecs_agent.types import CompletionResult, Message, StreamDelta, ToolSchema
 
 
@@ -123,34 +121,17 @@ async def main() -> None:
     world.add_component(
         entity,
         SystemPromptComponent(
-            template=(
+            content=(
                 "# Markdown Linked Prompt\n\n"
-                "${toolSelection}\n\n"
-                "${exploreSection}\n\n"
-                "${librarianSection}"
+                "## toolSelection\n\n"
+                "Prefer deterministic tools and concise synthesis.\n\n"
+                "## exploreSection\n\n"
+                "Surface concrete evidence from context entries first.\n\n"
+                "## librarianSection\n\n"
+                "Preserve exact references in final responses."
             ),
-            sections=[
-                PromptSectionSpec(
-                    title="toolSelection",
-                    lines=["Prefer deterministic tools and concise synthesis."],
-                    priority=30,
-                ),
-                PromptSectionSpec(
-                    title="exploreSection",
-                    lines=["Surface concrete evidence from context entries first."],
-                    priority=20,
-                ),
-                PromptSectionSpec(
-                    title="librarianSection",
-                    lines=["Preserve exact references in final responses."],
-                    priority=10,
-                ),
-            ],
-            content="",
         ),
     )
-
-    await SystemPromptAssemblySystem().process(world)
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
