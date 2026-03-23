@@ -121,7 +121,7 @@ path = skill.resolve_supporting_path("../../../etc/passwd")
 ```
 
 ### Trigger Templates
-Skills can define trigger templates (keywords or events) that are automatically registered if the agent has a `PromptConfigComponent`. These triggers (e.g., `@help` or `event:tool_success`) trigger the injection of specific prompt blocks when detected in user messages or runtime state.
+Skills can define trigger templates (keywords or events) that are automatically registered if the agent has a `UserPromptConfigComponent`. These triggers (e.g., `@help` or `event:tool_success`) trigger the injection of specific prompt blocks when detected in user messages or runtime state.
 ## Script Skills (Advanced)
 
 Script Skills are Python classes that implement the `ScriptSkill` protocol. Use these when you need complex tool handlers, precise schema definitions, or custom installation logic.

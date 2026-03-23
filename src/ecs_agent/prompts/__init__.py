@@ -1,3 +1,4 @@
+"""Public API for the ecs_agent prompts package."""
 from ecs_agent.prompts.contracts import (
     PlaceholderSpec,
     SystemPromptConfigSpec,

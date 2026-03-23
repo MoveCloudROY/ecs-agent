@@ -191,44 +191,55 @@ if conv and conv.messages:
 - **Graceful Interruption**: CancelledError must be re-raised after partial content preservation
 ## Prompt Normalization & Injection
 
-Dynamic prompt enhancement via keyword expansion and one-shot context collection.
+Dynamic prompt enhancement via trigger template injection and structured context queuing.
 
 ### Components
 
-- **`PromptConfigComponent`**: Opt-in configuration.
+- **`UserPromptConfigComponent`**: Opt-in configuration for user-prompt normalization.
   - `enable_context_pool: bool` — Enable automatic context collection.
-  - `trigger_templates: dict[str, str]` — Mapping of `@keyword` or `event:<name>` to template content.
+  - `triggers: dict[str, TriggerSpec]` — Mapping of `@keyword` or `event:<name>` to `TriggerSpec` objects.
   - `context_pool_max_chars: int` — Maximum size of the context block.
-- **`OneShotContextPoolComponent`**: Transient storage for collected context items.
+- **`PromptContextQueueComponent`**: Queue of `ContextEntry` items awaiting injection into the next outbound user message.
 
 ### Behavior
 
-1. **Opt-in Only**: Behavior is only active if `PromptConfigComponent` is attached to the entity.
+1. **Opt-in Only**: Behavior is only active if `UserPromptConfigComponent` is attached to the entity.
 2. **Injection Order**: When a user message is processed:
    - `[PROMPT_INJECT:...]` marker is added if a keyword or event is detected.
    - The corresponding trigger template block is injected.
    - The context pool block (tool results, etc.) is injected.
    - The original user text follows.
 3. **Deterministic Selection**: Triggers are resolved by `priority DESC`, then `registration_order ASC`, first-match.
-4. **One-Shot Lifecycle**:
-   - **Reserve**: Items are reserved for the current turn ID.
+4. **Reservation Lifecycle**:
+   - **Reserve**: Context entries are snapshotted into a `PromptContextReservationComponent` before the LLM call.
    - **Retry**: If a request fails and retries, the same reserved payload is reused.
-   - **Commit**: The pool is cleared only after a successful LLM response is received.
+   - **Commit**: The queue is cleared only after a successful LLM response is received.
 5. **Transient Injection**: Injected content is sent to the provider but **does not mutate stored conversation history**, keeping the long-term context clean.
 
 ### Example
 
 ```python
-from ecs_agent.components import PromptConfigComponent, OneShotContextPoolComponent
+from ecs_agent.components import UserPromptConfigComponent, PromptContextQueueComponent
+from ecs_agent.prompts import TriggerSpec
 
-world.add_component(agent, PromptConfigComponent(
-    trigger_templates={
-        "@code": "Use PEP8 style and include docstrings.",
-        "event:tool_success": "Great job on the tool execution!"
+world.add_component(agent, UserPromptConfigComponent(
+    triggers={
+        "@code": TriggerSpec(
+            pattern="@code",
+            match_mode="keyword",
+            action="replace",
+            content="Use PEP8 style and include docstrings.",
+        ),
+        "event:tool_success": TriggerSpec(
+            pattern="event:tool_success",
+            match_mode="keyword",
+            action="replace",
+            content="Great job on the tool execution!",
+        ),
     },
-    enable_context_pool=True
+    enable_context_pool=True,
 ))
-world.add_component(agent, OneShotContextPoolComponent())
+world.add_component(agent, PromptContextQueueComponent())
 
 # User message: "@code Refactor this function"
 # Sent to LLM: 1) [PROMPT_INJECT:@code] 2) Template 3) Context Pool 4) User Text
