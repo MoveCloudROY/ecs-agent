@@ -4,19 +4,19 @@ from typing import Any
 from collections.abc import AsyncIterator
 
 from ecs_agent.components import (
+    ContextEntry,
     ConversationComponent,
     LLMComponent,
-    OneShotContextPoolComponent,
-    PromptConfigComponent,
+    PromptContextQueueComponent,
+    UserPromptConfigComponent,
     RenderedSystemPromptComponent,
     RenderedUserPromptComponent,
     ToolRegistryComponent,
-    TurnStateComponent,
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeProvider, OpenAIProvider
 from ecs_agent.providers.protocol import LLMProvider
-from ecs_agent.prompts.contracts import PromptConfigSpec, PromptTemplateSource
+from ecs_agent.prompts.contracts import SystemPromptConfigSpec, PromptTemplateSource
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
@@ -55,7 +55,9 @@ def _build_provider_from_env() -> tuple[LLMProvider, str, str]:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
 
     if api_key:
-        real_provider: LLMProvider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+        real_provider: LLMProvider = OpenAIProvider(
+            api_key=api_key, base_url=base_url, model=model
+        )
         return real_provider, model, "real"
 
     provider = FakeProvider(
@@ -96,8 +98,8 @@ async def main() -> None:
     )
     world.add_component(
         entity,
-        PromptConfigComponent(
-            trigger_templates={
+        UserPromptConfigComponent(
+            triggers={
                 "@code": "Prioritize deterministic code-first reasoning.",
                 "event:tool_success": "Prefer successful tool outputs as evidence.",
             },
@@ -106,28 +108,28 @@ async def main() -> None:
     )
     world.add_component(
         entity,
-        OneShotContextPoolComponent(
-            items=[
-                (
-                    30,
-                    0,
-                    "tool:search",
-                    "source: tool:search\nstatus: success\nresult: citation-A",
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="tool-search-0",
+                    priority=30,
+                    registration_order=0,
+                    source_label="tool:search",
+                    content="source: tool:search\nstatus: success\nresult: citation-A",
                 ),
-                (
-                    20,
-                    1,
-                    "subagent:researcher",
-                    "source: subagent:researcher\nstatus: success\nresult: synthesis-B",
+                ContextEntry(
+                    entry_id="subagent-researcher-1",
+                    priority=20,
+                    registration_order=1,
+                    source_label="subagent:researcher",
+                    content="source: subagent:researcher\nstatus: success\nresult: synthesis-B",
                 ),
-            ],
-            _counter=2,
+            ]
         ),
     )
-    world.add_component(entity, TurnStateComponent(current_turn_id="demo-turn-1"))
     world.add_component(
         entity,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(
                 inline=(
                     "You are a helpful coding assistant.\n\n"
@@ -162,6 +164,7 @@ async def main() -> None:
     outbound_user = _extract_outbound_user_message(provider.last_messages)
     rendered_system = world.get_component(entity, RenderedSystemPromptComponent)
     rendered_user = world.get_component(entity, RenderedUserPromptComponent)
+    context_queue = world.get_component(entity, PromptContextQueueComponent)
     user_tail = "Please @code summarize latest findings"
 
     print(f"[mode] {mode}")
@@ -171,6 +174,12 @@ async def main() -> None:
     print(outbound_user.content)
     print("\n=== Rendered User Prompt Component ===")
     print(rendered_user.text if rendered_user is not None else "<missing>")
+    print("\n=== Seed Context Pool Entries ===")
+    if context_queue is None or not context_queue.entries:
+        print("<empty>")
+    else:
+        for entry in context_queue.entries:
+            print(entry.content)
     print("\n=== Rendered Component Presence ===")
     print(f"rendered system present: {rendered_system is not None}")
     print(f"rendered user present: {rendered_user is not None}")

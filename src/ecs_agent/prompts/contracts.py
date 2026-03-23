@@ -1,3 +1,4 @@
+"""Prompt contracts and dataclass specifications for the ECS agent prompt system."""
 from dataclasses import dataclass, field
 from typing import Any, Literal
 from collections.abc import Callable
@@ -39,7 +40,7 @@ class PlaceholderSpec:
 
 
 @dataclass(frozen=True, slots=True)
-class PromptConfigSpec:
+class SystemPromptConfigSpec:
     template_source: PromptTemplateSource
     placeholders: list[PlaceholderSpec] = field(default_factory=list)
 
@@ -51,18 +52,6 @@ class TriggerSpec:
     action: Literal["replace", "skill", "script"]
     content: str
     priority: int = 0
-
-
-PromptTriggerKind = Literal["keyword", "event"]
-
-
-@dataclass(frozen=True, slots=True)
-class PromptTriggerSpec:
-    kind: PromptTriggerKind
-    trigger: str
-    template_id: str
-    priority: int = 0
-    registration_order: int = 0
 
 
 @dataclass(slots=True)

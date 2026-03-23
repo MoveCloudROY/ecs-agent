@@ -69,7 +69,7 @@ async def test_reasoning_uses_rendered_user_prompt() -> None:
     )
     world.add_component(
         entity_id,
-        RenderedUserPromptComponent(text="NORMALIZED user text", turn_id="abc"),
+        RenderedUserPromptComponent(text="NORMALIZED user text"),
     )
 
     await ReasoningSystem().process(world)

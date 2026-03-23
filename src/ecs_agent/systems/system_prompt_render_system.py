@@ -1,4 +1,4 @@
-"""Render normalized system prompts from PromptConfigSpec."""
+"""Render normalized system prompts from SystemPromptConfigSpec."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
-from ecs_agent.prompts.contracts import PromptConfigSpec, PromptTemplateSource
+from ecs_agent.prompts.contracts import SystemPromptConfigSpec, PromptTemplateSource
 from ecs_agent.prompts.registry import resolve_placeholder_values
 from ecs_agent.types import EntityId
 
@@ -43,7 +43,7 @@ class SystemPromptRenderSystem:
         self.priority = priority
 
     async def process(self, world: World) -> None:
-        for entity_id, (prompt_config,) in world.query(PromptConfigSpec):
+        for entity_id, (prompt_config,) in world.query(SystemPromptConfigSpec):
             try:
                 rendered, snapshot = _render_system_prompt(
                     world, entity_id, prompt_config
@@ -71,7 +71,7 @@ class SystemPromptRenderSystem:
 def _render_system_prompt(
     world: World,
     entity_id: EntityId,
-    prompt_config: PromptConfigSpec,
+    prompt_config: SystemPromptConfigSpec,
 ) -> tuple[str, dict[str, str]]:
     template_text = _read_template(prompt_config.template_source)
     template = Template(template_text)
@@ -104,7 +104,7 @@ def _read_template(template_source: PromptTemplateSource) -> str:
         raise ValueError(f"unreadable template file: {file_path}") from exc
 
 
-def _resolve_user_placeholders(prompt_config: PromptConfigSpec) -> dict[str, str]:
+def _resolve_user_placeholders(prompt_config: SystemPromptConfigSpec) -> dict[str, str]:
     return resolve_placeholder_values(prompt_config.placeholders)
 
 

@@ -21,7 +21,7 @@ The table below summarizes the recommended priorities for each system. Priority 
 | :--- | :--- | :--- |
 | UserInputSystem | -10 | Captures async user input before reasoning. |
 | RAGSystem | -10 | Retrieves context via vector search before reasoning. |
-| SystemPromptRenderSystem | -20 | Resolves `${name}` placeholders from `PromptConfigSpec` and produces `RenderedSystemPromptComponent`. |
+| SystemPromptRenderSystem | -20 | Resolves `${name}` placeholders from `SystemPromptConfigSpec` and produces `RenderedSystemPromptComponent`. |
 | UserPromptNormalizationSystem | -10 | Injects trigger templates into user messages and produces `RenderedUserPromptComponent`. |
 | PromptContextCollectorSystem | 0 | Collects tool/subagent results into the context pool. |
 | ToolApprovalSystem | -5 | Filters pending tool calls before execution. |
@@ -84,22 +84,22 @@ This ensures deterministic system execution and prevents mid-tick mutations.
 ---
 ## 1. SystemPromptRenderSystem
 
-The `SystemPromptRenderSystem` resolves all `${name}` placeholders from a `PromptConfigSpec` component and writes a `RenderedSystemPromptComponent` for LLM callers. It replaces the legacy `SystemPromptAssemblySystem`.
+The `SystemPromptRenderSystem` resolves all `${name}` placeholders from a `SystemPromptConfigSpec` component and writes a `RenderedSystemPromptComponent` for LLM callers. It replaces the legacy `SystemPromptAssemblySystem`.
 
 - **Constructor**: `__init__(self)`
-- **Queries**: `PromptConfigSpec`
+- **Queries**: `SystemPromptConfigSpec`
 - **Produces**: `RenderedSystemPromptComponent`
 - **Recommended Priority**: -20 (must run before reasoning)
 
 ### Behavior
-The system reads the `PromptConfigSpec.template_source` (inline string or file path) and substitutes all `${name}` occurrences. Built-in placeholders `${_installed_tools}`, `${_installed_skills}`, `${_installed_mcps}`, and `${_installed_subagents}` are populated from entity metadata automatically. Callable placeholder resolvers are called once per render. Missing or failing placeholders raise `ValueError` immediately — no silent fallback.
+The system reads the `SystemPromptConfigSpec.template_source` (inline string or file path) and substitutes all `${name}` occurrences. Built-in placeholders `${_installed_tools}`, `${_installed_skills}`, `${_installed_mcps}`, and `${_installed_subagents}` are populated from entity metadata automatically. Callable placeholder resolvers are called once per render. Missing or failing placeholders raise `ValueError` immediately — no silent fallback.
 
 ### Usage Example
 ```python
-from ecs_agent.prompts.contracts import PromptConfigSpec, PromptTemplateSource
+from ecs_agent.prompts.contracts import SystemPromptConfigSpec, PromptTemplateSource
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 
-world.add_component(entity, PromptConfigSpec(
+world.add_component(entity, SystemPromptConfigSpec(
     template_source=PromptTemplateSource(
         inline="You are a helpful assistant. Tools: ${_installed_tools}"
     )
@@ -114,7 +114,7 @@ world.register_system(SystemPromptRenderSystem(), priority=-20)
 The `UserPromptNormalizationSystem` processes the latest user message in `ConversationComponent`, injects any matching `@keyword` or `event:<name>` trigger templates, and writes a `RenderedUserPromptComponent`. Stored conversation history is never mutated.
 
 - **Constructor**: `__init__(self)`
-- **Queries**: `PromptConfigComponent` or `PromptConfigSpec`, `ConversationComponent`
+- **Queries**: `UserPromptConfigComponent`, `ConversationComponent`
 - **Produces**: `RenderedUserPromptComponent`
 - **Recommended Priority**: -10 (must run before reasoning)
 
@@ -123,11 +123,11 @@ Scans the last user message for registered trigger patterns. Matched triggers pr
 
 ### Usage Example
 ```python
-from ecs_agent.components import PromptConfigComponent
+from ecs_agent.components import UserPromptConfigComponent
 from ecs_agent.systems.user_prompt_normalization_system import UserPromptNormalizationSystem
 
-world.add_component(entity, PromptConfigComponent(
-    trigger_templates={"@test": "Use testing best practices."}
+world.add_component(entity, UserPromptConfigComponent(
+    triggers={"@test": "Use testing best practices."}
 ))
 world.register_system(UserPromptNormalizationSystem(), priority=-10)
 ```
@@ -559,11 +559,11 @@ world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 ```
 ## 15. PromptContextCollectorSystem
 
-The PromptContextCollectorSystem automatically gathers results from tool executions and subagent completions, storing them in the `OneShotContextPoolComponent` for transient injection into the next LLM turn.
+The PromptContextCollectorSystem automatically gathers results from tool executions and subagent completions, storing them in the `PromptContextQueueComponent` for transient injection into the next LLM turn.
 
 - **Constructor**: `__init__(self, priority: int = 0)`
-- **Queries**: `OneShotContextPoolComponent`, `ToolResultsComponent`, `SubagentSessionTableComponent`
-- **Modifies**: `OneShotContextPoolComponent.items`.
+- **Queries**: `PromptContextQueueComponent`, `ToolResultsComponent`, `SubagentSessionTableComponent`
+- **Modifies**: `PromptContextQueueComponent.entries`.
 - **Recommended Priority**: 0
 
 ### Behavior

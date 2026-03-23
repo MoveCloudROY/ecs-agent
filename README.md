@@ -102,7 +102,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **Output Schema** — Optional JSON schema validation for task outputs.
 
 ### Prompt Normalization & Injection
-- **`PromptConfigSpec`** — Declare system prompts as `${name}` placeholder templates with static strings, callable resolvers, or file paths as sources.
+- **`SystemPromptConfigSpec`** — Declare system prompts as `${name}` placeholder templates with static strings, callable resolvers, or file paths as sources.
 - **`SystemPromptRenderSystem`** — ECS system (recommended priority -20) that resolves all `${name}` placeholders and writes a `RenderedSystemPromptComponent` for LLM callers.
 - **`UserPromptNormalizationSystem`** — ECS system (recommended priority -10) that injects trigger templates into outbound user messages and writes a `RenderedUserPromptComponent`.
 - **Built-in Placeholders** — `${_installed_tools}`, `${_installed_skills}`, `${_installed_mcps}`, `${_installed_subagents}` automatically expand to the current inventory.
@@ -214,8 +214,10 @@ World
 | `MessageBusConfigComponent` | Configuration for messaging (timeouts, queue sizes) |
 | `MessageBusSubscriptionComponent` | Registry of topic subscriptions for an entity |
 | `MessageBusConversationComponent` | Tracks active request-response conversations |
-| `SystemPromptComponent` | Legacy system prompt storage (template + sections); prefer `PromptConfigSpec` for new agents |
-| `PromptConfigSpec` | New-style prompt spec with `${name}` placeholder templates; resolved by `SystemPromptRenderSystem` |
+| `SystemPromptComponent` | Legacy system prompt storage (template + sections); prefer `SystemPromptConfigSpec` for new agents |
+| `SystemPromptConfigSpec` | New-style prompt spec with `${name}` placeholder templates; resolved by `SystemPromptRenderSystem` |
+| `UserPromptConfigComponent` | User prompt normalization config (triggers, context pool settings) |
+| `PromptContextQueueComponent` | Context entries for injection into outbound user messages |
 | `RenderedSystemPromptComponent` | Rendered system prompt text produced by `SystemPromptRenderSystem` for the current tick |
 | `RenderedUserPromptComponent` | Normalized user prompt text produced by `UserPromptNormalizationSystem` for the current tick |
 | `KVStoreComponent` | Generic key-value scratch space |
