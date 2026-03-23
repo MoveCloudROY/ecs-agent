@@ -424,27 +424,24 @@ class UserPromptConfigComponent:
 
 
 @dataclass(slots=True)
-class OneShotContextPoolComponent:
-    """Session-scoped one-shot context injection pool."""
-
-    # items: list of (priority, registration_order, source_label, content)
-    items: list[tuple[int, int, str, str]] = field(default_factory=list)
-    # reservation state: "idle" | "reserved" | "committed"
-    state: str = "idle"
-    # turn id that made the current reservation
-    reserved_turn_id: str = ""
-    reserved_counter_snapshot: int = -1
-    reserved_items: list[tuple[int, int, str, str]] = field(default_factory=list)
-    # monotonically increasing counter for registration order
-    _counter: int = field(default=0)
+class ContextEntry:
+    entry_id: str
+    priority: int
+    source_label: str
+    content: str
+    registration_order: int
 
 
 @dataclass(slots=True)
-class TurnStateComponent:
-    """Tracks per-turn ID for idempotency and injection dedup."""
+class PromptContextQueueComponent:
+    entries: list[ContextEntry] = field(default_factory=list)
 
-    current_turn_id: str = ""
-    last_injected_turn_id: str = ""
+
+@dataclass(slots=True)
+class PromptContextReservationComponent:
+    reservation_id: str
+    created_at_tick: int
+    reserved_entries: list[ContextEntry] = field(default_factory=list)
 
 
 @dataclass(slots=True)

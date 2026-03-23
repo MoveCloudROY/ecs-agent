@@ -7,10 +7,9 @@ import uuid
 from ecs_agent.components import (
     ConversationComponent,
     ConversationTreeComponent,
-    OneShotContextPoolComponent,
+    PromptContextQueueComponent,
     UserPromptConfigComponent,
     RenderedUserPromptComponent,
-    TurnStateComponent,
 )
 from ecs_agent.conversation_tree import get_active_leaf, linearize
 from ecs_agent.core.world import World
@@ -59,28 +58,21 @@ class UserPromptNormalizationSystem:
                 continue
 
             prompt_config = world.get_component(entity_id, UserPromptConfigComponent)
-            context_pool = world.get_component(entity_id, OneShotContextPoolComponent)
-            turn_state = world.get_component(entity_id, TurnStateComponent)
-            turn_id = (
-                turn_state.current_turn_id
-                if turn_state is not None and turn_state.current_turn_id
-                else uuid.uuid4().hex
-            )
+            context_queue = world.get_component(entity_id, PromptContextQueueComponent)
+            turn_id = uuid.uuid4().hex
 
             keyword_registry = None
             trigger_specs = None
             context_pool_enabled = False
-            context_pool_items: list[tuple[int, int, str, str]] | None = None
+            context_pool_items = None
 
             if prompt_config is not None:
                 context_pool_enabled = prompt_config.enable_context_pool
                 if prompt_config.triggers:
-                    keyword_registry = build_keyword_registry(
-                        prompt_config.triggers
-                    )
+                    keyword_registry = build_keyword_registry(prompt_config.triggers)
                     trigger_specs = build_trigger_specs(prompt_config.triggers)
-                if context_pool_enabled and context_pool is not None:
-                    context_pool_items = list(context_pool.items)
+                if context_pool_enabled and context_queue is not None:
+                    context_pool_items = list(context_queue.entries)
 
             active_events = collect_active_events(context_pool_items)
             assembled = assemble_messages(

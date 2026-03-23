@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import uuid
 
 from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
-    OneShotContextPoolComponent,
     PendingToolCallsComponent,
+    PromptContextQueueComponent,
+    PromptContextReservationComponent,
     UserPromptConfigComponent,
     RenderedSystemPromptComponent,
     RenderedUserPromptComponent,
+    RunnerStateComponent,
     SubagentRegistryComponent,
     SystemPromptComponent,
-    TurnStateComponent,
     ToolRegistryComponent,
     ToolResultsComponent,
 )
@@ -25,9 +25,9 @@ from ecs_agent.prompts.message_assembly import (
     assemble_messages,
     build_keyword_registry,
     build_trigger_specs,
-    commit_context_pool_reservation,
+    commit_prompt_context_reservation,
     collect_active_events,
-    reserve_context_pool_items,
+    reserve_prompt_context_reservation,
 )
 from ecs_agent.task.fetching_unit import DispatchRequest
 from ecs_agent.types import CompletionResult, EntityId, Message, ToolCall
@@ -272,8 +272,10 @@ class TaskExecutor:
             entity_id, RenderedUserPromptComponent
         )
         prompt_config = world.get_component(entity_id, UserPromptConfigComponent)
-        context_pool = world.get_component(entity_id, OneShotContextPoolComponent)
-        turn_state = world.get_component(entity_id, TurnStateComponent)
+        context_queue = world.get_component(entity_id, PromptContextQueueComponent)
+        context_reservation = world.get_component(
+            entity_id, PromptContextReservationComponent
+        )
         use_rendered_user_prompt = rendered_user_prompt is not None
         keyword_registry = None
         trigger_specs = None
@@ -294,19 +296,18 @@ class TaskExecutor:
                 if prompt_config is not None
                 else False
             )
-        turn_id = ""
-        reserved_context_pool_items: list[tuple[int, int, str, str]] | None = None
-        if context_pool_enabled and context_pool is not None:
-            if turn_state is None:
-                turn_state = TurnStateComponent()
-                world.add_component(entity_id, turn_state)
-            if not turn_state.current_turn_id:
-                turn_state.current_turn_id = uuid.uuid4().hex
-            turn_id = turn_state.current_turn_id
-            reserved_context_pool_items = reserve_context_pool_items(
-                pool=context_pool,
-                turn_id=turn_id,
+        reserved_context_pool_items = None
+        if context_pool_enabled and context_queue is not None:
+            runner_state = world.get_component(entity_id, RunnerStateComponent)
+            current_tick = runner_state.current_tick if runner_state is not None else 0
+            context_reservation = reserve_prompt_context_reservation(
+                queue=context_queue,
+                reservation=context_reservation,
+                current_tick=current_tick,
             )
+            if not world.has_component(entity_id, PromptContextReservationComponent):
+                world.add_component(entity_id, context_reservation)
+            reserved_context_pool_items = context_reservation.reserved_entries
         active_events = collect_active_events(reserved_context_pool_items)
         if rendered_user_prompt is not None:
             outbound_messages = assemble_messages(
@@ -343,11 +344,16 @@ class TaskExecutor:
                     result_content="Error: Unexpected streaming result from local execution",
                     backend_type="local",
                 )
-            if context_pool_enabled and context_pool is not None and turn_id:
-                commit_context_pool_reservation(pool=context_pool, turn_id=turn_id)
-                if turn_state is not None:
-                    turn_state.last_injected_turn_id = turn_id
-                    turn_state.current_turn_id = ""
+            if (
+                context_pool_enabled
+                and context_queue is not None
+                and context_reservation is not None
+            ):
+                commit_prompt_context_reservation(
+                    queue=context_queue,
+                    reservation=context_reservation,
+                )
+                world.remove_component(entity_id, PromptContextReservationComponent)
 
             # Add assistant response to conversation
             conv.messages.append(completion_result.message)

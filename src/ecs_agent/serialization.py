@@ -8,6 +8,7 @@ from typing import Any
 from ecs_agent.components import (
     CheckpointComponent,
     CompactionConfigComponent,
+    ContextEntry,
     ConversationArchiveComponent,
     ConversationComponent,
     ConversationTreeComponent,
@@ -18,7 +19,6 @@ from ecs_agent.components import (
     MessageBusConfigComponent,
     MessageBusConversationComponent,
     MessageBusSubscriptionComponent,
-    OneShotContextPoolComponent,
     OwnerComponent,
     PendingToolCallsComponent,
     PlanComponent,
@@ -26,6 +26,8 @@ from ecs_agent.components import (
     UserPromptConfigComponent,
     RenderedSystemPromptComponent,
     RenderedUserPromptComponent,
+    PromptContextQueueComponent,
+    PromptContextReservationComponent,
     RAGTriggerComponent,
     RunnerStateComponent,
     ResponsesAPIStateComponent,
@@ -41,7 +43,6 @@ from ecs_agent.components import (
     ToolApprovalComponent,
     ToolRegistryComponent,
     ToolResultsComponent,
-    TurnStateComponent,
     VectorStoreComponent,
 )
 from ecs_agent.core.world import World
@@ -91,8 +92,9 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     SystemPromptConfigSpec.__name__: SystemPromptConfigSpec,
     RenderedSystemPromptComponent.__name__: RenderedSystemPromptComponent,
     RenderedUserPromptComponent.__name__: RenderedUserPromptComponent,
-    OneShotContextPoolComponent.__name__: OneShotContextPoolComponent,
-    TurnStateComponent.__name__: TurnStateComponent,
+    ContextEntry.__name__: ContextEntry,
+    PromptContextQueueComponent.__name__: PromptContextQueueComponent,
+    PromptContextReservationComponent.__name__: PromptContextReservationComponent,
 }
 
 
@@ -472,6 +474,24 @@ class WorldSerializer:
                 else:
                     sections_list.append(section_data)
             normalized_data["sections"] = sections_list
+
+        if component_name == PromptContextQueueComponent.__name__:
+            entries_data = normalized_data.get("entries", [])
+            normalized_data["entries"] = [
+                ContextEntry(**entry_data)
+                if isinstance(entry_data, dict)
+                else entry_data
+                for entry_data in entries_data
+            ]
+
+        if component_name == PromptContextReservationComponent.__name__:
+            entries_data = normalized_data.get("reserved_entries", [])
+            normalized_data["reserved_entries"] = [
+                ContextEntry(**entry_data)
+                if isinstance(entry_data, dict)
+                else entry_data
+                for entry_data in entries_data
+            ]
 
         return normalized_data
 

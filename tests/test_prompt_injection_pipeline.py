@@ -2,17 +2,18 @@ import pytest
 
 from ecs_agent.components import (
     ConversationComponent,
+    ContextEntry,
     LLMComponent,
-    OneShotContextPoolComponent,
+    PromptContextQueueComponent,
+    PromptContextReservationComponent,
     UserPromptConfigComponent,
     SystemPromptComponent,
     ToolResultsComponent,
-    TurnStateComponent,
 )
 from ecs_agent.core import World
 from ecs_agent.prompts.message_assembly import (
-    commit_context_pool_reservation,
-    reserve_context_pool_items,
+    commit_prompt_context_reservation,
+    reserve_prompt_context_reservation,
 )
 from ecs_agent.providers import FakeProvider
 from ecs_agent.systems.prompt_context_collector import (
@@ -72,39 +73,106 @@ class RecordingProvider(FakeProvider):
         return await super().complete(messages, tools)
 
 
-def test_reserve_context_pool_reuses_existing_reservation_for_retry() -> None:
-    pool = OneShotContextPoolComponent(
-        items=[(30, 0, "tool:search", "source: tool\nresult: facts")],
-        _counter=1,
+def test_reserve_prompt_context_reuses_existing_reservation_on_retry() -> None:
+    queue = PromptContextQueueComponent(
+        entries=[
+            ContextEntry(
+                entry_id="entry-tool-1",
+                priority=30,
+                source_label="tool:search",
+                content="source: tool\nresult: facts",
+                registration_order=0,
+            )
+        ]
     )
 
-    first = reserve_context_pool_items(pool=pool, turn_id="turn-1")
-
-    pool.items.append((20, 1, "subagent:writer", "source: subagent\nresult: draft"))
-    pool._counter += 1
-    second = reserve_context_pool_items(pool=pool, turn_id="turn-1")
-
-    assert first == second
-    assert len(second) == 1
-    assert "source: tool" in second[0][3]
-
-
-def test_commit_context_pool_is_idempotent() -> None:
-    pool = OneShotContextPoolComponent(
-        items=[(30, 0, "tool:search", "source: tool\nresult: facts")],
-        _counter=1,
+    first = reserve_prompt_context_reservation(
+        queue=queue, reservation=None, current_tick=10
     )
 
-    _ = reserve_context_pool_items(pool=pool, turn_id="turn-1")
-    commit_context_pool_reservation(pool=pool, turn_id="turn-1")
+    queue.entries.append(
+        ContextEntry(
+            entry_id="entry-subagent-1",
+            priority=20,
+            source_label="subagent:writer",
+            content="source: subagent\nresult: draft",
+            registration_order=1,
+        )
+    )
 
-    assert pool.items == []
-    first_state = pool.state
+    second = reserve_prompt_context_reservation(
+        queue=queue,
+        reservation=first,
+        current_tick=11,
+    )
 
-    commit_context_pool_reservation(pool=pool, turn_id="turn-1")
+    assert second.reservation_id == first.reservation_id
+    assert second.created_at_tick == first.created_at_tick
+    assert [entry.entry_id for entry in second.reserved_entries] == ["entry-tool-1"]
 
-    assert pool.items == []
-    assert pool.state == first_state
+
+def test_commit_prompt_context_reservation_removes_only_matching_entry_id() -> None:
+    duplicated_content = "same content, different identity"
+    queue = PromptContextQueueComponent(
+        entries=[
+            ContextEntry(
+                entry_id="entry-1",
+                priority=30,
+                source_label="tool:a",
+                content=duplicated_content,
+                registration_order=0,
+            ),
+            ContextEntry(
+                entry_id="entry-2",
+                priority=30,
+                source_label="tool:b",
+                content=duplicated_content,
+                registration_order=1,
+            ),
+        ]
+    )
+    reservation = PromptContextReservationComponent(
+        reservation_id="reservation-1",
+        created_at_tick=7,
+        reserved_entries=[queue.entries[0]],
+    )
+
+    commit_prompt_context_reservation(queue=queue, reservation=reservation)
+
+    assert [entry.entry_id for entry in queue.entries] == ["entry-2"]
+
+
+def test_reserve_prompt_context_is_isolated_from_post_failure_queue_append() -> None:
+    queue = PromptContextQueueComponent(
+        entries=[
+            ContextEntry(
+                entry_id="entry-initial",
+                priority=10,
+                source_label="tool:initial",
+                content="initial",
+                registration_order=0,
+            )
+        ]
+    )
+    reservation = reserve_prompt_context_reservation(
+        queue=queue,
+        reservation=None,
+        current_tick=3,
+    )
+
+    queue.entries.append(
+        ContextEntry(
+            entry_id="entry-late",
+            priority=99,
+            source_label="tool:late",
+            content="late",
+            registration_order=1,
+        )
+    )
+
+    assert [entry.entry_id for entry in reservation.reserved_entries] == [
+        "entry-initial"
+    ]
 
 
 @pytest.mark.asyncio
@@ -128,22 +196,38 @@ async def test_retry_uses_reserved_payload_then_commit_clears_once_on_success() 
     )
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(
-            items=[(30, 0, "tool:search", "source: tool\nresult: facts")],
-            _counter=1,
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="entry-tool-1",
+                    priority=30,
+                    source_label="tool:search",
+                    content="source: tool\nresult: facts",
+                    registration_order=0,
+                )
+            ]
         ),
     )
-    world.add_component(entity_id, TurnStateComponent(current_turn_id="turn-1"))
 
     await ReasoningSystem().process(world)
 
-    pool = world.get_component(entity_id, OneShotContextPoolComponent)
-    assert pool is not None
-    assert pool.state == "reserved"
-    assert pool.items != []
+    queue = world.get_component(entity_id, PromptContextQueueComponent)
+    assert queue is not None
+    reservation = world.get_component(entity_id, PromptContextReservationComponent)
+    assert reservation is not None
+    assert [entry.entry_id for entry in reservation.reserved_entries] == [
+        "entry-tool-1"
+    ]
 
-    pool.items.append((20, 1, "subagent:writer", "source: subagent\nresult: draft"))
-    pool._counter += 1
+    queue.entries.append(
+        ContextEntry(
+            entry_id="entry-subagent-1",
+            priority=20,
+            source_label="subagent:writer",
+            content="source: subagent\nresult: draft",
+            registration_order=1,
+        )
+    )
 
     await ReasoningSystem().process(world)
 
@@ -156,8 +240,8 @@ async def test_retry_uses_reserved_payload_then_commit_clears_once_on_success() 
     assert first_user.index("source: tool") < first_user.index("@code Need summary")
     assert "source: subagent" not in second_user
 
-    assert pool.items == []
-    assert pool.state == "committed"
+    assert [entry.entry_id for entry in queue.entries] == ["entry-subagent-1"]
+    assert world.get_component(entity_id, PromptContextReservationComponent) is None
 
 
 @pytest.mark.asyncio
@@ -197,8 +281,7 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
             ),
         ),
     )
-    world.add_component(entity_id, OneShotContextPoolComponent())
-    world.add_component(entity_id, TurnStateComponent(current_turn_id="turn-ctx-1"))
+    world.add_component(entity_id, PromptContextQueueComponent())
 
     collector = PromptContextCollectorSystem()
     await collector.process(world)
@@ -244,15 +327,10 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
         "Reference exact snippets in final answer."
     )
 
-    pool = world.get_component(entity_id, OneShotContextPoolComponent)
-    assert pool is not None
-    assert pool.state == "committed"
-    assert pool.items == []
-
-    turn_state = world.get_component(entity_id, TurnStateComponent)
-    assert turn_state is not None
-    assert turn_state.last_injected_turn_id == "turn-ctx-1"
-    assert turn_state.current_turn_id == ""
+    queue = world.get_component(entity_id, PromptContextQueueComponent)
+    assert queue is not None
+    assert queue.entries == []
+    assert world.get_component(entity_id, PromptContextReservationComponent) is None
 
     conversation = world.get_component(entity_id, ConversationComponent)
     assert conversation is not None
@@ -282,25 +360,25 @@ async def test_event_trigger_injection_uses_context_signal_and_preserves_user_ta
     )
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(
-            items=[
-                (
-                    30,
-                    0,
-                    "tool:search",
-                    "source: tool:search\nstatus: success\nresult: citations\nerror: ",
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="entry-tool",
+                    priority=30,
+                    registration_order=0,
+                    source_label="tool:search",
+                    content="source: tool:search\nstatus: success\nresult: citations\nerror: ",
                 ),
-                (
-                    20,
-                    1,
-                    "subagent:researcher",
-                    "source: subagent:researcher\nstatus: success\nresult: synthesis\nerror: ",
+                ContextEntry(
+                    entry_id="entry-subagent",
+                    priority=20,
+                    registration_order=1,
+                    source_label="subagent:researcher",
+                    content="source: subagent:researcher\nstatus: success\nresult: synthesis\nerror: ",
                 ),
             ],
-            _counter=2,
         ),
     )
-    world.add_component(entity_id, TurnStateComponent(current_turn_id="turn-event-1"))
 
     await ReasoningSystem().process(world)
 
@@ -333,9 +411,16 @@ async def test_non_opt_in_reasoning_path_leaves_user_prompt_and_pool_unchanged()
     )
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(
-            items=[(30, 0, "tool:seed", "source: tool\nresult: keep")],
-            state="idle",
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="entry-seed",
+                    priority=30,
+                    registration_order=0,
+                    source_label="tool:seed",
+                    content="source: tool\nresult: keep",
+                )
+            ],
         ),
     )
 
@@ -346,10 +431,9 @@ async def test_non_opt_in_reasoning_path_leaves_user_prompt_and_pool_unchanged()
     assert "[PROMPT_INJECT:" not in sent_user
     assert "[PROMPT_CONTEXT_POOL]" not in sent_user
 
-    pool = world.get_component(entity_id, OneShotContextPoolComponent)
-    assert pool is not None
-    assert pool.state == "idle"
-    assert len(pool.items) == 1
+    queue = world.get_component(entity_id, PromptContextQueueComponent)
+    assert queue is not None
+    assert len(queue.entries) == 1
 
 
 @pytest.mark.asyncio
@@ -376,21 +460,28 @@ async def test_overflow_footer_is_injected_when_context_pool_entries_are_dropped
     )
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(
-            items=[
-                (30, 0, "tool:keep", keep_entry),
-                (20, 1, "subagent:drop", "source: subagent:drop\nresult: drop"),
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="entry-keep",
+                    priority=30,
+                    registration_order=0,
+                    source_label="tool:keep",
+                    content=keep_entry,
+                ),
+                ContextEntry(
+                    entry_id="entry-drop",
+                    priority=20,
+                    registration_order=1,
+                    source_label="subagent:drop",
+                    content="source: subagent:drop\nresult: drop",
+                ),
             ],
-            _counter=2,
         ),
     )
     world.add_component(
         entity_id, ToolResultsComponent(results={"result-1": "drop-me"})
     )
-    world.add_component(
-        entity_id, TurnStateComponent(current_turn_id="turn-overflow-1")
-    )
-
     collector = PromptContextCollectorSystem()
     await collector.process(world)
     await ReasoningSystem().process(world)
