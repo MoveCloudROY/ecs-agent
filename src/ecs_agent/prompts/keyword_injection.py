@@ -6,9 +6,7 @@ from ecs_agent.prompts.contracts import TriggerSpec
 from ecs_agent.prompts.registry import PromptRegistry
 
 
-def inject_keywords(text: str, registry: PromptRegistry) -> str:
-    return inject_triggers(text, registry)
-
+__all__ = ["inject_triggers"]
 
 def inject_triggers(
     text: str,
@@ -89,4 +87,3 @@ def _trigger_marker(spec: TriggerSpec) -> str:
     return f"[PROMPT_INJECT:{spec.pattern}]"
 
 
-__all__ = ["inject_keywords", "inject_triggers"]

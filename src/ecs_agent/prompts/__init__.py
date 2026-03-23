@@ -15,7 +15,7 @@ from ecs_agent.prompts.registry import (
     resolve_placeholder_values,
     _LEGACY_REQUIRED_TEMPLATE_KEYS as CORE_PLACEHOLDER_KEYS,
 )
-from ecs_agent.prompts.keyword_injection import inject_keywords, inject_triggers
+from ecs_agent.prompts.keyword_injection import inject_triggers
 from ecs_agent.prompts.message_assembly import assemble_messages, build_keyword_registry
 
 __all__ = [
@@ -31,7 +31,6 @@ __all__ = [
     "PlaceholderRegistry",
     "PromptRegistry",
     "resolve_placeholder_values",
-    "inject_keywords",
     "inject_triggers",
     "assemble_messages",
     "build_keyword_registry",
