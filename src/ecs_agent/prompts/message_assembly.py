@@ -18,6 +18,8 @@ CONTEXT_POOL_DELIMITER = "\n\n---\n\n"
 CONTEXT_POOL_MARKER = "[PROMPT_CONTEXT_POOL]"
 
 if TYPE_CHECKING:
+    from ecs_agent.core import World
+    from ecs_agent.types import EntityId
     from ecs_agent.components.definitions import (
         PromptContextQueueComponent,
         PromptContextReservationComponent,
@@ -154,6 +156,86 @@ def commit_prompt_context_reservation(
     ]
 
 
+def prepare_outbound_messages(
+    world: World,
+    entity_id: EntityId,
+    *,
+    system_prompt: str | None = None,
+    prefix_messages: list[Message] | None = None,
+    current_tick: int,
+) -> tuple[list[Message], PromptContextReservationComponent | None]:
+    from ecs_agent.components.definitions import (
+        ConversationComponent,
+        ConversationTreeComponent,
+        PromptContextQueueComponent,
+        PromptContextReservationComponent,
+        RenderedUserPromptComponent,
+        UserPromptConfigComponent,
+    )
+    from ecs_agent.conversation_tree import get_active_leaf, linearize
+
+    tree = world.get_component(entity_id, ConversationTreeComponent)
+    conversation = world.get_component(entity_id, ConversationComponent)
+
+    conversation_messages: list[Message] = []
+    if tree is not None:
+        active_leaf_id = get_active_leaf(tree)
+        if active_leaf_id is not None:
+            conversation_messages.extend(linearize(tree, active_leaf_id))
+    elif conversation is not None:
+        conversation_messages.extend(conversation.messages)
+
+    rendered_user_prompt = world.get_component(entity_id, RenderedUserPromptComponent)
+    prompt_config = world.get_component(entity_id, UserPromptConfigComponent)
+    context_queue = world.get_component(entity_id, PromptContextQueueComponent)
+    context_reservation = world.get_component(
+        entity_id, PromptContextReservationComponent
+    )
+
+    context_pool_enabled = (
+        prompt_config.enable_context_pool if prompt_config is not None else False
+    )
+
+    messages_for_assembly = list(conversation_messages)
+    if rendered_user_prompt is not None:
+        messages_for_assembly = _substitute_last_user_message(
+            messages_for_assembly,
+            rendered_user_prompt.text,
+        )
+
+    keyword_registry = None
+    trigger_specs = None
+    if (
+        rendered_user_prompt is None
+        and prompt_config is not None
+        and prompt_config.triggers
+    ):
+        keyword_registry = build_keyword_registry(prompt_config.triggers)
+        trigger_specs = build_trigger_specs(prompt_config.triggers)
+
+    reserved_context_pool_items = None
+    if context_pool_enabled and context_queue is not None:
+        context_reservation = reserve_prompt_context_reservation(
+            queue=context_queue,
+            reservation=context_reservation,
+            current_tick=current_tick,
+        )
+        reserved_context_pool_items = context_reservation.reserved_entries
+
+    active_events = collect_active_events(reserved_context_pool_items)
+    messages = assemble_messages(
+        system_prompt=system_prompt,
+        prefix_messages=prefix_messages,
+        conversation_messages=messages_for_assembly,
+        enable_context_pool=context_pool_enabled,
+        context_pool_items=reserved_context_pool_items,
+        keyword_registry=keyword_registry,
+        trigger_specs=trigger_specs,
+        active_events=active_events,
+    )
+    return messages, context_reservation
+
+
 def _with_transient_user_injection(
     conversation_messages: list[Message],
     *,
@@ -209,6 +291,24 @@ def _with_transient_user_injection(
     return mutated
 
 
+def _substitute_last_user_message(
+    conversation_messages: list[Message],
+    replacement_text: str,
+) -> list[Message]:
+    messages = list(conversation_messages)
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.role == "user":
+            messages[index] = Message(
+                role="user",
+                content=replacement_text,
+                tool_calls=message.tool_calls,
+                tool_call_id=message.tool_call_id,
+            )
+            break
+    return messages
+
+
 def _render_context_pool_block(
     context_pool_items: Sequence[ContextEntryProtocol] | None,
 ) -> str:
@@ -258,5 +358,6 @@ __all__ = [
     "build_trigger_specs",
     "commit_prompt_context_reservation",
     "collect_active_events",
+    "prepare_outbound_messages",
     "reserve_prompt_context_reservation",
 ]

@@ -6,6 +6,7 @@ from ecs_agent.components import (
     LLMComponent,
     PromptContextQueueComponent,
     PromptContextReservationComponent,
+    RenderedUserPromptComponent,
     UserPromptConfigComponent,
     SystemPromptComponent,
     ToolResultsComponent,
@@ -13,6 +14,7 @@ from ecs_agent.components import (
 from ecs_agent.core import World
 from ecs_agent.prompts.message_assembly import (
     commit_prompt_context_reservation,
+    prepare_outbound_messages,
     reserve_prompt_context_reservation,
 )
 from ecs_agent.providers import FakeProvider
@@ -173,6 +175,150 @@ def test_reserve_prompt_context_is_isolated_from_post_failure_queue_append() -> 
     assert [entry.entry_id for entry in reservation.reserved_entries] == [
         "entry-initial"
     ]
+
+
+def test_prepare_outbound_messages_no_context_pool_uses_rendered_user_prompt() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    conversation = ConversationComponent(
+        messages=[Message(role="user", content="raw user prompt")]
+    )
+    world.add_component(entity_id, conversation)
+    world.add_component(
+        entity_id,
+        RenderedUserPromptComponent(text="normalized user prompt", turn_id="turn-1"),
+    )
+
+    messages, reservation = prepare_outbound_messages(
+        world,
+        entity_id,
+        system_prompt="system prompt",
+        prefix_messages=[Message(role="system", content="prefix context")],
+        current_tick=7,
+    )
+
+    assert reservation is None
+    assert [message.role for message in messages] == ["system", "system", "user"]
+    assert messages[-1].content == "normalized user prompt"
+    assert conversation.messages[-1].content == "raw user prompt"
+
+
+def test_prepare_outbound_messages_reserves_reuses_and_commits_context_pool() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[Message(role="user", content="Need @code summary")]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        UserPromptConfigComponent(
+            triggers={"@code": "Use code-first reasoning"},
+            enable_context_pool=True,
+        ),
+    )
+    queue = PromptContextQueueComponent(
+        entries=[
+            ContextEntry(
+                entry_id="entry-1",
+                priority=30,
+                source_label="tool:search",
+                content="source: tool\nstatus: success\nresult: facts",
+                registration_order=0,
+            )
+        ]
+    )
+    world.add_component(entity_id, queue)
+
+    first_messages, first_reservation = prepare_outbound_messages(
+        world,
+        entity_id,
+        current_tick=10,
+    )
+
+    assert first_reservation is not None
+    world.add_component(entity_id, first_reservation)
+    first_user_text = first_messages[-1].content
+    assert "[PROMPT_INJECT:@code]" in first_user_text
+    assert "[PROMPT_CONTEXT_POOL]" in first_user_text
+    assert "source: tool" in first_user_text
+
+    queue.entries.append(
+        ContextEntry(
+            entry_id="entry-2",
+            priority=20,
+            source_label="subagent:writer",
+            content="source: subagent\nstatus: success\nresult: draft",
+            registration_order=1,
+        )
+    )
+
+    second_messages, second_reservation = prepare_outbound_messages(
+        world,
+        entity_id,
+        current_tick=11,
+    )
+
+    assert second_reservation is not None
+    assert second_reservation.reservation_id == first_reservation.reservation_id
+    assert second_messages[-1].content == first_user_text
+    assert "source: subagent" not in second_messages[-1].content
+
+    commit_prompt_context_reservation(queue=queue, reservation=second_reservation)
+    assert [entry.entry_id for entry in queue.entries] == ["entry-2"]
+
+
+def test_prepare_outbound_messages_uses_existing_stale_reservation_not_live_queue() -> (
+    None
+):
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Need summary")]),
+    )
+    world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
+
+    stale_entry = ContextEntry(
+        entry_id="entry-stale",
+        priority=10,
+        source_label="tool:stale",
+        content="source: stale",
+        registration_order=0,
+    )
+    stale_reservation = PromptContextReservationComponent(
+        reservation_id="reservation-stale",
+        created_at_tick=1,
+        reserved_entries=[stale_entry],
+    )
+    world.add_component(entity_id, stale_reservation)
+    world.add_component(
+        entity_id,
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="entry-live",
+                    priority=100,
+                    source_label="tool:live",
+                    content="source: live",
+                    registration_order=0,
+                )
+            ]
+        ),
+    )
+
+    messages, reservation = prepare_outbound_messages(
+        world,
+        entity_id,
+        current_tick=50,
+    )
+
+    assert reservation is not None
+    assert reservation.reservation_id == "reservation-stale"
+    assert "source: stale" in messages[-1].content
+    assert "source: live" not in messages[-1].content
 
 
 @pytest.mark.asyncio
