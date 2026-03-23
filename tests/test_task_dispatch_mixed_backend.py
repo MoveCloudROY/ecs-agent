@@ -5,12 +5,13 @@ from __future__ import annotations
 import pytest
 
 from ecs_agent.components import (
+    ContextEntry,
     ConversationComponent,
     LLMComponent,
-    OneShotContextPoolComponent,
+    PromptContextQueueComponent,
+    PromptContextReservationComponent,
     UserPromptConfigComponent,
     SubagentRegistryComponent,
-    TurnStateComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
@@ -511,8 +512,16 @@ async def test_local_backend_prompt_context_injection_is_transient() -> None:
     world.add_component(agent, UserPromptConfigComponent(enable_context_pool=True))
     world.add_component(
         agent,
-        OneShotContextPoolComponent(
-            items=[(30, 0, "tool:search", "source: tool\nresult: local facts")]
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="tool-search-0",
+                    priority=30,
+                    registration_order=0,
+                    source_label="tool:search",
+                    content="source: tool\nresult: local facts",
+                )
+            ]
         ),
     )
 
@@ -558,12 +567,18 @@ async def test_local_backend_retry_reuses_reserved_context_then_commits_on_succe
     world.add_component(agent, UserPromptConfigComponent(enable_context_pool=True))
     world.add_component(
         agent,
-        OneShotContextPoolComponent(
-            items=[(30, 0, "tool:search", "source: tool\nresult: local facts")],
-            _counter=1,
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="tool-search-0",
+                    priority=30,
+                    registration_order=0,
+                    source_label="tool:search",
+                    content="source: tool\nresult: local facts",
+                )
+            ]
         ),
     )
-    world.add_component(agent, TurnStateComponent(current_turn_id="turn-1"))
 
     request = DispatchRequest(
         task_id="local-context-retry",
@@ -580,13 +595,22 @@ async def test_local_backend_retry_reuses_reserved_context_then_commits_on_succe
     first = await executor.execute_dispatch_request(world, agent, request)
     assert first.success is False
 
-    pool = world.get_component(agent, OneShotContextPoolComponent)
-    assert pool is not None
-    assert pool.state == "reserved"
-    assert pool.items != []
+    queue = world.get_component(agent, PromptContextQueueComponent)
+    reservation = world.get_component(agent, PromptContextReservationComponent)
+    assert queue is not None
+    assert reservation is not None
+    assert reservation.reserved_entries != []
+    reserved_ids = {entry.entry_id for entry in reservation.reserved_entries}
 
-    pool.items.append((20, 1, "subagent:writer", "source: subagent\nresult: draft"))
-    pool._counter += 1
+    queue.entries.append(
+        ContextEntry(
+            entry_id="subagent-writer-1",
+            priority=20,
+            registration_order=1,
+            source_label="subagent:writer",
+            content="source: subagent\nresult: draft",
+        )
+    )
 
     second = await executor.execute_dispatch_request(world, agent, request)
     assert second.success is True
@@ -596,8 +620,10 @@ async def test_local_backend_retry_reuses_reserved_context_then_commits_on_succe
     assert first_user == second_user
     assert "source: subagent" not in second_user
 
-    assert pool.items == []
-    assert pool.state == "committed"
+    assert world.get_component(agent, PromptContextReservationComponent) is None
+    remaining_ids = {entry.entry_id for entry in queue.entries}
+    assert reserved_ids.isdisjoint(remaining_ids)
+    assert "subagent-writer-1" in remaining_ids
 
 
 @pytest.mark.asyncio
@@ -626,13 +652,14 @@ async def test_local_backend_event_trigger_injection_is_transient() -> None:
     )
     world.add_component(
         agent,
-        OneShotContextPoolComponent(
-            items=[
-                (
-                    30,
-                    0,
-                    "tool:search",
-                    "source: tool:search\nstatus: success\nresult: local facts\nerror: ",
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="tool-search-0",
+                    priority=30,
+                    registration_order=0,
+                    source_label="tool:search",
+                    content="source: tool:search\nstatus: success\nresult: local facts\nerror: ",
                 )
             ]
         ),

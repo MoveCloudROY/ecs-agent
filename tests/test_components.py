@@ -776,82 +776,100 @@ def test_prompt_contributions_component_removed_from_exports() -> None:
     assert not hasattr(components, "PromptContributionsComponent")
 
 
-class TestOneShotContextPoolComponent:
-    """Tests for OneShotContextPoolComponent."""
+class TestContextEntry:
+    def test_fields_are_stored(self):
+        from ecs_agent.components import ContextEntry
 
+        entry = ContextEntry(
+            entry_id="tool-search-0",
+            priority=30,
+            registration_order=0,
+            source_label="tool:search",
+            content="source: tool\nresult: evidence",
+        )
+        assert entry.entry_id == "tool-search-0"
+        assert entry.priority == 30
+        assert entry.registration_order == 0
+        assert entry.source_label == "tool:search"
+        assert entry.content == "source: tool\nresult: evidence"
+
+
+class TestPromptContextQueueComponent:
     def test_instantiation_defaults(self):
-        """Test OneShotContextPoolComponent defaults."""
-        from ecs_agent.components import OneShotContextPoolComponent
+        from ecs_agent.components import PromptContextQueueComponent
 
-        comp = OneShotContextPoolComponent()
-        assert comp.items == []
-        assert comp.state == "idle"
-        assert comp.reserved_turn_id == ""
-        assert comp._counter == 0
+        comp = PromptContextQueueComponent()
+        assert comp.entries == []
 
-    def test_items_field(self):
-        """Test OneShotContextPoolComponent items field."""
-        from ecs_agent.components import OneShotContextPoolComponent
+    def test_entries_field(self):
+        from ecs_agent.components import ContextEntry, PromptContextQueueComponent
 
-        item = (10, 0, "test-source", "some content")
-        comp = OneShotContextPoolComponent(items=[item])
-        assert len(comp.items) == 1
-        assert comp.items[0] == (10, 0, "test-source", "some content")
-
-    def test_state_reserved(self):
-        """Test OneShotContextPoolComponent with reserved state."""
-        from ecs_agent.components import OneShotContextPoolComponent
-
-        comp = OneShotContextPoolComponent(state="reserved", reserved_turn_id="turn-1")
-        assert comp.state == "reserved"
-        assert comp.reserved_turn_id == "turn-1"
+        entry = ContextEntry(
+            entry_id="tool-search-0",
+            priority=10,
+            registration_order=0,
+            source_label="tool:search",
+            content="some content",
+        )
+        comp = PromptContextQueueComponent(entries=[entry])
+        assert len(comp.entries) == 1
+        assert comp.entries[0] == entry
 
     def test_dataclass_slots(self):
-        """Test OneShotContextPoolComponent uses slots."""
-        from ecs_agent.components import OneShotContextPoolComponent
+        from ecs_agent.components import PromptContextQueueComponent
 
-        assert hasattr(OneShotContextPoolComponent, "__slots__")
+        assert hasattr(PromptContextQueueComponent, "__slots__")
 
     def test_mutable_default_independence(self):
-        """Test that items lists are independent instances."""
-        from ecs_agent.components import OneShotContextPoolComponent
+        from ecs_agent.components import ContextEntry, PromptContextQueueComponent
 
-        comp1 = OneShotContextPoolComponent()
-        comp2 = OneShotContextPoolComponent()
-        comp1.items.append((1, 0, "src", "text"))
-        assert len(comp2.items) == 0
+        comp1 = PromptContextQueueComponent()
+        comp2 = PromptContextQueueComponent()
+        comp1.entries.append(
+            ContextEntry(
+                entry_id="entry-1",
+                priority=1,
+                registration_order=0,
+                source_label="src",
+                content="text",
+            )
+        )
+        assert len(comp2.entries) == 0
 
 
-class TestTurnStateComponent:
-    """Tests for TurnStateComponent."""
+class TestPromptContextReservationComponent:
+    def test_instantiation_fields(self):
+        from ecs_agent.components import ContextEntry, PromptContextReservationComponent
 
-    def test_instantiation_defaults(self):
-        """Test TurnStateComponent defaults."""
-        from ecs_agent.components import TurnStateComponent
+        entry = ContextEntry(
+            entry_id="tool-search-0",
+            priority=30,
+            registration_order=0,
+            source_label="tool:search",
+            content="source: tool\nresult: evidence",
+        )
+        comp = PromptContextReservationComponent(
+            reservation_id="reservation-1",
+            created_at_tick=10,
+            reserved_entries=[entry],
+        )
+        assert comp.reservation_id == "reservation-1"
+        assert comp.created_at_tick == 10
+        assert comp.reserved_entries == [entry]
 
-        comp = TurnStateComponent()
-        assert comp.current_turn_id == ""
-        assert comp.last_injected_turn_id == ""
+    def test_reserved_entries_default(self):
+        from ecs_agent.components import PromptContextReservationComponent
 
-    def test_current_turn_id_set(self):
-        """Test TurnStateComponent with current_turn_id."""
-        from ecs_agent.components import TurnStateComponent
-
-        comp = TurnStateComponent(current_turn_id="turn-42")
-        assert comp.current_turn_id == "turn-42"
-
-    def test_last_injected_turn_id_set(self):
-        """Test TurnStateComponent with last_injected_turn_id."""
-        from ecs_agent.components import TurnStateComponent
-
-        comp = TurnStateComponent(last_injected_turn_id="turn-41")
-        assert comp.last_injected_turn_id == "turn-41"
+        comp = PromptContextReservationComponent(
+            reservation_id="reservation-2",
+            created_at_tick=11,
+        )
+        assert comp.reserved_entries == []
 
     def test_dataclass_slots(self):
-        """Test TurnStateComponent uses slots."""
-        from ecs_agent.components import TurnStateComponent
+        from ecs_agent.components import PromptContextReservationComponent
 
-        assert hasattr(TurnStateComponent, "__slots__")
+        assert hasattr(PromptContextReservationComponent, "__slots__")
 
 
 class TestPromptContractsModule:

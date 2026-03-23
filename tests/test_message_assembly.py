@@ -1,3 +1,4 @@
+from ecs_agent.components import ContextEntry
 from ecs_agent.prompts.message_assembly import assemble_messages, build_keyword_registry
 from ecs_agent.types import Message
 
@@ -9,7 +10,15 @@ def test_assemble_messages_orders_keyword_block_then_context_pool_then_original_
     assembled = assemble_messages(
         conversation_messages=[Message(role="user", content="Need @code help")],
         enable_context_pool=True,
-        context_pool_items=[(30, 0, "tool:search", "source: tool\nresult: facts")],
+        context_pool_items=[
+            ContextEntry(
+                entry_id="tool-search-0",
+                priority=30,
+                registration_order=0,
+                source_label="tool:search",
+                content="source: tool\nresult: facts",
+            )
+        ],
         keyword_registry=registry,
     )
 

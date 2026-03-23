@@ -3,16 +3,17 @@ from __future__ import annotations
 import pytest
 
 from ecs_agent.components import (
+    ContextEntry,
     ConversationComponent,
     ErrorComponent,
     LLMComponent,
-    OneShotContextPoolComponent,
     PendingToolCallsComponent,
     PlanComponent,
+    PromptContextQueueComponent,
+    PromptContextReservationComponent,
     UserPromptConfigComponent,
     SystemPromptComponent,
     TerminalComponent,
-    TurnStateComponent,
 )
 from ecs_agent.core import World
 from ecs_agent.providers import FakeProvider
@@ -305,8 +306,16 @@ async def test_prompt_context_injection_is_transient_for_planning_provider_call(
     world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(
-            items=[(30, 0, "tool:search", "source: tool\nresult: evidence")]
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="tool-search-0",
+                    priority=30,
+                    registration_order=0,
+                    source_label="tool:search",
+                    content="source: tool\nresult: evidence",
+                )
+            ]
         ),
     )
 
@@ -340,22 +349,37 @@ async def test_planning_retry_reuses_reserved_context_then_commits_on_success() 
     world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(
-            items=[(30, 0, "tool:search", "source: tool\nresult: evidence")],
-            _counter=1,
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="tool-search-0",
+                    priority=30,
+                    registration_order=0,
+                    source_label="tool:search",
+                    content="source: tool\nresult: evidence",
+                )
+            ]
         ),
     )
-    world.add_component(entity_id, TurnStateComponent(current_turn_id="turn-1"))
 
     await PlanningSystem().process(world)
 
-    pool = world.get_component(entity_id, OneShotContextPoolComponent)
-    assert pool is not None
-    assert pool.state == "reserved"
-    assert pool.items != []
+    queue = world.get_component(entity_id, PromptContextQueueComponent)
+    reservation = world.get_component(entity_id, PromptContextReservationComponent)
+    assert queue is not None
+    assert reservation is not None
+    assert reservation.reserved_entries != []
+    reserved_ids = {entry.entry_id for entry in reservation.reserved_entries}
 
-    pool.items.append((20, 1, "subagent:writer", "source: subagent\nresult: draft"))
-    pool._counter += 1
+    queue.entries.append(
+        ContextEntry(
+            entry_id="subagent-writer-1",
+            priority=20,
+            registration_order=1,
+            source_label="subagent:writer",
+            content="source: subagent\nresult: draft",
+        )
+    )
 
     await PlanningSystem().process(world)
 
@@ -364,8 +388,10 @@ async def test_planning_retry_reuses_reserved_context_then_commits_on_success() 
     assert first_user == second_user
     assert "source: subagent" not in second_user
 
-    assert pool.items == []
-    assert pool.state == "committed"
+    assert world.get_component(entity_id, PromptContextReservationComponent) is None
+    remaining_ids = {entry.entry_id for entry in queue.entries}
+    assert reserved_ids.isdisjoint(remaining_ids)
+    assert "subagent-writer-1" in remaining_ids
 
 
 @pytest.mark.asyncio
@@ -395,13 +421,14 @@ async def test_event_trigger_injection_is_transient_for_planning_provider_call()
     )
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(
-            items=[
-                (
-                    30,
-                    0,
-                    "tool:search",
-                    "source: tool:search\nstatus: success\nresult: evidence\nerror: ",
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="tool-search-0",
+                    priority=30,
+                    registration_order=0,
+                    source_label="tool:search",
+                    content="source: tool:search\nstatus: success\nresult: evidence\nerror: ",
                 )
             ]
         ),

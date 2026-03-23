@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from ecs_agent.components import ConversationComponent, UserPromptConfigComponent
 from ecs_agent.components.definitions import (
-    OneShotContextPoolComponent,
+    ContextEntry,
+    PromptContextQueueComponent,
     RenderedUserPromptComponent,
 )
 from ecs_agent.core import World
@@ -148,10 +149,22 @@ async def test_context_pool_items_injected() -> None:
     world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(
-            items=[
-                (30, 0, "tool:one", "source: tool:one\nresult: A"),
-                (20, 1, "subagent:two", "source: subagent:two\nresult: B"),
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="tool-one-0",
+                    priority=30,
+                    registration_order=0,
+                    source_label="tool:one",
+                    content="source: tool:one\nresult: A",
+                ),
+                ContextEntry(
+                    entry_id="subagent-two-1",
+                    priority=20,
+                    registration_order=1,
+                    source_label="subagent:two",
+                    content="source: subagent:two\nresult: B",
+                ),
             ]
         ),
     )
