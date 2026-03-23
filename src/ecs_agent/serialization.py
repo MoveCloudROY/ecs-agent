@@ -23,7 +23,7 @@ from ecs_agent.components import (
     PendingToolCallsComponent,
     PlanComponent,
     PlanSearchComponent,
-    PromptConfigComponent,
+    UserPromptConfigComponent,
     RenderedSystemPromptComponent,
     RenderedUserPromptComponent,
     RAGTriggerComponent,
@@ -47,7 +47,7 @@ from ecs_agent.components import (
 from ecs_agent.core.world import World
 from ecs_agent.prompts.contracts import (
     PlaceholderSpec,
-    PromptConfigSpec,
+    SystemPromptConfigSpec,
     PromptTemplateSource,
 )
 from ecs_agent.types import ApprovalPolicy, EntityId, Message, ToolCall, ToolSchema
@@ -87,8 +87,8 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     ScratchbookIndexComponent.__name__: ScratchbookIndexComponent,
     ScratchbookRefComponent.__name__: ScratchbookRefComponent,
     TaskComponent.__name__: TaskComponent,
-    PromptConfigComponent.__name__: PromptConfigComponent,
-    PromptConfigSpec.__name__: PromptConfigSpec,
+    UserPromptConfigComponent.__name__: UserPromptConfigComponent,
+    SystemPromptConfigSpec.__name__: SystemPromptConfigSpec,
     RenderedSystemPromptComponent.__name__: RenderedSystemPromptComponent,
     RenderedUserPromptComponent.__name__: RenderedUserPromptComponent,
     OneShotContextPoolComponent.__name__: OneShotContextPoolComponent,
@@ -313,20 +313,20 @@ class WorldSerializer:
             if isinstance(policy_value, str):
                 normalized_data["policy"] = ApprovalPolicy(policy_value)
 
-        if component_name == PromptConfigComponent.__name__:
+        if component_name == UserPromptConfigComponent.__name__:
             allowed_fields = {
-                "trigger_templates",
+                "triggers",
                 "enable_context_pool",
                 "context_pool_max_chars",
             }
             unknown_fields = sorted(set(normalized_data.keys()) - allowed_fields)
             if unknown_fields:
                 raise ValueError(
-                    "PromptConfigComponent contains unsupported fields: "
+                    "UserPromptConfigComponent contains unsupported fields: "
                     f"{', '.join(unknown_fields)}"
                 )
 
-        if component_name == PromptConfigSpec.__name__:
+        if component_name == SystemPromptConfigSpec.__name__:
             template_source_data = normalized_data.get("template_source")
             if isinstance(template_source_data, dict):
                 normalized_data["template_source"] = PromptTemplateSource(

@@ -6,7 +6,7 @@ from typing import Callable
 
 from ecs_agent.components import (
     OneShotContextPoolComponent,
-    PromptConfigComponent,
+    UserPromptConfigComponent,
     ToolResultsComponent,
 )
 from ecs_agent.core.world import World
@@ -46,7 +46,7 @@ class PromptContextCollectorSystem:
         self._ensure_subscribed(world)
 
         for entity_id, components in world.query(
-            PromptConfigComponent,
+            UserPromptConfigComponent,
             OneShotContextPoolComponent,
         ):
             config, pool = components

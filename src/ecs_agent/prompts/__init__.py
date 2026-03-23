@@ -1,6 +1,6 @@
 from ecs_agent.prompts.contracts import (
     PlaceholderSpec,
-    PromptConfigSpec,
+    SystemPromptConfigSpec,
     PromptInjectionArtifact,
     PromptRenderContext,
     PromptSectionSpec,
@@ -22,7 +22,7 @@ from ecs_agent.prompts.sections import render_sections
 __all__ = [
     "CORE_PLACEHOLDER_KEYS",
     "PlaceholderSpec",
-    "PromptConfigSpec",
+    "SystemPromptConfigSpec",
     "PromptInjectionArtifact",
     "PromptRenderContext",
     "PromptSectionSpec",

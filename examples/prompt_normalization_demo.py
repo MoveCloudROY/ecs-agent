@@ -7,7 +7,7 @@ from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
     OneShotContextPoolComponent,
-    PromptConfigComponent,
+    UserPromptConfigComponent,
     RenderedSystemPromptComponent,
     RenderedUserPromptComponent,
     ToolRegistryComponent,
@@ -16,7 +16,7 @@ from ecs_agent.components import (
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeProvider, OpenAIProvider
 from ecs_agent.providers.protocol import LLMProvider
-from ecs_agent.prompts.contracts import PromptConfigSpec, PromptTemplateSource
+from ecs_agent.prompts.contracts import SystemPromptConfigSpec, PromptTemplateSource
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
@@ -96,8 +96,8 @@ async def main() -> None:
     )
     world.add_component(
         entity,
-        PromptConfigComponent(
-            trigger_templates={
+        UserPromptConfigComponent(
+            triggers={
                 "@code": "Prioritize deterministic code-first reasoning.",
                 "event:tool_success": "Prefer successful tool outputs as evidence.",
             },
@@ -127,7 +127,7 @@ async def main() -> None:
     world.add_component(entity, TurnStateComponent(current_turn_id="demo-turn-1"))
     world.add_component(
         entity,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(
                 inline=(
                     "You are a helpful coding assistant.\n\n"

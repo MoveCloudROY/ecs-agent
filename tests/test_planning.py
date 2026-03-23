@@ -9,7 +9,7 @@ from ecs_agent.components import (
     OneShotContextPoolComponent,
     PendingToolCallsComponent,
     PlanComponent,
-    PromptConfigComponent,
+    UserPromptConfigComponent,
     SystemPromptComponent,
     TerminalComponent,
     TurnStateComponent,
@@ -302,7 +302,7 @@ async def test_prompt_context_injection_is_transient_for_planning_provider_call(
     world.add_component(
         entity_id, PlanComponent(steps=["inspect state"], current_step=0)
     )
-    world.add_component(entity_id, PromptConfigComponent(enable_context_pool=True))
+    world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
     world.add_component(
         entity_id,
         OneShotContextPoolComponent(
@@ -337,7 +337,7 @@ async def test_planning_retry_reuses_reserved_context_then_commits_on_success() 
     world.add_component(
         entity_id, PlanComponent(steps=["inspect state"], current_step=0)
     )
-    world.add_component(entity_id, PromptConfigComponent(enable_context_pool=True))
+    world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
     world.add_component(
         entity_id,
         OneShotContextPoolComponent(
@@ -388,8 +388,8 @@ async def test_event_trigger_injection_is_transient_for_planning_provider_call()
     )
     world.add_component(
         entity_id,
-        PromptConfigComponent(
-            trigger_templates={"event:tool_success": "Prefer successful tool context"},
+        UserPromptConfigComponent(
+            triggers={"event:tool_success": "Prefer successful tool context"},
             enable_context_pool=True,
         ),
     )

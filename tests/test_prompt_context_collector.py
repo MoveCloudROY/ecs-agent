@@ -6,7 +6,7 @@ import pytest
 
 from ecs_agent.components import (
     OneShotContextPoolComponent,
-    PromptConfigComponent,
+    UserPromptConfigComponent,
     ToolResultsComponent,
 )
 from ecs_agent.core import World
@@ -28,7 +28,7 @@ async def test_collector_orders_entries_by_priority_desc_then_registration_order
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigComponent(enable_context_pool=True, context_pool_max_chars=10000),
+        UserPromptConfigComponent(enable_context_pool=True, context_pool_max_chars=10000),
     )
     world.add_component(
         entity_id,
@@ -99,7 +99,7 @@ async def test_collector_truncation_appends_footer_when_entries_are_dropped() ->
 
     world.add_component(
         entity_id,
-        PromptConfigComponent(
+        UserPromptConfigComponent(
             enable_context_pool=True, context_pool_max_chars=max_chars
         ),
     )
@@ -139,7 +139,7 @@ async def test_collector_truncation_drops_more_entries_to_fit_footer() -> None:
 
     world.add_component(
         entity_id,
-        PromptConfigComponent(
+        UserPromptConfigComponent(
             enable_context_pool=True, context_pool_max_chars=max_chars
         ),
     )
@@ -172,7 +172,7 @@ async def test_collector_does_not_clear_pool_state_or_items() -> None:
     original_item = (1, 0, "baseline", "keep-me")
     world.add_component(
         entity_id,
-        PromptConfigComponent(enable_context_pool=True, context_pool_max_chars=10000),
+        UserPromptConfigComponent(enable_context_pool=True, context_pool_max_chars=10000),
     )
     world.add_component(
         entity_id,
@@ -212,7 +212,7 @@ async def test_collector_non_opt_in_entity_is_unchanged() -> None:
     original_item = (1, 0, "baseline", "keep-me")
     world.add_component(
         entity_id,
-        PromptConfigComponent(enable_context_pool=False, context_pool_max_chars=10000),
+        UserPromptConfigComponent(enable_context_pool=False, context_pool_max_chars=10000),
     )
     world.add_component(
         entity_id,

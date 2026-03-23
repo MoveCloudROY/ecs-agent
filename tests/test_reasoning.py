@@ -6,7 +6,7 @@ from ecs_agent.components import (
     LLMComponent,
     OneShotContextPoolComponent,
     PendingToolCallsComponent,
-    PromptConfigComponent,
+    UserPromptConfigComponent,
     SystemPromptComponent,
     TerminalComponent,
     ToolRegistryComponent,
@@ -503,7 +503,7 @@ async def test_prompt_context_injection_is_transient_for_reasoning_provider_call
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Need summary")]),
     )
-    world.add_component(entity_id, PromptConfigComponent(enable_context_pool=True))
+    world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
     world.add_component(
         entity_id,
         OneShotContextPoolComponent(
@@ -546,8 +546,8 @@ async def test_event_trigger_injection_is_transient_for_reasoning_provider_call(
     )
     world.add_component(
         entity_id,
-        PromptConfigComponent(
-            trigger_templates={
+        UserPromptConfigComponent(
+            triggers={
                 "event:tool_success": "Prefer using successful tool evidence"
             },
             enable_context_pool=True,
