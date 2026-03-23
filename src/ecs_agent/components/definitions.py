@@ -413,10 +413,10 @@ from ecs_agent.prompts.contracts import PromptSectionSpec  # noqa: E402
 
 
 @dataclass(slots=True)
-class PromptConfigComponent:
+class UserPromptConfigComponent:
     """Opts an entity into the prompt normalization pipeline."""
 
-    trigger_templates: dict[str, str] = field(default_factory=dict)
+    triggers: dict[str, str] = field(default_factory=dict)
     # whether to enable stage-2 context pool injection
     enable_context_pool: bool = False
     # max characters for context pool rendering (overflow = drop lowest priority)

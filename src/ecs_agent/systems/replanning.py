@@ -14,7 +14,7 @@ from ecs_agent.components import (
     LLMComponent,
     OneShotContextPoolComponent,
     PlanComponent,
-    PromptConfigComponent,
+    UserPromptConfigComponent,
     RenderedSystemPromptComponent,
     RenderedUserPromptComponent,
     ScratchbookIndexComponent,
@@ -111,7 +111,7 @@ class ReplanningSystem:
             rendered_user_prompt = world.get_component(
                 entity_id, RenderedUserPromptComponent
             )
-            prompt_config = world.get_component(entity_id, PromptConfigComponent)
+            prompt_config = world.get_component(entity_id, UserPromptConfigComponent)
             context_pool = world.get_component(entity_id, OneShotContextPoolComponent)
             turn_state = world.get_component(entity_id, TurnStateComponent)
             use_rendered_user_prompt = rendered_user_prompt is not None
@@ -213,7 +213,7 @@ class ReplanningSystem:
         *,
         system_prompt_text: str | None,
         rendered_user_text: str | None,
-        prompt_config: PromptConfigComponent | None,
+        prompt_config: UserPromptConfigComponent | None,
         context_pool_enabled: bool,
         context_pool_items: list[tuple[int, int, str, str]] | None,
         active_events: set[str],
@@ -269,13 +269,13 @@ class ReplanningSystem:
             )
 
         keyword_registry = (
-            build_keyword_registry(prompt_config.trigger_templates)
-            if prompt_config is not None and prompt_config.trigger_templates
+            build_keyword_registry(prompt_config.triggers)
+            if prompt_config is not None and prompt_config.triggers
             else None
         )
         trigger_specs = (
-            build_trigger_specs(prompt_config.trigger_templates)
-            if prompt_config is not None and prompt_config.trigger_templates
+            build_trigger_specs(prompt_config.triggers)
+            if prompt_config is not None and prompt_config.triggers
             else None
         )
         return assemble_messages(

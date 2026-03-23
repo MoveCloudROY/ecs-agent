@@ -8,7 +8,7 @@ from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
     OneShotContextPoolComponent,
-    PromptConfigComponent,
+    UserPromptConfigComponent,
     SubagentRegistryComponent,
     TurnStateComponent,
     ToolRegistryComponent,
@@ -508,7 +508,7 @@ async def test_local_backend_prompt_context_injection_is_transient() -> None:
     )
     world.add_component(agent, ConversationComponent(messages=[]))
     world.add_component(agent, ToolRegistryComponent(tools={}, handlers={}))
-    world.add_component(agent, PromptConfigComponent(enable_context_pool=True))
+    world.add_component(agent, UserPromptConfigComponent(enable_context_pool=True))
     world.add_component(
         agent,
         OneShotContextPoolComponent(
@@ -555,7 +555,7 @@ async def test_local_backend_retry_reuses_reserved_context_then_commits_on_succe
     )
     world.add_component(agent, ConversationComponent(messages=[]))
     world.add_component(agent, ToolRegistryComponent(tools={}, handlers={}))
-    world.add_component(agent, PromptConfigComponent(enable_context_pool=True))
+    world.add_component(agent, UserPromptConfigComponent(enable_context_pool=True))
     world.add_component(
         agent,
         OneShotContextPoolComponent(
@@ -619,8 +619,8 @@ async def test_local_backend_event_trigger_injection_is_transient() -> None:
     world.add_component(agent, ToolRegistryComponent(tools={}, handlers={}))
     world.add_component(
         agent,
-        PromptConfigComponent(
-            trigger_templates={"event:tool_success": "Prefer successful tool outputs"},
+        UserPromptConfigComponent(
+            triggers={"event:tool_success": "Prefer successful tool outputs"},
             enable_context_pool=True,
         ),
     )

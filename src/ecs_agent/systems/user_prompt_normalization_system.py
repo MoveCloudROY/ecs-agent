@@ -8,7 +8,7 @@ from ecs_agent.components import (
     ConversationComponent,
     ConversationTreeComponent,
     OneShotContextPoolComponent,
-    PromptConfigComponent,
+    UserPromptConfigComponent,
     RenderedUserPromptComponent,
     TurnStateComponent,
 )
@@ -58,7 +58,7 @@ class UserPromptNormalizationSystem:
             if raw_user_text is None:
                 continue
 
-            prompt_config = world.get_component(entity_id, PromptConfigComponent)
+            prompt_config = world.get_component(entity_id, UserPromptConfigComponent)
             context_pool = world.get_component(entity_id, OneShotContextPoolComponent)
             turn_state = world.get_component(entity_id, TurnStateComponent)
             turn_id = (
@@ -74,11 +74,11 @@ class UserPromptNormalizationSystem:
 
             if prompt_config is not None:
                 context_pool_enabled = prompt_config.enable_context_pool
-                if prompt_config.trigger_templates:
+                if prompt_config.triggers:
                     keyword_registry = build_keyword_registry(
-                        prompt_config.trigger_templates
+                        prompt_config.triggers
                     )
-                    trigger_specs = build_trigger_specs(prompt_config.trigger_templates)
+                    trigger_specs = build_trigger_specs(prompt_config.triggers)
                 if context_pool_enabled and context_pool is not None:
                     context_pool_items = list(context_pool.items)
 
@@ -92,11 +92,6 @@ class UserPromptNormalizationSystem:
                 active_events=active_events,
             )
             normalized_text = assembled[-1].content if assembled else raw_user_text
-            if "[PROMPT_INJECT:" not in raw_user_text and normalized_text.startswith(
-                "[PROMPT_INJECT:"
-            ):
-                _, _, normalized_text = normalized_text.partition("\n")
-                normalized_text = normalized_text.lstrip("\n")
             normalized_text = self.apply_trigger_specs(
                 user_text=normalized_text,
                 trigger_specs=self._trigger_specs,

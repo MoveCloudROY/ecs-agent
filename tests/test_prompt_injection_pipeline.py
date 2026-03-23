@@ -4,7 +4,7 @@ from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
     OneShotContextPoolComponent,
-    PromptConfigComponent,
+    UserPromptConfigComponent,
     SystemPromptComponent,
     ToolResultsComponent,
     TurnStateComponent,
@@ -121,8 +121,8 @@ async def test_retry_uses_reserved_payload_then_commit_clears_once_on_success() 
     )
     world.add_component(
         entity_id,
-        PromptConfigComponent(
-            trigger_templates={"@code": "Use code-first reasoning"},
+        UserPromptConfigComponent(
+            triggers={"@code": "Use code-first reasoning"},
             enable_context_pool=True,
         ),
     )
@@ -174,8 +174,8 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
     )
     world.add_component(
         entity_id,
-        PromptConfigComponent(
-            trigger_templates={
+        UserPromptConfigComponent(
+            triggers={
                 "@code": "Use code-first reasoning",
                 "event:tool_success": "Prioritize successful tool evidence",
             },
@@ -275,8 +275,8 @@ async def test_event_trigger_injection_uses_context_signal_and_preserves_user_ta
     )
     world.add_component(
         entity_id,
-        PromptConfigComponent(
-            trigger_templates={"event:tool_success": "Prefer successful tool context"},
+        UserPromptConfigComponent(
+            triggers={"event:tool_success": "Prefer successful tool context"},
             enable_context_pool=True,
         ),
     )
@@ -369,7 +369,7 @@ async def test_overflow_footer_is_injected_when_context_pool_entries_are_dropped
     max_chars = len(keep_entry) + len(CONTEXT_ENTRY_DELIMITER) + len(footer)
     world.add_component(
         entity_id,
-        PromptConfigComponent(
+        UserPromptConfigComponent(
             enable_context_pool=True,
             context_pool_max_chars=max_chars,
         ),

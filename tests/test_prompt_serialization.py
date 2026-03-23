@@ -6,7 +6,7 @@ import json
 
 from ecs_agent.components import (
     OneShotContextPoolComponent,
-    PromptConfigComponent,
+    UserPromptConfigComponent,
     RenderedSystemPromptComponent,
     RenderedUserPromptComponent,
     SystemPromptComponent,
@@ -15,7 +15,7 @@ from ecs_agent.components import (
 from ecs_agent.core.world import World
 from ecs_agent.prompts.contracts import (
     PlaceholderSpec,
-    PromptConfigSpec,
+    SystemPromptConfigSpec,
     PromptSectionSpec,
     PromptTemplateSource,
 )
@@ -29,13 +29,11 @@ class DummyProvider:
 
 
 def test_prompt_config_component_roundtrip() -> None:
-    """PromptConfigComponent serializes and deserializes correctly."""
     world = World()
     entity = world.create_entity()
 
-    # Create a PromptConfigComponent with all fields
-    config = PromptConfigComponent(
-        trigger_templates={
+    config = UserPromptConfigComponent(
+        triggers={
             "inject_coding": "template-1",
             "inject_context": "template-2",
         },
@@ -53,9 +51,9 @@ def test_prompt_config_component_roundtrip() -> None:
     )
 
     # Verify roundtrip
-    config2 = world2.get_component(entity, PromptConfigComponent)
+    config2 = world2.get_component(entity, UserPromptConfigComponent)
     assert config2 is not None
-    assert config2.trigger_templates == {
+    assert config2.triggers == {
         "inject_coding": "template-1",
         "inject_context": "template-2",
     }
@@ -212,7 +210,7 @@ def test_prompt_config_spec_static_roundtrip() -> None:
     world = World()
     entity = world.create_entity()
 
-    config = PromptConfigSpec(
+    config = SystemPromptConfigSpec(
         template_source=PromptTemplateSource(inline="Hello ${name}"),
         placeholders=[PlaceholderSpec(name="name", value="world")],
     )
@@ -223,7 +221,7 @@ def test_prompt_config_spec_static_roundtrip() -> None:
     providers = {"default": DummyProvider()}
     world2 = WorldSerializer.from_dict(data, providers=providers, tool_handlers={})
 
-    config2 = world2.get_component(entity, PromptConfigSpec)
+    config2 = world2.get_component(entity, SystemPromptConfigSpec)
     assert config2 is not None
     assert config2.template_source.inline == "Hello ${name}"
     assert config2.template_source.file_path is None
@@ -235,8 +233,8 @@ def test_prompt_config_spec_static_roundtrip() -> None:
 def test_prompt_components_serializer_registered() -> None:
     """All prompt components are registered in COMPONENT_REGISTRY."""
     component_names = {
-        PromptConfigComponent.__name__,
-        PromptConfigSpec.__name__,
+        UserPromptConfigComponent.__name__,
+        SystemPromptConfigSpec.__name__,
         SystemPromptComponent.__name__,
         OneShotContextPoolComponent.__name__,
         RenderedSystemPromptComponent.__name__,

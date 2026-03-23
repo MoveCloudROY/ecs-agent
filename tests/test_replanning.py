@@ -7,7 +7,7 @@ from ecs_agent.components import (
     LLMComponent,
     OneShotContextPoolComponent,
     PlanComponent,
-    PromptConfigComponent,
+    UserPromptConfigComponent,
     TurnStateComponent,
 )
 from ecs_agent.core import World
@@ -338,7 +338,7 @@ async def test_prompt_context_injection_is_transient_for_replanning_provider_cal
         steps=["step 1", "step 2"],
         current_step=1,
     )
-    world.add_component(entity_id, PromptConfigComponent(enable_context_pool=True))
+    world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
     world.add_component(
         entity_id,
         OneShotContextPoolComponent(
@@ -369,7 +369,7 @@ async def test_replanning_retry_reuses_reserved_context_then_commits_on_success(
         steps=["step 1", "step 2"],
         current_step=1,
     )
-    world.add_component(entity_id, PromptConfigComponent(enable_context_pool=True))
+    world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
     world.add_component(
         entity_id,
         OneShotContextPoolComponent(
@@ -422,8 +422,8 @@ async def test_event_trigger_injection_is_transient_for_replanning_provider_call
     )
     world.add_component(
         entity_id,
-        PromptConfigComponent(
-            trigger_templates={"event:tool_success": "Prefer successful tool context"},
+        UserPromptConfigComponent(
+            triggers={"event:tool_success": "Prefer successful tool context"},
             enable_context_pool=True,
         ),
     )

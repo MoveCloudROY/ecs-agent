@@ -26,7 +26,7 @@ from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
     OneShotContextPoolComponent,
-    PromptConfigComponent,
+    UserPromptConfigComponent,
     StreamingComponent,
     SystemPromptComponent,
     TurnStateComponent,
@@ -485,8 +485,8 @@ async def test_real_llm_prompt_keyword_injection_smoke() -> None:
     )
     world.add_component(
         entity,
-        PromptConfigComponent(
-            trigger_templates={"@code": "KEYWORD_TEMPLATE_BLOCK"},
+        UserPromptConfigComponent(
+            triggers={"@code": "KEYWORD_TEMPLATE_BLOCK"},
             enable_context_pool=True,
         ),
     )
@@ -584,8 +584,8 @@ async def test_real_llm_prompt_event_injection_smoke() -> None:
     )
     world.add_component(
         entity,
-        PromptConfigComponent(
-            trigger_templates={"event:tool_success": "EVENT_TEMPLATE_BLOCK"},
+        UserPromptConfigComponent(
+            triggers={"event:tool_success": "EVENT_TEMPLATE_BLOCK"},
             enable_context_pool=True,
         ),
     )
@@ -1133,7 +1133,7 @@ async def test_real_llm_rendered_system_prompt_reaches_provider() -> None:
     """Verify RenderedSystemPromptComponent.text reaches the provider as system message."""
     from ecs_agent.components import ToolRegistryComponent, TurnStateComponent
     from ecs_agent.components.definitions import RenderedSystemPromptComponent
-    from ecs_agent.prompts.contracts import PromptConfigSpec, PromptTemplateSource
+    from ecs_agent.prompts.contracts import SystemPromptConfigSpec, PromptTemplateSource
     from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
     from ecs_agent.types import ToolSchema as _ToolSchema
 
@@ -1152,7 +1152,7 @@ async def test_real_llm_rendered_system_prompt_reaches_provider() -> None:
     world.add_component(entity, TurnStateComponent(current_turn_id="t1"))
     world.add_component(
         entity,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(
                 inline="You are a Python expert. Available tools:\n${_installed_tools}"
             )
@@ -1192,7 +1192,7 @@ async def test_real_llm_rendered_system_prompt_reaches_provider() -> None:
 @pytest.mark.asyncio
 async def test_real_llm_rendered_user_prompt_trigger_injection() -> None:
     """Verify RenderedUserPromptComponent.text contains injected trigger content."""
-    from ecs_agent.components import PromptConfigComponent, TurnStateComponent
+    from ecs_agent.components import UserPromptConfigComponent, TurnStateComponent
     from ecs_agent.components.definitions import RenderedUserPromptComponent
     from ecs_agent.systems.user_prompt_normalization_system import (
         UserPromptNormalizationSystem,
@@ -1213,8 +1213,8 @@ async def test_real_llm_rendered_user_prompt_trigger_injection() -> None:
     world.add_component(entity, TurnStateComponent(current_turn_id="t2"))
     world.add_component(
         entity,
-        PromptConfigComponent(
-            trigger_templates={"@test": "Use testing best practices."},
+        UserPromptConfigComponent(
+            triggers={"@test": "Use testing best practices."},
             enable_context_pool=False,
         ),
     )

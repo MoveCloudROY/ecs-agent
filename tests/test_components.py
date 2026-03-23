@@ -721,53 +721,53 @@ class TestScratchbookIndexComponent:
 # ---------------------------------------------------------------------------
 
 
-class TestPromptConfigComponent:
-    """Tests for PromptConfigComponent."""
+class TestUserPromptConfigComponent:
+    """Tests for UserPromptConfigComponent."""
 
     def test_instantiation_defaults(self):
-        """Test PromptConfigComponent defaults."""
-        from ecs_agent.components import PromptConfigComponent
+        """Test UserPromptConfigComponent defaults."""
+        from ecs_agent.components import UserPromptConfigComponent
 
-        comp = PromptConfigComponent()
-        assert comp.trigger_templates == {}
+        comp = UserPromptConfigComponent()
+        assert comp.triggers == {}
         assert comp.enable_context_pool is False
         assert comp.context_pool_max_chars == 8192
 
-    def test_trigger_templates(self):
-        """Test PromptConfigComponent with trigger_templates."""
-        from ecs_agent.components import PromptConfigComponent
+    def test_triggers(self):
+        """Test UserPromptConfigComponent with triggers."""
+        from ecs_agent.components import UserPromptConfigComponent
 
-        comp = PromptConfigComponent(trigger_templates={"code": "coding-assistant"})
-        assert comp.trigger_templates == {"code": "coding-assistant"}
+        comp = UserPromptConfigComponent(triggers={"code": "coding-assistant"})
+        assert comp.triggers == {"code": "coding-assistant"}
 
     def test_enable_context_pool(self):
-        """Test PromptConfigComponent with enable_context_pool=True."""
-        from ecs_agent.components import PromptConfigComponent
+        """Test UserPromptConfigComponent with enable_context_pool=True."""
+        from ecs_agent.components import UserPromptConfigComponent
 
-        comp = PromptConfigComponent(enable_context_pool=True)
+        comp = UserPromptConfigComponent(enable_context_pool=True)
         assert comp.enable_context_pool is True
 
     def test_context_pool_max_chars_custom(self):
-        """Test PromptConfigComponent with custom context_pool_max_chars."""
-        from ecs_agent.components import PromptConfigComponent
+        """Test UserPromptConfigComponent with custom context_pool_max_chars."""
+        from ecs_agent.components import UserPromptConfigComponent
 
-        comp = PromptConfigComponent(context_pool_max_chars=4096)
+        comp = UserPromptConfigComponent(context_pool_max_chars=4096)
         assert comp.context_pool_max_chars == 4096
 
     def test_dataclass_slots(self):
-        """Test PromptConfigComponent uses slots."""
-        from ecs_agent.components import PromptConfigComponent
+        """Test UserPromptConfigComponent uses slots."""
+        from ecs_agent.components import UserPromptConfigComponent
 
-        assert hasattr(PromptConfigComponent, "__slots__")
+        assert hasattr(UserPromptConfigComponent, "__slots__")
 
     def test_mutable_default_independence(self):
-        """Test that trigger_templates are independent instances."""
-        from ecs_agent.components import PromptConfigComponent
+        """Test that triggers are independent instances."""
+        from ecs_agent.components import UserPromptConfigComponent
 
-        comp1 = PromptConfigComponent()
-        comp2 = PromptConfigComponent()
-        comp1.trigger_templates["x"] = "y"
-        assert "x" not in comp2.trigger_templates
+        comp1 = UserPromptConfigComponent()
+        comp2 = UserPromptConfigComponent()
+        comp1.triggers["x"] = "y"
+        assert "x" not in comp2.triggers
 
 
 def test_prompt_contributions_component_removed_from_exports() -> None:

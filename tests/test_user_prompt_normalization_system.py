@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ecs_agent.components import ConversationComponent, PromptConfigComponent
+from ecs_agent.components import ConversationComponent, UserPromptConfigComponent
 from ecs_agent.components.definitions import (
     OneShotContextPoolComponent,
     RenderedUserPromptComponent,
@@ -37,14 +37,14 @@ async def test_keyword_trigger_prepends_content() -> None:
     )
     world.add_component(
         entity_id,
-        PromptConfigComponent(trigger_templates={"@greet": "Be greeting"}),
+        UserPromptConfigComponent(triggers={"@greet": "Be greeting"}),
     )
 
     await UserPromptNormalizationSystem().process(world)
 
     rendered = world.get_component(entity_id, RenderedUserPromptComponent)
     assert rendered is not None
-    assert rendered.text.startswith("Be greeting")
+    assert rendered.text.startswith("[PROMPT_INJECT:@greet]\nBe greeting")
     assert rendered.text.endswith("@greet please")
 
 
@@ -87,7 +87,7 @@ async def test_rendered_text_is_transient_not_stored() -> None:
     )
     world.add_component(
         entity_id,
-        PromptConfigComponent(trigger_templates={"@greet": "Be greeting"}),
+        UserPromptConfigComponent(triggers={"@greet": "Be greeting"}),
     )
 
     await UserPromptNormalizationSystem().process(world)
@@ -112,7 +112,7 @@ async def test_duplicate_injection_marker_not_doubled() -> None:
     )
     world.add_component(
         entity_id,
-        PromptConfigComponent(trigger_templates={"@greet": "Be greeting"}),
+        UserPromptConfigComponent(triggers={"@greet": "Be greeting"}),
     )
 
     await UserPromptNormalizationSystem().process(world)
@@ -122,14 +122,14 @@ async def test_duplicate_injection_marker_not_doubled() -> None:
     assert rendered.text.count("[PROMPT_INJECT:") == 1
 
 
-async def test_empty_trigger_templates_passthrough() -> None:
+async def test_empty_triggers_passthrough() -> None:
     world = World()
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="hello")]),
     )
-    world.add_component(entity_id, PromptConfigComponent(trigger_templates={}))
+    world.add_component(entity_id, UserPromptConfigComponent(triggers={}))
 
     await UserPromptNormalizationSystem().process(world)
 
@@ -145,7 +145,7 @@ async def test_context_pool_items_injected() -> None:
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Need summary")]),
     )
-    world.add_component(entity_id, PromptConfigComponent(enable_context_pool=True))
+    world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
     world.add_component(
         entity_id,
         OneShotContextPoolComponent(

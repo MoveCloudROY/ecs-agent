@@ -16,7 +16,7 @@ from ecs_agent.components import (
 from ecs_agent.core import World
 from ecs_agent.prompts.contracts import (
     PlaceholderSpec,
-    PromptConfigSpec,
+    SystemPromptConfigSpec,
     PromptTemplateSource,
     TriggerSpec,
 )
@@ -91,7 +91,7 @@ def test_contract_placeholder_callable_is_invoked_once_per_render() -> None:
 
 
 def test_contract_prompt_config_spec_keeps_user_placeholders() -> None:
-    spec = PromptConfigSpec(
+    spec = SystemPromptConfigSpec(
         template_source=PromptTemplateSource(inline="Hello ${user_name}"),
         placeholders=[PlaceholderSpec(name="user_name", value="roy")],
     )
@@ -137,7 +137,7 @@ async def test_render_system_renders_inline_template_and_bridges_to_llm() -> Non
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(
                 inline="Hello ${user_name}\n${_installed_tools}"
             ),
@@ -184,7 +184,7 @@ async def test_render_system_writes_component_for_inline_template_without_placeh
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(template_source=PromptTemplateSource(inline="Always terse.")),
+        SystemPromptConfigSpec(template_source=PromptTemplateSource(inline="Always terse.")),
     )
 
     await SystemPromptRenderSystem().process(world)
@@ -203,7 +203,7 @@ async def test_render_system_loads_template_from_file(tmp_path: Path) -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(file_path=str(template_path)),
         ),
     )
@@ -240,7 +240,7 @@ async def test_render_system_renders_all_builtin_placeholders() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(
                 inline=(
                     "${_installed_tools}\n${_installed_skills}\n"
@@ -313,7 +313,7 @@ async def test_render_system_rejects_unknown_placeholder() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(template_source=PromptTemplateSource(inline="${missing}")),
+        SystemPromptConfigSpec(template_source=PromptTemplateSource(inline="${missing}")),
     )
 
     with pytest.raises(ValueError, match="unknown placeholders"):
@@ -326,7 +326,7 @@ async def test_render_system_rejects_missing_template_file() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(file_path="/tmp/does-not-exist.prompt")
         ),
     )
@@ -341,7 +341,7 @@ async def test_render_system_rejects_non_string_callable_return() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(inline="${dynamic}"),
             placeholders=[PlaceholderSpec(name="dynamic", value=lambda: 123)],
         ),
@@ -361,7 +361,7 @@ async def test_render_system_callable_raises_propagates() -> None:
 
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(inline="${dynamic}"),
             placeholders=[PlaceholderSpec(name="dynamic", value=_explode)],
         ),
@@ -377,7 +377,7 @@ async def test_render_system_inline_no_placeholders() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(inline="Hello world"),
             placeholders=[],
         ),
@@ -396,7 +396,7 @@ async def test_render_system_user_placeholder_static() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(inline="Hello ${name}"),
             placeholders=[PlaceholderSpec(name="name", value="Alice")],
         ),
@@ -415,7 +415,7 @@ async def test_render_system_built_in_installed_tools() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(inline="${_installed_tools}")
         ),
     )
@@ -453,7 +453,7 @@ async def test_render_system_empty_inventory_renders_none() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(inline="${_installed_tools}")
         ),
     )
@@ -471,7 +471,7 @@ async def test_render_system_unknown_placeholder_raises() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(template_source=PromptTemplateSource(inline="${unknown_var}")),
+        SystemPromptConfigSpec(template_source=PromptTemplateSource(inline="${unknown_var}")),
     )
 
     with pytest.raises(ValueError):
@@ -484,7 +484,7 @@ async def test_render_system_callable_placeholder() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(inline="today=${ts}"),
             placeholders=[PlaceholderSpec(name="ts", value=lambda: "2026-01-01")],
         ),
@@ -503,7 +503,7 @@ async def test_render_system_callable_non_string_raises() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(inline="${ts}"),
             placeholders=[PlaceholderSpec(name="ts", value=lambda: 42)],
         ),
@@ -522,7 +522,7 @@ async def test_render_system_file_template(tmp_path: Path) -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(file_path=str(file_path)),
             placeholders=[PlaceholderSpec(name="name", value="Alice")],
         ),
@@ -541,7 +541,7 @@ async def test_render_system_missing_file_raises() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(file_path="/nonexistent/path.txt")
         ),
     )
@@ -556,7 +556,7 @@ async def test_render_system_mirrors_to_llm_component() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(inline="Hello ${name}"),
             placeholders=[PlaceholderSpec(name="name", value="Alice")],
         ),
@@ -581,7 +581,7 @@ async def test_render_system_installed_skills_sorted() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(inline="${_installed_skills}")
         ),
     )
@@ -618,7 +618,7 @@ async def test_render_system_empty_skills_renders_none() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(inline="${_installed_skills}")
         ),
     )
@@ -637,7 +637,7 @@ async def test_render_system_no_skill_component_renders_none() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(inline="${_installed_skills}")
         ),
     )
@@ -655,7 +655,7 @@ async def test_render_system_installed_subagents_sorted() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(inline="${_installed_subagents}")
         ),
     )
@@ -690,7 +690,7 @@ async def test_render_system_empty_subagents_renders_none() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(inline="${_installed_subagents}")
         ),
     )
@@ -721,7 +721,7 @@ async def test_render_system_all_builtins_together(
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(
                 inline=(
                     "Tools:\n${_installed_tools}\n"
@@ -802,7 +802,7 @@ async def test_render_system_skill_activate_then_render() -> None:
     world.add_component(entity_id, skill_component)
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(inline="${_installed_skills}")
         ),
     )
@@ -845,7 +845,7 @@ async def test_render_system_skill_uninstall_removed_from_snapshot() -> None:
     world.add_component(entity_id, skill_component)
     world.add_component(
         entity_id,
-        PromptConfigSpec(
+        SystemPromptConfigSpec(
             template_source=PromptTemplateSource(inline="${_installed_skills}")
         ),
     )

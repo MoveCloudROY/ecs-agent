@@ -10,7 +10,7 @@ from ecs_agent.components import (
     LLMComponent,
     OneShotContextPoolComponent,
     PendingToolCallsComponent,
-    PromptConfigComponent,
+    UserPromptConfigComponent,
     RenderedSystemPromptComponent,
     RenderedUserPromptComponent,
     SubagentRegistryComponent,
@@ -271,7 +271,7 @@ class TaskExecutor:
         rendered_user_prompt = world.get_component(
             entity_id, RenderedUserPromptComponent
         )
-        prompt_config = world.get_component(entity_id, PromptConfigComponent)
+        prompt_config = world.get_component(entity_id, UserPromptConfigComponent)
         context_pool = world.get_component(entity_id, OneShotContextPoolComponent)
         turn_state = world.get_component(entity_id, TurnStateComponent)
         use_rendered_user_prompt = rendered_user_prompt is not None
@@ -280,13 +280,13 @@ class TaskExecutor:
         context_pool_enabled = False
         if not use_rendered_user_prompt:
             keyword_registry = (
-                build_keyword_registry(prompt_config.trigger_templates)
-                if prompt_config is not None and prompt_config.trigger_templates
+                build_keyword_registry(prompt_config.triggers)
+                if prompt_config is not None and prompt_config.triggers
                 else None
             )
             trigger_specs = (
-                build_trigger_specs(prompt_config.trigger_templates)
-                if prompt_config is not None and prompt_config.trigger_templates
+                build_trigger_specs(prompt_config.triggers)
+                if prompt_config is not None and prompt_config.triggers
                 else None
             )
             context_pool_enabled = (
