@@ -122,13 +122,12 @@ def test_component_rendered_system_prompt_component_has_text_and_snapshot() -> N
     assert component.placeholder_snapshot["user_name"] == "roy"
 
 
-def test_component_rendered_user_prompt_component_has_text_and_turn_id() -> None:
+def test_component_rendered_user_prompt_component_has_text() -> None:
     component = RenderedUserPromptComponent(
-        text="normalized user prompt", turn_id="turn-1"
+        text="normalized user prompt"
     )
 
     assert component.text == "normalized user prompt"
-    assert component.turn_id == "turn-1"
 
 
 @pytest.mark.asyncio

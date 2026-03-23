@@ -453,4 +453,3 @@ class RenderedSystemPromptComponent:
 @dataclass(slots=True)
 class RenderedUserPromptComponent:
     text: str
-    turn_id: str

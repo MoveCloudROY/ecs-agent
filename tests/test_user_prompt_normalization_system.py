@@ -196,3 +196,10 @@ async def test_stale_rendered_prompt_removed_when_no_latest_user_message() -> No
 
     stale_rendered = world.get_component(entity_id, RenderedUserPromptComponent)
     assert stale_rendered is None
+
+
+
+async def test_rendered_user_prompt_component_accepts_only_text() -> None:
+    """Verify RenderedUserPromptComponent can be constructed with only text field."""
+    component = RenderedUserPromptComponent(text="hello world")
+    assert component.text == "hello world"
