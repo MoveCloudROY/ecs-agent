@@ -55,8 +55,8 @@ def _build_provider_from_env() -> tuple[LLMProvider, str, str]:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
 
     if api_key:
-        provider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
-        return provider, model, "real"
+        real_provider: LLMProvider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+        return real_provider, model, "real"
 
     provider = FakeProvider(
         responses=[
