@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+import uuid
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Protocol
 
 from ecs_agent.prompts.contracts import (
     PromptTemplate,
@@ -15,14 +17,19 @@ from ecs_agent.types import Message
 CONTEXT_POOL_DELIMITER = "\n\n---\n\n"
 CONTEXT_POOL_MARKER = "[PROMPT_CONTEXT_POOL]"
 
+if TYPE_CHECKING:
+    from ecs_agent.components.definitions import (
+        PromptContextQueueComponent,
+        PromptContextReservationComponent,
+    )
 
-class ContextPoolReservationProtocol(Protocol):
-    items: list[tuple[int, int, str, str]]
-    reserved_items: list[tuple[int, int, str, str]]
-    state: str
-    reserved_turn_id: str
-    reserved_counter_snapshot: int
-    _counter: int
+
+class ContextEntryProtocol(Protocol):
+    entry_id: str
+    priority: int
+    source_label: str
+    content: str
+    registration_order: int
 
 
 def build_keyword_registry(triggers: dict[str, str]) -> PromptRegistry:
@@ -55,13 +62,15 @@ def build_trigger_specs(triggers: dict[str, str]) -> list[TriggerSpec]:
 
 
 def collect_active_events(
-    context_pool_items: list[tuple[int, int, str, str]] | None,
+    context_pool_items: Sequence[ContextEntryProtocol] | None,
 ) -> set[str]:
     if not context_pool_items:
         return set()
 
     active_events: set[str] = set()
-    for _, _, source, content in context_pool_items:
+    for entry in context_pool_items:
+        source = entry.source_label
+        content = entry.content
         source_kind = ""
         if source:
             active_events.add(source)
@@ -82,7 +91,7 @@ def assemble_messages(
     system_prompt: str | None = None,
     prefix_messages: list[Message] | None = None,
     enable_context_pool: bool = False,
-    context_pool_items: list[tuple[int, int, str, str]] | None = None,
+    context_pool_items: Sequence[ContextEntryProtocol] | None = None,
     keyword_registry: PromptRegistry | None = None,
     trigger_specs: list[TriggerSpec] | None = None,
     active_events: set[str] | None = None,
@@ -113,36 +122,36 @@ def assemble_messages(
     return assembled
 
 
-def reserve_context_pool_items(
+def reserve_prompt_context_reservation(
     *,
-    pool: ContextPoolReservationProtocol,
-    turn_id: str,
-) -> list[tuple[int, int, str, str]]:
-    if pool.state == "reserved" and pool.reserved_turn_id == turn_id:
-        return list(pool.reserved_items)
+    queue: PromptContextQueueComponent,
+    reservation: PromptContextReservationComponent | None,
+    current_tick: int,
+) -> PromptContextReservationComponent:
+    if reservation is not None:
+        return reservation
 
-    reserved_items = list(pool.items)
-    pool.reserved_items = reserved_items
-    pool.state = "reserved"
-    pool.reserved_turn_id = turn_id
-    pool.reserved_counter_snapshot = pool._counter
-    return list(reserved_items)
+    from ecs_agent.components.definitions import PromptContextReservationComponent
+
+    return PromptContextReservationComponent(
+        reservation_id=uuid.uuid4().hex,
+        created_at_tick=current_tick,
+        reserved_entries=list(queue.entries),
+    )
 
 
-def commit_context_pool_reservation(
+def commit_prompt_context_reservation(
     *,
-    pool: ContextPoolReservationProtocol,
-    turn_id: str,
+    queue: PromptContextQueueComponent,
+    reservation: PromptContextReservationComponent,
 ) -> None:
-    if pool.state == "committed" and pool.reserved_turn_id == turn_id:
+    reserved_ids = {entry.entry_id for entry in reservation.reserved_entries}
+    if not reserved_ids:
         return
 
-    if pool.state != "reserved" or pool.reserved_turn_id != turn_id:
-        return
-
-    pool.items.clear()
-    pool.reserved_items.clear()
-    pool.state = "committed"
+    queue.entries = [
+        entry for entry in queue.entries if entry.entry_id not in reserved_ids
+    ]
 
 
 def _with_transient_user_injection(
@@ -152,7 +161,7 @@ def _with_transient_user_injection(
     trigger_specs: list[TriggerSpec] | None,
     active_events: set[str] | None,
     enable_context_pool: bool,
-    context_pool_items: list[tuple[int, int, str, str]] | None,
+    context_pool_items: Sequence[ContextEntryProtocol] | None,
 ) -> list[Message]:
     if not conversation_messages:
         return []
@@ -201,13 +210,16 @@ def _with_transient_user_injection(
 
 
 def _render_context_pool_block(
-    context_pool_items: list[tuple[int, int, str, str]] | None,
+    context_pool_items: Sequence[ContextEntryProtocol] | None,
 ) -> str:
     if not context_pool_items:
         return ""
 
-    sorted_items = sorted(context_pool_items, key=lambda item: (-item[0], item[1]))
-    rendered_entries = [item[3] for item in sorted_items if item[3]]
+    sorted_items = sorted(
+        context_pool_items,
+        key=lambda entry: (-entry.priority, entry.registration_order),
+    )
+    rendered_entries = [entry.content for entry in sorted_items if entry.content]
     if not rendered_entries:
         return ""
 
@@ -244,5 +256,7 @@ __all__ = [
     "assemble_messages",
     "build_keyword_registry",
     "build_trigger_specs",
+    "commit_prompt_context_reservation",
     "collect_active_events",
+    "reserve_prompt_context_reservation",
 ]

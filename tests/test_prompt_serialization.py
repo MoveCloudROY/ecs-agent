@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 
 from ecs_agent.components import (
-    OneShotContextPoolComponent,
+    ContextEntry,
+    PromptContextQueueComponent,
+    PromptContextReservationComponent,
     UserPromptConfigComponent,
     RenderedSystemPromptComponent,
     RenderedUserPromptComponent,
     SystemPromptComponent,
-    TurnStateComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.prompts.contracts import (
@@ -103,22 +104,29 @@ def test_system_prompt_component_roundtrip() -> None:
     assert system_prompt2.sections[1].priority == 5
 
 
-def test_oneshot_context_pool_component_roundtrip() -> None:
-    """OneShotContextPoolComponent serializes and deserializes correctly."""
+def test_prompt_context_queue_component_roundtrip() -> None:
     world = World()
     entity = world.create_entity()
 
-    # Create a OneShotContextPoolComponent with items, state, and counter
-    pool = OneShotContextPoolComponent(
-        items=[
-            (10, 1, "source_a", "content_a"),
-            (5, 2, "source_b", "content_b"),
+    queue = PromptContextQueueComponent(
+        entries=[
+            ContextEntry(
+                entry_id="entry-a",
+                priority=10,
+                source_label="source_a",
+                content="content_a",
+                registration_order=1,
+            ),
+            ContextEntry(
+                entry_id="entry-b",
+                priority=5,
+                source_label="source_b",
+                content="content_b",
+                registration_order=2,
+            ),
         ],
-        state="reserved",
-        reserved_turn_id="turn-123",
-        _counter=42,
     )
-    world.add_component(entity, pool)
+    world.add_component(entity, queue)
 
     # Serialize and deserialize
     data = WorldSerializer.to_dict(world)
@@ -129,28 +137,33 @@ def test_oneshot_context_pool_component_roundtrip() -> None:
     )
 
     # Verify roundtrip
-    pool2 = world2.get_component(entity, OneShotContextPoolComponent)
-    assert pool2 is not None
-    assert pool2.items == [
-        (10, 1, "source_a", "content_a"),
-        (5, 2, "source_b", "content_b"),
-    ]
-    assert pool2.state == "reserved"
-    assert pool2.reserved_turn_id == "turn-123"
-    assert pool2._counter == 42
+    queue2 = world2.get_component(entity, PromptContextQueueComponent)
+    assert queue2 is not None
+    assert [entry.entry_id for entry in queue2.entries] == ["entry-a", "entry-b"]
+    assert [entry.priority for entry in queue2.entries] == [10, 5]
+    assert [entry.source_label for entry in queue2.entries] == ["source_a", "source_b"]
+    assert [entry.content for entry in queue2.entries] == ["content_a", "content_b"]
+    assert [entry.registration_order for entry in queue2.entries] == [1, 2]
 
 
-def test_turn_state_component_roundtrip() -> None:
-    """TurnStateComponent serializes and deserializes correctly."""
+def test_prompt_context_reservation_component_roundtrip() -> None:
     world = World()
     entity = world.create_entity()
 
-    # Create a TurnStateComponent with turn IDs
-    turn_state = TurnStateComponent(
-        current_turn_id="turn-100",
-        last_injected_turn_id="turn-99",
+    reservation = PromptContextReservationComponent(
+        reservation_id="reservation-100",
+        created_at_tick=99,
+        reserved_entries=[
+            ContextEntry(
+                entry_id="entry-reserved",
+                priority=42,
+                source_label="tool:search",
+                content="reserved content",
+                registration_order=11,
+            )
+        ],
     )
-    world.add_component(entity, turn_state)
+    world.add_component(entity, reservation)
 
     # Serialize and deserialize
     data = WorldSerializer.to_dict(world)
@@ -161,10 +174,13 @@ def test_turn_state_component_roundtrip() -> None:
     )
 
     # Verify roundtrip
-    turn_state2 = world2.get_component(entity, TurnStateComponent)
-    assert turn_state2 is not None
-    assert turn_state2.current_turn_id == "turn-100"
-    assert turn_state2.last_injected_turn_id == "turn-99"
+    reservation2 = world2.get_component(entity, PromptContextReservationComponent)
+    assert reservation2 is not None
+    assert reservation2.reservation_id == "reservation-100"
+    assert reservation2.created_at_tick == 99
+    assert len(reservation2.reserved_entries) == 1
+    assert reservation2.reserved_entries[0].entry_id == "entry-reserved"
+    assert reservation2.reserved_entries[0].source_label == "tool:search"
 
 
 def test_rendered_system_prompt_component_roundtrip() -> None:
@@ -236,10 +252,11 @@ def test_prompt_components_serializer_registered() -> None:
         UserPromptConfigComponent.__name__,
         SystemPromptConfigSpec.__name__,
         SystemPromptComponent.__name__,
-        OneShotContextPoolComponent.__name__,
+        ContextEntry.__name__,
+        PromptContextQueueComponent.__name__,
+        PromptContextReservationComponent.__name__,
         RenderedSystemPromptComponent.__name__,
         RenderedUserPromptComponent.__name__,
-        TurnStateComponent.__name__,
     }
 
     for name in component_names:
