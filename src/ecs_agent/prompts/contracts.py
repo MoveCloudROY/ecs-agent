@@ -1,3 +1,4 @@
+"""Prompt contracts and dataclass specifications for the ECS agent prompt system."""
 from dataclasses import dataclass, field
 from typing import Any, Literal
 from collections.abc import Callable
