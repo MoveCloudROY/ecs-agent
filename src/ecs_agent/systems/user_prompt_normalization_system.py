@@ -7,20 +7,13 @@ import uuid
 from ecs_agent.components import (
     ConversationComponent,
     ConversationTreeComponent,
-    PromptContextQueueComponent,
-    UserPromptConfigComponent,
     RenderedUserPromptComponent,
+    UserPromptConfigComponent,
 )
 from ecs_agent.conversation_tree import get_active_leaf, linearize
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.prompts.contracts import TriggerSpec
-from ecs_agent.prompts.message_assembly import (
-    assemble_messages,
-    build_keyword_registry,
-    build_trigger_specs,
-    collect_active_events,
-)
 from ecs_agent.types import EntityId, Message
 
 logger = get_logger(__name__)
@@ -51,39 +44,25 @@ class UserPromptNormalizationSystem:
                 world, entity_id
             )
             if not conversation_messages:
+                self._clear_rendered_user_prompt(world=world, entity_id=entity_id)
                 continue
 
             raw_user_text = self._find_last_user_text(conversation_messages)
             if raw_user_text is None:
+                self._clear_rendered_user_prompt(world=world, entity_id=entity_id)
                 continue
 
             prompt_config = world.get_component(entity_id, UserPromptConfigComponent)
-            context_queue = world.get_component(entity_id, PromptContextQueueComponent)
             turn_id = uuid.uuid4().hex
 
-            keyword_registry = None
-            trigger_specs = None
-            context_pool_enabled = False
-            context_pool_items = None
-
-            if prompt_config is not None:
-                context_pool_enabled = prompt_config.enable_context_pool
-                if prompt_config.triggers:
-                    keyword_registry = build_keyword_registry(prompt_config.triggers)
-                    trigger_specs = build_trigger_specs(prompt_config.triggers)
-                if context_pool_enabled and context_queue is not None:
-                    context_pool_items = list(context_queue.entries)
-
-            active_events = collect_active_events(context_pool_items)
-            assembled = assemble_messages(
-                conversation_messages=[Message(role="user", content=raw_user_text)],
-                keyword_registry=keyword_registry,
-                trigger_specs=trigger_specs,
-                enable_context_pool=context_pool_enabled,
-                context_pool_items=context_pool_items,
-                active_events=active_events,
-            )
-            normalized_text = assembled[-1].content if assembled else raw_user_text
+            normalized_text = raw_user_text
+            if prompt_config is not None and prompt_config.triggers:
+                normalized_text = self.apply_trigger_specs(
+                    user_text=normalized_text,
+                    trigger_specs=self._trigger_specs_from_config(
+                        prompt_config.triggers
+                    ),
+                )
             normalized_text = self.apply_trigger_specs(
                 user_text=normalized_text,
                 trigger_specs=self._trigger_specs,
@@ -106,17 +85,37 @@ class UserPromptNormalizationSystem:
                 continue
             if spec.action == "replace":
                 return spec.content
-            return f"{spec.content}\n\n{user_text}"
+            marker = UserPromptNormalizationSystem._trigger_marker(spec.pattern)
+            return f"{marker}\n{spec.content}\n\n{user_text}"
 
         return user_text
 
     @staticmethod
     def _matches(*, spec: TriggerSpec, text: str) -> bool:
+        if spec.pattern.startswith("event:"):
+            return False
         if spec.match_mode == "keyword":
             return spec.pattern in text
         if spec.match_mode == "prefix":
             return text.startswith(spec.pattern)
         return spec.pattern in text
+
+    @staticmethod
+    def _trigger_marker(pattern: str) -> str:
+        return f"[PROMPT_INJECT:{pattern}]"
+
+    @staticmethod
+    def _trigger_specs_from_config(triggers: dict[str, str]) -> list[TriggerSpec]:
+        return [
+            TriggerSpec(
+                pattern=pattern,
+                match_mode="keyword",
+                action="skill",
+                content=content,
+                priority=0,
+            )
+            for pattern, content in triggers.items()
+        ]
 
     @staticmethod
     def _find_last_user_text(messages: list[Message]) -> str | None:
@@ -140,6 +139,11 @@ class UserPromptNormalizationSystem:
             return list(conversation.messages)
 
         return []
+
+    @staticmethod
+    def _clear_rendered_user_prompt(world: World, entity_id: EntityId) -> None:
+        if world.has_component(entity_id, RenderedUserPromptComponent):
+            world.remove_component(entity_id, RenderedUserPromptComponent)
 
 
 __all__ = ["UserPromptNormalizationSystem"]
