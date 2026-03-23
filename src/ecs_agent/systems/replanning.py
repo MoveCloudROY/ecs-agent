@@ -6,49 +6,26 @@ execution results and revise remaining steps if needed.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import json
 
 from ecs_agent.components import (
-    ContextEntry,
     ConversationComponent,
     LLMComponent,
     PlanComponent,
     PromptContextQueueComponent,
     PromptContextReservationComponent,
-    UserPromptConfigComponent,
     RenderedSystemPromptComponent,
-    RenderedUserPromptComponent,
     RunnerStateComponent,
     ScratchbookIndexComponent,
     SystemPromptComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.prompts.message_assembly import (
-    assemble_messages,
-    build_keyword_registry,
-    build_trigger_specs,
     commit_prompt_context_reservation,
-    collect_active_events,
-    reserve_prompt_context_reservation,
+    prepare_outbound_messages,
 )
 from ecs_agent.scratchbook import ScratchbookService
 from ecs_agent.types import CompletionResult, EntityId, Message, PlanRevisedEvent
-
-
-def _substitute_last_user_message(
-    messages: list[Message], new_text: str
-) -> list[Message]:
-    if not messages:
-        return [Message(role="user", content=new_text)]
-
-    result = list(messages)
-    for index in range(len(result) - 1, -1, -1):
-        if result[index].role == "user":
-            result[index] = Message(role="user", content=new_text)
-            return result
-
-    return [*result, Message(role="user", content=new_text)]
 
 
 class ReplanningSystem:
@@ -110,54 +87,30 @@ class ReplanningSystem:
                     else (llm_component.system_prompt or None)
                 )
             )
-            rendered_user_prompt = world.get_component(
-                entity_id, RenderedUserPromptComponent
-            )
-            prompt_config = world.get_component(entity_id, UserPromptConfigComponent)
             context_queue = world.get_component(entity_id, PromptContextQueueComponent)
-            context_reservation = world.get_component(
-                entity_id, PromptContextReservationComponent
-            )
-            use_rendered_user_prompt = rendered_user_prompt is not None
-            context_pool_enabled = False
-            if not use_rendered_user_prompt:
-                context_pool_enabled = (
-                    prompt_config.enable_context_pool
-                    if prompt_config is not None
-                    else False
+            runner_state = world.get_component(entity_id, RunnerStateComponent)
+            current_tick = runner_state.current_tick if runner_state is not None else 0
+            original_messages = list(conversation.messages)
+            conversation.messages = [
+                Message(
+                    role="user",
+                    content=self._build_replanning_prompt(
+                        plan=plan, conversation=conversation
+                    ),
                 )
-            reserved_context_pool_items = None
-            if context_pool_enabled and context_queue is not None:
-                runner_state = world.get_component(entity_id, RunnerStateComponent)
-                current_tick = (
-                    runner_state.current_tick if runner_state is not None else 0
-                )
-                context_reservation = reserve_prompt_context_reservation(
-                    queue=context_queue,
-                    reservation=context_reservation,
+            ]
+            try:
+                messages, context_reservation = prepare_outbound_messages(
+                    world,
+                    entity_id,
+                    system_prompt=system_prompt_text,
                     current_tick=current_tick,
                 )
-                if not world.has_component(
-                    entity_id, PromptContextReservationComponent
-                ):
-                    world.add_component(entity_id, context_reservation)
-                reserved_context_pool_items = context_reservation.reserved_entries
-            messages = self._build_replanning_messages(
-                world,
-                entity_id,
-                plan,
-                conversation,
-                system_prompt_text=system_prompt_text,
-                rendered_user_text=(
-                    rendered_user_prompt.text
-                    if rendered_user_prompt is not None
-                    else None
-                ),
-                prompt_config=prompt_config,
-                context_pool_enabled=context_pool_enabled,
-                context_pool_items=reserved_context_pool_items,
-                active_events=collect_active_events(reserved_context_pool_items),
-            )
+            finally:
+                conversation.messages = original_messages
+
+            if context_reservation is not None:
+                world.add_component(entity_id, context_reservation)
 
             try:
                 result = await llm_component.provider.complete(messages)
@@ -165,11 +118,7 @@ class ReplanningSystem:
                     raise RuntimeError(
                         "Provider returned stream iterator in non-streaming mode"
                     )
-                if (
-                    context_pool_enabled
-                    and context_queue is not None
-                    and context_reservation is not None
-                ):
+                if context_queue is not None and context_reservation is not None:
                     commit_prompt_context_reservation(
                         queue=context_queue,
                         reservation=context_reservation,
@@ -216,23 +165,11 @@ class ReplanningSystem:
             except Exception:
                 continue
 
-    def _build_replanning_messages(
+    def _build_replanning_prompt(
         self,
-        world: World,
-        entity_id: EntityId,
         plan: PlanComponent,
         conversation: ConversationComponent,
-        *,
-        system_prompt_text: str | None,
-        rendered_user_text: str | None,
-        prompt_config: UserPromptConfigComponent | None,
-        context_pool_enabled: bool,
-        context_pool_items: Sequence[ContextEntry] | None,
-        active_events: set[str],
-    ) -> list[Message]:
-        """Build the message list for the replanning LLM call."""
-        conversation_messages: list[Message] = []
-
+    ) -> str:
         # Extract original objective from first user message
         objective = ""
         for msg in conversation.messages:
@@ -269,36 +206,7 @@ class ReplanningSystem:
             "Do NOT include completed steps in revised_steps."
         )
 
-        conversation_messages.append(Message(role="user", content=replanning_prompt))
-        if rendered_user_text is not None:
-            return assemble_messages(
-                system_prompt=system_prompt_text,
-                conversation_messages=_substitute_last_user_message(
-                    conversation_messages,
-                    rendered_user_text,
-                ),
-                enable_context_pool=False,
-            )
-
-        keyword_registry = (
-            build_keyword_registry(prompt_config.triggers)
-            if prompt_config is not None and prompt_config.triggers
-            else None
-        )
-        trigger_specs = (
-            build_trigger_specs(prompt_config.triggers)
-            if prompt_config is not None and prompt_config.triggers
-            else None
-        )
-        return assemble_messages(
-            system_prompt=system_prompt_text,
-            conversation_messages=conversation_messages,
-            enable_context_pool=context_pool_enabled,
-            context_pool_items=context_pool_items,
-            keyword_registry=keyword_registry,
-            trigger_specs=trigger_specs,
-            active_events=active_events,
-        )
+        return replanning_prompt
 
     def _find_step_result(
         self, conversation: ConversationComponent, step_index: int

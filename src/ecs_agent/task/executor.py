@@ -10,9 +10,7 @@ from ecs_agent.components import (
     PendingToolCallsComponent,
     PromptContextQueueComponent,
     PromptContextReservationComponent,
-    UserPromptConfigComponent,
     RenderedSystemPromptComponent,
-    RenderedUserPromptComponent,
     RunnerStateComponent,
     SubagentRegistryComponent,
     SystemPromptComponent,
@@ -22,32 +20,13 @@ from ecs_agent.components import (
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.prompts.message_assembly import (
-    assemble_messages,
-    build_keyword_registry,
-    build_trigger_specs,
     commit_prompt_context_reservation,
-    collect_active_events,
-    reserve_prompt_context_reservation,
+    prepare_outbound_messages,
 )
 from ecs_agent.task.fetching_unit import DispatchRequest
 from ecs_agent.types import CompletionResult, EntityId, Message, ToolCall
 
 logger = get_logger(__name__)
-
-
-def _substitute_last_user_message(
-    messages: list[Message], new_text: str
-) -> list[Message]:
-    if not messages:
-        return [Message(role="user", content=new_text)]
-
-    result = list(messages)
-    for index in range(len(result) - 1, -1, -1):
-        if result[index].role == "user":
-            result[index] = Message(role="user", content=new_text)
-            return result
-
-    return [*result, Message(role="user", content=new_text)]
 
 
 @dataclass(slots=True, frozen=True)
@@ -268,66 +247,17 @@ class TaskExecutor:
                 else (llm_component.system_prompt or None)
             )
         )
-        rendered_user_prompt = world.get_component(
-            entity_id, RenderedUserPromptComponent
-        )
-        prompt_config = world.get_component(entity_id, UserPromptConfigComponent)
         context_queue = world.get_component(entity_id, PromptContextQueueComponent)
-        context_reservation = world.get_component(
-            entity_id, PromptContextReservationComponent
+        runner_state = world.get_component(entity_id, RunnerStateComponent)
+        current_tick = runner_state.current_tick if runner_state is not None else 0
+        outbound_messages, context_reservation = prepare_outbound_messages(
+            world,
+            entity_id,
+            system_prompt=system_prompt_text,
+            current_tick=current_tick,
         )
-        use_rendered_user_prompt = rendered_user_prompt is not None
-        keyword_registry = None
-        trigger_specs = None
-        context_pool_enabled = False
-        if not use_rendered_user_prompt:
-            keyword_registry = (
-                build_keyword_registry(prompt_config.triggers)
-                if prompt_config is not None and prompt_config.triggers
-                else None
-            )
-            trigger_specs = (
-                build_trigger_specs(prompt_config.triggers)
-                if prompt_config is not None and prompt_config.triggers
-                else None
-            )
-            context_pool_enabled = (
-                prompt_config.enable_context_pool
-                if prompt_config is not None
-                else False
-            )
-        reserved_context_pool_items = None
-        if context_pool_enabled and context_queue is not None:
-            runner_state = world.get_component(entity_id, RunnerStateComponent)
-            current_tick = runner_state.current_tick if runner_state is not None else 0
-            context_reservation = reserve_prompt_context_reservation(
-                queue=context_queue,
-                reservation=context_reservation,
-                current_tick=current_tick,
-            )
-            if not world.has_component(entity_id, PromptContextReservationComponent):
-                world.add_component(entity_id, context_reservation)
-            reserved_context_pool_items = context_reservation.reserved_entries
-        active_events = collect_active_events(reserved_context_pool_items)
-        if rendered_user_prompt is not None:
-            outbound_messages = assemble_messages(
-                system_prompt=system_prompt_text,
-                conversation_messages=_substitute_last_user_message(
-                    conv.messages,
-                    rendered_user_prompt.text,
-                ),
-                enable_context_pool=False,
-            )
-        else:
-            outbound_messages = assemble_messages(
-                system_prompt=system_prompt_text,
-                conversation_messages=conv.messages,
-                enable_context_pool=context_pool_enabled,
-                context_pool_items=reserved_context_pool_items,
-                keyword_registry=keyword_registry,
-                trigger_specs=trigger_specs,
-                active_events=active_events,
-            )
+        if context_reservation is not None:
+            world.add_component(entity_id, context_reservation)
 
         # Execute LLM reasoning step to get tool calls
         try:
@@ -344,11 +274,7 @@ class TaskExecutor:
                     result_content="Error: Unexpected streaming result from local execution",
                     backend_type="local",
                 )
-            if (
-                context_pool_enabled
-                and context_queue is not None
-                and context_reservation is not None
-            ):
+            if context_queue is not None and context_reservation is not None:
                 commit_prompt_context_reservation(
                     queue=context_queue,
                     reservation=context_reservation,
