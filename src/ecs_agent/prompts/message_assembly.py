@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+import uuid
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Protocol
 
 from ecs_agent.prompts.contracts import (
     PromptTemplate,
-    PromptTriggerKind,
-    PromptTriggerSpec,
+    TriggerSpec,
 )
 from ecs_agent.prompts.keyword_injection import inject_triggers
 from ecs_agent.prompts.registry import PromptRegistry
@@ -16,54 +17,62 @@ from ecs_agent.types import Message
 CONTEXT_POOL_DELIMITER = "\n\n---\n\n"
 CONTEXT_POOL_MARKER = "[PROMPT_CONTEXT_POOL]"
 
+if TYPE_CHECKING:
+    from ecs_agent.core import World
+    from ecs_agent.types import EntityId
+    from ecs_agent.components.definitions import (
+        PromptContextQueueComponent,
+        PromptContextReservationComponent,
+    )
 
-class ContextPoolReservationProtocol(Protocol):
-    items: list[tuple[int, int, str, str]]
-    reserved_items: list[tuple[int, int, str, str]]
-    state: str
-    reserved_turn_id: str
-    reserved_counter_snapshot: int
-    _counter: int
+
+class ContextEntryProtocol(Protocol):
+    entry_id: str
+    priority: int
+    source_label: str
+    content: str
+    registration_order: int
 
 
-def build_keyword_registry(trigger_templates: dict[str, str]) -> PromptRegistry:
+def build_keyword_registry(triggers: dict[str, str]) -> PromptRegistry:
     """Build a keyword registry from trigger-to-template-content mapping."""
     registry = PromptRegistry()
-    for index, (trigger_key, template_content) in enumerate(trigger_templates.items()):
+    for index, (trigger_key, template_content) in enumerate(triggers.items()):
         template_id = f"keyword-template-{index}"
         registry.register(
             PromptTemplate(template_id=template_id, content=template_content)
         )
-        trigger_kind, trigger_value = _parse_trigger_key(trigger_key)
-        if trigger_kind == "keyword":
+        is_event_trigger, trigger_value = _parse_trigger_key(trigger_key)
+        if not is_event_trigger:
             registry.register_keyword(trigger_value, template_id)
     return registry
 
 
-def build_trigger_specs(trigger_templates: dict[str, str]) -> list[PromptTriggerSpec]:
-    trigger_specs: list[PromptTriggerSpec] = []
-    for index, trigger_key in enumerate(trigger_templates):
-        trigger_kind, trigger_value = _parse_trigger_key(trigger_key)
+def build_trigger_specs(triggers: dict[str, str]) -> list[TriggerSpec]:
+    trigger_specs: list[TriggerSpec] = []
+    for index, trigger_key in enumerate(triggers):
         trigger_specs.append(
-            PromptTriggerSpec(
-                kind=trigger_kind,
-                trigger=trigger_value,
-                template_id=f"keyword-template-{index}",
+            TriggerSpec(
+                pattern=trigger_key,
+                match_mode="keyword",
+                action="skill",
+                content=f"keyword-template-{index}",
                 priority=0,
-                registration_order=index,
             )
         )
     return trigger_specs
 
 
 def collect_active_events(
-    context_pool_items: list[tuple[int, int, str, str]] | None,
+    context_pool_items: Sequence[ContextEntryProtocol] | None,
 ) -> set[str]:
     if not context_pool_items:
         return set()
 
     active_events: set[str] = set()
-    for _, _, source, content in context_pool_items:
+    for entry in context_pool_items:
+        source = entry.source_label
+        content = entry.content
         source_kind = ""
         if source:
             active_events.add(source)
@@ -84,9 +93,9 @@ def assemble_messages(
     system_prompt: str | None = None,
     prefix_messages: list[Message] | None = None,
     enable_context_pool: bool = False,
-    context_pool_items: list[tuple[int, int, str, str]] | None = None,
+    context_pool_items: Sequence[ContextEntryProtocol] | None = None,
     keyword_registry: PromptRegistry | None = None,
-    trigger_specs: list[PromptTriggerSpec] | None = None,
+    trigger_specs: list[TriggerSpec] | None = None,
     active_events: set[str] | None = None,
 ) -> list[Message]:
     """Assemble provider-call messages with stable ordering.
@@ -115,46 +124,126 @@ def assemble_messages(
     return assembled
 
 
-def reserve_context_pool_items(
+def reserve_prompt_context_reservation(
     *,
-    pool: ContextPoolReservationProtocol,
-    turn_id: str,
-) -> list[tuple[int, int, str, str]]:
-    if pool.state == "reserved" and pool.reserved_turn_id == turn_id:
-        return list(pool.reserved_items)
+    queue: PromptContextQueueComponent,
+    reservation: PromptContextReservationComponent | None,
+    current_tick: int,
+) -> PromptContextReservationComponent:
+    if reservation is not None:
+        return reservation
 
-    reserved_items = list(pool.items)
-    pool.reserved_items = reserved_items
-    pool.state = "reserved"
-    pool.reserved_turn_id = turn_id
-    pool.reserved_counter_snapshot = pool._counter
-    return list(reserved_items)
+    from ecs_agent.components.definitions import PromptContextReservationComponent
+
+    return PromptContextReservationComponent(
+        reservation_id=uuid.uuid4().hex,
+        created_at_tick=current_tick,
+        reserved_entries=list(queue.entries),
+    )
 
 
-def commit_context_pool_reservation(
+def commit_prompt_context_reservation(
     *,
-    pool: ContextPoolReservationProtocol,
-    turn_id: str,
+    queue: PromptContextQueueComponent,
+    reservation: PromptContextReservationComponent,
 ) -> None:
-    if pool.state == "committed" and pool.reserved_turn_id == turn_id:
+    reserved_ids = {entry.entry_id for entry in reservation.reserved_entries}
+    if not reserved_ids:
         return
 
-    if pool.state != "reserved" or pool.reserved_turn_id != turn_id:
-        return
+    queue.entries = [
+        entry for entry in queue.entries if entry.entry_id not in reserved_ids
+    ]
 
-    pool.items.clear()
-    pool.reserved_items.clear()
-    pool.state = "committed"
+
+def prepare_outbound_messages(
+    world: World,
+    entity_id: EntityId,
+    *,
+    system_prompt: str | None = None,
+    prefix_messages: list[Message] | None = None,
+    current_tick: int,
+) -> tuple[list[Message], PromptContextReservationComponent | None]:
+    from ecs_agent.components.definitions import (
+        ConversationComponent,
+        ConversationTreeComponent,
+        PromptContextQueueComponent,
+        PromptContextReservationComponent,
+        RenderedUserPromptComponent,
+        UserPromptConfigComponent,
+    )
+    from ecs_agent.conversation_tree import get_active_leaf, linearize
+
+    tree = world.get_component(entity_id, ConversationTreeComponent)
+    conversation = world.get_component(entity_id, ConversationComponent)
+
+    conversation_messages: list[Message] = []
+    if tree is not None:
+        active_leaf_id = get_active_leaf(tree)
+        if active_leaf_id is not None:
+            conversation_messages.extend(linearize(tree, active_leaf_id))
+    elif conversation is not None:
+        conversation_messages.extend(conversation.messages)
+
+    rendered_user_prompt = world.get_component(entity_id, RenderedUserPromptComponent)
+    prompt_config = world.get_component(entity_id, UserPromptConfigComponent)
+    context_queue = world.get_component(entity_id, PromptContextQueueComponent)
+    context_reservation = world.get_component(
+        entity_id, PromptContextReservationComponent
+    )
+
+    context_pool_enabled = (
+        prompt_config.enable_context_pool if prompt_config is not None else False
+    )
+
+    messages_for_assembly = list(conversation_messages)
+    if rendered_user_prompt is not None:
+        messages_for_assembly = _substitute_last_user_message(
+            messages_for_assembly,
+            rendered_user_prompt.text,
+        )
+
+    keyword_registry = None
+    trigger_specs = None
+    if (
+        rendered_user_prompt is None
+        and prompt_config is not None
+        and prompt_config.triggers
+    ):
+        keyword_registry = build_keyword_registry(prompt_config.triggers)
+        trigger_specs = build_trigger_specs(prompt_config.triggers)
+
+    reserved_context_pool_items = None
+    if context_pool_enabled and context_queue is not None:
+        context_reservation = reserve_prompt_context_reservation(
+            queue=context_queue,
+            reservation=context_reservation,
+            current_tick=current_tick,
+        )
+        reserved_context_pool_items = context_reservation.reserved_entries
+
+    active_events = collect_active_events(reserved_context_pool_items)
+    messages = assemble_messages(
+        system_prompt=system_prompt,
+        prefix_messages=prefix_messages,
+        conversation_messages=messages_for_assembly,
+        enable_context_pool=context_pool_enabled,
+        context_pool_items=reserved_context_pool_items,
+        keyword_registry=keyword_registry,
+        trigger_specs=trigger_specs,
+        active_events=active_events,
+    )
+    return messages, context_reservation
 
 
 def _with_transient_user_injection(
     conversation_messages: list[Message],
     *,
     keyword_registry: PromptRegistry | None,
-    trigger_specs: list[PromptTriggerSpec] | None,
+    trigger_specs: list[TriggerSpec] | None,
     active_events: set[str] | None,
     enable_context_pool: bool,
-    context_pool_items: list[tuple[int, int, str, str]] | None,
+    context_pool_items: Sequence[ContextEntryProtocol] | None,
 ) -> list[Message]:
     if not conversation_messages:
         return []
@@ -202,14 +291,35 @@ def _with_transient_user_injection(
     return mutated
 
 
+def _substitute_last_user_message(
+    conversation_messages: list[Message],
+    replacement_text: str,
+) -> list[Message]:
+    messages = list(conversation_messages)
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.role == "user":
+            messages[index] = Message(
+                role="user",
+                content=replacement_text,
+                tool_calls=message.tool_calls,
+                tool_call_id=message.tool_call_id,
+            )
+            break
+    return messages
+
+
 def _render_context_pool_block(
-    context_pool_items: list[tuple[int, int, str, str]] | None,
+    context_pool_items: Sequence[ContextEntryProtocol] | None,
 ) -> str:
     if not context_pool_items:
         return ""
 
-    sorted_items = sorted(context_pool_items, key=lambda item: (-item[0], item[1]))
-    rendered_entries = [item[3] for item in sorted_items if item[3]]
+    sorted_items = sorted(
+        context_pool_items,
+        key=lambda entry: (-entry.priority, entry.registration_order),
+    )
+    rendered_entries = [entry.content for entry in sorted_items if entry.content]
     if not rendered_entries:
         return ""
 
@@ -229,10 +339,10 @@ def _inject_context_block(
     return f"{context_block}\n\n{text_with_keyword}"
 
 
-def _parse_trigger_key(trigger_key: str) -> tuple[PromptTriggerKind, str]:
+def _parse_trigger_key(trigger_key: str) -> tuple[bool, str]:
     if trigger_key.startswith("event:"):
-        return "event", trigger_key.removeprefix("event:")
-    return "keyword", trigger_key
+        return True, trigger_key.removeprefix("event:")
+    return False, trigger_key
 
 
 def _extract_status(context_entry_content: str) -> str:
@@ -246,5 +356,8 @@ __all__ = [
     "assemble_messages",
     "build_keyword_registry",
     "build_trigger_specs",
+    "commit_prompt_context_reservation",
     "collect_active_events",
+    "prepare_outbound_messages",
+    "reserve_prompt_context_reservation",
 ]

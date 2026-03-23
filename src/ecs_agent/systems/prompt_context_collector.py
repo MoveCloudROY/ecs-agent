@@ -3,10 +3,12 @@
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Callable
+import uuid
 
 from ecs_agent.components import (
-    OneShotContextPoolComponent,
-    PromptConfigComponent,
+    ContextEntry,
+    PromptContextQueueComponent,
+    UserPromptConfigComponent,
     ToolResultsComponent,
 )
 from ecs_agent.core.world import World
@@ -46,26 +48,39 @@ class PromptContextCollectorSystem:
         self._ensure_subscribed(world)
 
         for entity_id, components in world.query(
-            PromptConfigComponent,
-            OneShotContextPoolComponent,
+            UserPromptConfigComponent,
+            PromptContextQueueComponent,
         ):
-            config, pool = components
+            config, queue = components
             if not config.enable_context_pool:
                 continue
 
+            next_registration_order = (
+                max((entry.registration_order for entry in queue.entries), default=-1)
+                + 1
+            )
+
             for priority, source, content in self._collect_entries(world, entity_id):
-                pool.items.append((priority, pool._counter, source, content))
-                pool._counter += 1
+                queue.entries.append(
+                    ContextEntry(
+                        entry_id=uuid.uuid4().hex,
+                        priority=priority,
+                        source_label=source,
+                        content=content,
+                        registration_order=next_registration_order,
+                    )
+                )
+                next_registration_order += 1
 
             sorted_items = sorted(
                 [
                     item
-                    for item in pool.items
-                    if item[2] != CONTEXT_POOL_OVERFLOW_SOURCE
+                    for item in queue.entries
+                    if item.source_label != CONTEXT_POOL_OVERFLOW_SOURCE
                 ],
-                key=lambda item: (-item[0], item[1]),
+                key=lambda item: (-item.priority, item.registration_order),
             )
-            pool.items = self._truncate(sorted_items, config.context_pool_max_chars)
+            queue.entries = self._truncate(sorted_items, config.context_pool_max_chars)
 
     def _ensure_subscribed(self, world: World) -> None:
         world_id = id(world)
@@ -162,9 +177,9 @@ class PromptContextCollectorSystem:
 
     def _truncate(
         self,
-        items: list[tuple[int, int, str, str]],
+        items: list[ContextEntry],
         max_chars: int,
-    ) -> list[tuple[int, int, str, str]]:
+    ) -> list[ContextEntry]:
         if max_chars <= 0:
             return []
 
@@ -179,11 +194,12 @@ class PromptContextCollectorSystem:
 
         while True:
             footer = self._overflow_footer(dropped_count)
-            footer_item = (
-                OVERFLOW_FOOTER_PRIORITY,
-                0,
-                CONTEXT_POOL_OVERFLOW_SOURCE,
-                footer,
+            footer_item = ContextEntry(
+                entry_id=uuid.uuid4().hex,
+                priority=OVERFLOW_FOOTER_PRIORITY,
+                source_label=CONTEXT_POOL_OVERFLOW_SOURCE,
+                content=footer,
+                registration_order=0,
             )
             with_footer = [*kept, footer_item]
             if self._rendered_length(with_footer) <= max_chars:
@@ -196,12 +212,12 @@ class PromptContextCollectorSystem:
     def _overflow_footer(self, dropped_count: int) -> str:
         return f"{CONTEXT_POOL_OVERFLOW_FOOTER_PREFIX} dropped_entries={dropped_count}"
 
-    def _rendered_length(self, items: list[tuple[int, int, str, str]]) -> int:
+    def _rendered_length(self, items: list[ContextEntry]) -> int:
         if not items:
             return 0
-        return sum(len(item[3]) for item in items) + len(CONTEXT_ENTRY_DELIMITER) * (
-            len(items) - 1
-        )
+        return sum(len(item.content) for item in items) + len(
+            CONTEXT_ENTRY_DELIMITER
+        ) * (len(items) - 1)
 
 
 __all__ = [

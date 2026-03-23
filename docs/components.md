@@ -50,7 +50,7 @@ world.add_component(agent, ConversationComponent(messages=[]))
 ```
 
 ### SystemPromptComponent
-Legacy component that stores the system prompt template and rendered content. For new agents, prefer `PromptConfigSpec` with `SystemPromptRenderSystem`.
+Legacy component that stores the system prompt template and rendered content. For new agents, prefer `SystemPromptConfigSpec` with `SystemPromptRenderSystem`.
 
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
@@ -62,7 +62,7 @@ Legacy component that stores the system prompt template and rendered content. Fo
 
 ---
 
-### PromptConfigSpec
+### SystemPromptConfigSpec
 New-style prompt spec using `${name}` placeholder templates. Processed by `SystemPromptRenderSystem`.
 
 | Name | Type | Default | Description |
@@ -74,9 +74,9 @@ New-style prompt spec using `${name}` placeholder templates. Processed by `Syste
 
 **Usage:**
 ```python
-from ecs_agent.prompts.contracts import PromptConfigSpec, PromptTemplateSource
+from ecs_agent.prompts.contracts import SystemPromptConfigSpec, PromptTemplateSource
 
-world.add_component(entity, PromptConfigSpec(
+world.add_component(entity, SystemPromptConfigSpec(
     template_source=PromptTemplateSource(
         inline="You are a helpful assistant. Tools: ${_installed_tools}"
     )
@@ -697,28 +697,27 @@ from ecs_agent.components import ScratchbookIndexComponent
 
 world.add_component(agent, ScratchbookIndexComponent(artifacts={}))
 ```
-### PromptConfigComponent
+### UserPromptConfigComponent
 Configures opt-in prompt normalization and keyword injection.
 
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `trigger_templates` | `dict[str, str]` | `{}` | Mapping of `@keyword` or `event:<name>` to template content |
+| `triggers` | `dict[str, str]` | `{}` | Mapping of `@keyword` or `event:<name>` to template content |
 | `enable_context_pool` | `bool` | `False` | Enable one-shot context collection |
 | `context_pool_max_chars` | `int` | `8192` | Maximum characters for context block |
 
-### OneShotContextPoolComponent
-Transient storage for context items (tool results, subagent outputs) to be injected into the next turn.
+### PromptContextQueueComponent
+Queue-backed storage for context items (tool results, subagent outputs) to be injected into outbound user messages.
 
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `items` | `list[tuple]` | `[]` | Collected context items (priority, order, label, content) |
-| `state` | `str` | `"idle"` | Reservation state (`idle`, `reserved`, `committed`) |
-| `reserved_turn_id` | `str` | `""` | Turn ID that made the current reservation |
+| `entries` | `list[ContextEntry]` | `[]` | Collected context entries |
 
-### TurnStateComponent
-Tracks per-turn ID for idempotency and injection deduplication.
+### PromptContextReservationComponent
+Tracks an active reservation snapshot for deterministic prompt context injection.
 
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `current_turn_id` | `str` | `""` | Current turn identifier |
-| `last_injected_turn_id` | `str` | `""` | Last turn ID that received injection |
+| `reservation_id` | `str` | (required) | Unique reservation identifier |
+| `created_at_tick` | `int` | (required) | Tick when reservation was created |
+| `reserved_entries` | `list[ContextEntry]` | (required) | Snapshot of reserved context entries |

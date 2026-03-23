@@ -2,17 +2,21 @@ import pytest
 
 from ecs_agent.components import (
     ConversationComponent,
+    ContextEntry,
     LLMComponent,
-    OneShotContextPoolComponent,
-    PromptConfigComponent,
+    PromptContextQueueComponent,
+    PromptContextReservationComponent,
+    PlanComponent,
+    RenderedUserPromptComponent,
+    UserPromptConfigComponent,
     SystemPromptComponent,
     ToolResultsComponent,
-    TurnStateComponent,
 )
 from ecs_agent.core import World
 from ecs_agent.prompts.message_assembly import (
-    commit_context_pool_reservation,
-    reserve_context_pool_items,
+    commit_prompt_context_reservation,
+    prepare_outbound_messages,
+    reserve_prompt_context_reservation,
 )
 from ecs_agent.providers import FakeProvider
 from ecs_agent.systems.prompt_context_collector import (
@@ -20,6 +24,7 @@ from ecs_agent.systems.prompt_context_collector import (
     CONTEXT_POOL_OVERFLOW_FOOTER_PREFIX,
     PromptContextCollectorSystem,
 )
+from ecs_agent.systems.planning import PlanningSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import (
     CompletionResult,
@@ -72,39 +77,250 @@ class RecordingProvider(FakeProvider):
         return await super().complete(messages, tools)
 
 
-def test_reserve_context_pool_reuses_existing_reservation_for_retry() -> None:
-    pool = OneShotContextPoolComponent(
-        items=[(30, 0, "tool:search", "source: tool\nresult: facts")],
-        _counter=1,
+def test_reserve_prompt_context_reuses_existing_reservation_on_retry() -> None:
+    queue = PromptContextQueueComponent(
+        entries=[
+            ContextEntry(
+                entry_id="entry-tool-1",
+                priority=30,
+                source_label="tool:search",
+                content="source: tool\nresult: facts",
+                registration_order=0,
+            )
+        ]
     )
 
-    first = reserve_context_pool_items(pool=pool, turn_id="turn-1")
-
-    pool.items.append((20, 1, "subagent:writer", "source: subagent\nresult: draft"))
-    pool._counter += 1
-    second = reserve_context_pool_items(pool=pool, turn_id="turn-1")
-
-    assert first == second
-    assert len(second) == 1
-    assert "source: tool" in second[0][3]
-
-
-def test_commit_context_pool_is_idempotent() -> None:
-    pool = OneShotContextPoolComponent(
-        items=[(30, 0, "tool:search", "source: tool\nresult: facts")],
-        _counter=1,
+    first = reserve_prompt_context_reservation(
+        queue=queue, reservation=None, current_tick=10
     )
 
-    _ = reserve_context_pool_items(pool=pool, turn_id="turn-1")
-    commit_context_pool_reservation(pool=pool, turn_id="turn-1")
+    queue.entries.append(
+        ContextEntry(
+            entry_id="entry-subagent-1",
+            priority=20,
+            source_label="subagent:writer",
+            content="source: subagent\nresult: draft",
+            registration_order=1,
+        )
+    )
 
-    assert pool.items == []
-    first_state = pool.state
+    second = reserve_prompt_context_reservation(
+        queue=queue,
+        reservation=first,
+        current_tick=11,
+    )
 
-    commit_context_pool_reservation(pool=pool, turn_id="turn-1")
+    assert second.reservation_id == first.reservation_id
+    assert second.created_at_tick == first.created_at_tick
+    assert [entry.entry_id for entry in second.reserved_entries] == ["entry-tool-1"]
 
-    assert pool.items == []
-    assert pool.state == first_state
+
+def test_commit_prompt_context_reservation_removes_only_matching_entry_id() -> None:
+    duplicated_content = "same content, different identity"
+    queue = PromptContextQueueComponent(
+        entries=[
+            ContextEntry(
+                entry_id="entry-1",
+                priority=30,
+                source_label="tool:a",
+                content=duplicated_content,
+                registration_order=0,
+            ),
+            ContextEntry(
+                entry_id="entry-2",
+                priority=30,
+                source_label="tool:b",
+                content=duplicated_content,
+                registration_order=1,
+            ),
+        ]
+    )
+    reservation = PromptContextReservationComponent(
+        reservation_id="reservation-1",
+        created_at_tick=7,
+        reserved_entries=[queue.entries[0]],
+    )
+
+    commit_prompt_context_reservation(queue=queue, reservation=reservation)
+
+    assert [entry.entry_id for entry in queue.entries] == ["entry-2"]
+
+
+def test_reserve_prompt_context_is_isolated_from_post_failure_queue_append() -> None:
+    queue = PromptContextQueueComponent(
+        entries=[
+            ContextEntry(
+                entry_id="entry-initial",
+                priority=10,
+                source_label="tool:initial",
+                content="initial",
+                registration_order=0,
+            )
+        ]
+    )
+    reservation = reserve_prompt_context_reservation(
+        queue=queue,
+        reservation=None,
+        current_tick=3,
+    )
+
+    queue.entries.append(
+        ContextEntry(
+            entry_id="entry-late",
+            priority=99,
+            source_label="tool:late",
+            content="late",
+            registration_order=1,
+        )
+    )
+
+    assert [entry.entry_id for entry in reservation.reserved_entries] == [
+        "entry-initial"
+    ]
+
+
+def test_prepare_outbound_messages_no_context_pool_uses_rendered_user_prompt() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    conversation = ConversationComponent(
+        messages=[Message(role="user", content="raw user prompt")]
+    )
+    world.add_component(entity_id, conversation)
+    world.add_component(
+        entity_id,
+        RenderedUserPromptComponent(text="normalized user prompt"),
+    )
+
+    messages, reservation = prepare_outbound_messages(
+        world,
+        entity_id,
+        system_prompt="system prompt",
+        prefix_messages=[Message(role="system", content="prefix context")],
+        current_tick=7,
+    )
+
+    assert reservation is None
+    assert [message.role for message in messages] == ["system", "system", "user"]
+    assert messages[-1].content == "normalized user prompt"
+    assert conversation.messages[-1].content == "raw user prompt"
+
+
+def test_prepare_outbound_messages_reserves_reuses_and_commits_context_pool() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[Message(role="user", content="Need @code summary")]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        UserPromptConfigComponent(
+            triggers={"@code": "Use code-first reasoning"},
+            enable_context_pool=True,
+        ),
+    )
+    queue = PromptContextQueueComponent(
+        entries=[
+            ContextEntry(
+                entry_id="entry-1",
+                priority=30,
+                source_label="tool:search",
+                content="source: tool\nstatus: success\nresult: facts",
+                registration_order=0,
+            )
+        ]
+    )
+    world.add_component(entity_id, queue)
+
+    first_messages, first_reservation = prepare_outbound_messages(
+        world,
+        entity_id,
+        current_tick=10,
+    )
+
+    assert first_reservation is not None
+    world.add_component(entity_id, first_reservation)
+    first_user_text = first_messages[-1].content
+    assert "[PROMPT_INJECT:@code]" in first_user_text
+    assert "[PROMPT_CONTEXT_POOL]" in first_user_text
+    assert "source: tool" in first_user_text
+
+    queue.entries.append(
+        ContextEntry(
+            entry_id="entry-2",
+            priority=20,
+            source_label="subagent:writer",
+            content="source: subagent\nstatus: success\nresult: draft",
+            registration_order=1,
+        )
+    )
+
+    second_messages, second_reservation = prepare_outbound_messages(
+        world,
+        entity_id,
+        current_tick=11,
+    )
+
+    assert second_reservation is not None
+    assert second_reservation.reservation_id == first_reservation.reservation_id
+    assert second_messages[-1].content == first_user_text
+    assert "source: subagent" not in second_messages[-1].content
+
+    commit_prompt_context_reservation(queue=queue, reservation=second_reservation)
+    assert [entry.entry_id for entry in queue.entries] == ["entry-2"]
+
+
+def test_prepare_outbound_messages_uses_existing_stale_reservation_not_live_queue() -> (
+    None
+):
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Need summary")]),
+    )
+    world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
+
+    stale_entry = ContextEntry(
+        entry_id="entry-stale",
+        priority=10,
+        source_label="tool:stale",
+        content="source: stale",
+        registration_order=0,
+    )
+    stale_reservation = PromptContextReservationComponent(
+        reservation_id="reservation-stale",
+        created_at_tick=1,
+        reserved_entries=[stale_entry],
+    )
+    world.add_component(entity_id, stale_reservation)
+    world.add_component(
+        entity_id,
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="entry-live",
+                    priority=100,
+                    source_label="tool:live",
+                    content="source: live",
+                    registration_order=0,
+                )
+            ]
+        ),
+    )
+
+    messages, reservation = prepare_outbound_messages(
+        world,
+        entity_id,
+        current_tick=50,
+    )
+
+    assert reservation is not None
+    assert reservation.reservation_id == "reservation-stale"
+    assert "source: stale" in messages[-1].content
+    assert "source: live" not in messages[-1].content
 
 
 @pytest.mark.asyncio
@@ -121,29 +337,45 @@ async def test_retry_uses_reserved_payload_then_commit_clears_once_on_success() 
     )
     world.add_component(
         entity_id,
-        PromptConfigComponent(
-            trigger_templates={"@code": "Use code-first reasoning"},
+        UserPromptConfigComponent(
+            triggers={"@code": "Use code-first reasoning"},
             enable_context_pool=True,
         ),
     )
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(
-            items=[(30, 0, "tool:search", "source: tool\nresult: facts")],
-            _counter=1,
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="entry-tool-1",
+                    priority=30,
+                    source_label="tool:search",
+                    content="source: tool\nresult: facts",
+                    registration_order=0,
+                )
+            ]
         ),
     )
-    world.add_component(entity_id, TurnStateComponent(current_turn_id="turn-1"))
 
     await ReasoningSystem().process(world)
 
-    pool = world.get_component(entity_id, OneShotContextPoolComponent)
-    assert pool is not None
-    assert pool.state == "reserved"
-    assert pool.items != []
+    queue = world.get_component(entity_id, PromptContextQueueComponent)
+    assert queue is not None
+    reservation = world.get_component(entity_id, PromptContextReservationComponent)
+    assert reservation is not None
+    assert [entry.entry_id for entry in reservation.reserved_entries] == [
+        "entry-tool-1"
+    ]
 
-    pool.items.append((20, 1, "subagent:writer", "source: subagent\nresult: draft"))
-    pool._counter += 1
+    queue.entries.append(
+        ContextEntry(
+            entry_id="entry-subagent-1",
+            priority=20,
+            source_label="subagent:writer",
+            content="source: subagent\nresult: draft",
+            registration_order=1,
+        )
+    )
 
     await ReasoningSystem().process(world)
 
@@ -156,8 +388,8 @@ async def test_retry_uses_reserved_payload_then_commit_clears_once_on_success() 
     assert first_user.index("source: tool") < first_user.index("@code Need summary")
     assert "source: subagent" not in second_user
 
-    assert pool.items == []
-    assert pool.state == "committed"
+    assert [entry.entry_id for entry in queue.entries] == ["entry-subagent-1"]
+    assert world.get_component(entity_id, PromptContextReservationComponent) is None
 
 
 @pytest.mark.asyncio
@@ -174,8 +406,8 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
     )
     world.add_component(
         entity_id,
-        PromptConfigComponent(
-            trigger_templates={
+        UserPromptConfigComponent(
+            triggers={
                 "@code": "Use code-first reasoning",
                 "event:tool_success": "Prioritize successful tool evidence",
             },
@@ -197,8 +429,7 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
             ),
         ),
     )
-    world.add_component(entity_id, OneShotContextPoolComponent())
-    world.add_component(entity_id, TurnStateComponent(current_turn_id="turn-ctx-1"))
+    world.add_component(entity_id, PromptContextQueueComponent())
 
     collector = PromptContextCollectorSystem()
     await collector.process(world)
@@ -244,15 +475,10 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
         "Reference exact snippets in final answer."
     )
 
-    pool = world.get_component(entity_id, OneShotContextPoolComponent)
-    assert pool is not None
-    assert pool.state == "committed"
-    assert pool.items == []
-
-    turn_state = world.get_component(entity_id, TurnStateComponent)
-    assert turn_state is not None
-    assert turn_state.last_injected_turn_id == "turn-ctx-1"
-    assert turn_state.current_turn_id == ""
+    queue = world.get_component(entity_id, PromptContextQueueComponent)
+    assert queue is not None
+    assert queue.entries == []
+    assert world.get_component(entity_id, PromptContextReservationComponent) is None
 
     conversation = world.get_component(entity_id, ConversationComponent)
     assert conversation is not None
@@ -275,32 +501,32 @@ async def test_event_trigger_injection_uses_context_signal_and_preserves_user_ta
     )
     world.add_component(
         entity_id,
-        PromptConfigComponent(
-            trigger_templates={"event:tool_success": "Prefer successful tool context"},
+        UserPromptConfigComponent(
+            triggers={"event:tool_success": "Prefer successful tool context"},
             enable_context_pool=True,
         ),
     )
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(
-            items=[
-                (
-                    30,
-                    0,
-                    "tool:search",
-                    "source: tool:search\nstatus: success\nresult: citations\nerror: ",
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="entry-tool",
+                    priority=30,
+                    registration_order=0,
+                    source_label="tool:search",
+                    content="source: tool:search\nstatus: success\nresult: citations\nerror: ",
                 ),
-                (
-                    20,
-                    1,
-                    "subagent:researcher",
-                    "source: subagent:researcher\nstatus: success\nresult: synthesis\nerror: ",
+                ContextEntry(
+                    entry_id="entry-subagent",
+                    priority=20,
+                    registration_order=1,
+                    source_label="subagent:researcher",
+                    content="source: subagent:researcher\nstatus: success\nresult: synthesis\nerror: ",
                 ),
             ],
-            _counter=2,
         ),
     )
-    world.add_component(entity_id, TurnStateComponent(current_turn_id="turn-event-1"))
 
     await ReasoningSystem().process(world)
 
@@ -333,9 +559,16 @@ async def test_non_opt_in_reasoning_path_leaves_user_prompt_and_pool_unchanged()
     )
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(
-            items=[(30, 0, "tool:seed", "source: tool\nresult: keep")],
-            state="idle",
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="entry-seed",
+                    priority=30,
+                    registration_order=0,
+                    source_label="tool:seed",
+                    content="source: tool\nresult: keep",
+                )
+            ],
         ),
     )
 
@@ -346,10 +579,9 @@ async def test_non_opt_in_reasoning_path_leaves_user_prompt_and_pool_unchanged()
     assert "[PROMPT_INJECT:" not in sent_user
     assert "[PROMPT_CONTEXT_POOL]" not in sent_user
 
-    pool = world.get_component(entity_id, OneShotContextPoolComponent)
-    assert pool is not None
-    assert pool.state == "idle"
-    assert len(pool.items) == 1
+    queue = world.get_component(entity_id, PromptContextQueueComponent)
+    assert queue is not None
+    assert len(queue.entries) == 1
 
 
 @pytest.mark.asyncio
@@ -369,28 +601,35 @@ async def test_overflow_footer_is_injected_when_context_pool_entries_are_dropped
     max_chars = len(keep_entry) + len(CONTEXT_ENTRY_DELIMITER) + len(footer)
     world.add_component(
         entity_id,
-        PromptConfigComponent(
+        UserPromptConfigComponent(
             enable_context_pool=True,
             context_pool_max_chars=max_chars,
         ),
     )
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(
-            items=[
-                (30, 0, "tool:keep", keep_entry),
-                (20, 1, "subagent:drop", "source: subagent:drop\nresult: drop"),
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="entry-keep",
+                    priority=30,
+                    registration_order=0,
+                    source_label="tool:keep",
+                    content=keep_entry,
+                ),
+                ContextEntry(
+                    entry_id="entry-drop",
+                    priority=20,
+                    registration_order=1,
+                    source_label="subagent:drop",
+                    content="source: subagent:drop\nresult: drop",
+                ),
             ],
-            _counter=2,
         ),
     )
     world.add_component(
         entity_id, ToolResultsComponent(results={"result-1": "drop-me"})
     )
-    world.add_component(
-        entity_id, TurnStateComponent(current_turn_id="turn-overflow-1")
-    )
-
     collector = PromptContextCollectorSystem()
     await collector.process(world)
     await ReasoningSystem().process(world)
@@ -402,3 +641,131 @@ async def test_overflow_footer_is_injected_when_context_pool_entries_are_dropped
     assert "structured_output:result-1" not in sent_user
     assert footer in sent_user
     assert sent_user.endswith("Need summary")
+
+
+@pytest.mark.asyncio
+async def test_reasoning_uses_prepare_outbound_messages_shared_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = World()
+    provider = RecordingProvider()
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[Message(role="user", content="Original user text")]
+        ),
+    )
+    queue = PromptContextQueueComponent(
+        entries=[
+            ContextEntry(
+                entry_id="entry-1",
+                priority=30,
+                registration_order=0,
+                source_label="tool:search",
+                content="source: tool\nresult: evidence",
+            )
+        ]
+    )
+    world.add_component(entity_id, queue)
+    world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
+
+    reservation = PromptContextReservationComponent(
+        reservation_id="reservation-shared-path",
+        created_at_tick=0,
+        reserved_entries=list(queue.entries),
+    )
+
+    def fake_prepare_outbound_messages(
+        world_obj: World,
+        target_entity_id: int,
+        *,
+        system_prompt: str | None = None,
+        prefix_messages: list[Message] | None = None,
+        current_tick: int,
+    ) -> tuple[list[Message], PromptContextReservationComponent | None]:
+        _ = world_obj
+        _ = system_prompt
+        _ = prefix_messages
+        _ = current_tick
+        assert target_entity_id == entity_id
+        return [
+            Message(role="user", content="[shared-path] reasoning payload")
+        ], reservation
+
+    monkeypatch.setattr(
+        "ecs_agent.systems.reasoning.prepare_outbound_messages",
+        fake_prepare_outbound_messages,
+        raising=False,
+    )
+
+    await ReasoningSystem().process(world)
+
+    assert provider.calls[0][-1].content == "[shared-path] reasoning payload"
+    assert world.get_component(entity_id, PromptContextReservationComponent) is None
+    assert queue.entries == []
+
+
+@pytest.mark.asyncio
+async def test_planning_uses_prepare_outbound_messages_shared_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = World()
+    provider = RecordingProvider()
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Plan this")]),
+    )
+    world.add_component(entity_id, PlanComponent(steps=["step one"], current_step=0))
+    queue = PromptContextQueueComponent(
+        entries=[
+            ContextEntry(
+                entry_id="entry-1",
+                priority=30,
+                registration_order=0,
+                source_label="tool:search",
+                content="source: tool\nresult: evidence",
+            )
+        ]
+    )
+    world.add_component(entity_id, queue)
+    world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
+
+    reservation = PromptContextReservationComponent(
+        reservation_id="reservation-plan-shared-path",
+        created_at_tick=0,
+        reserved_entries=list(queue.entries),
+    )
+
+    def fake_prepare_outbound_messages(
+        world_obj: World,
+        target_entity_id: int,
+        *,
+        system_prompt: str | None = None,
+        prefix_messages: list[Message] | None = None,
+        current_tick: int,
+    ) -> tuple[list[Message], PromptContextReservationComponent | None]:
+        _ = world_obj
+        _ = system_prompt
+        _ = current_tick
+        assert target_entity_id == entity_id
+        assert prefix_messages is not None
+        return [
+            *prefix_messages,
+            Message(role="user", content="[shared-path] planning payload"),
+        ], reservation
+
+    monkeypatch.setattr(
+        "ecs_agent.systems.planning.prepare_outbound_messages",
+        fake_prepare_outbound_messages,
+        raising=False,
+    )
+
+    await PlanningSystem().process(world)
+
+    assert provider.calls[0][-1].content == "[shared-path] planning payload"
+    assert world.get_component(entity_id, PromptContextReservationComponent) is None
+    assert queue.entries == []

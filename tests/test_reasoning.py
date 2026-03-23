@@ -1,12 +1,13 @@
 import pytest
 
 from ecs_agent.components import (
+    ContextEntry,
     ConversationComponent,
     ErrorComponent,
     LLMComponent,
-    OneShotContextPoolComponent,
     PendingToolCallsComponent,
-    PromptConfigComponent,
+    PromptContextQueueComponent,
+    UserPromptConfigComponent,
     SystemPromptComponent,
     TerminalComponent,
     ToolRegistryComponent,
@@ -503,13 +504,25 @@ async def test_prompt_context_injection_is_transient_for_reasoning_provider_call
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Need summary")]),
     )
-    world.add_component(entity_id, PromptConfigComponent(enable_context_pool=True))
+    world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(
-            items=[
-                (20, 1, "subagent:writer", "source: subagent\nresult: drafted"),
-                (30, 0, "tool:search", "source: tool\nresult: found facts"),
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="subagent-writer-1",
+                    priority=20,
+                    registration_order=1,
+                    source_label="subagent:writer",
+                    content="source: subagent\nresult: drafted",
+                ),
+                ContextEntry(
+                    entry_id="tool-search-0",
+                    priority=30,
+                    registration_order=0,
+                    source_label="tool:search",
+                    content="source: tool\nresult: found facts",
+                ),
             ]
         ),
     )
@@ -546,22 +559,21 @@ async def test_event_trigger_injection_is_transient_for_reasoning_provider_call(
     )
     world.add_component(
         entity_id,
-        PromptConfigComponent(
-            trigger_templates={
-                "event:tool_success": "Prefer using successful tool evidence"
-            },
+        UserPromptConfigComponent(
+            triggers={"event:tool_success": "Prefer using successful tool evidence"},
             enable_context_pool=True,
         ),
     )
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(
-            items=[
-                (
-                    30,
-                    0,
-                    "tool:search",
-                    "source: tool:search\nstatus: success\nresult: found facts\nerror: ",
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="tool-search-0",
+                    priority=30,
+                    registration_order=0,
+                    source_label="tool:search",
+                    content="source: tool:search\nstatus: success\nresult: found facts\nerror: ",
                 )
             ]
         ),

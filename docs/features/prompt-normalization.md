@@ -7,7 +7,7 @@ The prompt normalization pipeline replaces raw string concatenation with a decla
 Prompt normalization runs as two ECS systems in every tick, before reasoning:
 
 ```
-PromptConfigSpec          PromptConfigComponent
+SystemPromptConfigSpec    UserPromptConfigComponent
        |                         |
        v                         v
 SystemPromptRenderSystem   UserPromptNormalizationSystem
@@ -22,8 +22,8 @@ RenderedSystemPromptComponent  RenderedUserPromptComponent
      ReasoningSystem / PlanningSystem / ReplanningSystem
 ```
 
-1. **SystemPromptRenderSystem** (priority -20) reads `PromptConfigSpec`, resolves all `${name}` placeholders, and writes a `RenderedSystemPromptComponent`.
-2. **UserPromptNormalizationSystem** (priority -10) reads `PromptConfigComponent`, injects keyword/event triggers and context pool entries into the last user message, and writes a `RenderedUserPromptComponent`.
+1. **SystemPromptRenderSystem** (priority -20) reads `SystemPromptConfigSpec`, resolves all `${name}` placeholders, and writes a `RenderedSystemPromptComponent`.
+2. **UserPromptNormalizationSystem** (priority -10) reads `UserPromptConfigComponent`, injects keyword/event triggers and context entries from `PromptContextQueueComponent` into the last user message, and writes a `RenderedUserPromptComponent`.
 3. **LLM callers** (`ReasoningSystem`, `PlanningSystem`, `ReplanningSystem`) read the rendered components instead of assembling prompts themselves.
 
 Stored conversation history is never mutated. All injections are transient and scoped to the current tick.
@@ -39,7 +39,7 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.prompts.contracts import PromptConfigSpec, PromptTemplateSource
+from ecs_agent.prompts.contracts import SystemPromptConfigSpec, PromptTemplateSource
 from ecs_agent.providers import FakeProvider
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -60,7 +60,7 @@ async def main() -> None:
     ))
 
     # Declare a system prompt template with a built-in placeholder
-    world.add_component(entity, PromptConfigSpec(
+    world.add_component(entity, SystemPromptConfigSpec(
         template_source=PromptTemplateSource(
             inline="You are a helpful assistant.\n\nAvailable tools:\n${_installed_tools}"
         ),
@@ -139,7 +139,7 @@ static = PlaceholderSpec(name="project_name", value="ecs-agent")
 dynamic = PlaceholderSpec(name="timestamp", value=lambda: "2025-01-01T00:00:00Z")
 ```
 
-### PromptConfigSpec
+### SystemPromptConfigSpec
 
 Frozen dataclass used as an ECS component. Declares the system prompt template and user-defined placeholders. Processed by `SystemPromptRenderSystem`.
 
@@ -149,9 +149,9 @@ Frozen dataclass used as an ECS component. Declares the system prompt template a
 | `placeholders` | `list[PlaceholderSpec]` | `[]` | User-defined placeholder resolvers |
 
 ```python
-from ecs_agent.prompts.contracts import PromptConfigSpec, PromptTemplateSource, PlaceholderSpec
+from ecs_agent.prompts.contracts import SystemPromptConfigSpec, PromptTemplateSource, PlaceholderSpec
 
-world.add_component(entity, PromptConfigSpec(
+world.add_component(entity, SystemPromptConfigSpec(
     template_source=PromptTemplateSource(
         inline="You are ${role}. Tools:\n${_installed_tools}"
     ),
@@ -185,23 +185,23 @@ trigger = TriggerSpec(
 
 ## Components Reference
 
-### PromptConfigComponent
+### UserPromptConfigComponent
 
 Opts an entity into the user prompt normalization pipeline. Configures trigger templates and context pool behavior.
 
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `trigger_templates` | `dict[str, str]` | `{}` | Mapping of trigger patterns to injection content |
+| `triggers` | `dict[str, str]` | `{}` | Mapping of trigger patterns to injection content |
 | `enable_context_pool` | `bool` | `False` | Whether to inject context pool entries into user messages |
 | `context_pool_max_chars` | `int` | `8192` | Maximum characters for rendered context pool |
 
 **Used by:** `UserPromptNormalizationSystem`
 
 ```python
-from ecs_agent.components import PromptConfigComponent
+from ecs_agent.components import UserPromptConfigComponent
 
-world.add_component(entity, PromptConfigComponent(
-    trigger_templates={
+world.add_component(entity, UserPromptConfigComponent(
+    triggers={
         "@code": "Prioritize deterministic code-first reasoning.",
         "event:tool_success": "Prefer successful tool outputs as evidence.",
     },
@@ -209,48 +209,64 @@ world.add_component(entity, PromptConfigComponent(
 ))
 ```
 
-### OneShotContextPoolComponent
+### PromptContextQueueComponent
 
-Session-scoped injection pool holding ranked context entries from tools, subagents, or other sources.
+Queue-backed context storage for prompt injection. Holds normalized context entries collected from tools, subagents, or other sources.
 
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `items` | `list[tuple[int, int, str, str]]` | `[]` | Tuples of `(priority, order, source_label, content)` |
-| `state` | `str` | `"idle"` | Reservation state: `"idle"`, `"reserved"`, or `"committed"` |
-| `reserved_turn_id` | `str` | `""` | Turn ID that made the current reservation |
-| `reserved_counter_snapshot` | `int` | `-1` | Counter value at reservation time |
-| `reserved_items` | `list[tuple[int, int, str, str]]` | `[]` | Snapshot of items at reservation time |
-| `_counter` | `int` | `0` | Monotonically increasing registration counter |
+| `entries` | `list[ContextEntry]` | `[]` | Ordered context entries available for injection |
 
-**Used by:** `UserPromptNormalizationSystem`
+**Used by:** `UserPromptNormalizationSystem`, `PromptContextCollectorSystem`
 
 ```python
-from ecs_agent.components import OneShotContextPoolComponent
+from ecs_agent.components import ContextEntry, PromptContextQueueComponent
 
-world.add_component(entity, OneShotContextPoolComponent(
-    items=[
-        (30, 0, "tool:search", "source: tool:search\nstatus: success\nresult: citation-A"),
-        (20, 1, "subagent:researcher", "source: subagent:researcher\nresult: synthesis-B"),
-    ],
-    _counter=2,
+world.add_component(entity, PromptContextQueueComponent(
+    entries=[
+        ContextEntry(
+            entry_id="tool-search-0",
+            priority=30,
+            registration_order=0,
+            source_label="tool:search",
+            content="source: tool:search\nstatus: success\nresult: citation-A",
+        )
+    ]
 ))
 ```
 
-### TurnStateComponent
+### ContextEntry
 
-Tracks per-turn identifiers for idempotent injection and deduplication.
+Single context payload item used by `PromptContextQueueComponent` and reservation snapshots.
 
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `current_turn_id` | `str` | `""` | ID of the current turn |
-| `last_injected_turn_id` | `str` | `""` | ID of the last turn where injection occurred |
+| `entry_id` | `str` | (required) | Stable identifier for deduplication and traceability |
+| `priority` | `int` | (required) | Higher value means earlier injection |
+| `registration_order` | `int` | (required) | Monotonic tie-breaker for deterministic ordering |
+| `source_label` | `str` | (required) | Source marker such as `tool:search` or `subagent:researcher` |
+| `content` | `str` | (required) | Renderable context block content |
+
+### PromptContextReservationComponent
+
+Tracks an active, per-tick reservation snapshot of queue entries chosen for prompt injection.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `reservation_id` | `str` | (required) | Unique reservation identifier |
+| `created_at_tick` | `int` | (required) | Tick number when the reservation was created |
+| `reserved_entries` | `list[ContextEntry]` | (required) | Snapshot of context entries reserved for rendering |
 
 **Used by:** `UserPromptNormalizationSystem`
 
 ```python
-from ecs_agent.components import TurnStateComponent
+from ecs_agent.components import PromptContextReservationComponent
 
-world.add_component(entity, TurnStateComponent(current_turn_id="turn-001"))
+world.add_component(entity, PromptContextReservationComponent(
+    reservation_id="resv-001",
+    created_at_tick=42,
+    reserved_entries=[],
+))
 ```
 
 ### RenderedSystemPromptComponent
@@ -272,7 +288,6 @@ Output component written by `UserPromptNormalizationSystem`. Contains the normal
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `text` | `str` | (required) | Normalized user message |
-| `turn_id` | `str` | (required) | Turn ID for this render |
 
 **Produced by:** `UserPromptNormalizationSystem`
 **Consumed by:** `ReasoningSystem`, `PlanningSystem`, `ReplanningSystem`
@@ -287,7 +302,7 @@ Resolves `${name}` placeholders in system prompt templates and produces a `Rende
 **Recommended priority:** `-20`
 
 Processing steps:
-1. Query all entities with a `PromptConfigSpec` component.
+1. Query all entities with a `SystemPromptConfigSpec` component.
 2. Read the template from the configured source (inline string or file path).
 3. Resolve user-defined placeholders via `PlaceholderSpec` values.
 4. Resolve built-in placeholders (`_installed_tools`, `_installed_skills`, etc.) from entity components.
@@ -315,7 +330,7 @@ Processing steps:
 2. Find the last user message.
 3. Apply keyword triggers: if user text contains a trigger key (e.g., `@code`), prepend the trigger block with a `[PROMPT_INJECT:@keyword]` marker.
 4. Apply event triggers: match `event:<name>` patterns against active events derived from context pool sources.
-5. Apply context pool injection: render `OneShotContextPoolComponent` items sorted by priority (descending), wrapped in a `[PROMPT_CONTEXT_POOL]` marker.
+5. Apply context pool injection: render `PromptContextQueueComponent.entries` sorted by priority (descending), wrapped in a `[PROMPT_CONTEXT_POOL]` marker.
 6. Apply `TriggerSpec` rules passed via constructor (`replace` action replaces the entire message; other actions prepend).
 7. Write a `RenderedUserPromptComponent` to the entity.
 
@@ -329,7 +344,7 @@ world.register_system(UserPromptNormalizationSystem(priority=-10), priority=-10)
 
 ## Built-in Placeholders
 
-These placeholders are automatically resolved by `SystemPromptRenderSystem` from entity components. They do not need to be declared in `PromptConfigSpec.placeholders`.
+These placeholders are automatically resolved by `SystemPromptRenderSystem` from entity components. They do not need to be declared in `SystemPromptConfigSpec.placeholders`.
 
 | Placeholder | Source Component | Description |
 | :--- | :--- | :--- |
@@ -342,14 +357,14 @@ If a source component is absent from the entity, the placeholder resolves to `"-
 
 ## Trigger Templates
 
-Trigger templates inject contextual prompt blocks into user messages based on pattern matching. They are configured via `PromptConfigComponent.trigger_templates`.
+Trigger templates inject contextual prompt blocks into user messages based on pattern matching. They are configured via `UserPromptConfigComponent.triggers`.
 
 ### Keyword Triggers
 
 Keys that do not start with `event:` are treated as keyword triggers. When the pattern appears anywhere in the user message, the corresponding content is prepended.
 
 ```python
-trigger_templates = {
+triggers = {
     "@code": "Prioritize deterministic code-first reasoning.",
     "@help": "Provide step-by-step guidance with examples.",
 }
@@ -369,12 +384,12 @@ Please @code summarize findings
 Keys starting with `event:` match against active events derived from context pool source labels. If a matching event is found, the content is injected.
 
 ```python
-trigger_templates = {
+triggers = {
     "event:tool_success": "Prefer successful tool outputs as evidence.",
 }
 ```
 
-Events are extracted from `OneShotContextPoolComponent` item source labels (e.g., `tool:search` produces events `tool:search`, `tool`, and `tool_success` if the content contains `status: success`).
+Events are extracted from `PromptContextQueueComponent` entry source labels (e.g., `tool:search` produces events `tool:search`, `tool`, and `tool_success` if the content contains `status: success`).
 
 ### Idempotency
 
@@ -382,7 +397,7 @@ If a `[PROMPT_INJECT:...]` marker for a given keyword is already present in the 
 
 ## Context Pool Injection
 
-When `PromptConfigComponent.enable_context_pool` is `True` and an `OneShotContextPoolComponent` is present, context entries are injected into the user message.
+When `UserPromptConfigComponent.enable_context_pool` is `True` and a `PromptContextQueueComponent` is present, context entries are injected into the user message.
 
 Items are sorted by priority (descending), then by registration order (ascending). The rendered block is wrapped in a `[PROMPT_CONTEXT_POOL]` marker and placed before the original user text.
 

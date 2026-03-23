@@ -1,3 +1,4 @@
+"""Prompt template registry and placeholder resolution utilities."""
 from __future__ import annotations
 
 import re

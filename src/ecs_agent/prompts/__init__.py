@@ -1,6 +1,7 @@
+"""Public API for the ecs_agent prompts package."""
 from ecs_agent.prompts.contracts import (
     PlaceholderSpec,
-    PromptConfigSpec,
+    SystemPromptConfigSpec,
     PromptInjectionArtifact,
     PromptRenderContext,
     PromptSectionSpec,
@@ -16,13 +17,11 @@ from ecs_agent.prompts.registry import (
 )
 from ecs_agent.prompts.keyword_injection import inject_keywords, inject_triggers
 from ecs_agent.prompts.message_assembly import assemble_messages, build_keyword_registry
-from ecs_agent.prompts.renderers import render_string, render_table
-from ecs_agent.prompts.sections import render_sections
 
 __all__ = [
     "CORE_PLACEHOLDER_KEYS",
     "PlaceholderSpec",
-    "PromptConfigSpec",
+    "SystemPromptConfigSpec",
     "PromptInjectionArtifact",
     "PromptRenderContext",
     "PromptSectionSpec",
@@ -36,7 +35,4 @@ __all__ = [
     "inject_triggers",
     "assemble_messages",
     "build_keyword_registry",
-    "render_string",
-    "render_table",
-    "render_sections",
 ]

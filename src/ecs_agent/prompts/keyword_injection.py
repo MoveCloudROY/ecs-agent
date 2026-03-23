@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ecs_agent.prompts.contracts import PromptTriggerSpec
+from ecs_agent.prompts.contracts import TriggerSpec
 from ecs_agent.prompts.registry import PromptRegistry
 
 
@@ -14,7 +14,7 @@ def inject_triggers(
     text: str,
     registry: PromptRegistry,
     *,
-    trigger_specs: list[PromptTriggerSpec] | None = None,
+    trigger_specs: list[TriggerSpec] | None = None,
     active_events: set[str] | None = None,
 ) -> str:
     if "[PROMPT_INJECT:" in text:
@@ -32,7 +32,7 @@ def inject_triggers(
     if matched is None:
         return text
 
-    template = registry.get(matched.template_id)
+    template = registry.get(matched.content)
     marker = _trigger_marker(matched)
     return f"{marker}\n{template.content}\n\n{text}"
 
@@ -40,49 +40,53 @@ def inject_triggers(
 def _ordered_trigger_specs(
     *,
     registry: PromptRegistry,
-    trigger_specs: list[PromptTriggerSpec] | None,
-) -> list[PromptTriggerSpec]:
+    trigger_specs: list[TriggerSpec] | None,
+) -> list[TriggerSpec]:
     if trigger_specs is None:
-        synthesized: list[PromptTriggerSpec] = []
-        for registration_order, keyword in enumerate(registry.list_keywords()):
+        synthesized: list[TriggerSpec] = []
+        for keyword in registry.list_keywords():
             template = registry.resolve_keyword(keyword)
             if template is None:
                 continue
             synthesized.append(
-                PromptTriggerSpec(
-                    kind="keyword",
-                    trigger=keyword,
-                    template_id=template.template_id,
+                TriggerSpec(
+                    pattern=keyword,
+                    match_mode="keyword",
+                    action="skill",
+                    content=template.template_id,
                     priority=0,
-                    registration_order=registration_order,
                 )
             )
         trigger_specs = synthesized
 
-    return sorted(
-        trigger_specs, key=lambda spec: (-spec.priority, spec.registration_order)
-    )
+    return sorted(trigger_specs, key=lambda spec: -spec.priority)
 
 
 def _resolve_first_match(
     *,
     text: str,
-    ordered_specs: list[PromptTriggerSpec],
+    ordered_specs: list[TriggerSpec],
     active_events: set[str] | None,
-) -> PromptTriggerSpec | None:
+) -> TriggerSpec | None:
     event_set = active_events or set()
     for spec in ordered_specs:
-        if spec.kind == "keyword" and spec.trigger in text:
-            return spec
-        if spec.kind == "event" and spec.trigger in event_set:
+        if _matches(spec=spec, text=text, active_events=event_set):
             return spec
     return None
 
 
-def _trigger_marker(spec: PromptTriggerSpec) -> str:
-    if spec.kind == "keyword":
-        return f"[PROMPT_INJECT:{spec.trigger}]"
-    return f"[PROMPT_INJECT:{spec.kind}:{spec.trigger}]"
+def _matches(*, spec: TriggerSpec, text: str, active_events: set[str]) -> bool:
+    if spec.pattern.startswith("event:"):
+        return spec.pattern.removeprefix("event:") in active_events
+    if spec.match_mode == "prefix":
+        return text.startswith(spec.pattern)
+    return spec.pattern in text
+
+
+def _trigger_marker(spec: TriggerSpec) -> str:
+    if spec.pattern.startswith("event:"):
+        return f"[PROMPT_INJECT:event:{spec.pattern.removeprefix('event:')}]"
+    return f"[PROMPT_INJECT:{spec.pattern}]"
 
 
 __all__ = ["inject_keywords", "inject_triggers"]
