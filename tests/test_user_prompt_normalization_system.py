@@ -139,7 +139,7 @@ async def test_empty_triggers_passthrough() -> None:
     assert rendered.text == "hello"
 
 
-async def test_context_pool_items_injected() -> None:
+async def test_context_pool_entries_are_not_injected_by_normalization_system() -> None:
     world = World()
     entity_id = world.create_entity()
     world.add_component(
@@ -173,7 +173,26 @@ async def test_context_pool_items_injected() -> None:
 
     rendered = world.get_component(entity_id, RenderedUserPromptComponent)
     assert rendered is not None
-    assert "[PROMPT_CONTEXT_POOL]" in rendered.text
-    assert "source: tool:one" in rendered.text
-    assert rendered.text.index("source: tool:one") < rendered.text.index("Need summary")
-    assert rendered.text.endswith("Need summary")
+    assert rendered.text == "Need summary"
+
+
+async def test_stale_rendered_prompt_removed_when_no_latest_user_message() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    conversation = ConversationComponent(
+        messages=[Message(role="user", content="hello")]
+    )
+    world.add_component(entity_id, conversation)
+
+    system = UserPromptNormalizationSystem()
+    await system.process(world)
+
+    initial_rendered = world.get_component(entity_id, RenderedUserPromptComponent)
+    assert initial_rendered is not None
+    assert initial_rendered.text == "hello"
+
+    conversation.messages = [Message(role="assistant", content="done")]
+    await system.process(world)
+
+    stale_rendered = world.get_component(entity_id, RenderedUserPromptComponent)
+    assert stale_rendered is None
