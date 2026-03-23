@@ -164,6 +164,7 @@ async def main() -> None:
     outbound_user = _extract_outbound_user_message(provider.last_messages)
     rendered_system = world.get_component(entity, RenderedSystemPromptComponent)
     rendered_user = world.get_component(entity, RenderedUserPromptComponent)
+    context_queue = world.get_component(entity, PromptContextQueueComponent)
     user_tail = "Please @code summarize latest findings"
 
     print(f"[mode] {mode}")
@@ -173,6 +174,12 @@ async def main() -> None:
     print(outbound_user.content)
     print("\n=== Rendered User Prompt Component ===")
     print(rendered_user.text if rendered_user is not None else "<missing>")
+    print("\n=== Seed Context Pool Entries ===")
+    if context_queue is None or not context_queue.entries:
+        print("<empty>")
+    else:
+        for entry in context_queue.entries:
+            print(entry.content)
     print("\n=== Rendered Component Presence ===")
     print(f"rendered system present: {rendered_system is not None}")
     print(f"rendered user present: {rendered_user is not None}")
