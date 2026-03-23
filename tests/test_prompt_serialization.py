@@ -208,7 +208,7 @@ def test_rendered_user_prompt_component_roundtrip() -> None:
     entity = world.create_entity()
 
     rendered = RenderedUserPromptComponent(
-        text="rendered user prompt", turn_id="turn-42"
+        text="rendered user prompt"
     )
     world.add_component(entity, rendered)
 
@@ -219,7 +219,6 @@ def test_rendered_user_prompt_component_roundtrip() -> None:
     rendered2 = world2.get_component(entity, RenderedUserPromptComponent)
     assert rendered2 is not None
     assert rendered2.text == "rendered user prompt"
-    assert rendered2.turn_id == "turn-42"
 
 
 def test_prompt_config_spec_static_roundtrip() -> None:

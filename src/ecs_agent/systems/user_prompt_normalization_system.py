@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 
 from ecs_agent.components import (
     ConversationComponent,
@@ -53,7 +52,6 @@ class UserPromptNormalizationSystem:
                 continue
 
             prompt_config = world.get_component(entity_id, UserPromptConfigComponent)
-            turn_id = uuid.uuid4().hex
 
             normalized_text = raw_user_text
             if prompt_config is not None and prompt_config.triggers:
@@ -70,7 +68,7 @@ class UserPromptNormalizationSystem:
 
             world.add_component(
                 entity_id,
-                RenderedUserPromptComponent(text=normalized_text, turn_id=turn_id),
+                RenderedUserPromptComponent(text=normalized_text),
             )
 
     @staticmethod

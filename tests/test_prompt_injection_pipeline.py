@@ -186,7 +186,7 @@ def test_prepare_outbound_messages_no_context_pool_uses_rendered_user_prompt() -
     world.add_component(entity_id, conversation)
     world.add_component(
         entity_id,
-        RenderedUserPromptComponent(text="normalized user prompt", turn_id="turn-1"),
+        RenderedUserPromptComponent(text="normalized user prompt"),
     )
 
     messages, reservation = prepare_outbound_messages(
