@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+import json
+
 from ecs_agent.components import (
     OneShotContextPoolComponent,
     PromptConfigComponent,
+    RenderedSystemPromptComponent,
+    RenderedUserPromptComponent,
     SystemPromptComponent,
     TurnStateComponent,
 )
 from ecs_agent.core.world import World
-from ecs_agent.prompts.contracts import PromptSectionSpec
+from ecs_agent.prompts.contracts import (
+    PlaceholderSpec,
+    PromptConfigSpec,
+    PromptSectionSpec,
+    PromptTemplateSource,
+)
 from ecs_agent.serialization import WorldSerializer, COMPONENT_REGISTRY
 
 
@@ -160,12 +169,78 @@ def test_turn_state_component_roundtrip() -> None:
     assert turn_state2.last_injected_turn_id == "turn-99"
 
 
+def test_rendered_system_prompt_component_roundtrip() -> None:
+    world = World()
+    entity = world.create_entity()
+
+    rendered = RenderedSystemPromptComponent(
+        text="rendered prompt",
+        placeholder_snapshot={"installed_tools": "- bash"},
+    )
+    world.add_component(entity, rendered)
+
+    data = WorldSerializer.to_dict(world)
+    providers = {"default": DummyProvider()}
+    world2 = WorldSerializer.from_dict(data, providers=providers, tool_handlers={})
+
+    rendered2 = world2.get_component(entity, RenderedSystemPromptComponent)
+    assert rendered2 is not None
+    assert rendered2.text == "rendered prompt"
+    assert rendered2.placeholder_snapshot == {"installed_tools": "- bash"}
+
+
+def test_rendered_user_prompt_component_roundtrip() -> None:
+    world = World()
+    entity = world.create_entity()
+
+    rendered = RenderedUserPromptComponent(
+        text="rendered user prompt", turn_id="turn-42"
+    )
+    world.add_component(entity, rendered)
+
+    data = WorldSerializer.to_dict(world)
+    providers = {"default": DummyProvider()}
+    world2 = WorldSerializer.from_dict(data, providers=providers, tool_handlers={})
+
+    rendered2 = world2.get_component(entity, RenderedUserPromptComponent)
+    assert rendered2 is not None
+    assert rendered2.text == "rendered user prompt"
+    assert rendered2.turn_id == "turn-42"
+
+
+def test_prompt_config_spec_static_roundtrip() -> None:
+    world = World()
+    entity = world.create_entity()
+
+    config = PromptConfigSpec(
+        template_source=PromptTemplateSource(inline="Hello ${name}"),
+        placeholders=[PlaceholderSpec(name="name", value="world")],
+    )
+    world.add_component(entity, config)
+
+    data = WorldSerializer.to_dict(world)
+    json.loads(json.dumps(data))
+    providers = {"default": DummyProvider()}
+    world2 = WorldSerializer.from_dict(data, providers=providers, tool_handlers={})
+
+    config2 = world2.get_component(entity, PromptConfigSpec)
+    assert config2 is not None
+    assert config2.template_source.inline == "Hello ${name}"
+    assert config2.template_source.file_path is None
+    assert len(config2.placeholders) == 1
+    assert config2.placeholders[0].name == "name"
+    assert config2.placeholders[0].value == "world"
+
+
 def test_prompt_components_serializer_registered() -> None:
     """All prompt components are registered in COMPONENT_REGISTRY."""
     component_names = {
         PromptConfigComponent.__name__,
+        PromptConfigSpec.__name__,
         SystemPromptComponent.__name__,
         OneShotContextPoolComponent.__name__,
+        RenderedSystemPromptComponent.__name__,
+        RenderedUserPromptComponent.__name__,
         TurnStateComponent.__name__,
     }
 

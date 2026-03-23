@@ -11,7 +11,10 @@ from ecs_agent.components import (
     OneShotContextPoolComponent,
     PendingToolCallsComponent,
     PromptConfigComponent,
+    RenderedSystemPromptComponent,
+    RenderedUserPromptComponent,
     SubagentRegistryComponent,
+    SystemPromptComponent,
     TurnStateComponent,
     ToolRegistryComponent,
     ToolResultsComponent,
@@ -30,6 +33,21 @@ from ecs_agent.task.fetching_unit import DispatchRequest
 from ecs_agent.types import CompletionResult, EntityId, Message, ToolCall
 
 logger = get_logger(__name__)
+
+
+def _substitute_last_user_message(
+    messages: list[Message], new_text: str
+) -> list[Message]:
+    if not messages:
+        return [Message(role="user", content=new_text)]
+
+    result = list(messages)
+    for index in range(len(result) - 1, -1, -1):
+        if result[index].role == "user":
+            result[index] = Message(role="user", content=new_text)
+            return result
+
+    return [*result, Message(role="user", content=new_text)]
 
 
 @dataclass(slots=True, frozen=True)
@@ -237,22 +255,45 @@ class TaskExecutor:
         task_message = Message(role="user", content=request.description)
         conv.messages.append(task_message)
 
+        rendered_system_prompt = world.get_component(
+            entity_id, RenderedSystemPromptComponent
+        )
+        system_prompt = world.get_component(entity_id, SystemPromptComponent)
+        system_prompt_text = (
+            rendered_system_prompt.text
+            if rendered_system_prompt is not None
+            else (
+                system_prompt.content
+                if system_prompt is not None
+                else (llm_component.system_prompt or None)
+            )
+        )
+        rendered_user_prompt = world.get_component(
+            entity_id, RenderedUserPromptComponent
+        )
         prompt_config = world.get_component(entity_id, PromptConfigComponent)
         context_pool = world.get_component(entity_id, OneShotContextPoolComponent)
         turn_state = world.get_component(entity_id, TurnStateComponent)
-        keyword_registry = (
-            build_keyword_registry(prompt_config.trigger_templates)
-            if prompt_config is not None and prompt_config.trigger_templates
-            else None
-        )
-        trigger_specs = (
-            build_trigger_specs(prompt_config.trigger_templates)
-            if prompt_config is not None and prompt_config.trigger_templates
-            else None
-        )
-        context_pool_enabled = (
-            prompt_config.enable_context_pool if prompt_config is not None else False
-        )
+        use_rendered_user_prompt = rendered_user_prompt is not None
+        keyword_registry = None
+        trigger_specs = None
+        context_pool_enabled = False
+        if not use_rendered_user_prompt:
+            keyword_registry = (
+                build_keyword_registry(prompt_config.trigger_templates)
+                if prompt_config is not None and prompt_config.trigger_templates
+                else None
+            )
+            trigger_specs = (
+                build_trigger_specs(prompt_config.trigger_templates)
+                if prompt_config is not None and prompt_config.trigger_templates
+                else None
+            )
+            context_pool_enabled = (
+                prompt_config.enable_context_pool
+                if prompt_config is not None
+                else False
+            )
         turn_id = ""
         reserved_context_pool_items: list[tuple[int, int, str, str]] | None = None
         if context_pool_enabled and context_pool is not None:
@@ -267,14 +308,25 @@ class TaskExecutor:
                 turn_id=turn_id,
             )
         active_events = collect_active_events(reserved_context_pool_items)
-        outbound_messages = assemble_messages(
-            conversation_messages=conv.messages,
-            enable_context_pool=context_pool_enabled,
-            context_pool_items=reserved_context_pool_items,
-            keyword_registry=keyword_registry,
-            trigger_specs=trigger_specs,
-            active_events=active_events,
-        )
+        if rendered_user_prompt is not None:
+            outbound_messages = assemble_messages(
+                system_prompt=system_prompt_text,
+                conversation_messages=_substitute_last_user_message(
+                    conv.messages,
+                    rendered_user_prompt.text,
+                ),
+                enable_context_pool=False,
+            )
+        else:
+            outbound_messages = assemble_messages(
+                system_prompt=system_prompt_text,
+                conversation_messages=conv.messages,
+                enable_context_pool=context_pool_enabled,
+                context_pool_items=reserved_context_pool_items,
+                keyword_registry=keyword_registry,
+                trigger_specs=trigger_specs,
+                active_events=active_events,
+            )
 
         # Execute LLM reasoning step to get tool calls
         try:

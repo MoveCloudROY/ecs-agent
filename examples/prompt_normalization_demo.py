@@ -8,16 +8,21 @@ from ecs_agent.components import (
     LLMComponent,
     OneShotContextPoolComponent,
     PromptConfigComponent,
-    SystemPromptComponent,
+    RenderedSystemPromptComponent,
+    RenderedUserPromptComponent,
+    ToolRegistryComponent,
     TurnStateComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.prompts.contracts import PromptSectionSpec
 from ecs_agent.providers import FakeProvider, OpenAIProvider
 from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.prompts.contracts import PromptConfigSpec, PromptTemplateSource
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
-from ecs_agent.systems.system_prompt_assembly import SystemPromptAssemblySystem
+from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
+from ecs_agent.systems.user_prompt_normalization_system import (
+    UserPromptNormalizationSystem,
+)
 from ecs_agent.types import CompletionResult, Message, StreamDelta, ToolSchema
 
 
@@ -66,12 +71,12 @@ def _build_provider_from_env() -> tuple[LLMProvider, str, str]:
     return provider, "fake", "fake"
 
 
-def _extract_outbound_messages(messages: list[Message]) -> tuple[Message, Message]:
+def _extract_outbound_user_message(messages: list[Message]) -> Message:
     if len(messages) < 2:
         raise RuntimeError(
             "Provider did not receive expected outbound message sequence"
         )
-    return messages[0], messages[-1]
+    return messages[-1]
 
 
 async def main() -> None:
@@ -122,49 +127,53 @@ async def main() -> None:
     world.add_component(entity, TurnStateComponent(current_turn_id="demo-turn-1"))
     world.add_component(
         entity,
-        SystemPromptComponent(
-            template=(
-                "# Markdown Linked Prompt\n\n"
-                "${toolSelection}\n\n"
-                "${exploreSection}\n\n"
-                "${librarianSection}"
+        PromptConfigSpec(
+            template_source=PromptTemplateSource(
+                inline=(
+                    "You are a helpful coding assistant.\n\n"
+                    "Available tools:\n"
+                    "${_installed_tools}\n\n"
+                    "Keep responses evidence-based and concise."
+                )
             ),
-            sections=[
-                PromptSectionSpec(
-                    title="toolSelection",
-                    lines=["Prefer deterministic tools and concise synthesis."],
-                    priority=30,
-                ),
-                PromptSectionSpec(
-                    title="exploreSection",
-                    lines=["Surface concrete evidence from context entries first."],
-                    priority=20,
-                ),
-                PromptSectionSpec(
-                    title="librarianSection",
-                    lines=["Preserve exact references in final responses."],
-                    priority=10,
-                ),
-            ],
-            content="",
         ),
     )
-
-    await SystemPromptAssemblySystem().process(world)
+    world.add_component(
+        entity,
+        ToolRegistryComponent(
+            tools={
+                "demo_tool": ToolSchema(
+                    name="demo_tool",
+                    description="Demo capability wiring check",
+                    parameters={"type": "object", "properties": {}},
+                )
+            },
+            handlers={},
+        ),
+    )
+    world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
+    world.register_system(UserPromptNormalizationSystem(priority=-10), priority=-10)
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     runner = Runner()
     await runner.run(world, max_ticks=1)
 
-    outbound_system, outbound_user = _extract_outbound_messages(provider.last_messages)
+    outbound_user = _extract_outbound_user_message(provider.last_messages)
+    rendered_system = world.get_component(entity, RenderedSystemPromptComponent)
+    rendered_user = world.get_component(entity, RenderedUserPromptComponent)
     user_tail = "Please @code summarize latest findings"
 
     print(f"[mode] {mode}")
-    print("\n=== Assembled System Prompt ===")
-    print(outbound_system.content)
+    print("\n=== Rendered System Prompt ===")
+    print(rendered_system.text if rendered_system is not None else "<missing>")
     print("\n=== Outbound User Message (Injected) ===")
     print(outbound_user.content)
+    print("\n=== Rendered User Prompt Component ===")
+    print(rendered_user.text if rendered_user is not None else "<missing>")
+    print("\n=== Rendered Component Presence ===")
+    print(f"rendered system present: {rendered_system is not None}")
+    print(f"rendered user present: {rendered_user is not None}")
     print("\n=== Marker Checks ===")
     print(f"[PROMPT_INJECT:@code]: {'[PROMPT_INJECT:@code]' in outbound_user.content}")
     print(f"[PROMPT_CONTEXT_POOL]: {'[PROMPT_CONTEXT_POOL]' in outbound_user.content}")
