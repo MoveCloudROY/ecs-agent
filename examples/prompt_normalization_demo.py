@@ -4,14 +4,14 @@ from typing import Any
 from collections.abc import AsyncIterator
 
 from ecs_agent.components import (
+    ContextEntry,
     ConversationComponent,
     LLMComponent,
-    OneShotContextPoolComponent,
+    PromptContextQueueComponent,
     UserPromptConfigComponent,
     RenderedSystemPromptComponent,
     RenderedUserPromptComponent,
     ToolRegistryComponent,
-    TurnStateComponent,
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeProvider, OpenAIProvider
@@ -55,7 +55,9 @@ def _build_provider_from_env() -> tuple[LLMProvider, str, str]:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
 
     if api_key:
-        real_provider: LLMProvider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+        real_provider: LLMProvider = OpenAIProvider(
+            api_key=api_key, base_url=base_url, model=model
+        )
         return real_provider, model, "real"
 
     provider = FakeProvider(
@@ -106,25 +108,25 @@ async def main() -> None:
     )
     world.add_component(
         entity,
-        OneShotContextPoolComponent(
-            items=[
-                (
-                    30,
-                    0,
-                    "tool:search",
-                    "source: tool:search\nstatus: success\nresult: citation-A",
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="tool-search-0",
+                    priority=30,
+                    registration_order=0,
+                    source_label="tool:search",
+                    content="source: tool:search\nstatus: success\nresult: citation-A",
                 ),
-                (
-                    20,
-                    1,
-                    "subagent:researcher",
-                    "source: subagent:researcher\nstatus: success\nresult: synthesis-B",
+                ContextEntry(
+                    entry_id="subagent-researcher-1",
+                    priority=20,
+                    registration_order=1,
+                    source_label="subagent:researcher",
+                    content="source: subagent:researcher\nstatus: success\nresult: synthesis-B",
                 ),
-            ],
-            _counter=2,
+            ]
         ),
     )
-    world.add_component(entity, TurnStateComponent(current_turn_id="demo-turn-1"))
     world.add_component(
         entity,
         SystemPromptConfigSpec(

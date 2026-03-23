@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 import pytest
 
 from ecs_agent.components import (
-    OneShotContextPoolComponent,
+    ContextEntry,
+    PromptContextQueueComponent,
+    PromptContextReservationComponent,
     UserPromptConfigComponent,
     ToolResultsComponent,
 )
@@ -28,12 +30,22 @@ async def test_collector_orders_entries_by_priority_desc_then_registration_order
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        UserPromptConfigComponent(enable_context_pool=True, context_pool_max_chars=10000),
+        UserPromptConfigComponent(
+            enable_context_pool=True, context_pool_max_chars=10000
+        ),
     )
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(
-            items=[(5, 0, "existing", "existing-content")], _counter=1
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="existing-0",
+                    priority=5,
+                    registration_order=0,
+                    source_label="existing",
+                    content="existing-content",
+                )
+            ]
         ),
     )
     world.add_component(
@@ -66,11 +78,15 @@ async def test_collector_orders_entries_by_priority_desc_then_registration_order
 
     await system.process(world)
 
-    pool = world.get_component(entity_id, OneShotContextPoolComponent)
-    assert pool is not None
-    assert len(pool.items) == 4
-    assert pool.items == sorted(pool.items, key=lambda item: (-item[0], item[1]))
-    for _, _, source, content in pool.items:
+    queue = world.get_component(entity_id, PromptContextQueueComponent)
+    assert queue is not None
+    assert len(queue.entries) == 4
+    assert queue.entries == sorted(
+        queue.entries, key=lambda entry: (-entry.priority, entry.registration_order)
+    )
+    for entry in queue.entries:
+        source = entry.source_label
+        content = entry.content
         if source == "existing":
             continue
         assert "source:" in content
@@ -84,15 +100,27 @@ async def test_collector_orders_entries_by_priority_desc_then_registration_order
 async def test_collector_truncation_appends_footer_when_entries_are_dropped() -> None:
     world = World()
     entity_id = world.create_entity()
-    existing_items = [
-        (STRUCTURED_OUTPUT_CONTEXT_PRIORITY, 0, "structured-output:0", "first"),
-        (STRUCTURED_OUTPUT_CONTEXT_PRIORITY, 1, "structured-output:1", "second"),
+    existing_entries = [
+        ContextEntry(
+            entry_id="structured-output-0",
+            priority=STRUCTURED_OUTPUT_CONTEXT_PRIORITY,
+            registration_order=0,
+            source_label="structured-output:0",
+            content="first",
+        ),
+        ContextEntry(
+            entry_id="structured-output-1",
+            priority=STRUCTURED_OUTPUT_CONTEXT_PRIORITY,
+            registration_order=1,
+            source_label="structured-output:1",
+            content="second",
+        ),
     ]
     footer = f"{CONTEXT_POOL_OVERFLOW_FOOTER_PREFIX} dropped_entries=1"
     max_chars = (
-        len(existing_items[0][3])
+        len(existing_entries[0].content)
         + len(CONTEXT_ENTRY_DELIMITER)
-        + len(existing_items[1][3])
+        + len(existing_entries[1].content)
         + len(CONTEXT_ENTRY_DELIMITER)
         + len(footer)
     )
@@ -105,7 +133,7 @@ async def test_collector_truncation_appends_footer_when_entries_are_dropped() ->
     )
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(items=list(existing_items), _counter=2),
+        PromptContextQueueComponent(entries=list(existing_entries)),
     )
     world.add_component(
         entity_id,
@@ -117,25 +145,39 @@ async def test_collector_truncation_appends_footer_when_entries_are_dropped() ->
     )
     await system.process(world)
 
-    pool = world.get_component(entity_id, OneShotContextPoolComponent)
-    assert pool is not None
-    assert len(pool.items) == 3
-    assert pool.items[0] == existing_items[0]
-    assert pool.items[1] == existing_items[1]
-    assert pool.items[2][2] == CONTEXT_POOL_OVERFLOW_SOURCE
-    assert pool.items[2][3] == footer
+    queue = world.get_component(entity_id, PromptContextQueueComponent)
+    assert queue is not None
+    assert len(queue.entries) == 3
+    assert queue.entries[0] == existing_entries[0]
+    assert queue.entries[1] == existing_entries[1]
+    assert queue.entries[2].source_label == CONTEXT_POOL_OVERFLOW_SOURCE
+    assert queue.entries[2].content == footer
 
 
 @pytest.mark.asyncio
 async def test_collector_truncation_drops_more_entries_to_fit_footer() -> None:
     world = World()
     entity_id = world.create_entity()
-    existing_items = [
-        (STRUCTURED_OUTPUT_CONTEXT_PRIORITY, 0, "structured-output:0", "alpha"),
-        (STRUCTURED_OUTPUT_CONTEXT_PRIORITY, 1, "structured-output:1", "beta"),
+    existing_entries = [
+        ContextEntry(
+            entry_id="structured-output-0",
+            priority=STRUCTURED_OUTPUT_CONTEXT_PRIORITY,
+            registration_order=0,
+            source_label="structured-output:0",
+            content="alpha",
+        ),
+        ContextEntry(
+            entry_id="structured-output-1",
+            priority=STRUCTURED_OUTPUT_CONTEXT_PRIORITY,
+            registration_order=1,
+            source_label="structured-output:1",
+            content="beta",
+        ),
     ]
     footer = f"{CONTEXT_POOL_OVERFLOW_FOOTER_PREFIX} dropped_entries=2"
-    max_chars = len(existing_items[0][3]) + len(CONTEXT_ENTRY_DELIMITER) + len(footer)
+    max_chars = (
+        len(existing_entries[0].content) + len(CONTEXT_ENTRY_DELIMITER) + len(footer)
+    )
 
     world.add_component(
         entity_id,
@@ -145,7 +187,7 @@ async def test_collector_truncation_drops_more_entries_to_fit_footer() -> None:
     )
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(items=list(existing_items), _counter=2),
+        PromptContextQueueComponent(entries=list(existing_entries)),
     )
     world.add_component(
         entity_id,
@@ -157,32 +199,41 @@ async def test_collector_truncation_drops_more_entries_to_fit_footer() -> None:
     )
     await system.process(world)
 
-    pool = world.get_component(entity_id, OneShotContextPoolComponent)
-    assert pool is not None
-    assert len(pool.items) == 2
-    assert pool.items[0] == existing_items[0]
-    assert pool.items[1][2] == CONTEXT_POOL_OVERFLOW_SOURCE
-    assert pool.items[1][3] == footer
+    queue = world.get_component(entity_id, PromptContextQueueComponent)
+    assert queue is not None
+    assert len(queue.entries) == 2
+    assert queue.entries[0] == existing_entries[0]
+    assert queue.entries[1].source_label == CONTEXT_POOL_OVERFLOW_SOURCE
+    assert queue.entries[1].content == footer
 
 
 @pytest.mark.asyncio
 async def test_collector_does_not_clear_pool_state_or_items() -> None:
     world = World()
     entity_id = world.create_entity()
-    original_item = (1, 0, "baseline", "keep-me")
-    world.add_component(
-        entity_id,
-        UserPromptConfigComponent(enable_context_pool=True, context_pool_max_chars=10000),
+    original_entry = ContextEntry(
+        entry_id="baseline-0",
+        priority=1,
+        registration_order=0,
+        source_label="baseline",
+        content="keep-me",
+    )
+    original_reservation = PromptContextReservationComponent(
+        reservation_id="reservation-123",
+        created_at_tick=7,
+        reserved_entries=[original_entry],
     )
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(
-            items=[original_item],
-            state="reserved",
-            reserved_turn_id="turn-123",
-            _counter=1,
+        UserPromptConfigComponent(
+            enable_context_pool=True, context_pool_max_chars=10000
         ),
     )
+    world.add_component(
+        entity_id,
+        PromptContextQueueComponent(entries=[original_entry]),
+    )
+    world.add_component(entity_id, original_reservation)
 
     system = PromptContextCollectorSystem(
         now_provider=lambda: datetime(2026, 3, 18, 0, 0, 0, tzinfo=timezone.utc)
@@ -198,25 +249,34 @@ async def test_collector_does_not_clear_pool_state_or_items() -> None:
     )
     await system.process(world)
 
-    pool = world.get_component(entity_id, OneShotContextPoolComponent)
-    assert pool is not None
-    assert pool.state == "reserved"
-    assert pool.reserved_turn_id == "turn-123"
-    assert original_item in pool.items
+    queue = world.get_component(entity_id, PromptContextQueueComponent)
+    reservation = world.get_component(entity_id, PromptContextReservationComponent)
+    assert queue is not None
+    assert reservation is not None
+    assert original_entry in queue.entries
+    assert reservation == original_reservation
 
 
 @pytest.mark.asyncio
 async def test_collector_non_opt_in_entity_is_unchanged() -> None:
     world = World()
     entity_id = world.create_entity()
-    original_item = (1, 0, "baseline", "keep-me")
-    world.add_component(
-        entity_id,
-        UserPromptConfigComponent(enable_context_pool=False, context_pool_max_chars=10000),
+    original_entry = ContextEntry(
+        entry_id="baseline-0",
+        priority=1,
+        registration_order=0,
+        source_label="baseline",
+        content="keep-me",
     )
     world.add_component(
         entity_id,
-        OneShotContextPoolComponent(items=[original_item], _counter=1),
+        UserPromptConfigComponent(
+            enable_context_pool=False, context_pool_max_chars=10000
+        ),
+    )
+    world.add_component(
+        entity_id,
+        PromptContextQueueComponent(entries=[original_entry]),
     )
 
     system = PromptContextCollectorSystem(
@@ -233,7 +293,6 @@ async def test_collector_non_opt_in_entity_is_unchanged() -> None:
     )
     await system.process(world)
 
-    pool = world.get_component(entity_id, OneShotContextPoolComponent)
-    assert pool is not None
-    assert pool.items == [original_item]
-    assert pool._counter == 1
+    queue = world.get_component(entity_id, PromptContextQueueComponent)
+    assert queue is not None
+    assert queue.entries == [original_entry]
