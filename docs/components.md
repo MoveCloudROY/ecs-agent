@@ -50,7 +50,7 @@ world.add_component(agent, ConversationComponent(messages=[]))
 ```
 
 ### SystemPromptComponent
-Defines the base system prompt used to guide LLM behavior.
+Legacy component that stores the system prompt template and rendered content. For new agents, prefer `PromptConfigSpec` with `SystemPromptRenderSystem`.
 
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
@@ -58,18 +58,48 @@ Defines the base system prompt used to guide LLM behavior.
 | `sections` | `list[PromptSectionSpec]` | `[]` | List of prompt sections to inject into placeholders |
 | `content` | `str` | `""` | Rendered system prompt output |
 
-**Used by:** `ReasoningSystem`, `PlanningSystem`, `ReplanningSystem`
+**Used by:** `ReasoningSystem`, `PlanningSystem`, `ReplanningSystem` (legacy path)
+
+---
+
+### PromptConfigSpec
+New-style prompt spec using `${name}` placeholder templates. Processed by `SystemPromptRenderSystem`.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `template_source` | `PromptTemplateSource` | required | Inline string or file path for the template |
+| `placeholder_specs` | `dict[str, PlaceholderSpec]` | `{}` | Per-placeholder resolver specs (static, callable, or file) |
+
+**Produces:** `RenderedSystemPromptComponent` (via `SystemPromptRenderSystem`)
 
 **Usage:**
 ```python
-from ecs_agent.components import SystemPromptComponent
-from ecs_agent.prompts.contracts import PromptSectionSpec
+from ecs_agent.prompts.contracts import PromptConfigSpec, PromptTemplateSource
 
-world.add_component(agent, SystemPromptComponent(
-    template="You are a specialized code reviewer.\n\n$toolSelection",
-    sections=[PromptSectionSpec(title="toolSelection", lines=["Use PEP8 style."])]
+world.add_component(entity, PromptConfigSpec(
+    template_source=PromptTemplateSource(
+        inline="You are a helpful assistant. Tools: ${_installed_tools}"
+    )
 ))
+```
 
+---
+
+### RenderedSystemPromptComponent
+Output component written by `SystemPromptRenderSystem` containing the fully resolved system prompt for the current tick. Consumed by `ReasoningSystem`, `PlanningSystem`, `ReplanningSystem`.
+
+| Name | Type | Description |
+| :--- | :--- | :--- |
+| `text` | `str` | Fully rendered system prompt with all `${name}` placeholders resolved |
+
+---
+
+### RenderedUserPromptComponent
+Output component written by `UserPromptNormalizationSystem` containing the normalized user message for the current tick. Stored conversation history is never mutated.
+
+| Name | Type | Description |
+| :--- | :--- | :--- |
+| `text` | `str` | Normalized user message with trigger injections prepended |
 ### `EntityRegistryComponent`
 
 Internal registry for named entity resolution and tagging. Usually managed by World via `register_entity()`, not directly attached to entities.

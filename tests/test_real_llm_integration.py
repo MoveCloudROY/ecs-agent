@@ -42,12 +42,10 @@ from ecs_agent.conversation_tree import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import FORBIDDEN_FIELDS
-from ecs_agent.prompts.contracts import PromptSectionSpec
 from ecs_agent.providers import OpenAIProvider
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
-from ecs_agent.systems.system_prompt_assembly import SystemPromptAssemblySystem
 from ecs_agent.types import (
     CompletionResult,
     InterruptionReason,
@@ -518,34 +516,17 @@ async def test_real_llm_prompt_keyword_injection_smoke() -> None:
     world.add_component(
         entity,
         SystemPromptComponent(
-            template=(
+            content=(
                 "# Markdown Linked Prompt\n\n"
-                "${toolSelection}\n\n"
-                "${exploreSection}\n\n"
-                "${librarianSection}"
+                "## toolSelection\n\n"
+                "Follow the workflow from markdown-linked skills.\n\n"
+                "## exploreSection\n\n"
+                "Use evidence from context pool entries first.\n\n"
+                "## librarianSection\n\n"
+                "Preserve concrete citations in responses."
             ),
-            sections=[
-                PromptSectionSpec(
-                    title="toolSelection",
-                    lines=["Follow the workflow from markdown-linked skills."],
-                    priority=30,
-                ),
-                PromptSectionSpec(
-                    title="exploreSection",
-                    lines=["Use evidence from context pool entries first."],
-                    priority=20,
-                ),
-                PromptSectionSpec(
-                    title="librarianSection",
-                    lines=["Preserve concrete citations in responses."],
-                    priority=10,
-                ),
-            ],
-            content="",
         ),
     )
-
-    await SystemPromptAssemblySystem().process(world)
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
@@ -1119,3 +1100,136 @@ async def test_real_llm_agent_reads_and_reports_file_content(tmp_path: Any) -> N
     assert any("1#" in msg.content for msg in tool_messages)
     assert conv.messages[-1].role == "assistant"
     assert len(conv.messages[-1].content.strip()) > 0
+
+
+# ============================================================================
+# T7: Rendered Prompt Pipeline Real-LLM Tests
+# ============================================================================
+
+
+class _CapturingProvider:
+    """Wraps a real provider and captures the outbound messages."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self.captured_messages: list[Message] = []
+
+    async def complete(
+        self,
+        messages: list[Message],
+        tools: list[Any] | None = None,
+        stream: bool = False,
+        response_format: dict[str, Any] | None = None,
+    ) -> CompletionResult | Any:
+        self.captured_messages = list(messages)
+        return await self._inner.complete(  # type: ignore[no-any-return]
+            messages, tools=tools, stream=stream, response_format=response_format
+        )
+
+
+@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.asyncio
+async def test_real_llm_rendered_system_prompt_reaches_provider() -> None:
+    """Verify RenderedSystemPromptComponent.text reaches the provider as system message."""
+    from ecs_agent.components import ToolRegistryComponent, TurnStateComponent
+    from ecs_agent.components.definitions import RenderedSystemPromptComponent
+    from ecs_agent.prompts.contracts import PromptConfigSpec, PromptTemplateSource
+    from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
+    from ecs_agent.types import ToolSchema as _ToolSchema
+
+    inner = OpenAIProvider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    capturing: _CapturingProvider = _CapturingProvider(inner)
+
+    world = World()
+    entity = world.create_entity()
+    world.add_component(entity, LLMComponent(provider=capturing, model=MODEL))  # type: ignore[arg-type]
+    world.add_component(
+        entity,
+        ConversationComponent(
+            messages=[Message(role="user", content="What tools do you have?")]
+        ),
+    )
+    world.add_component(entity, TurnStateComponent(current_turn_id="t1"))
+    world.add_component(
+        entity,
+        PromptConfigSpec(
+            template_source=PromptTemplateSource(
+                inline="You are a Python expert. Available tools:\n${_installed_tools}"
+            )
+        ),
+    )
+    world.add_component(
+        entity,
+        ToolRegistryComponent(
+            tools={
+                "bash": _ToolSchema(
+                    name="bash",
+                    description="Run shell commands",
+                    parameters={"type": "object", "properties": {}},
+                )
+            },
+            handlers={},
+        ),
+    )
+    world.register_system(SystemPromptRenderSystem(), priority=-20)
+    world.register_system(ReasoningSystem(priority=0), priority=0)
+    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
+
+    runner = Runner()
+    await runner.run(world, max_ticks=1)
+
+    rendered = world.get_component(entity, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert len(capturing.captured_messages) >= 1
+    sys_msg = capturing.captured_messages[0]
+    assert sys_msg.role == "system"
+    assert sys_msg.content == rendered.text
+    assert "You are a Python expert" in sys_msg.content
+    assert "bash" in sys_msg.content  # ${_installed_tools} was rendered
+
+
+@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.asyncio
+async def test_real_llm_rendered_user_prompt_trigger_injection() -> None:
+    """Verify RenderedUserPromptComponent.text contains injected trigger content."""
+    from ecs_agent.components import PromptConfigComponent, TurnStateComponent
+    from ecs_agent.components.definitions import RenderedUserPromptComponent
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+
+    inner = OpenAIProvider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    capturing: _CapturingProvider = _CapturingProvider(inner)
+
+    world = World()
+    entity = world.create_entity()
+    world.add_component(entity, LLMComponent(provider=capturing, model=MODEL))  # type: ignore[arg-type]
+    world.add_component(
+        entity,
+        ConversationComponent(
+            messages=[Message(role="user", content="Please @test verify the output")]
+        ),
+    )
+    world.add_component(entity, TurnStateComponent(current_turn_id="t2"))
+    world.add_component(
+        entity,
+        PromptConfigComponent(
+            trigger_templates={"@test": "Use testing best practices."},
+            enable_context_pool=False,
+        ),
+    )
+    world.register_system(UserPromptNormalizationSystem(), priority=-10)
+    world.register_system(ReasoningSystem(priority=0), priority=0)
+    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
+
+    runner = Runner()
+    await runner.run(world, max_ticks=1)
+
+    rendered = world.get_component(entity, RenderedUserPromptComponent)
+    assert rendered is not None
+    assert len(capturing.captured_messages) >= 1
+    user_msg = capturing.captured_messages[-1]
+    assert user_msg.role == "user"
+    assert user_msg.content == rendered.text
+    assert "Use testing best practices." in user_msg.content
+    assert "Please @test verify the output" in user_msg.content

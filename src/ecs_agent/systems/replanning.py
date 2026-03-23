@@ -15,6 +15,8 @@ from ecs_agent.components import (
     OneShotContextPoolComponent,
     PlanComponent,
     PromptConfigComponent,
+    RenderedSystemPromptComponent,
+    RenderedUserPromptComponent,
     ScratchbookIndexComponent,
     SystemPromptComponent,
     TurnStateComponent,
@@ -30,6 +32,21 @@ from ecs_agent.prompts.message_assembly import (
 )
 from ecs_agent.scratchbook import ScratchbookService
 from ecs_agent.types import CompletionResult, EntityId, Message, PlanRevisedEvent
+
+
+def _substitute_last_user_message(
+    messages: list[Message], new_text: str
+) -> list[Message]:
+    if not messages:
+        return [Message(role="user", content=new_text)]
+
+    result = list(messages)
+    for index in range(len(result) - 1, -1, -1):
+        if result[index].role == "user":
+            result[index] = Message(role="user", content=new_text)
+            return result
+
+    return [*result, Message(role="user", content=new_text)]
 
 
 class ReplanningSystem:
@@ -78,14 +95,33 @@ class ReplanningSystem:
                 continue
 
             # Build replanning prompt
+            rendered_system_prompt = world.get_component(
+                entity_id, RenderedSystemPromptComponent
+            )
+            system_prompt = world.get_component(entity_id, SystemPromptComponent)
+            system_prompt_text = (
+                rendered_system_prompt.text
+                if rendered_system_prompt is not None
+                else (
+                    system_prompt.content
+                    if system_prompt is not None
+                    else (llm_component.system_prompt or None)
+                )
+            )
+            rendered_user_prompt = world.get_component(
+                entity_id, RenderedUserPromptComponent
+            )
             prompt_config = world.get_component(entity_id, PromptConfigComponent)
             context_pool = world.get_component(entity_id, OneShotContextPoolComponent)
             turn_state = world.get_component(entity_id, TurnStateComponent)
-            context_pool_enabled = (
-                prompt_config.enable_context_pool
-                if prompt_config is not None
-                else False
-            )
+            use_rendered_user_prompt = rendered_user_prompt is not None
+            context_pool_enabled = False
+            if not use_rendered_user_prompt:
+                context_pool_enabled = (
+                    prompt_config.enable_context_pool
+                    if prompt_config is not None
+                    else False
+                )
             turn_id = ""
             reserved_context_pool_items: list[tuple[int, int, str, str]] | None = None
             if context_pool_enabled and context_pool is not None:
@@ -104,6 +140,12 @@ class ReplanningSystem:
                 entity_id,
                 plan,
                 conversation,
+                system_prompt_text=system_prompt_text,
+                rendered_user_text=(
+                    rendered_user_prompt.text
+                    if rendered_user_prompt is not None
+                    else None
+                ),
                 prompt_config=prompt_config,
                 context_pool_enabled=context_pool_enabled,
                 context_pool_items=reserved_context_pool_items,
@@ -169,6 +211,8 @@ class ReplanningSystem:
         plan: PlanComponent,
         conversation: ConversationComponent,
         *,
+        system_prompt_text: str | None,
+        rendered_user_text: str | None,
         prompt_config: PromptConfigComponent | None,
         context_pool_enabled: bool,
         context_pool_items: list[tuple[int, int, str, str]] | None,
@@ -198,19 +242,6 @@ class ReplanningSystem:
         for i in range(plan.current_step, len(plan.steps)):
             remaining_lines.append(f"{i + 1}. {plan.steps[i]}")
 
-        # System prompt
-        system_prompt = world.get_component(entity_id, SystemPromptComponent)
-        keyword_registry = (
-            build_keyword_registry(prompt_config.trigger_templates)
-            if prompt_config is not None and prompt_config.trigger_templates
-            else None
-        )
-        trigger_specs = (
-            build_trigger_specs(prompt_config.trigger_templates)
-            if prompt_config is not None and prompt_config.trigger_templates
-            else None
-        )
-
         replanning_prompt = (
             "You are a planning revision agent. Review the execution so far "
             "and revise remaining steps if needed.\n\n"
@@ -227,8 +258,28 @@ class ReplanningSystem:
         )
 
         conversation_messages.append(Message(role="user", content=replanning_prompt))
+        if rendered_user_text is not None:
+            return assemble_messages(
+                system_prompt=system_prompt_text,
+                conversation_messages=_substitute_last_user_message(
+                    conversation_messages,
+                    rendered_user_text,
+                ),
+                enable_context_pool=False,
+            )
+
+        keyword_registry = (
+            build_keyword_registry(prompt_config.trigger_templates)
+            if prompt_config is not None and prompt_config.trigger_templates
+            else None
+        )
+        trigger_specs = (
+            build_trigger_specs(prompt_config.trigger_templates)
+            if prompt_config is not None and prompt_config.trigger_templates
+            else None
+        )
         return assemble_messages(
-            system_prompt=system_prompt.content if system_prompt is not None else None,
+            system_prompt=system_prompt_text,
             conversation_messages=conversation_messages,
             enable_context_pool=context_pool_enabled,
             context_pool_items=context_pool_items,

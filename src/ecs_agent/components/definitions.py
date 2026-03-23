@@ -445,3 +445,15 @@ class TurnStateComponent:
 
     current_turn_id: str = ""
     last_injected_turn_id: str = ""
+
+
+@dataclass(slots=True)
+class RenderedSystemPromptComponent:
+    text: str
+    placeholder_snapshot: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class RenderedUserPromptComponent:
+    text: str
+    turn_id: str
