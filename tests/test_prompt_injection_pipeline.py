@@ -6,6 +6,7 @@ from ecs_agent.components import (
     LLMComponent,
     PromptContextQueueComponent,
     PromptContextReservationComponent,
+    PlanComponent,
     RenderedUserPromptComponent,
     UserPromptConfigComponent,
     SystemPromptComponent,
@@ -23,6 +24,7 @@ from ecs_agent.systems.prompt_context_collector import (
     CONTEXT_POOL_OVERFLOW_FOOTER_PREFIX,
     PromptContextCollectorSystem,
 )
+from ecs_agent.systems.planning import PlanningSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import (
     CompletionResult,
@@ -639,3 +641,131 @@ async def test_overflow_footer_is_injected_when_context_pool_entries_are_dropped
     assert "structured_output:result-1" not in sent_user
     assert footer in sent_user
     assert sent_user.endswith("Need summary")
+
+
+@pytest.mark.asyncio
+async def test_reasoning_uses_prepare_outbound_messages_shared_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = World()
+    provider = RecordingProvider()
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[Message(role="user", content="Original user text")]
+        ),
+    )
+    queue = PromptContextQueueComponent(
+        entries=[
+            ContextEntry(
+                entry_id="entry-1",
+                priority=30,
+                registration_order=0,
+                source_label="tool:search",
+                content="source: tool\nresult: evidence",
+            )
+        ]
+    )
+    world.add_component(entity_id, queue)
+    world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
+
+    reservation = PromptContextReservationComponent(
+        reservation_id="reservation-shared-path",
+        created_at_tick=0,
+        reserved_entries=list(queue.entries),
+    )
+
+    def fake_prepare_outbound_messages(
+        world_obj: World,
+        target_entity_id: int,
+        *,
+        system_prompt: str | None = None,
+        prefix_messages: list[Message] | None = None,
+        current_tick: int,
+    ) -> tuple[list[Message], PromptContextReservationComponent | None]:
+        _ = world_obj
+        _ = system_prompt
+        _ = prefix_messages
+        _ = current_tick
+        assert target_entity_id == entity_id
+        return [
+            Message(role="user", content="[shared-path] reasoning payload")
+        ], reservation
+
+    monkeypatch.setattr(
+        "ecs_agent.systems.reasoning.prepare_outbound_messages",
+        fake_prepare_outbound_messages,
+        raising=False,
+    )
+
+    await ReasoningSystem().process(world)
+
+    assert provider.calls[0][-1].content == "[shared-path] reasoning payload"
+    assert world.get_component(entity_id, PromptContextReservationComponent) is None
+    assert queue.entries == []
+
+
+@pytest.mark.asyncio
+async def test_planning_uses_prepare_outbound_messages_shared_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = World()
+    provider = RecordingProvider()
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Plan this")]),
+    )
+    world.add_component(entity_id, PlanComponent(steps=["step one"], current_step=0))
+    queue = PromptContextQueueComponent(
+        entries=[
+            ContextEntry(
+                entry_id="entry-1",
+                priority=30,
+                registration_order=0,
+                source_label="tool:search",
+                content="source: tool\nresult: evidence",
+            )
+        ]
+    )
+    world.add_component(entity_id, queue)
+    world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
+
+    reservation = PromptContextReservationComponent(
+        reservation_id="reservation-plan-shared-path",
+        created_at_tick=0,
+        reserved_entries=list(queue.entries),
+    )
+
+    def fake_prepare_outbound_messages(
+        world_obj: World,
+        target_entity_id: int,
+        *,
+        system_prompt: str | None = None,
+        prefix_messages: list[Message] | None = None,
+        current_tick: int,
+    ) -> tuple[list[Message], PromptContextReservationComponent | None]:
+        _ = world_obj
+        _ = system_prompt
+        _ = current_tick
+        assert target_entity_id == entity_id
+        assert prefix_messages is not None
+        return [
+            *prefix_messages,
+            Message(role="user", content="[shared-path] planning payload"),
+        ], reservation
+
+    monkeypatch.setattr(
+        "ecs_agent.systems.planning.prepare_outbound_messages",
+        fake_prepare_outbound_messages,
+        raising=False,
+    )
+
+    await PlanningSystem().process(world)
+
+    assert provider.calls[0][-1].content == "[shared-path] planning payload"
+    assert world.get_component(entity_id, PromptContextReservationComponent) is None
+    assert queue.entries == []
