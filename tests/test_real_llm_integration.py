@@ -1178,9 +1178,12 @@ async def test_real_llm_rendered_system_prompt_reaches_provider() -> None:
     runner = Runner()
     await runner.run(world, max_ticks=1)
 
+    rendered = world.get_component(entity, RenderedSystemPromptComponent)
+    assert rendered is not None
     assert len(capturing.captured_messages) >= 1
     sys_msg = capturing.captured_messages[0]
     assert sys_msg.role == "system"
+    assert sys_msg.content == rendered.text
     assert "You are a Python expert" in sys_msg.content
     assert "bash" in sys_msg.content  # ${_installed_tools} was rendered
 
@@ -1222,8 +1225,11 @@ async def test_real_llm_rendered_user_prompt_trigger_injection() -> None:
     runner = Runner()
     await runner.run(world, max_ticks=1)
 
+    rendered = world.get_component(entity, RenderedUserPromptComponent)
+    assert rendered is not None
     assert len(capturing.captured_messages) >= 1
     user_msg = capturing.captured_messages[-1]
     assert user_msg.role == "user"
+    assert user_msg.content == rendered.text
     assert "Use testing best practices." in user_msg.content
     assert "Please @test verify the output" in user_msg.content
