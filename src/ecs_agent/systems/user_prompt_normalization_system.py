@@ -65,6 +65,15 @@ class UserPromptNormalizationSystem:
                 trigger_specs=trigger_specs,
             )
 
+            logger.debug(
+                "user_prompt_normalized",
+                entity_id=entity_id,
+                raw_length=len(raw_user_text),
+                normalized_length=len(normalized_text),
+                trigger_count=len(trigger_specs) if trigger_specs else 0,
+                prompt_text=normalized_text,
+            )
+
             world.add_component(
                 entity_id,
                 RenderedUserPromptComponent(text=normalized_text),
