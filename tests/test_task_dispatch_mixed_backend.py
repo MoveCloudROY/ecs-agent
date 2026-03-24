@@ -14,6 +14,7 @@ from ecs_agent.components import (
     SubagentRegistryComponent,
     ToolRegistryComponent,
 )
+from ecs_agent.prompts.contracts import TriggerSpec
 from ecs_agent.core.world import World
 from ecs_agent.providers.fake_provider import FakeProvider
 from ecs_agent.task.executor import ExecutionResult, TaskExecutor
@@ -646,7 +647,7 @@ async def test_local_backend_event_trigger_injection_is_transient() -> None:
     world.add_component(
         agent,
         UserPromptConfigComponent(
-            triggers={"work": "Prefer successful tool outputs"},
+            triggers=[TriggerSpec(pattern="work", match_mode="keyword", action="skill", content="Prefer successful tool outputs", priority=0)],
             enable_context_pool=True,
         ),
     )

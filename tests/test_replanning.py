@@ -11,6 +11,7 @@ from ecs_agent.components import (
     PromptContextReservationComponent,
     UserPromptConfigComponent,
 )
+from ecs_agent.prompts.contracts import TriggerSpec
 from ecs_agent.core import World
 from ecs_agent.providers import FakeProvider
 from ecs_agent.systems.replanning import ReplanningSystem
@@ -449,7 +450,7 @@ async def test_event_trigger_injection_is_transient_for_replanning_provider_call
     world.add_component(
         entity_id,
         UserPromptConfigComponent(
-            triggers={"objective": "Prefer successful tool context"},
+            triggers=[TriggerSpec(pattern="objective", match_mode="keyword", action="skill", content="Prefer successful tool context", priority=0)],
             enable_context_pool=True,
         ),
     )

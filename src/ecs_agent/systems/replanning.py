@@ -90,24 +90,18 @@ class ReplanningSystem:
             context_queue = world.get_component(entity_id, PromptContextQueueComponent)
             runner_state = world.get_component(entity_id, RunnerStateComponent)
             current_tick = runner_state.current_tick if runner_state is not None else 0
-            original_messages = list(conversation.messages)
-            conversation.messages = [
-                Message(
-                    role="user",
-                    content=self._build_replanning_prompt(
-                        plan=plan, conversation=conversation
-                    ),
-                )
-            ]
-            try:
-                messages, context_reservation = prepare_outbound_messages(
-                    world,
-                    entity_id,
-                    system_prompt=system_prompt_text,
-                    current_tick=current_tick,
-                )
-            finally:
-                conversation.messages = original_messages
+            replanning_prompt = self._build_replanning_prompt(
+                plan=plan, conversation=conversation
+            )
+            messages, context_reservation = prepare_outbound_messages(
+                world,
+                entity_id,
+                system_prompt=system_prompt_text,
+                current_tick=current_tick,
+                conversation_override=[
+                    Message(role="user", content=replanning_prompt)
+                ],
+            )
 
             if context_reservation is not None:
                 world.add_component(entity_id, context_reservation)

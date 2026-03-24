@@ -8,10 +8,22 @@ from ecs_agent.components.definitions import (
 )
 from ecs_agent.core import World
 from ecs_agent.prompts.contracts import TriggerSpec
+from ecs_agent.prompts.user_prompt_rendering import (
+    render_user_prompt_text,
+)
 from ecs_agent.systems.user_prompt_normalization_system import (
     UserPromptNormalizationSystem,
 )
 from ecs_agent.types import Message
+
+
+_GREET_TRIGGER = TriggerSpec(
+    pattern="@greet",
+    match_mode="keyword",
+    action="skill",
+    content="Be greeting",
+    priority=0,
+)
 
 
 async def test_no_trigger_passthrough() -> None:
@@ -38,7 +50,7 @@ async def test_keyword_trigger_prepends_content() -> None:
     )
     world.add_component(
         entity_id,
-        UserPromptConfigComponent(triggers={"@greet": "Be greeting"}),
+        UserPromptConfigComponent(triggers=[_GREET_TRIGGER]),
     )
 
     await UserPromptNormalizationSystem().process(world)
@@ -88,7 +100,7 @@ async def test_rendered_text_is_transient_not_stored() -> None:
     )
     world.add_component(
         entity_id,
-        UserPromptConfigComponent(triggers={"@greet": "Be greeting"}),
+        UserPromptConfigComponent(triggers=[_GREET_TRIGGER]),
     )
 
     await UserPromptNormalizationSystem().process(world)
@@ -113,7 +125,7 @@ async def test_duplicate_injection_marker_not_doubled() -> None:
     )
     world.add_component(
         entity_id,
-        UserPromptConfigComponent(triggers={"@greet": "Be greeting"}),
+        UserPromptConfigComponent(triggers=[_GREET_TRIGGER]),
     )
 
     await UserPromptNormalizationSystem().process(world)
@@ -130,7 +142,7 @@ async def test_empty_triggers_passthrough() -> None:
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="hello")]),
     )
-    world.add_component(entity_id, UserPromptConfigComponent(triggers={}))
+    world.add_component(entity_id, UserPromptConfigComponent(triggers=[]))
 
     await UserPromptNormalizationSystem().process(world)
 
@@ -198,8 +210,56 @@ async def test_stale_rendered_prompt_removed_when_no_latest_user_message() -> No
     assert stale_rendered is None
 
 
-
 async def test_rendered_user_prompt_component_accepts_only_text() -> None:
     """Verify RenderedUserPromptComponent can be constructed with only text field."""
     component = RenderedUserPromptComponent(text="hello world")
     assert component.text == "hello world"
+
+
+async def test_render_user_prompt_text_no_triggers_returns_unchanged() -> None:
+    user_text = "hello world"
+
+    rendered = render_user_prompt_text(user_text)
+
+    assert rendered == "hello world"
+
+
+async def test_render_user_prompt_text_trigger_specs_injects_content() -> None:
+    user_text = "please @greet the user"
+
+    rendered = render_user_prompt_text(
+        user_text,
+        trigger_specs=[_GREET_TRIGGER],
+    )
+
+    assert rendered.startswith("[PROMPT_INJECT:@greet]\nBe greeting")
+    assert rendered.endswith("please @greet the user")
+
+
+async def test_render_user_prompt_text_idempotency_skips_if_sentinel_present() -> None:
+    already_injected = "[PROMPT_INJECT:@greet]\nBe greeting\n\nplease @greet the user"
+
+    rendered = render_user_prompt_text(
+        already_injected,
+        trigger_specs=[_GREET_TRIGGER],
+    )
+
+    assert rendered == already_injected
+    assert rendered.count("[PROMPT_INJECT:") == 1
+
+
+async def test_render_user_prompt_text_replace_action() -> None:
+    rendered = render_user_prompt_text(
+        "please @rewrite this",
+        trigger_specs=[
+            TriggerSpec(
+                pattern="@rewrite",
+                match_mode="keyword",
+                action="replace",
+                content="Replacement prompt",
+                priority=0,
+            )
+        ],
+    )
+
+    assert rendered == "Replacement prompt"

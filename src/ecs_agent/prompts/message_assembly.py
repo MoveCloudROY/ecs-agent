@@ -12,6 +12,7 @@ from ecs_agent.prompts.contracts import (
 )
 from ecs_agent.prompts.keyword_injection import inject_triggers
 from ecs_agent.prompts.registry import PromptRegistry
+from ecs_agent.prompts.user_prompt_rendering import render_user_prompt_text
 from ecs_agent.types import Message
 
 CONTEXT_POOL_DELIMITER = "\n\n---\n\n"
@@ -59,8 +60,6 @@ def build_trigger_specs(triggers: dict[str, str]) -> list[TriggerSpec]:
             )
         )
     return trigger_specs
-
-
 
 
 def assemble_messages(
@@ -137,7 +136,25 @@ def prepare_outbound_messages(
     system_prompt: str | None = None,
     prefix_messages: list[Message] | None = None,
     current_tick: int,
+    conversation_override: list[Message] | None = None,
 ) -> tuple[list[Message], PromptContextReservationComponent | None]:
+    """Build the final message list for an LLM provider call.
+
+    Args:
+        world: The ECS world.
+        entity_id: Target entity.
+        system_prompt: Optional system prompt override.
+        prefix_messages: Extra messages inserted after the system prompt.
+        current_tick: Current runner tick (used for context reservation).
+        conversation_override: When supplied, used **instead** of the entity's
+            conversation history.  ``RenderedUserPromptComponent`` substitution
+            and trigger injection via the pre-rendered path are skipped;
+            keyword triggers are applied inline at call-time so the override
+            text still receives trigger processing.
+
+    Returns:
+        ``(messages, context_reservation | None)``
+    """
     from ecs_agent.components.definitions import (
         ConversationComponent,
         ConversationTreeComponent,
@@ -148,18 +165,6 @@ def prepare_outbound_messages(
     )
     from ecs_agent.conversation_tree import get_active_leaf, linearize
 
-    tree = world.get_component(entity_id, ConversationTreeComponent)
-    conversation = world.get_component(entity_id, ConversationComponent)
-
-    conversation_messages: list[Message] = []
-    if tree is not None:
-        active_leaf_id = get_active_leaf(tree)
-        if active_leaf_id is not None:
-            conversation_messages.extend(linearize(tree, active_leaf_id))
-    elif conversation is not None:
-        conversation_messages.extend(conversation.messages)
-
-    rendered_user_prompt = world.get_component(entity_id, RenderedUserPromptComponent)
     prompt_config = world.get_component(entity_id, UserPromptConfigComponent)
     context_queue = world.get_component(entity_id, PromptContextQueueComponent)
     context_reservation = world.get_component(
@@ -170,23 +175,51 @@ def prepare_outbound_messages(
         prompt_config.enable_context_pool if prompt_config is not None else False
     )
 
-    messages_for_assembly = list(conversation_messages)
-    if rendered_user_prompt is not None:
-        messages_for_assembly = _substitute_last_user_message(
-            messages_for_assembly,
-            rendered_user_prompt.text,
+    # -------------------------------------------------------------------
+    # Resolve conversation messages
+    # -------------------------------------------------------------------
+    if conversation_override is not None:
+        # Override path: skip World read, skip RenderedUserPromptComponent.
+        # Convert config triggers to trigger_specs for inline injection.
+        messages_for_assembly = list(conversation_override)
+        trigger_specs: list[TriggerSpec] | None = None
+        if prompt_config is not None and prompt_config.triggers:
+            trigger_specs = list(prompt_config.triggers)
+    else:
+        # Normal path: read from World, apply RenderedUserPromptComponent.
+        tree = world.get_component(entity_id, ConversationTreeComponent)
+        conversation = world.get_component(entity_id, ConversationComponent)
+
+        conversation_messages: list[Message] = []
+        if tree is not None:
+            active_leaf_id = get_active_leaf(tree)
+            if active_leaf_id is not None:
+                conversation_messages.extend(linearize(tree, active_leaf_id))
+        elif conversation is not None:
+            conversation_messages.extend(conversation.messages)
+
+        rendered_user_prompt = world.get_component(
+            entity_id, RenderedUserPromptComponent
         )
 
-    keyword_registry = None
-    trigger_specs = None
-    if (
-        rendered_user_prompt is None
-        and prompt_config is not None
-        and prompt_config.triggers
-    ):
-        keyword_registry = build_keyword_registry(prompt_config.triggers)
-        trigger_specs = build_trigger_specs(prompt_config.triggers)
+        messages_for_assembly = list(conversation_messages)
+        if rendered_user_prompt is not None:
+            messages_for_assembly = _substitute_last_user_message(
+                messages_for_assembly,
+                rendered_user_prompt.text,
+            )
 
+        # Inline fallback: if no pre-rendered prompt, apply triggers at call-time
+        trigger_specs = None
+        if (
+            rendered_user_prompt is None
+            and prompt_config is not None
+            and prompt_config.triggers
+        ):
+            trigger_specs = list(prompt_config.triggers)
+    # -------------------------------------------------------------------
+    # Context pool reservation (always at call-time)
+    # -------------------------------------------------------------------
     reserved_context_pool_items = None
     if context_pool_enabled and context_queue is not None:
         context_reservation = reserve_prompt_context_reservation(
@@ -202,7 +235,6 @@ def prepare_outbound_messages(
         conversation_messages=messages_for_assembly,
         enable_context_pool=context_pool_enabled,
         context_pool_items=reserved_context_pool_items,
-        keyword_registry=keyword_registry,
         trigger_specs=trigger_specs,
     )
     return messages, context_reservation
@@ -216,6 +248,13 @@ def _with_transient_user_injection(
     enable_context_pool: bool,
     context_pool_items: Sequence[ContextEntryProtocol] | None,
 ) -> list[Message]:
+    """Apply transient trigger + context-pool injection to the last user message.
+
+    Trigger injection is performed via one of two paths:
+    * **trigger_specs** (preferred) — delegates to ``render_user_prompt_text``.
+    * **keyword_registry** (legacy) — delegates to ``inject_triggers`` for
+      backward compatibility with direct ``assemble_messages`` callers.
+    """
     if not conversation_messages:
         return []
 
@@ -232,10 +271,16 @@ def _with_transient_user_injection(
     original_text = last_user_message.content
     transformed_text = original_text
 
+    # Trigger injection: prefer shared helper, fall back to legacy registry
     if keyword_registry is not None:
         transformed_text = inject_triggers(
             transformed_text,
             keyword_registry,
+            trigger_specs=trigger_specs,
+        )
+    elif trigger_specs is not None:
+        transformed_text = render_user_prompt_text(
+            transformed_text,
             trigger_specs=trigger_specs,
         )
 
@@ -307,7 +352,6 @@ def _inject_context_block(
         return f"{prefix}\n\n{context_block}\n\n{original_user_text}"
 
     return f"{context_block}\n\n{text_with_keyword}"
-
 
 
 __all__ = [

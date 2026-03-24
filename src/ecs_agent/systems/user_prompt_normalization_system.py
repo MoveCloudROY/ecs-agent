@@ -13,6 +13,10 @@ from ecs_agent.conversation_tree import get_active_leaf, linearize
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.prompts.contracts import TriggerSpec
+from ecs_agent.prompts.user_prompt_rendering import (
+    render_user_prompt_text,
+    _apply_trigger_specs,
+)
 from ecs_agent.types import EntityId, Message
 
 logger = get_logger(__name__)
@@ -24,10 +28,8 @@ class UserPromptNormalizationSystem:
     def __init__(
         self,
         priority: int = 0,
-        trigger_specs: list[TriggerSpec] | None = None,
     ) -> None:
         self.priority = priority
-        self._trigger_specs = trigger_specs or []
 
     async def process(self, world: World) -> None:
         entity_ids: set[EntityId] = set()
@@ -53,17 +55,14 @@ class UserPromptNormalizationSystem:
 
             prompt_config = world.get_component(entity_id, UserPromptConfigComponent)
 
-            normalized_text = raw_user_text
-            if prompt_config is not None and prompt_config.triggers:
-                normalized_text = self.apply_trigger_specs(
-                    user_text=normalized_text,
-                    trigger_specs=self._trigger_specs_from_config(
-                        prompt_config.triggers
-                    ),
-                )
-            normalized_text = self.apply_trigger_specs(
-                user_text=normalized_text,
-                trigger_specs=self._trigger_specs,
+            trigger_specs = (
+                prompt_config.triggers
+                if prompt_config is not None and prompt_config.triggers
+                else None
+            )
+            normalized_text = render_user_prompt_text(
+                raw_user_text,
+                trigger_specs=trigger_specs,
             )
 
             world.add_component(
@@ -73,44 +72,12 @@ class UserPromptNormalizationSystem:
 
     @staticmethod
     def apply_trigger_specs(user_text: str, trigger_specs: list[TriggerSpec]) -> str:
-        """Apply TriggerSpec rules over normalized user text."""
-        if not trigger_specs or "[PROMPT_INJECT:" in user_text:
-            return user_text
+        """Apply TriggerSpec rules over normalized user text.
 
-        ordered_specs = sorted(trigger_specs, key=lambda spec: -spec.priority)
-        for spec in ordered_specs:
-            if not UserPromptNormalizationSystem._matches(spec=spec, text=user_text):
-                continue
-            if spec.action == "replace":
-                return spec.content
-            marker = UserPromptNormalizationSystem._trigger_marker(spec.pattern)
-            return f"{marker}\n{spec.content}\n\n{user_text}"
-
-        return user_text
-
-    @staticmethod
-    def _matches(*, spec: TriggerSpec, text: str) -> bool:
-        if spec.match_mode == "keyword":
-            return spec.pattern in text
-        if spec.match_mode == "prefix":
-            return text.startswith(spec.pattern)
-        return spec.pattern in text
-    @staticmethod
-    def _trigger_marker(pattern: str) -> str:
-        return f"[PROMPT_INJECT:{pattern}]"
-
-    @staticmethod
-    def _trigger_specs_from_config(triggers: dict[str, str]) -> list[TriggerSpec]:
-        return [
-            TriggerSpec(
-                pattern=pattern,
-                match_mode="keyword",
-                action="skill",
-                content=content,
-                priority=0,
-            )
-            for pattern, content in triggers.items()
-        ]
+        Thin wrapper kept for backward compatibility.  Delegates to the
+        shared ``_apply_trigger_specs`` helper in ``user_prompt_rendering``.
+        """
+        return _apply_trigger_specs(user_text, trigger_specs)
 
     @staticmethod
     def _find_last_user_text(messages: list[Message]) -> str | None:

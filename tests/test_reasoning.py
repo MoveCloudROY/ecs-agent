@@ -12,6 +12,7 @@ from ecs_agent.components import (
     TerminalComponent,
     ToolRegistryComponent,
 )
+from ecs_agent.prompts.contracts import TriggerSpec
 from ecs_agent.core import World
 from ecs_agent.providers import FakeProvider
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -560,7 +561,7 @@ async def test_event_trigger_injection_is_transient_for_reasoning_provider_call(
     world.add_component(
         entity_id,
         UserPromptConfigComponent(
-            triggers={"summary": "Prefer using successful tool evidence"},
+            triggers=[TriggerSpec(pattern="summary", match_mode="keyword", action="skill", content="Prefer using successful tool evidence", priority=0)],
             enable_context_pool=True,
         ),
     )

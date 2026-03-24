@@ -15,6 +15,7 @@ from ecs_agent.prompts.registry import (
 )
 from ecs_agent.prompts.keyword_injection import inject_triggers
 from ecs_agent.prompts.message_assembly import assemble_messages, build_keyword_registry
+from ecs_agent.prompts.user_prompt_rendering import render_user_prompt_text
 
 __all__ = [
     "CORE_PLACEHOLDER_KEYS",
@@ -29,4 +30,5 @@ __all__ = [
     "inject_triggers",
     "assemble_messages",
     "build_keyword_registry",
+    "render_user_prompt_text",
 ]

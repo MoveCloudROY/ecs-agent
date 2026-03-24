@@ -31,6 +31,7 @@ from ecs_agent.components import (
     StreamingComponent,
     SystemPromptComponent,
 )
+from ecs_agent.prompts.contracts import TriggerSpec
 from ecs_agent.components.definitions import InterruptionComponent, TerminalComponent
 from ecs_agent.conversation_tree import (
     ConversationTreeComponent,
@@ -486,7 +487,7 @@ async def test_real_llm_prompt_keyword_injection_smoke() -> None:
     world.add_component(
         entity,
         UserPromptConfigComponent(
-            triggers={"@code": "KEYWORD_TEMPLATE_BLOCK"},
+            triggers=[TriggerSpec(pattern="@code", match_mode="keyword", action="skill", content="KEYWORD_TEMPLATE_BLOCK", priority=0)],
             enable_context_pool=True,
         ),
     )
@@ -583,7 +584,7 @@ async def test_real_llm_prompt_event_injection_smoke() -> None:
     world.add_component(
         entity,
         UserPromptConfigComponent(
-            triggers={"summary": "EVENT_TEMPLATE_BLOCK"},
+            triggers=[TriggerSpec(pattern="summary", match_mode="keyword", action="skill", content="EVENT_TEMPLATE_BLOCK", priority=0)],
             enable_context_pool=True,
         ),
     )
@@ -1210,7 +1211,7 @@ async def test_real_llm_rendered_user_prompt_trigger_injection() -> None:
     world.add_component(
         entity,
         UserPromptConfigComponent(
-            triggers={"@test": "Use testing best practices."},
+            triggers=[TriggerSpec(pattern="@test", match_mode="keyword", action="skill", content="Use testing best practices.", priority=0)],
             enable_context_pool=False,
         ),
     )
