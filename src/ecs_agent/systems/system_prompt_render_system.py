@@ -56,6 +56,14 @@ class SystemPromptRenderSystem:
                     ),
                 )
 
+                logger.debug(
+                    "system_prompt_rendered",
+                    entity_id=entity_id,
+                    prompt_length=len(rendered),
+                    placeholder_count=len(snapshot),
+                    prompt_text=rendered,
+                )
+
                 llm_component = world.get_component(entity_id, LLMComponent)
                 if llm_component is not None:
                     llm_component.system_prompt = rendered

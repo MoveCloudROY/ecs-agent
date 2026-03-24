@@ -14,6 +14,9 @@ from ecs_agent.prompts.keyword_injection import inject_triggers
 from ecs_agent.prompts.registry import PromptRegistry
 from ecs_agent.prompts.user_prompt_rendering import render_user_prompt_text
 from ecs_agent.types import Message
+from ecs_agent.logging import get_logger
+
+logger = get_logger(__name__)
 
 CONTEXT_POOL_DELIMITER = "\n\n---\n\n"
 CONTEXT_POOL_MARKER = "[PROMPT_CONTEXT_POOL]"
@@ -236,6 +239,13 @@ def prepare_outbound_messages(
         enable_context_pool=context_pool_enabled,
         context_pool_items=reserved_context_pool_items,
         trigger_specs=trigger_specs,
+    )
+    logger.debug(
+        "outbound_messages_assembled",
+        entity_id=entity_id,
+        message_count=len(messages),
+        system_prompt_preview=messages[0].content[:200] if messages and messages[0].role == "system" else None,
+        last_user_prompt=messages[-1].content if messages and messages[-1].role == "user" else None,
     )
     return messages, context_reservation
 
