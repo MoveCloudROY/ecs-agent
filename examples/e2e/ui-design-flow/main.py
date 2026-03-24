@@ -3,13 +3,14 @@
 Demonstrates a complete workflow for designing UI through an interactive
 agent using ECS-based composition with dual-mode provider selection.
 
-Tasks:
-- Create World with ReasoningSystem, ToolExecutionSystem, and error handling
-- Install ui-navigator and ui-prompt markdown skills (pure prompt, no script tools)
-- Install BuiltinToolsSkill for read_file, write_file, edit_file, bash
-- Setup interactive input handling via UserInputSystem
-- Execute agent loop until TerminalComponent or max_ticks
-- Output results to ui-design/ directory via builtin write_file tool
+Features exercised:
+- SystemPromptConfigSpec with ${name} placeholder templates
+- Built-in placeholders: ${_installed_tools}, ${_installed_skills}
+- Callable placeholder: ${skill_instructions} resolves skill-injected prompts at render time
+- UserPromptConfigComponent with TriggerSpec-based keyword injection
+- SystemPromptRenderSystem (priority -20) and UserPromptNormalizationSystem (priority -10)
+- Skill discovery + SkillManager lifecycle (ui-navigator, ui-prompt, BuiltinToolsSkill)
+- Interactive input handling via UserInputSystem
 """
 
 from __future__ import annotations
@@ -19,23 +20,89 @@ import os
 import sys
 from pathlib import Path
 
-from ecs_agent.components import ConversationComponent, LLMComponent
+from ecs_agent.components import (
+    ConversationComponent,
+    LLMComponent,
+    UserPromptConfigComponent,
+)
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import configure_logging, get_logger
+from ecs_agent.prompts.contracts import (
+    PlaceholderSpec,
+    PromptTemplateSource,
+    SystemPromptConfigSpec,
+    TriggerSpec,
+)
 from ecs_agent.providers import FakeProvider, OpenAIProvider
 from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.skills.discovery import discover_skills
+from ecs_agent.skills.manager import SkillManager
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
-from ecs_agent.types import CompletionResult, Message
-from ecs_agent.skills.discovery import discover_skills
-from ecs_agent.skills.manager import SkillManager
+from ecs_agent.systems.user_prompt_normalization_system import (
+    UserPromptNormalizationSystem,
+)
 from ecs_agent.tools.builtins import BuiltinToolsSkill
+from ecs_agent.types import CompletionResult, EntityId, Message
 
 from runtime import setup_interactive_input
 
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Prompt system helpers
+# ---------------------------------------------------------------------------
+
+_SYSTEM_PROMPT_TEMPLATE = """\
+You are a UI design expert. Help users create stunning, modern interfaces.
+
+## Available Tools
+${_installed_tools}
+
+## Available Skills
+${_installed_skills}
+
+## Skill Instructions
+${skill_instructions}\
+"""
+
+
+def _build_system_prompt_config(
+    world: World,
+    entity_id: EntityId,
+    manager: SkillManager,
+) -> SystemPromptConfigSpec:
+    """Build a SystemPromptConfigSpec that merges base template with skill prompts.
+
+    The ``skill_instructions`` placeholder is a callable that reads each
+    installed skill's system prompt at render time via ``SkillManager``,
+    so skill-injected system prompts are included in the final rendered output.
+    """
+
+    def _resolve_skill_instructions() -> str:
+        skill_metas = manager.list_skills(world, entity_id)
+        parts: list[str] = []
+        for meta in skill_metas:
+            skill_obj = manager._installed_skills.get((entity_id, meta.name))
+            if skill_obj is not None:
+                prompt = skill_obj.system_prompt()
+                if prompt:
+                    parts.append(prompt)
+        return "\n\n".join(parts) if parts else "(none)"
+
+    return SystemPromptConfigSpec(
+        template_source=PromptTemplateSource(inline=_SYSTEM_PROMPT_TEMPLATE),
+        placeholders=[
+            PlaceholderSpec(
+                name="skill_instructions",
+                value=_resolve_skill_instructions,
+            ),
+        ],
+    )
 
 
 async def main() -> None:
@@ -51,7 +118,7 @@ async def main() -> None:
     """
     # Configure logging
     debug_mode = os.environ.get("DEBUG", "").lower() in ("1", "true")
-    configure_logging(json_output=False)
+    configure_logging(json_output=False, level="DEBUG" if debug_mode else None)
 
     if debug_mode:
         logger.info("debug_mode_enabled")
@@ -88,6 +155,7 @@ async def main() -> None:
     # Create Agent Entity
     agent_id = world.create_entity()
 
+    # --- Install skills (populates ToolRegistryComponent, SkillComponent) ---
     manager = SkillManager()
     workspace_dir = Path(__file__).parent
     skills_root = workspace_dir / ".claude" / "skills"
@@ -132,21 +200,31 @@ async def main() -> None:
         print(f"Error: Prompt file not found: {prompt_path}")
         sys.exit(1)
 
-    # Add components
+    # --- Add components ---
+
+    # LLM provider (no bare system_prompt — handled by SystemPromptConfigSpec)
     world.add_component(
         agent_id,
         LLMComponent(
             provider=provider,
             model=model if api_key else "fake",
-            system_prompt="You are a UI design expert. Help users create stunning interfaces.",
         ),
     )
+
+    # Conversation seed
     world.add_component(
         agent_id,
         ConversationComponent(messages=[Message(role="user", content=initial_prompt)]),
     )
 
-    # Register Systems (priority order: lower = earlier execution)
+    # System prompt: template with built-in + callable placeholders.
+    # Must be added AFTER skills are installed so ${skill_instructions} can
+    # resolve skill system prompts at render time via SkillManager.
+    world.add_component(agent_id, _build_system_prompt_config(world, agent_id, manager))
+
+    # --- Register Systems (priority order: lower = earlier execution) ---
+    world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
+    world.register_system(UserPromptNormalizationSystem(priority=-10), priority=-10)
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
     world.register_system(MemorySystem(), priority=10)
