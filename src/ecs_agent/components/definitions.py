@@ -172,7 +172,6 @@ class SystemPromptComponent:
     """System prompt assembly inputs and rendered output."""
 
     template: str = ""
-    sections: list["PromptSectionSpec"] = field(default_factory=list)
     content: str = ""
 
 
@@ -409,7 +408,6 @@ class SubagentSessionTableComponent:
 # Prompt normalization components (Task-1)
 # ---------------------------------------------------------------------------
 
-from ecs_agent.prompts.contracts import PromptSectionSpec  # noqa: E402
 
 
 @dataclass(slots=True)

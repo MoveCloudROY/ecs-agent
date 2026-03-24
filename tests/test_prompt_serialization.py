@@ -17,7 +17,6 @@ from ecs_agent.core.world import World
 from ecs_agent.prompts.contracts import (
     PlaceholderSpec,
     SystemPromptConfigSpec,
-    PromptSectionSpec,
     PromptTemplateSource,
 )
 from ecs_agent.serialization import WorldSerializer, COMPONENT_REGISTRY
@@ -61,47 +60,6 @@ def test_prompt_config_component_roundtrip() -> None:
     assert config2.enable_context_pool is True
     assert config2.context_pool_max_chars == 16384
 
-
-def test_system_prompt_component_roundtrip() -> None:
-    """SystemPromptComponent with nested PromptSectionSpec serializes correctly."""
-    world = World()
-    entity = world.create_entity()
-
-    sections = [
-        PromptSectionSpec(title="Context", lines=["line1", "line2"], priority=10),
-        PromptSectionSpec(title="Rules", lines=["rule1"], priority=5),
-    ]
-    system_prompt = SystemPromptComponent(
-        template="Core ${toolSelection} ${exploreSection} ${librarianSection}",
-        sections=sections,
-        content="rendered content",
-    )
-    world.add_component(entity, system_prompt)
-
-    # Serialize and deserialize
-    data = WorldSerializer.to_dict(world)
-    providers = {"default": DummyProvider()}
-    tool_handlers = {}
-    world2 = WorldSerializer.from_dict(
-        data, providers=providers, tool_handlers=tool_handlers
-    )
-
-    # Verify roundtrip
-    system_prompt2 = world2.get_component(entity, SystemPromptComponent)
-    assert system_prompt2 is not None
-    assert system_prompt2.template == system_prompt.template
-    assert system_prompt2.content == "rendered content"
-    assert len(system_prompt2.sections) == 2
-
-    # First section
-    assert system_prompt2.sections[0].title == "Context"
-    assert system_prompt2.sections[0].lines == ["line1", "line2"]
-    assert system_prompt2.sections[0].priority == 10
-
-    # Second section
-    assert system_prompt2.sections[1].title == "Rules"
-    assert system_prompt2.sections[1].lines == ["rule1"]
-    assert system_prompt2.sections[1].priority == 5
 
 
 def test_prompt_context_queue_component_roundtrip() -> None:

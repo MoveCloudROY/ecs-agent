@@ -1,10 +1,8 @@
 """Public API for the ecs_agent prompts package."""
+
 from ecs_agent.prompts.contracts import (
     PlaceholderSpec,
     SystemPromptConfigSpec,
-    PromptInjectionArtifact,
-    PromptRenderContext,
-    PromptSectionSpec,
     PromptTemplate,
     PromptTemplateSource,
     TriggerSpec,
@@ -22,9 +20,6 @@ __all__ = [
     "CORE_PLACEHOLDER_KEYS",
     "PlaceholderSpec",
     "SystemPromptConfigSpec",
-    "PromptInjectionArtifact",
-    "PromptRenderContext",
-    "PromptSectionSpec",
     "PromptTemplate",
     "PromptTemplateSource",
     "TriggerSpec",

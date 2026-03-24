@@ -464,17 +464,6 @@ class WorldSerializer:
                     sessions_dict[session_id] = session_data
             normalized_data["sessions"] = sessions_dict
 
-        if component_name == SystemPromptComponent.__name__:
-            from ecs_agent.prompts.contracts import PromptSectionSpec
-
-            sections_list = []
-            for section_data in normalized_data.get("sections", []):
-                if isinstance(section_data, dict):
-                    sections_list.append(PromptSectionSpec(**section_data))
-                else:
-                    sections_list.append(section_data)
-            normalized_data["sections"] = sections_list
-
         if component_name == PromptContextQueueComponent.__name__:
             entries_data = normalized_data.get("entries", [])
             normalized_data["entries"] = [
