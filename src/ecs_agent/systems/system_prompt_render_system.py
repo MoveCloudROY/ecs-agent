@@ -44,6 +44,8 @@ class SystemPromptRenderSystem:
 
     async def process(self, world: World) -> None:
         for entity_id, (prompt_config,) in world.query(SystemPromptConfigSpec):
+            if world.get_component(entity_id, RenderedSystemPromptComponent) is not None:
+                continue
             try:
                 rendered, snapshot = _render_system_prompt(
                     world, entity_id, prompt_config
