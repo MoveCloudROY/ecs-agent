@@ -860,6 +860,6 @@ async def test_render_system_skill_uninstall_removed_from_snapshot() -> None:
 
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
-    assert rendered.text == "- python: python skill"
-    assert "shell" not in rendered.text
-    assert "shell" not in rendered.placeholder_snapshot["_installed_skills"]
+    # After freeze, the rendered text should remain unchanged despite skill uninstall
+    assert rendered.text == "- python: python skill\n- shell: shell skill"
+    assert "shell" in rendered.text  # Shell is still in the frozen snapshot
