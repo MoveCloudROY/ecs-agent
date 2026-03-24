@@ -21,7 +21,7 @@ The table below summarizes the recommended priorities for each system. Priority 
 | :--- | :--- | :--- |
 | UserInputSystem | -10 | Captures async user input before reasoning. |
 | RAGSystem | -10 | Retrieves context via vector search before reasoning. |
-| SystemPromptRenderSystem | -20 | Resolves `${name}` placeholders from `SystemPromptConfigSpec` and produces `RenderedSystemPromptComponent`. |
+| SystemPromptRenderSystem | -20 | Resolves `${name}` placeholders from `SystemPromptConfigSpec` and produces a cached `RenderedSystemPromptComponent` on first render. |
 | UserPromptNormalizationSystem | -10 | Injects trigger templates into user messages and produces `RenderedUserPromptComponent`. |
 | PromptContextCollectorSystem | 0 | Collects tool/subagent results into the context pool. |
 | ToolApprovalSystem | -5 | Filters pending tool calls before execution. |
@@ -84,7 +84,7 @@ This ensures deterministic system execution and prevents mid-tick mutations.
 ---
 ## 1. SystemPromptRenderSystem
 
-The `SystemPromptRenderSystem` resolves all `${name}` placeholders from a `SystemPromptConfigSpec` component and writes a `RenderedSystemPromptComponent` for LLM callers. It replaces the legacy `SystemPromptAssemblySystem`.
+The `SystemPromptRenderSystem` resolves all `${name}` placeholders from a `SystemPromptConfigSpec` component and writes a cached `RenderedSystemPromptComponent` for LLM callers on the first successful render-system pass. Subsequent ticks reuse this frozen component and skip re-rendering. It replaces the legacy `SystemPromptAssemblySystem`.
 
 - **Constructor**: `__init__(self)`
 - **Queries**: `SystemPromptConfigSpec`
@@ -92,7 +92,7 @@ The `SystemPromptRenderSystem` resolves all `${name}` placeholders from a `Syste
 - **Recommended Priority**: -20 (must run before reasoning)
 
 ### Behavior
-The system reads the `SystemPromptConfigSpec.template_source` (inline string or file path) and substitutes all `${name}` occurrences. Built-in placeholders `${_installed_tools}`, `${_installed_skills}`, `${_installed_mcps}`, and `${_installed_subagents}` are populated from entity metadata automatically. Callable placeholder resolvers are called once per render. Missing or failing placeholders raise `ValueError` immediately — no silent fallback.
+The system reads the `SystemPromptConfigSpec.template_source` (inline string or file path) and substitutes all `${name}` occurrences. Built-in placeholders `${_installed_tools}`, `${_installed_skills}`, `${_installed_mcps}`, and `${_installed_subagents}` are populated from entity metadata automatically. Callable placeholder resolvers are called once during the first successful render-system pass. The resulting prompt is frozen (freeze semantics) and reused on subsequent ticks. Missing or failing placeholders raise `ValueError` immediately — no silent fallback.
 
 ### Usage Example
 ```python

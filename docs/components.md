@@ -86,7 +86,7 @@ world.add_component(entity, SystemPromptConfigSpec(
 ---
 
 ### RenderedSystemPromptComponent
-Output component written by `SystemPromptRenderSystem` containing the fully resolved system prompt for the current tick. Consumed by `ReasoningSystem`, `PlanningSystem`, `ReplanningSystem`.
+cached/frozen rendered system prompt produced by `SystemPromptRenderSystem` on the first successful render-system pass. Reused on subsequent ticks; consumed by `ReasoningSystem`, `PlanningSystem`, `ReplanningSystem`.
 
 | Name | Type | Description |
 | :--- | :--- | :--- |

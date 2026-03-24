@@ -218,7 +218,7 @@ World
 | `SystemPromptConfigSpec` | New-style prompt spec with `${name}` placeholder templates; resolved by `SystemPromptRenderSystem` |
 | `UserPromptConfigComponent` | User prompt normalization config (triggers, context pool settings) |
 | `PromptContextQueueComponent` | Context entries for injection into outbound user messages |
-| `RenderedSystemPromptComponent` | Rendered system prompt text produced by `SystemPromptRenderSystem` for the current tick |
+| `RenderedSystemPromptComponent` | cached/frozen rendered system prompt produced by `SystemPromptRenderSystem` on first render; reused on subsequent ticks |
 | `RenderedUserPromptComponent` | Normalized user prompt text produced by `UserPromptNormalizationSystem` for the current tick |
 | `KVStoreComponent` | Generic key-value scratch space |
 | `ErrorComponent` | Error details for failed operations |
