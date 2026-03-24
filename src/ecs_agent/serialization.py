@@ -400,6 +400,7 @@ class WorldSerializer:
 
                 subagent_config = SubagentConfig(
                     name=config_data["name"],
+                    description=config_data.get("description", ""),
                     provider=provider,
                     model=config_data["model"],
                     system_prompt=config_data.get("system_prompt", ""),

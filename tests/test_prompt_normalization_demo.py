@@ -56,20 +56,22 @@ async def test_prompt_normalization_demo_fake_mode_prints_rendered_markers(
 
     stdout = capsys.readouterr().out
     assert "[mode] fake" in stdout
-    assert "=== Rendered System Prompt ===" in stdout
-    assert "You are a helpful coding assistant." in stdout
-    assert "Available tools:" in stdout
-    assert "- demo_tool" in stdout
-    assert "${_installed_tools}" not in stdout
-    assert "=== Outbound User Message (Injected) ===" in stdout
+    assert "=== 1. System Prompt: Built-in Placeholders ===" in stdout
+    assert "- read_file: Read file contents" in stdout
+    assert "- code_review: Review code for issues" in stdout
+    assert "- researcher" in stdout
+    assert "${_installed_tools} resolved" in stdout
+    assert "=== 3. System Prompt: Full Rendered Text ===" in stdout
+    assert "=== 4. User Prompt: Keyword Trigger Injection ===" in stdout
     assert "[PROMPT_INJECT:@code]" in stdout
+    assert "=== 5. User Prompt: Outbound Message (with Context Pool) ===" in stdout
     assert "[PROMPT_CONTEXT_POOL]" in stdout
     assert "Prioritize deterministic code-first reasoning." in stdout
     assert "source: tool:search" in stdout
     assert "source: subagent:researcher" in stdout
     assert "Please @code summarize latest findings" in stdout
-    assert "user tail preserved: True" in stdout
-    assert "=== Rendered User Prompt Component ===" in stdout
+    assert "user text preserved: True" in stdout
+    assert "=== 7. Verification Checks ===" in stdout
 
 
 @pytest.mark.asyncio
