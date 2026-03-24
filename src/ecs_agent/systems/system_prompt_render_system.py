@@ -110,35 +110,44 @@ def _resolve_user_placeholders(prompt_config: SystemPromptConfigSpec) -> dict[st
 
 def _resolve_builtin_placeholders(world: World, entity_id: EntityId) -> dict[str, str]:
     return {
-        "_installed_tools": _format_bullets(_tool_names(world, entity_id)),
-        "_installed_skills": _format_bullets(_skill_names(world, entity_id)),
-        "_installed_mcps": _format_bullets(_mcp_tool_names(world, entity_id)),
-        "_installed_subagents": _format_bullets(_subagent_names(world, entity_id)),
+        "_installed_tools": _format_bullets(_tool_entries(world, entity_id)),
+        "_installed_skills": _format_bullets(_skill_entries(world, entity_id)),
+        "_installed_mcps": _format_bullets(_mcp_tool_entries(world, entity_id)),
+        "_installed_subagents": _format_bullets(_subagent_entries(world, entity_id)),
     }
 
 
-def _tool_names(world: World, entity_id: EntityId) -> list[str]:
+def _tool_entries(world: World, entity_id: EntityId) -> list[tuple[str, str]]:
     registry = world.get_component(entity_id, ToolRegistryComponent)
     if registry is None:
         return []
-    return sorted(registry.tools)
+    return sorted(
+        ((name, schema.description) for name, schema in registry.tools.items()),
+        key=lambda e: e[0],
+    )
 
 
-def _skill_names(world: World, entity_id: EntityId) -> list[str]:
+def _skill_entries(world: World, entity_id: EntityId) -> list[tuple[str, str]]:
     skill_component = world.get_component(entity_id, SkillComponent)
     if skill_component is None:
         return []
-    return sorted(skill_component.skills)
+    return sorted(
+        ((name, meta.description) for name, meta in skill_component.skills.items()),
+        key=lambda e: e[0],
+    )
 
 
-def _subagent_names(world: World, entity_id: EntityId) -> list[str]:
+def _subagent_entries(world: World, entity_id: EntityId) -> list[tuple[str, str]]:
     registry = world.get_component(entity_id, SubagentRegistryComponent)
     if registry is None:
         return []
-    return sorted(registry.subagents)
+    return sorted(
+        ((name, cfg.description) for name, cfg in registry.subagents.items()),
+        key=lambda e: e[0],
+    )
 
 
-def _mcp_tool_names(world: World, entity_id: EntityId) -> list[str]:
+def _mcp_tool_entries(world: World, entity_id: EntityId) -> list[tuple[str, str]]:
     if _MCP_CLIENT_COMPONENT_CLASS is None:
         return []
 
@@ -150,31 +159,39 @@ def _mcp_tool_names(world: World, entity_id: EntityId) -> list[str]:
     if not isinstance(cached_tools, list):
         return []
 
-    names: list[str] = []
+    entries: list[tuple[str, str]] = []
     for tool in cached_tools:
-        name = _extract_name(tool)
-        if name:
-            names.append(name)
-    return sorted(set(names))
+        entry = _extract_entry(tool)
+        if entry is not None:
+            entries.append(entry)
+    return sorted(set(entries), key=lambda e: e[0])
 
 
-def _extract_name(tool: object) -> str | None:
+def _extract_entry(tool: object) -> tuple[str, str] | None:
     if isinstance(tool, dict):
         name = tool.get("name")
         if isinstance(name, str):
-            return name
+            desc = tool.get("description", "")
+            return (name, desc if isinstance(desc, str) else "")
         return None
 
     name = getattr(tool, "name", None)
     if isinstance(name, str):
-        return name
+        desc = getattr(tool, "description", "")
+        return (name, desc if isinstance(desc, str) else "")
     return None
 
 
-def _format_bullets(values: list[str]) -> str:
-    if not values:
+def _format_bullets(entries: list[tuple[str, str]]) -> str:
+    if not entries:
         return "- none"
-    return "\n".join(f"- {value}" for value in values)
+    lines: list[str] = []
+    for name, description in entries:
+        if description:
+            lines.append(f"- {name}: {description}")
+        else:
+            lines.append(f"- {name}")
+    return "\n".join(lines)
 
 
 __all__ = ["SystemPromptRenderSystem"]

@@ -164,10 +164,10 @@ async def test_render_system_renders_inline_template_and_bridges_to_llm() -> Non
     llm = world.get_component(entity_id, LLMComponent)
     assert rendered is not None
     assert llm is not None
-    assert rendered.text == "Hello roy\n- write_file"
+    assert rendered.text == "Hello roy\n- write_file: write"
     assert rendered.placeholder_snapshot == {
         "user_name": "roy",
-        "_installed_tools": "- write_file",
+        "_installed_tools": "- write_file: write",
         "_installed_skills": "- none",
         "_installed_mcps": "- none",
         "_installed_subagents": "- none",
@@ -230,7 +230,7 @@ async def test_render_system_loads_template_from_file(tmp_path: Path) -> None:
 
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
-    assert rendered.text == "Skills:\n- alpha\n- beta"
+    assert rendered.text == "Skills:\n- alpha: a\n- beta: b"
 
 
 @pytest.mark.asyncio
@@ -302,7 +302,7 @@ async def test_render_system_renders_all_builtin_placeholders() -> None:
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
     assert rendered.text == (
-        "- bash\n- read\n- alpha\n- zeta\n- none\n- planner\n- researcher"
+        "- bash: shell\n- read: read\n- alpha: a\n- zeta: z\n- none\n- planner\n- researcher"
     )
 
 
@@ -441,9 +441,9 @@ async def test_render_system_built_in_installed_tools() -> None:
 
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
-    assert rendered.text == "- bash\n- read_file"
-    assert "- bash" in rendered.text
-    assert "- read_file" in rendered.text
+    assert rendered.text == "- bash: bash\n- read_file: read file"
+    assert "- bash: bash" in rendered.text
+    assert "- read_file: read file" in rendered.text
 
 
 @pytest.mark.asyncio
@@ -608,7 +608,7 @@ async def test_render_system_installed_skills_sorted() -> None:
 
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
-    assert rendered.text == "- analyze\n- code"
+    assert rendered.text == "- analyze: analyze skill\n- code: code skill"
 
 
 @pytest.mark.asyncio
@@ -786,8 +786,8 @@ async def test_render_system_all_builtins_together(
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
     assert rendered.text == (
-        "Tools:\n- bash\n- read\n"
-        "Skills:\n- python\n"
+        "Tools:\n- bash: bash\n- read: read\n"
+        "Skills:\n- python: python skill\n"
         "MCPs:\n- filesystem.read\n- filesystem.write\n"
         "Subagents:\n- child"
     )
@@ -818,7 +818,7 @@ async def test_render_system_skill_activate_then_render() -> None:
 
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
-    assert rendered.text == "- python"
+    assert rendered.text == "- python: python skill"
 
 
 @pytest.mark.asyncio
@@ -852,7 +852,7 @@ async def test_render_system_skill_uninstall_removed_from_snapshot() -> None:
     await SystemPromptRenderSystem().process(world)
     first_render = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert first_render is not None
-    assert first_render.text == "- python\n- shell"
+    assert first_render.text == "- python: python skill\n- shell: shell skill"
 
     del skill_component.skills["shell"]
 
@@ -860,6 +860,6 @@ async def test_render_system_skill_uninstall_removed_from_snapshot() -> None:
 
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
-    assert rendered.text == "- python"
+    assert rendered.text == "- python: python skill"
     assert "shell" not in rendered.text
     assert "shell" not in rendered.placeholder_snapshot["_installed_skills"]

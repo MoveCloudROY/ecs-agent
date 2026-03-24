@@ -306,12 +306,14 @@ async def main() -> None:
                     name="researcher",
                     provider=base_provider,
                     model=model,
+                    description="Research and gather information",
                     system_prompt="Research assistant",
                 ),
                 "reviewer": SubagentConfig(
                     name="reviewer",
                     provider=base_provider,
                     model=model,
+                    description="Review and critique work products",
                     system_prompt="Review assistant",
                 ),
             }
