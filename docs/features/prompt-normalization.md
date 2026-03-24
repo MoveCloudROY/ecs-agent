@@ -22,11 +22,11 @@ RenderedSystemPromptComponent  RenderedUserPromptComponent
      ReasoningSystem / PlanningSystem / ReplanningSystem
 ```
 
-1. **SystemPromptRenderSystem** (priority -20) reads `SystemPromptConfigSpec`, resolves all `${name}` placeholders, and writes a `RenderedSystemPromptComponent`.
+1. **SystemPromptRenderSystem** (priority -20) reads `SystemPromptConfigSpec`, resolves all `${name}` placeholders, and writes a `RenderedSystemPromptComponent` on the first successful render-system pass. This component is then cached and reused on subsequent ticks.
 2. **UserPromptNormalizationSystem** (priority -10) reads `UserPromptConfigComponent`, injects keyword/event triggers and context entries from `PromptContextQueueComponent` into the last user message, and writes a `RenderedUserPromptComponent`.
 3. **LLM callers** (`ReasoningSystem`, `PlanningSystem`, `ReplanningSystem`) read the rendered components instead of assembling prompts themselves.
 
-Stored conversation history is never mutated. All injections are transient and scoped to the current tick.
+Stored conversation history is never mutated. User prompt injections are transient and scoped to the current tick, while rendered system prompts are frozen after the first successful render-system pass.
 
 ## Quick Start
 
@@ -296,7 +296,7 @@ Output component written by `UserPromptNormalizationSystem`. Contains the normal
 
 ### SystemPromptRenderSystem
 
-Resolves `${name}` placeholders in system prompt templates and produces a `RenderedSystemPromptComponent`.
+Resolves `${name}` placeholders in system prompt templates and produces a cached `RenderedSystemPromptComponent` on the first successful render-system pass.
 
 **Constructor:** `SystemPromptRenderSystem(priority: int = 0)`
 **Recommended priority:** `-20`
@@ -307,7 +307,7 @@ Processing steps:
 3. Resolve user-defined placeholders via `PlaceholderSpec` values.
 4. Resolve built-in placeholders (`_installed_tools`, `_installed_skills`, etc.) from entity components.
 5. Substitute all `${name}` references using Python `string.Template`.
-6. Write a `RenderedSystemPromptComponent` to the entity.
+6. Write a `RenderedSystemPromptComponent` to the entity (only if not already present).
 7. Update `LLMComponent.system_prompt` for backward compatibility.
 
 Raises `ValueError` on missing placeholders. No silent fallbacks.
@@ -423,7 +423,7 @@ The original user message is always preserved as the tail of the normalized text
 
 ## Callable Placeholders
 
-Placeholder values can be zero-argument callables that return a string. The callable is invoked exactly once per render cycle.
+Placeholder values can be zero-argument callables that return a string. The callable is invoked exactly once during the first successful render-system pass. Because the rendered prompt is cached, these values are intentionally stale on subsequent ticks.
 
 ```python
 import time
