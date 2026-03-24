@@ -583,7 +583,7 @@ async def test_real_llm_prompt_event_injection_smoke() -> None:
     world.add_component(
         entity,
         UserPromptConfigComponent(
-            triggers={"event:tool_success": "EVENT_TEMPLATE_BLOCK"},
+            triggers={"summary": "EVENT_TEMPLATE_BLOCK"},
             enable_context_pool=True,
         ),
     )
@@ -618,10 +618,10 @@ async def test_real_llm_prompt_event_injection_smoke() -> None:
     outbound_user = provider.last_messages[-1]
     assert outbound_user.role == "user"
     assert outbound_user.content.startswith(
-        "[PROMPT_INJECT:event:tool_success]\nEVENT_TEMPLATE_BLOCK\n\n"
+        "[PROMPT_INJECT:summary]\nEVENT_TEMPLATE_BLOCK\n\n"
     )
     assert outbound_user.content.index(
-        "[PROMPT_INJECT:event:tool_success]"
+        "[PROMPT_INJECT:summary]"
     ) < outbound_user.content.index("[PROMPT_CONTEXT_POOL]")
     assert outbound_user.content.index(
         "source: tool:search"

@@ -42,9 +42,7 @@ def build_keyword_registry(triggers: dict[str, str]) -> PromptRegistry:
         registry.register(
             PromptTemplate(template_id=template_id, content=template_content)
         )
-        is_event_trigger, trigger_value = _parse_trigger_key(trigger_key)
-        if not is_event_trigger:
-            registry.register_keyword(trigger_value, template_id)
+        registry.register_keyword(trigger_key, template_id)
     return registry
 
 
@@ -63,28 +61,6 @@ def build_trigger_specs(triggers: dict[str, str]) -> list[TriggerSpec]:
     return trigger_specs
 
 
-def collect_active_events(
-    context_pool_items: Sequence[ContextEntryProtocol] | None,
-) -> set[str]:
-    if not context_pool_items:
-        return set()
-
-    active_events: set[str] = set()
-    for entry in context_pool_items:
-        source = entry.source_label
-        content = entry.content
-        source_kind = ""
-        if source:
-            active_events.add(source)
-            source_kind = source.split(":", maxsplit=1)[0].strip()
-            if source_kind:
-                active_events.add(source_kind)
-
-        status = _extract_status(content)
-        if status and source_kind:
-            active_events.add(f"{source_kind}_{status}")
-
-    return active_events
 
 
 def assemble_messages(
@@ -96,7 +72,6 @@ def assemble_messages(
     context_pool_items: Sequence[ContextEntryProtocol] | None = None,
     keyword_registry: PromptRegistry | None = None,
     trigger_specs: list[TriggerSpec] | None = None,
-    active_events: set[str] | None = None,
 ) -> list[Message]:
     """Assemble provider-call messages with stable ordering.
 
@@ -116,7 +91,6 @@ def assemble_messages(
         conversation_messages,
         keyword_registry=keyword_registry,
         trigger_specs=trigger_specs,
-        active_events=active_events,
         enable_context_pool=enable_context_pool,
         context_pool_items=context_pool_items,
     )
@@ -222,7 +196,6 @@ def prepare_outbound_messages(
         )
         reserved_context_pool_items = context_reservation.reserved_entries
 
-    active_events = collect_active_events(reserved_context_pool_items)
     messages = assemble_messages(
         system_prompt=system_prompt,
         prefix_messages=prefix_messages,
@@ -231,7 +204,6 @@ def prepare_outbound_messages(
         context_pool_items=reserved_context_pool_items,
         keyword_registry=keyword_registry,
         trigger_specs=trigger_specs,
-        active_events=active_events,
     )
     return messages, context_reservation
 
@@ -241,7 +213,6 @@ def _with_transient_user_injection(
     *,
     keyword_registry: PromptRegistry | None,
     trigger_specs: list[TriggerSpec] | None,
-    active_events: set[str] | None,
     enable_context_pool: bool,
     context_pool_items: Sequence[ContextEntryProtocol] | None,
 ) -> list[Message]:
@@ -266,7 +237,6 @@ def _with_transient_user_injection(
             transformed_text,
             keyword_registry,
             trigger_specs=trigger_specs,
-            active_events=active_events,
         )
 
     if enable_context_pool:
@@ -339,25 +309,12 @@ def _inject_context_block(
     return f"{context_block}\n\n{text_with_keyword}"
 
 
-def _parse_trigger_key(trigger_key: str) -> tuple[bool, str]:
-    if trigger_key.startswith("event:"):
-        return True, trigger_key.removeprefix("event:")
-    return False, trigger_key
-
-
-def _extract_status(context_entry_content: str) -> str:
-    for line in context_entry_content.splitlines():
-        if line.startswith("status:"):
-            return line.partition(":")[2].strip()
-    return ""
-
 
 __all__ = [
     "assemble_messages",
     "build_keyword_registry",
     "build_trigger_specs",
     "commit_prompt_context_reservation",
-    "collect_active_events",
     "prepare_outbound_messages",
     "reserve_prompt_context_reservation",
 ]

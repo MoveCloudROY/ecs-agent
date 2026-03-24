@@ -90,14 +90,11 @@ class UserPromptNormalizationSystem:
 
     @staticmethod
     def _matches(*, spec: TriggerSpec, text: str) -> bool:
-        if spec.pattern.startswith("event:"):
-            return False
         if spec.match_mode == "keyword":
             return spec.pattern in text
         if spec.match_mode == "prefix":
             return text.startswith(spec.pattern)
         return spec.pattern in text
-
     @staticmethod
     def _trigger_marker(pattern: str) -> str:
         return f"[PROMPT_INJECT:{pattern}]"

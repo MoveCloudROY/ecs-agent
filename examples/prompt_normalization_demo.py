@@ -5,8 +5,8 @@ Demonstrates:
 - Built-in placeholders: ${_installed_tools}, ${_installed_skills}, ${_installed_mcps}, ${_installed_subagents}
 - User-defined placeholders: static strings and callable resolvers
 - Template source: inline strings and file-based loading
-- Keyword trigger injection (@code → prompt text)
-- Event-based triggers (event:tool_success → evidence-based reasoning)
+- Keyword trigger injection (@code, findings → prompt text)
+- Match-mode demos (prefix/replace, keyword/skill, contains/script)
 - Context pool injection (tool results, subagent status)
 
 Run:
@@ -45,7 +45,6 @@ from ecs_agent.prompts.keyword_injection import inject_triggers
 from ecs_agent.prompts.message_assembly import (
     build_keyword_registry,
     build_trigger_specs,
-    collect_active_events,
 )
 from ecs_agent.providers import FakeProvider, OpenAIProvider
 from ecs_agent.providers.protocol import LLMProvider
@@ -367,7 +366,7 @@ async def main() -> None:
         UserPromptConfigComponent(
             triggers={
                 "@code": "Prioritize deterministic code-first reasoning.",
-                "event:tool_success": "Prefer successful tool outputs as evidence.",
+                "findings": "Prefer successful tool outputs as evidence.",
             },
             enable_context_pool=True,
         ),
@@ -390,13 +389,12 @@ async def main() -> None:
 
     triggers = {
         "@code": "Prioritize deterministic code-first reasoning.",
-        "event:tool_success": "Prefer successful tool outputs as evidence.",
+        "findings": "Prefer successful tool outputs as evidence.",
     }
-    event_demo_text = inject_triggers(
+    keyword_demo_text = inject_triggers(
         "Please summarize latest findings",
         build_keyword_registry(triggers),
         trigger_specs=build_trigger_specs(triggers),
-        active_events=collect_active_events(context_entries),
     )
     action_demos = _build_match_action_demo_outputs()
 
@@ -435,8 +433,8 @@ async def main() -> None:
 
     print("\n=== 4. User Prompt: Keyword Trigger Injection ===")
     print(rendered_user_text or "<missing>")
-    print("\n[event-trigger demo]")
-    print(event_demo_text)
+    print("\n[keyword-trigger demo]")
+    print(keyword_demo_text)
     print("\n[match-action demos]")
     for name, value in action_demos.items():
         print(f"{name}: {value}")
