@@ -62,21 +62,3 @@ class PromptTemplate:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(slots=True)
-class PromptSectionSpec:
-    title: str
-    lines: list[str] = field(default_factory=list)
-    priority: int = 0
-
-
-@dataclass(slots=True)
-class PromptRenderContext:
-    variables: dict[str, str] = field(default_factory=dict)
-    entity_id: int | None = None
-
-
-@dataclass(slots=True)
-class PromptInjectionArtifact:
-    keyword: str
-    block: str
-    source_template_id: str

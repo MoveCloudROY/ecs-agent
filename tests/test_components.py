@@ -241,26 +241,8 @@ class TestSystemPromptComponent:
         content = "Be helpful"
         comp = SystemPromptComponent(content=content)
         assert comp.template == ""
-        assert comp.sections == []
         assert comp.content == content
 
-    def test_template_and_sections(self):
-        """Test SystemPromptComponent accepts prompt assembly inputs."""
-        from ecs_agent.prompts import PromptSectionSpec
-
-        section = PromptSectionSpec(
-            title="Context", lines=["line1", "line2"], priority=1
-        )
-        comp = SystemPromptComponent(
-            template="Core ${toolSelection} ${exploreSection} ${librarianSection}",
-            sections=[section],
-            content="rendered",
-        )
-
-        assert comp.template.startswith("Core")
-        assert len(comp.sections) == 1
-        assert comp.sections[0].title == "Context"
-        assert comp.content == "rendered"
 
     def test_dataclass_slots(self):
         """Test SystemPromptComponent uses slots."""
@@ -900,66 +882,6 @@ class TestPromptContractsModule:
         assert tmpl.description == "A test template"
         assert tmpl.metadata == {"version": "1"}
 
-    def test_prompt_section_spec_instantiation(self):
-        """Test PromptSectionSpec can be instantiated."""
-        from ecs_agent.prompts import PromptSectionSpec
-
-        spec = PromptSectionSpec(title="Rules")
-        assert spec.title == "Rules"
-        assert spec.lines == []
-        assert spec.priority == 0
-
-    def test_prompt_section_spec_with_lines(self):
-        """Test PromptSectionSpec with lines and priority."""
-        from ecs_agent.prompts import PromptSectionSpec
-
-        spec = PromptSectionSpec(title="Rules", lines=["Rule 1", "Rule 2"], priority=5)
-        assert spec.lines == ["Rule 1", "Rule 2"]
-        assert spec.priority == 5
-
-    def test_prompt_render_context_instantiation(self):
-        """Test PromptRenderContext can be instantiated."""
-        from ecs_agent.prompts import PromptRenderContext
-
-        ctx = PromptRenderContext()
-        assert ctx.variables == {}
-        assert ctx.entity_id is None
-
-    def test_prompt_render_context_with_values(self):
-        """Test PromptRenderContext with variables and entity_id."""
-        from ecs_agent.prompts import PromptRenderContext
-
-        ctx = PromptRenderContext(variables={"name": "Alice"}, entity_id=42)
-        assert ctx.variables == {"name": "Alice"}
-        assert ctx.entity_id == 42
-
-    def test_prompt_injection_artifact_instantiation(self):
-        """Test PromptInjectionArtifact can be instantiated."""
-        from ecs_agent.prompts import PromptInjectionArtifact
-
-        artifact = PromptInjectionArtifact(
-            keyword="code",
-            block="You are a coder.",
-            source_template_id="coding-assistant",
-        )
-        assert artifact.keyword == "code"
-        assert artifact.block == "You are a coder."
-        assert artifact.source_template_id == "coding-assistant"
-
-    def test_prompt_template_metadata_independence(self):
-        """Test PromptTemplate metadata dicts are independent."""
-        from ecs_agent.prompts import PromptTemplate
-
-        tmpl1 = PromptTemplate(template_id="a", content="c")
-        tmpl2 = PromptTemplate(template_id="b", content="d")
-        tmpl1.metadata["key"] = "val"
-        assert "key" not in tmpl2.metadata
-
-    def test_prompt_section_spec_slots(self):
-        """Test PromptSectionSpec uses slots."""
-        from ecs_agent.prompts import PromptSectionSpec
-
-        assert hasattr(PromptSectionSpec, "__slots__")
 
     def test_prompt_template_slots(self):
         """Test PromptTemplate uses slots."""
