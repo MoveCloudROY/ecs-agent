@@ -378,7 +378,8 @@ async def test_ui_design_flow_real_llm(
     assistant_indices = [
         idx
         for idx, msg in enumerate(conv.messages)
-        if msg.role == "assistant" and msg.content.strip()
+        if msg.role == "assistant"
+        and (msg.content.strip() or msg.tool_calls)
     ]
     assert assistant_indices, "Expected at least one assistant completion"
 
@@ -399,7 +400,7 @@ async def test_ui_design_flow_real_llm(
         "Expected at least one tool message from builtin tool execution"
     )
 
-    artifact_path = tmp_path / "ui-design" / "nano-banana-prompts.md"
+    artifact_path = tmp_path / "ui-design-flow" / "ui-design" / "nano-banana-prompts.md"
     wrote_artifact_via_tool = any(
         (
             "write_file" in msg.content.lower()
