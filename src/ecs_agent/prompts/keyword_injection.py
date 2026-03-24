@@ -13,7 +13,6 @@ def inject_triggers(
     registry: PromptRegistry,
     *,
     trigger_specs: list[TriggerSpec] | None = None,
-    active_events: set[str] | None = None,
 ) -> str:
     if "[PROMPT_INJECT:" in text:
         return text
@@ -25,15 +24,13 @@ def inject_triggers(
     matched = _resolve_first_match(
         text=text,
         ordered_specs=ordered_specs,
-        active_events=active_events,
     )
     if matched is None:
         return text
 
     template = registry.get(matched.content)
-    marker = _trigger_marker(matched)
+    marker = _trigger_marker(matched.pattern)
     return f"{marker}\n{template.content}\n\n{text}"
-
 
 def _ordered_trigger_specs(
     *,
@@ -64,26 +61,19 @@ def _resolve_first_match(
     *,
     text: str,
     ordered_specs: list[TriggerSpec],
-    active_events: set[str] | None,
 ) -> TriggerSpec | None:
-    event_set = active_events or set()
     for spec in ordered_specs:
-        if _matches(spec=spec, text=text, active_events=event_set):
+        if _matches(spec=spec, text=text):
             return spec
     return None
 
 
-def _matches(*, spec: TriggerSpec, text: str, active_events: set[str]) -> bool:
-    if spec.pattern.startswith("event:"):
-        return spec.pattern.removeprefix("event:") in active_events
+def _matches(*, spec: TriggerSpec, text: str) -> bool:
     if spec.match_mode == "prefix":
         return text.startswith(spec.pattern)
     return spec.pattern in text
 
 
-def _trigger_marker(spec: TriggerSpec) -> str:
-    if spec.pattern.startswith("event:"):
-        return f"[PROMPT_INJECT:event:{spec.pattern.removeprefix('event:')}]"
-    return f"[PROMPT_INJECT:{spec.pattern}]"
-
+def _trigger_marker(pattern: str) -> str:
+    return f"[PROMPT_INJECT:{pattern}]"
 

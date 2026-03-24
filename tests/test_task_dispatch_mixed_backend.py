@@ -646,7 +646,7 @@ async def test_local_backend_event_trigger_injection_is_transient() -> None:
     world.add_component(
         agent,
         UserPromptConfigComponent(
-            triggers={"event:tool_success": "Prefer successful tool outputs"},
+            triggers={"work": "Prefer successful tool outputs"},
             enable_context_pool=True,
         ),
     )
@@ -682,7 +682,7 @@ async def test_local_backend_event_trigger_injection_is_transient() -> None:
     sent_messages = provider.calls[0]
     assert sent_messages[-1].role == "user"
     assert sent_messages[-1].content.startswith(
-        "[PROMPT_INJECT:event:tool_success]\nPrefer successful tool outputs"
+        "[PROMPT_INJECT:work]\nPrefer successful tool outputs"
     )
     assert sent_messages[-1].content.endswith("Do local work")
 

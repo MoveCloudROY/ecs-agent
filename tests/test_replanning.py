@@ -449,7 +449,7 @@ async def test_event_trigger_injection_is_transient_for_replanning_provider_call
     world.add_component(
         entity_id,
         UserPromptConfigComponent(
-            triggers={"event:tool_success": "Prefer successful tool context"},
+            triggers={"objective": "Prefer successful tool context"},
             enable_context_pool=True,
         ),
     )
@@ -473,7 +473,7 @@ async def test_event_trigger_injection_is_transient_for_replanning_provider_call
     sent = provider.calls[0]
     assert sent[-1].role == "user"
     assert sent[-1].content.startswith(
-        "[PROMPT_INJECT:event:tool_success]\nPrefer successful tool context"
+        "[PROMPT_INJECT:objective]\nPrefer successful tool context"
     )
 
     conversation = world.get_component(entity_id, ConversationComponent)

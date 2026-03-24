@@ -409,7 +409,6 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
         UserPromptConfigComponent(
             triggers={
                 "@code": "Use code-first reasoning",
-                "event:tool_success": "Prioritize successful tool evidence",
             },
             enable_context_pool=True,
             context_pool_max_chars=10000,
@@ -486,7 +485,7 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
 
 
 @pytest.mark.asyncio
-async def test_event_trigger_injection_uses_context_signal_and_preserves_user_tail() -> (
+async def test_keyword_trigger_injection_with_context_pool_preserves_user_tail() -> (
     None
 ):
     world = World()
@@ -502,7 +501,7 @@ async def test_event_trigger_injection_uses_context_signal_and_preserves_user_ta
     world.add_component(
         entity_id,
         UserPromptConfigComponent(
-            triggers={"event:tool_success": "Prefer successful tool context"},
+            triggers={"summary": "Prefer successful tool context"},
             enable_context_pool=True,
         ),
     )
@@ -532,9 +531,9 @@ async def test_event_trigger_injection_uses_context_signal_and_preserves_user_ta
 
     sent_user = provider.calls[0][-1].content
     assert sent_user.startswith(
-        "[PROMPT_INJECT:event:tool_success]\nPrefer successful tool context"
+        "[PROMPT_INJECT:summary]\nPrefer successful tool context"
     )
-    assert sent_user.index("[PROMPT_INJECT:event:tool_success]") < sent_user.index(
+    assert sent_user.index("[PROMPT_INJECT:summary]") < sent_user.index(
         "[PROMPT_CONTEXT_POOL]"
     )
     assert sent_user.index("source: tool:search") < sent_user.index(

@@ -560,7 +560,7 @@ async def test_event_trigger_injection_is_transient_for_reasoning_provider_call(
     world.add_component(
         entity_id,
         UserPromptConfigComponent(
-            triggers={"event:tool_success": "Prefer using successful tool evidence"},
+            triggers={"summary": "Prefer using successful tool evidence"},
             enable_context_pool=True,
         ),
     )
@@ -585,7 +585,7 @@ async def test_event_trigger_injection_is_transient_for_reasoning_provider_call(
     transient_user = sent_messages[-1]
     assert transient_user.role == "user"
     assert transient_user.content.startswith(
-        "[PROMPT_INJECT:event:tool_success]\nPrefer using successful tool evidence"
+        "[PROMPT_INJECT:summary]\nPrefer using successful tool evidence"
     )
     assert transient_user.content.endswith("Need summary")
 
