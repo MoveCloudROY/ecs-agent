@@ -711,16 +711,24 @@ class TestUserPromptConfigComponent:
         from ecs_agent.components import UserPromptConfigComponent
 
         comp = UserPromptConfigComponent()
-        assert comp.triggers == {}
+        assert comp.triggers == []
         assert comp.enable_context_pool is False
         assert comp.context_pool_max_chars == 8192
 
     def test_triggers(self):
         """Test UserPromptConfigComponent with triggers."""
         from ecs_agent.components import UserPromptConfigComponent
+        from ecs_agent.prompts.contracts import TriggerSpec
 
-        comp = UserPromptConfigComponent(triggers={"code": "coding-assistant"})
-        assert comp.triggers == {"code": "coding-assistant"}
+        trigger = TriggerSpec(
+            pattern="code",
+            match_mode="keyword",
+            action="skill",
+            content="coding-assistant",
+            priority=0,
+        )
+        comp = UserPromptConfigComponent(triggers=[trigger])
+        assert comp.triggers == [trigger]
 
     def test_enable_context_pool(self):
         """Test UserPromptConfigComponent with enable_context_pool=True."""
@@ -745,11 +753,20 @@ class TestUserPromptConfigComponent:
     def test_mutable_default_independence(self):
         """Test that triggers are independent instances."""
         from ecs_agent.components import UserPromptConfigComponent
+        from ecs_agent.prompts.contracts import TriggerSpec
 
         comp1 = UserPromptConfigComponent()
         comp2 = UserPromptConfigComponent()
-        comp1.triggers["x"] = "y"
-        assert "x" not in comp2.triggers
+        comp1.triggers.append(
+            TriggerSpec(
+                pattern="x",
+                match_mode="keyword",
+                action="skill",
+                content="y",
+                priority=0,
+            )
+        )
+        assert len(comp2.triggers) == 0
 
 
 def test_prompt_contributions_component_removed_from_exports() -> None:

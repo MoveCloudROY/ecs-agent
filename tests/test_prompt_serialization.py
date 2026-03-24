@@ -18,6 +18,7 @@ from ecs_agent.prompts.contracts import (
     PlaceholderSpec,
     SystemPromptConfigSpec,
     PromptTemplateSource,
+    TriggerSpec,
 )
 from ecs_agent.serialization import WorldSerializer, COMPONENT_REGISTRY
 
@@ -33,10 +34,22 @@ def test_prompt_config_component_roundtrip() -> None:
     entity = world.create_entity()
 
     config = UserPromptConfigComponent(
-        triggers={
-            "inject_coding": "template-1",
-            "inject_context": "template-2",
-        },
+        triggers=[
+            TriggerSpec(
+                pattern="inject_coding",
+                match_mode="keyword",
+                action="skill",
+                content="template-1",
+                priority=0,
+            ),
+            TriggerSpec(
+                pattern="inject_context",
+                match_mode="keyword",
+                action="skill",
+                content="template-2",
+                priority=0,
+            ),
+        ],
         enable_context_pool=True,
         context_pool_max_chars=16384,
     )
@@ -53,10 +66,11 @@ def test_prompt_config_component_roundtrip() -> None:
     # Verify roundtrip
     config2 = world2.get_component(entity, UserPromptConfigComponent)
     assert config2 is not None
-    assert config2.triggers == {
-        "inject_coding": "template-1",
-        "inject_context": "template-2",
-    }
+    assert len(config2.triggers) == 2
+    assert config2.triggers[0].pattern == "inject_coding"
+    assert config2.triggers[0].content == "template-1"
+    assert config2.triggers[1].pattern == "inject_context"
+    assert config2.triggers[1].content == "template-2"
     assert config2.enable_context_pool is True
     assert config2.context_pool_max_chars == 16384
 

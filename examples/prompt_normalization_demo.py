@@ -364,10 +364,22 @@ async def main() -> None:
     world.add_component(
         entity,
         UserPromptConfigComponent(
-            triggers={
-                "@code": "Prioritize deterministic code-first reasoning.",
-                "findings": "Prefer successful tool outputs as evidence.",
-            },
+            triggers=[
+                TriggerSpec(
+                    pattern="@code",
+                    match_mode="keyword",
+                    action="skill",
+                    content="Prioritize deterministic code-first reasoning.",
+                    priority=0,
+                ),
+                TriggerSpec(
+                    pattern="findings",
+                    match_mode="keyword",
+                    action="skill",
+                    content="Prefer successful tool outputs as evidence.",
+                    priority=0,
+                ),
+            ],
             enable_context_pool=True,
         ),
     )

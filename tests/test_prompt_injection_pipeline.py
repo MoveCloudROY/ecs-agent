@@ -24,6 +24,7 @@ from ecs_agent.systems.prompt_context_collector import (
     CONTEXT_POOL_OVERFLOW_FOOTER_PREFIX,
     PromptContextCollectorSystem,
 )
+from ecs_agent.prompts.contracts import TriggerSpec
 from ecs_agent.systems.planning import PlanningSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import (
@@ -217,7 +218,7 @@ def test_prepare_outbound_messages_reserves_reuses_and_commits_context_pool() ->
     world.add_component(
         entity_id,
         UserPromptConfigComponent(
-            triggers={"@code": "Use code-first reasoning"},
+            triggers=[TriggerSpec(pattern="@code", match_mode="keyword", action="skill", content="Use code-first reasoning", priority=0)],
             enable_context_pool=True,
         ),
     )
@@ -338,7 +339,7 @@ async def test_retry_uses_reserved_payload_then_commit_clears_once_on_success() 
     world.add_component(
         entity_id,
         UserPromptConfigComponent(
-            triggers={"@code": "Use code-first reasoning"},
+            triggers=[TriggerSpec(pattern="@code", match_mode="keyword", action="skill", content="Use code-first reasoning", priority=0)],
             enable_context_pool=True,
         ),
     )
@@ -407,9 +408,7 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
     world.add_component(
         entity_id,
         UserPromptConfigComponent(
-            triggers={
-                "@code": "Use code-first reasoning",
-            },
+            triggers=[TriggerSpec(pattern="@code", match_mode="keyword", action="skill", content="Use code-first reasoning", priority=0)],
             enable_context_pool=True,
             context_pool_max_chars=10000,
         ),
@@ -501,7 +500,7 @@ async def test_keyword_trigger_injection_with_context_pool_preserves_user_tail()
     world.add_component(
         entity_id,
         UserPromptConfigComponent(
-            triggers={"summary": "Prefer successful tool context"},
+            triggers=[TriggerSpec(pattern="summary", match_mode="keyword", action="skill", content="Prefer successful tool context", priority=0)],
             enable_context_pool=True,
         ),
     )
@@ -683,6 +682,7 @@ async def test_reasoning_uses_prepare_outbound_messages_shared_path(
         system_prompt: str | None = None,
         prefix_messages: list[Message] | None = None,
         current_tick: int,
+        conversation_override: list[Message] | None = None,
     ) -> tuple[list[Message], PromptContextReservationComponent | None]:
         _ = world_obj
         _ = system_prompt
@@ -746,6 +746,7 @@ async def test_planning_uses_prepare_outbound_messages_shared_path(
         system_prompt: str | None = None,
         prefix_messages: list[Message] | None = None,
         current_tick: int,
+        conversation_override: list[Message] | None = None,
     ) -> tuple[list[Message], PromptContextReservationComponent | None]:
         _ = world_obj
         _ = system_prompt
@@ -768,3 +769,93 @@ async def test_planning_uses_prepare_outbound_messages_shared_path(
     assert provider.calls[0][-1].content == "[shared-path] planning payload"
     assert world.get_component(entity_id, PromptContextReservationComponent) is None
     assert queue.entries == []
+
+
+def test_conversation_override_bypasses_world_conversation() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[
+                Message(role="user", content="world user"),
+                Message(role="assistant", content="world assistant"),
+            ]
+        ),
+    )
+
+    messages, reservation = prepare_outbound_messages(
+        world,
+        entity_id,
+        current_tick=1,
+        conversation_override=[Message(role="user", content="override user")],
+    )
+
+    assert reservation is None
+    assert [(message.role, message.content) for message in messages] == [
+        ("user", "override user")
+    ]
+
+
+def test_conversation_override_skips_rendered_user_prompt_substitution() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="world user")]),
+    )
+    world.add_component(entity_id, RenderedUserPromptComponent(text="rendered prompt"))
+
+    messages, reservation = prepare_outbound_messages(
+        world,
+        entity_id,
+        current_tick=1,
+        conversation_override=[Message(role="user", content="override user")],
+    )
+
+    assert reservation is None
+    assert messages[-1].content == "override user"
+    assert "rendered prompt" not in messages[-1].content
+
+
+def test_conversation_override_applies_config_triggers_inline() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        UserPromptConfigComponent(triggers=[
+            TriggerSpec(
+                pattern="@greet",
+                match_mode="keyword",
+                action="skill",
+                content="Be greeting",
+                priority=0,
+            )
+        ]),
+    )
+
+    messages, reservation = prepare_outbound_messages(
+        world,
+        entity_id,
+        current_tick=1,
+        conversation_override=[Message(role="user", content="please @greet now")],
+    )
+
+    assert reservation is None
+    assert messages[-1].content.startswith("[PROMPT_INJECT:@greet]\nBe greeting")
+    assert messages[-1].content.endswith("please @greet now")
+
+
+def test_conversation_override_no_triggers_when_no_config() -> None:
+    world = World()
+    entity_id = world.create_entity()
+
+    messages, reservation = prepare_outbound_messages(
+        world,
+        entity_id,
+        current_tick=1,
+        conversation_override=[Message(role="user", content="please @greet now")],
+    )
+
+    assert reservation is None
+    assert messages[-1].content == "please @greet now"

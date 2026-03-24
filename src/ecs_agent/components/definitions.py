@@ -6,6 +6,7 @@ from typing import Any, Awaitable, Callable
 import asyncio
 import time
 
+from ecs_agent.prompts.contracts import TriggerSpec
 from ecs_agent.types import (
     ApprovalPolicy,
     ConversationBranch,
@@ -414,7 +415,7 @@ class SubagentSessionTableComponent:
 class UserPromptConfigComponent:
     """Opts an entity into the prompt normalization pipeline."""
 
-    triggers: dict[str, str] = field(default_factory=dict)
+    triggers: list[TriggerSpec] = field(default_factory=list)
     # whether to enable stage-2 context pool injection
     enable_context_pool: bool = False
     # max characters for context pool rendering (overflow = drop lowest priority)

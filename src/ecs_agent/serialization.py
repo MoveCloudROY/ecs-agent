@@ -50,6 +50,7 @@ from ecs_agent.prompts.contracts import (
     PlaceholderSpec,
     SystemPromptConfigSpec,
     PromptTemplateSource,
+    TriggerSpec,
 )
 from ecs_agent.types import ApprovalPolicy, EntityId, Message, ToolCall, ToolSchema
 
@@ -327,6 +328,14 @@ class WorldSerializer:
                     "UserPromptConfigComponent contains unsupported fields: "
                     f"{', '.join(unknown_fields)}"
                 )
+            # Reconstruct TriggerSpec objects from serialized dicts
+            triggers_data = normalized_data.get("triggers", [])
+            normalized_data["triggers"] = [
+                TriggerSpec(**trigger_data)
+                if isinstance(trigger_data, dict)
+                else trigger_data
+                for trigger_data in triggers_data
+            ]
 
         if component_name == SystemPromptConfigSpec.__name__:
             template_source_data = normalized_data.get("template_source")
