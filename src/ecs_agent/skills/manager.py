@@ -9,7 +9,11 @@ from ecs_agent.components import (
     SandboxConfigComponent,
     ToolRegistryComponent,
 )
-from ecs_agent.components.definitions import SkillComponent, SkillMetadata
+from ecs_agent.components.definitions import (
+    PendingSkillContextComponent,
+    SkillComponent,
+    SkillMetadata,
+)
 from ecs_agent.core.world import World
 from ecs_agent.tools.bwrap_sandbox import wrap_sandbox_handler
 from ecs_agent.types import (
@@ -20,6 +24,46 @@ from ecs_agent.types import (
 )
 
 from ecs_agent.skills.script_skill import ScriptSkill
+
+
+def render_full_skill_context(
+    *,
+    skill_name: str,
+    description: str,
+    body: str,
+    tool_schemas: list[ToolSchema],
+) -> str:
+    lines = [
+        f"Skill: {skill_name}",
+        f"Description: {description}",
+        "",
+        "## Skill Body",
+    ]
+
+    if body:
+        lines.append(body)
+    else:
+        lines.append("(none)")
+
+    lines.extend(["", "## Tool Schemas"])
+
+    if not tool_schemas:
+        lines.append("- none")
+        return "\n".join(lines)
+
+    for schema in sorted(tool_schemas, key=lambda item: item.name):
+        lines.extend(
+            [
+                f"### Tool: {schema.name}",
+                f"Description: {schema.description}",
+                "parameters:",
+                "```json",
+                json.dumps(schema.parameters, indent=2, sort_keys=True),
+                "```",
+            ]
+        )
+
+    return "\n".join(lines)
 
 
 class SkillManager:
@@ -238,27 +282,21 @@ class SkillManager:
         if registry is None:
             return None
 
-        lines = [
-            f"Skill: {metadata.name}",
-            f"Description: {metadata.description}",
-            "Tools:",
-        ]
+        skill = self._installed_skills.get((entity_id, skill_name))
+        body = skill.system_prompt() if skill is not None else ""
 
-        for tool_name in metadata.tool_names:
+        schemas: list[ToolSchema] = []
+        for tool_name in sorted(metadata.tool_names):
             schema = registry.tools.get(tool_name)
-            if schema is None:
-                continue
+            if schema is not None:
+                schemas.append(schema)
 
-            lines.extend(
-                [
-                    f"- {schema.name}",
-                    f"  description: {schema.description}",
-                    "  parameters:",
-                    json.dumps(schema.parameters, indent=2, sort_keys=True),
-                ]
-            )
-
-        return "\n".join(lines)
+        return render_full_skill_context(
+            skill_name=metadata.name,
+            description=metadata.description,
+            body=body,
+            tool_schemas=schemas,
+        )
 
     def _ensure_skill_details_tool(
         self, world: World, entity_id: EntityId, registry: ToolRegistryComponent
@@ -270,6 +308,13 @@ class SkillManager:
             details = self.format_skill_details(world, entity_id, skill_name)
             if details is None:
                 return f"Skill '{skill_name}' is not installed."
+            world.add_component(
+                entity_id,
+                PendingSkillContextComponent(
+                    skill_name=skill_name,
+                    rendered_context=details,
+                ),
+            )
             return details
 
         registry.tools[self._DETAILS_TOOL_NAME] = ToolSchema(

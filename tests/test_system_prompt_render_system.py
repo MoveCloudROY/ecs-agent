@@ -123,9 +123,7 @@ def test_component_rendered_system_prompt_component_has_text_and_snapshot() -> N
 
 
 def test_component_rendered_user_prompt_component_has_text() -> None:
-    component = RenderedUserPromptComponent(
-        text="normalized user prompt"
-    )
+    component = RenderedUserPromptComponent(text="normalized user prompt")
 
     assert component.text == "normalized user prompt"
 
@@ -183,7 +181,9 @@ async def test_render_system_writes_component_for_inline_template_without_placeh
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        SystemPromptConfigSpec(template_source=PromptTemplateSource(inline="Always terse.")),
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="Always terse.")
+        ),
     )
 
     await SystemPromptRenderSystem().process(world)
@@ -312,7 +312,9 @@ async def test_render_system_rejects_unknown_placeholder() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        SystemPromptConfigSpec(template_source=PromptTemplateSource(inline="${missing}")),
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${missing}")
+        ),
     )
 
     with pytest.raises(ValueError, match="unknown placeholders"):
@@ -470,7 +472,9 @@ async def test_render_system_unknown_placeholder_raises() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        SystemPromptConfigSpec(template_source=PromptTemplateSource(inline="${unknown_var}")),
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${unknown_var}")
+        ),
     )
 
     with pytest.raises(ValueError):
@@ -646,6 +650,41 @@ async def test_render_system_no_skill_component_renders_none() -> None:
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
     assert rendered.text == "- none"
+
+
+@pytest.mark.asyncio
+async def test_installed_skills_placeholder_renders_summary_only() -> None:
+    """Contract: ${_installed_skills} renders Tier-1 name+description only."""
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="Skills:\n${_installed_skills}")
+        ),
+    )
+    world.add_component(
+        entity_id,
+        SkillComponent(
+            skills={
+                "alpha": SkillMetadata(
+                    name="alpha",
+                    description="alpha summary",
+                    tool_names=["tool_a", "tool_b"],
+                    has_system_prompt=True,
+                )
+            }
+        ),
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text == "Skills:\n- alpha: alpha summary"
+    assert "##" not in rendered.text
+    assert "parameters" not in rendered.text
+    assert "tool_a" not in rendered.text
 
 
 @pytest.mark.asyncio

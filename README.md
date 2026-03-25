@@ -114,7 +114,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **Markdown Skills** — Define agent capabilities via `SKILL.md` files with YAML frontmatter. System prompts are injected automatically, and `@`-prefixed relative paths are resolved to workspace-safe paths at load time.
 - **Script Skills** — Extend markdown skills with Python tool handlers in a `scripts/` directory, executed as sandboxed subprocesses.
 - **Built-in Tools** — `BuiltinToolsSkill` provides `read_file`, `write_file`, `edit_file`, `bash`, and `glob` with workspace binding, path traversal protection, and hash-anchored editing.
-- **Skill Discovery** — File-based skill loading from directories with metadata-first activation and lifecycle management via `SkillManager`.
+- **Skill Discovery** — File-based skill loading from directories with metadata-first activation and staged full-context injection via `load_skill_details`.
 
 ### Production Infrastructure
 - **5 LLM Providers + Streaming** — OpenAI, Claude, LiteLLM (100+ models), Fake, and Retry providers with real-time SSE token delivery.
@@ -220,6 +220,7 @@ World
 | `PromptContextQueueComponent` | Context entries for injection into outbound user messages |
 | `RenderedSystemPromptComponent` | cached/frozen rendered system prompt produced by `SystemPromptRenderSystem` on first render; reused on subsequent ticks |
 | `RenderedUserPromptComponent` | Normalized user prompt text produced by `UserPromptNormalizationSystem` for the current tick |
+| `PendingSkillContextComponent` | Ephemeral staged skill context for next-turn injection by `load_skill_details` |
 | `KVStoreComponent` | Generic key-value scratch space |
 | `ErrorComponent` | Error details for failed operations |
 | `TerminalComponent` | Signals agent completion |

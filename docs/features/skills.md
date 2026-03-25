@@ -40,9 +40,30 @@ To remain token-efficient, the `SkillManager` supports a two-phase loading proce
 ### Progressive Disclosure (3 Tiers)
 Skills use progressive disclosure to minimize the context window while keeping capabilities discoverable:
 
-1.  **Tier 1: Metadata Summary**: Included in the main system prompt. Lists available skill names and descriptions.
-2.  **Tier 2: Detailed Schemas**: The `load_skill_details` meta-tool allows the LLM to fetch full JSON schemas for a specific skill's tools on demand.
+1.  **Tier 1: Metadata Summary**: Included in the main system prompt. Lists available skill names and descriptions via the `${_installed_skills}` placeholder.
+2.  **Tier 2: Staged Skill Context**: The model calls `load_skill_details('<skill_name>')`. The tool executes and stages the skill's **full context block** — including skill name, description, markdown body (system prompt), and all tool schemas — for injection into the **next outbound request only**. The context is cleared after one use (exact-once semantics). Last-call-wins if multiple `load_skill_details` calls happen before the next outbound render.
 3.  **Tier 3: Reference Docs**: Extensive documentation or guides can be requested by the agent (optional/custom implementation).
+
+### Full Skill Context Block
+The `load_skill_details` tool returns and stages a formatted block containing the skill's complete definition. This block is injected into the next outbound user message to provide the model with the necessary context to use the skill's tools. This staged injection works on both the normal `UserPromptNormalizationSystem` path and the `conversation_override` path used by replanning systems.
+
+Format:
+```
+Skill: <name>
+Description: <description>
+
+## Skill Body
+<markdown system prompt body>
+
+## Tool Schemas
+### Tool: <tool_name>
+Description: <description>
+parameters:
+```json
+<JSON parameters>
+```
+...
+```
 
 ## Markdown Skills (Primary)
 
