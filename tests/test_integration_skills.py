@@ -252,6 +252,126 @@ async def test_load_skill_details_meta_tool() -> None:
     assert "workspace_root" in result
 
 
+@pytest.mark.asyncio
+async def test_load_skill_details_result_includes_markdown_body(tmp_path: Path) -> None:
+    """Contract: load_skill_details must include skill markdown/system-prompt body."""
+    from ecs_agent import SkillManager
+    from ecs_agent.skills.skill import Skill
+
+    skill_dir = tmp_path / ".claude" / "skills" / "body-contract"
+    skill_dir.mkdir(parents=True)
+    skill_path = skill_dir / "SKILL.md"
+    skill_path.write_text(
+        "---\n"
+        "name: body-contract\n"
+        "description: verifies full skill details\n"
+        "---\n"
+        "## Skill Body\n"
+        "Always include this markdown body in Tier-2 details.\n",
+        encoding="utf-8",
+    )
+
+    world = World()
+    entity = world.create_entity()
+    manager = SkillManager()
+    manager.install(world, entity, Skill(skill_path))
+
+    registry = world.get_component(entity, ToolRegistryComponent)
+    assert registry is not None
+    handler = registry.handlers.get("load_skill_details")
+    assert handler is not None
+
+    result = await handler(skill_name="body-contract")
+
+    assert "## Skill Body" in result
+    assert "Always include this markdown body" in result
+
+
+def test_no_use_skill_tool_in_registry() -> None:
+    """Contract: registry must never expose a model-facing use_skill tool."""
+    from ecs_agent import BuiltinToolsSkill, SkillManager
+
+    world = World()
+    entity = world.create_entity()
+    manager = SkillManager()
+    manager.install(world, entity, BuiltinToolsSkill())
+
+    registry = world.get_component(entity, ToolRegistryComponent)
+    assert registry is not None
+    assert "use_skill" not in registry.tools
+
+
+@pytest.mark.asyncio
+async def test_load_skill_details_stages_next_turn_context() -> None:
+    """Contract: successful load_skill_details must stage pending next-turn context."""
+    import ecs_agent.components.definitions as component_defs
+
+    from ecs_agent import BuiltinToolsSkill, SkillManager
+
+    world = World()
+    entity = world.create_entity()
+    manager = SkillManager()
+    manager.install(world, entity, BuiltinToolsSkill())
+
+    registry = world.get_component(entity, ToolRegistryComponent)
+    assert registry is not None
+    handler = registry.handlers.get("load_skill_details")
+    assert handler is not None
+
+    await handler(skill_name="builtin-tools")
+
+    pending_context_component = getattr(
+        component_defs,
+        "PendingSkillContextComponent",
+        None,
+    )
+    assert pending_context_component is not None
+    assert world.get_component(entity, pending_context_component) is not None
+
+
+@pytest.mark.asyncio
+async def test_staged_skill_context_cleared_after_one_use() -> None:
+    """Contract: staged skill context is injected once, then cleared for next turn."""
+    import ecs_agent.components.definitions as component_defs
+
+    from ecs_agent import BuiltinToolsSkill, SkillManager
+    from ecs_agent.components import ConversationComponent
+    from ecs_agent.prompts.message_assembly import prepare_outbound_messages
+    from ecs_agent.types import Message
+
+    world = World()
+    entity = world.create_entity()
+    manager = SkillManager()
+    manager.install(world, entity, BuiltinToolsSkill())
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content="Need details")]),
+    )
+
+    registry = world.get_component(entity, ToolRegistryComponent)
+    assert registry is not None
+    handler = registry.handlers.get("load_skill_details")
+    assert handler is not None
+
+    await handler(skill_name="builtin-tools")
+
+    pending_context_component = getattr(
+        component_defs,
+        "PendingSkillContextComponent",
+        None,
+    )
+    assert pending_context_component is not None
+
+    first_messages, _ = prepare_outbound_messages(world, entity, current_tick=1)
+    second_messages, _ = prepare_outbound_messages(world, entity, current_tick=2)
+
+    first_user_content = first_messages[-1].content
+    second_user_content = second_messages[-1].content
+    assert "Skill: builtin-tools" in first_user_content
+    assert "Skill: builtin-tools" not in second_user_content
+    assert world.get_component(entity, pending_context_component) is None
+
+
 def test_skill_uninstall_removes_only_owned_tools() -> None:
     """Test that uninstalling a skill only removes tools it owns."""
     from ecs_agent import BuiltinToolsSkill, SkillManager
