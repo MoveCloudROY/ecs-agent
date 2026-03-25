@@ -191,7 +191,7 @@ Opts an entity into the user prompt normalization pipeline. Configures trigger t
 
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `triggers` | `dict[str, str]` | `{}` | Mapping of trigger patterns to injection content |
+| `triggers` | `list[TriggerSpec]` | `[]` | List of `TriggerSpec` rules for pattern-based injection |
 | `enable_context_pool` | `bool` | `False` | Whether to inject context pool entries into user messages |
 | `context_pool_max_chars` | `int` | `8192` | Maximum characters for rendered context pool |
 
@@ -199,12 +199,25 @@ Opts an entity into the user prompt normalization pipeline. Configures trigger t
 
 ```python
 from ecs_agent.components import UserPromptConfigComponent
+from ecs_agent.prompts.contracts import TriggerSpec
 
 world.add_component(entity, UserPromptConfigComponent(
-    triggers={
-        "@code": "Prioritize deterministic code-first reasoning.",
-        "event:tool_success": "Prefer successful tool outputs as evidence.",
-    },
+    triggers=[
+        TriggerSpec(
+            pattern="@code",
+            match_mode="keyword",
+            action="skill",
+            content="Prioritize deterministic code-first reasoning.",
+            priority=10,
+        ),
+        TriggerSpec(
+            pattern="findings",
+            match_mode="contains",
+            action="skill",
+            content="Prefer successful tool outputs as evidence.",
+            priority=5,
+        ),
+    ],
     enable_context_pool=True,
 ))
 ```
@@ -217,7 +230,7 @@ Queue-backed context storage for prompt injection. Holds normalized context entr
 | :--- | :--- | :--- | :--- |
 | `entries` | `list[ContextEntry]` | `[]` | Ordered context entries available for injection |
 
-**Used by:** `UserPromptNormalizationSystem`, `PromptContextCollectorSystem`
+**Used by:** `UserPromptNormalizationSystem`
 
 ```python
 from ecs_agent.components import ContextEntry, PromptContextQueueComponent
@@ -255,7 +268,7 @@ Tracks an active, per-tick reservation snapshot of queue entries chosen for prom
 | :--- | :--- | :--- | :--- |
 | `reservation_id` | `str` | (required) | Unique reservation identifier |
 | `created_at_tick` | `int` | (required) | Tick number when the reservation was created |
-| `reserved_entries` | `list[ContextEntry]` | (required) | Snapshot of context entries reserved for rendering |
+| `reserved_entries` | `list[ContextEntry]` | `[]` | Snapshot of context entries reserved for rendering |
 
 **Used by:** `UserPromptNormalizationSystem`
 
@@ -322,18 +335,16 @@ world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
 
 Injects trigger templates and context pool entries into the last user message without mutating stored conversation history.
 
-**Constructor:** `UserPromptNormalizationSystem(priority: int = 0, trigger_specs: list[TriggerSpec] | None = None)`
+**Constructor:** `UserPromptNormalizationSystem(priority: int = 0)`
 **Recommended priority:** `-10`
 
 Processing steps:
 1. Query entities with `ConversationComponent` or `ConversationTreeComponent`.
 2. Find the last user message.
-3. Apply keyword triggers: if user text contains a trigger key (e.g., `@code`), prepend the trigger block with a `[PROMPT_INJECT:@keyword]` marker.
-4. Apply event triggers: match `event:<name>` patterns against active events derived from context pool sources.
-5. Apply context pool injection: render `PromptContextQueueComponent.entries` sorted by priority (descending), wrapped in a `[PROMPT_CONTEXT_POOL]` marker.
-6. Apply `TriggerSpec` rules passed via constructor (`replace` action replaces the entire message; other actions prepend).
-7. Write a `RenderedUserPromptComponent` to the entity.
-
+3. Apply trigger rules from `UserPromptConfigComponent.triggers` (`list[TriggerSpec]`): match each spec by `match_mode` (`keyword`, `prefix`, `contains`) and apply `action` (`replace`, `skill`, `script`). A `replace` action replaces the entire message; other actions prepend a `[PROMPT_INJECT:<pattern>]` block.
+4. Apply context pool injection: if `UserPromptConfigComponent.enable_context_pool` is `True` and a `PromptContextQueueComponent` is present, render its entries sorted by priority (descending), wrapped in a `[PROMPT_CONTEXT_POOL]` marker.
+5. Write a `RenderedUserPromptComponent` to the entity.
+6. If no user message is found, remove any existing `RenderedUserPromptComponent`.
 Deduplication: if a `[PROMPT_INJECT:...]` marker is already present in the user text, it is not doubled.
 
 ```python
@@ -357,17 +368,22 @@ If a source component is absent from the entity, the placeholder resolves to `"-
 
 ## Trigger Templates
 
-Trigger templates inject contextual prompt blocks into user messages based on pattern matching. They are configured via `UserPromptConfigComponent.triggers`.
+Trigger templates inject contextual prompt blocks into user messages based on pattern matching. They are configured via `UserPromptConfigComponent.triggers` as a `list[TriggerSpec]`.
 
 ### Keyword Triggers
 
-Keys that do not start with `event:` are treated as keyword triggers. When the pattern appears anywhere in the user message, the corresponding content is prepended.
+A `TriggerSpec` with `match_mode="keyword"` matches when the pattern appears as a word token in the user message. The `action` field controls what happens on match: `"replace"` replaces the entire message with `content`; `"skill"` and `"script"` prepend the content as a `[PROMPT_INJECT:<pattern>]` block.
 
 ```python
-triggers = {
-    "@code": "Prioritize deterministic code-first reasoning.",
-    "@help": "Provide step-by-step guidance with examples.",
-}
+from ecs_agent.prompts.contracts import TriggerSpec
+
+TriggerSpec(
+    pattern="@code",
+    match_mode="keyword",
+    action="skill",
+    content="Prioritize deterministic code-first reasoning.",
+    priority=10,
+)
 ```
 
 A user message `"Please @code summarize findings"` produces:
@@ -379,17 +395,17 @@ Prioritize deterministic code-first reasoning.
 Please @code summarize findings
 ```
 
-### Event Triggers
+### Prefix and Contains Triggers
 
-Keys starting with `event:` match against active events derived from context pool source labels. If a matching event is found, the content is injected.
+- `match_mode="prefix"` — matches when the user message starts with the pattern.
+- `match_mode="contains"` — matches when the pattern appears anywhere in the message.
 
 ```python
-triggers = {
-    "event:tool_success": "Prefer successful tool outputs as evidence.",
-}
+TriggerSpec(pattern="REPLACE_ME", match_mode="prefix", action="replace",
+            content="[REPLACED]", priority=20)
+TriggerSpec(pattern="findings", match_mode="contains", action="script",
+            content="Look up related context.", priority=5)
 ```
-
-Events are extracted from `PromptContextQueueComponent` entry source labels (e.g., `tool:search` produces events `tool:search`, `tool`, and `tool_success` if the content contains `status: success`).
 
 ### Idempotency
 
