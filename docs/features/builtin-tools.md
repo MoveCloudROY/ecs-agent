@@ -12,6 +12,20 @@ The `BuiltinToolsSkill` includes five primary tools:
 -   `glob`: Find files matching a glob pattern in the workspace.
 Tool results from `BuiltinToolsSkill` are automatically collected into the **One-Shot Context Pool** if enabled, providing immediate context for the next reasoning turn without polluting the permanent conversation history.
 
+## Tool Bundle Behaviour
+
+`BuiltinToolsSkill` sets `is_tool_bundle = True`. This means:
+
+- Its tools (`read_file`, `write_file`, `edit_file`, `bash`, `glob`) are registered on
+  `ToolRegistryComponent` and available for the LLM to call.
+- The skill is **not** listed in `SkillComponent` and does **not** appear in the
+  `${_installed_skills}` system-prompt placeholder.
+- `load_skill_details` cannot be called for it (it has no Tier-2 skill details).
+- No `system_prompt()` fragment is injected into the agent's system prompt.
+
+This keeps the agent's skill list clean: `BuiltinToolsSkill` is infrastructure,
+not a user-facing capability the LLM should reason about.
+
 
 ## Installation
 
