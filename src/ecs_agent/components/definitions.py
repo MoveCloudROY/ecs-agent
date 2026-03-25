@@ -410,7 +410,6 @@ class SubagentSessionTableComponent:
 # ---------------------------------------------------------------------------
 
 
-
 @dataclass(slots=True)
 class UserPromptConfigComponent:
     """Opts an entity into the prompt normalization pipeline."""
@@ -447,6 +446,12 @@ class PromptContextReservationComponent:
 class RenderedSystemPromptComponent:
     text: str
     placeholder_snapshot: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class PendingSkillContextComponent:
+    skill_name: str
+    rendered_context: str
 
 
 @dataclass(slots=True)
