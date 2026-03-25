@@ -387,7 +387,6 @@ class TestComponentsExportedInInit:
             "KVStoreComponent",
             "ToolRegistryComponent",
             "PendingToolCallsComponent",
-            "PendingSkillContextComponent",
             "ToolResultsComponent",
             "PlanComponent",
             "OwnerComponent",
@@ -870,22 +869,6 @@ class TestPromptContextReservationComponent:
 
         assert hasattr(PromptContextReservationComponent, "__slots__")
 
-
-class TestPendingSkillContextComponent:
-    def test_fields_are_stored(self) -> None:
-        from ecs_agent.components import PendingSkillContextComponent
-
-        comp = PendingSkillContextComponent(
-            skill_name="research_skill",
-            rendered_context="rendered context",
-        )
-        assert comp.skill_name == "research_skill"
-        assert comp.rendered_context == "rendered context"
-
-    def test_dataclass_slots(self) -> None:
-        from ecs_agent.components import PendingSkillContextComponent
-
-        assert hasattr(PendingSkillContextComponent, "__slots__")
 
 
 class TestPromptContractsModule:

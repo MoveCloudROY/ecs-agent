@@ -21,7 +21,6 @@ from ecs_agent.components import (
     MessageBusSubscriptionComponent,
     OwnerComponent,
     PendingToolCallsComponent,
-    PendingSkillContextComponent,
     PlanComponent,
     PlanSearchComponent,
     UserPromptConfigComponent,
@@ -57,7 +56,7 @@ from ecs_agent.types import ApprovalPolicy, EntityId, Message, ToolCall, ToolSch
 
 NON_SERIALIZABLE_PLACEHOLDER = "<non-serializable>"
 
-EPHEMERAL_COMPONENT_TYPES: tuple[type[Any], ...] = (PendingSkillContextComponent,)
+EPHEMERAL_COMPONENT_TYPES: tuple[type[Any], ...] = ()
 
 COMPONENT_REGISTRY: dict[str, type[Any]] = {
     LLMComponent.__name__: LLMComponent,

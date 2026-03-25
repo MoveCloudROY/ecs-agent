@@ -161,7 +161,6 @@ def prepare_outbound_messages(
     from ecs_agent.components.definitions import (
         ConversationComponent,
         ConversationTreeComponent,
-        PendingSkillContextComponent,
         PromptContextQueueComponent,
         PromptContextReservationComponent,
         RenderedUserPromptComponent,
@@ -242,13 +241,6 @@ def prepare_outbound_messages(
         trigger_specs=trigger_specs,
     )
 
-    pending_skill_context = world.get_component(entity_id, PendingSkillContextComponent)
-    if pending_skill_context is not None:
-        messages = _append_to_last_user_message(
-            messages,
-            suffix=pending_skill_context.rendered_context,
-        )
-        world.remove_component(entity_id, PendingSkillContextComponent)
 
     logger.debug(
         "outbound_messages_assembled",

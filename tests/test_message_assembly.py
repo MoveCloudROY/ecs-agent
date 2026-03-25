@@ -59,7 +59,6 @@ async def test_load_skill_details_returns_full_context_directly() -> None:
 async def test_load_skill_details_does_not_stage_pending_context() -> None:
     from ecs_agent import BuiltinToolsSkill, SkillManager
     from ecs_agent.components import ConversationComponent, ToolRegistryComponent
-    from ecs_agent.components.definitions import PendingSkillContextComponent
     from ecs_agent.core import World
     from ecs_agent.types import Message
 
@@ -77,5 +76,3 @@ async def test_load_skill_details_does_not_stage_pending_context() -> None:
     handler = registry.handlers["load_skill_details"]
     await handler(skill_name="builtin-tools")
 
-    # No PendingSkillContextComponent should be set — the return value IS the context.
-    assert world.get_component(entity, PendingSkillContextComponent) is None
