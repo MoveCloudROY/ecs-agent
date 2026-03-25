@@ -753,6 +753,15 @@ class MessageBusResponseEvent:
     envelope: MessageBusEnvelope
 
 
+
+@dataclass(slots=True)
+class ReasoningCompleteEvent:
+    """Event emitted when ReasoningSystem produces a final text response (no tool calls)."""
+
+    entity_id: EntityId
+    model: str
+    duration_ms: float
+
 @dataclass(slots=True)
 class RevertRequest:
     """Request to revert conversation to a specific branch."""
@@ -800,6 +809,7 @@ __all__ = [
     "MessageBusTimeoutEvent",
     "PlanRevisedEvent",
     "PlanStepCompletedEvent",
+    "ReasoningCompleteEvent",
     "RAGRetrievalCompletedEvent",
     "ResponsesAPICallEvent",
     "RetryConfig",
