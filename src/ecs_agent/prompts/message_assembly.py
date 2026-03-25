@@ -244,7 +244,7 @@ def prepare_outbound_messages(
         "outbound_messages_assembled",
         entity_id=entity_id,
         message_count=len(messages),
-        system_prompt_preview=messages[0].content[:200] if messages and messages[0].role == "system" else None,
+        system_prompt_preview=f"{messages[0].content[:200]} ... (only the first 200)" if messages and messages[0].role == "system" else None,
         last_user_prompt=messages[-1].content if messages and messages[-1].role == "user" else None,
     )
     return messages, context_reservation
