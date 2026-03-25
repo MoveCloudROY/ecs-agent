@@ -487,7 +487,15 @@ async def test_real_llm_prompt_keyword_injection_smoke() -> None:
     world.add_component(
         entity,
         UserPromptConfigComponent(
-            triggers=[TriggerSpec(pattern="@code", match_mode="keyword", action="skill", content="KEYWORD_TEMPLATE_BLOCK", priority=0)],
+            triggers=[
+                TriggerSpec(
+                    pattern="@code",
+                    match_mode="keyword",
+                    action="skill",
+                    content="KEYWORD_TEMPLATE_BLOCK",
+                    priority=0,
+                )
+            ],
             enable_context_pool=True,
         ),
     )
@@ -584,7 +592,15 @@ async def test_real_llm_prompt_event_injection_smoke() -> None:
     world.add_component(
         entity,
         UserPromptConfigComponent(
-            triggers=[TriggerSpec(pattern="summary", match_mode="keyword", action="skill", content="EVENT_TEMPLATE_BLOCK", priority=0)],
+            triggers=[
+                TriggerSpec(
+                    pattern="summary",
+                    match_mode="keyword",
+                    action="skill",
+                    content="EVENT_TEMPLATE_BLOCK",
+                    priority=0,
+                )
+            ],
             enable_context_pool=True,
         ),
     )
@@ -1211,7 +1227,15 @@ async def test_real_llm_rendered_user_prompt_trigger_injection() -> None:
     world.add_component(
         entity,
         UserPromptConfigComponent(
-            triggers=[TriggerSpec(pattern="@test", match_mode="keyword", action="skill", content="Use testing best practices.", priority=0)],
+            triggers=[
+                TriggerSpec(
+                    pattern="@test",
+                    match_mode="keyword",
+                    action="skill",
+                    content="Use testing best practices.",
+                    priority=0,
+                )
+            ],
             enable_context_pool=False,
         ),
     )
@@ -1230,3 +1254,83 @@ async def test_real_llm_rendered_user_prompt_trigger_injection() -> None:
     assert user_msg.content == rendered.text
     assert "Use testing best practices." in user_msg.content
     assert "Please @test verify the output" in user_msg.content
+
+
+@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.asyncio
+async def test_real_llm_skill_prompt_context_staged_on_load_skill_details(
+    tmp_path: Any,
+) -> None:
+    from ecs_agent import BuiltinToolsSkill
+    from ecs_agent.components import UserPromptConfigComponent
+    from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
+    from ecs_agent.skills.manager import SkillManager
+    from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
+    from ecs_agent.systems.tool_execution import ToolExecutionSystem
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+
+    inner = OpenAIProvider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    capturing: _CapturingProvider = _CapturingProvider(inner)
+
+    world = World()
+    entity = world.create_entity()
+    world.add_component(entity, LLMComponent(provider=capturing, model=MODEL))  # type: ignore[arg-type]
+    world.add_component(
+        entity,
+        ConversationComponent(
+            messages=[
+                Message(
+                    role="user",
+                    content=(
+                        "Use the load_skill_details tool with skill_name='builtin-tools'. "
+                        "After calling it, summarize what the skill can do in one short paragraph."
+                    ),
+                )
+            ]
+        ),
+    )
+    world.add_component(
+        entity,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(
+                inline=(
+                    "You are a precise assistant. Installed skills summary:\n"
+                    "${_installed_skills}\n"
+                    "When tool details are required, call load_skill_details first."
+                )
+            )
+        ),
+    )
+    world.add_component(
+        entity,
+        UserPromptConfigComponent(
+            triggers=[],
+            enable_context_pool=False,
+        ),
+    )
+
+    skill = BuiltinToolsSkill()
+    skill.bind_workspace(str(tmp_path))
+    SkillManager().install(world, entity, skill)
+
+    world.register_system(SystemPromptRenderSystem(), priority=-20)
+    world.register_system(UserPromptNormalizationSystem(), priority=-10)
+    world.register_system(ReasoningSystem(priority=0), priority=0)
+    world.register_system(ToolExecutionSystem(priority=5), priority=5)
+    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
+
+    await Runner().run(world, max_ticks=3)
+
+    assert len(capturing.captured_messages) >= 1
+    assert any(msg.role == "tool" for msg in capturing.captured_messages)
+
+    staged_user_messages = [
+        msg
+        for msg in capturing.captured_messages
+        if msg.role == "user" and "Skill: builtin-tools" in msg.content
+    ]
+    assert staged_user_messages, (
+        "Expected post-tool outbound request to include injected full skill context block"
+    )

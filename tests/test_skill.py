@@ -60,6 +60,31 @@ It has multiple lines."""
         assert "---" not in prompt
 
 
+def test_skill_body_contains_markdown_content() -> None:
+    """Contract: Skill.system_prompt() exposes full markdown body content."""
+    content = """---
+name: body-contract
+description: body contract
+---
+# Skill Body
+
+## Execution Contract
+Always include this section in prompt material.
+"""
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        skill_path = Path(tmpdir) / "SKILL.md"
+        skill_path.write_text(content)
+
+        skill = Skill(skill_path)
+        prompt = skill.system_prompt()
+
+        assert prompt.strip() != ""
+        assert "# Skill Body" in prompt
+        assert "## Execution Contract" in prompt
+        assert "Always include this section" in prompt
+
+
 def test_markdown_skill_implements_skill_protocol() -> None:
     """MarkdownSkill implements Skill protocol."""
     content = """---

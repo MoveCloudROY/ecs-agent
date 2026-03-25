@@ -161,6 +161,7 @@ def prepare_outbound_messages(
     from ecs_agent.components.definitions import (
         ConversationComponent,
         ConversationTreeComponent,
+        PendingSkillContextComponent,
         PromptContextQueueComponent,
         PromptContextReservationComponent,
         RenderedUserPromptComponent,
@@ -240,12 +241,25 @@ def prepare_outbound_messages(
         context_pool_items=reserved_context_pool_items,
         trigger_specs=trigger_specs,
     )
+
+    pending_skill_context = world.get_component(entity_id, PendingSkillContextComponent)
+    if pending_skill_context is not None:
+        messages = _append_to_last_user_message(
+            messages,
+            suffix=pending_skill_context.rendered_context,
+        )
+        world.remove_component(entity_id, PendingSkillContextComponent)
+
     logger.debug(
         "outbound_messages_assembled",
         entity_id=entity_id,
         message_count=len(messages),
-        system_prompt_preview=f"{messages[0].content[:200]} ... (only the first 200)" if messages and messages[0].role == "system" else None,
-        last_user_prompt=messages[-1].content if messages and messages[-1].role == "user" else None,
+        system_prompt_preview=f"{messages[0].content[:200]} ... (only the first 200)"
+        if messages and messages[0].role == "system"
+        else None,
+        last_user_prompt=messages[-1].content
+        if messages and messages[-1].role == "user"
+        else None,
     )
     return messages, context_reservation
 
@@ -331,6 +345,29 @@ def _substitute_last_user_message(
                 tool_call_id=message.tool_call_id,
             )
             break
+    return messages
+
+
+def _append_to_last_user_message(
+    conversation_messages: list[Message],
+    *,
+    suffix: str,
+) -> list[Message]:
+    if not suffix:
+        return list(conversation_messages)
+
+    messages = list(conversation_messages)
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.role != "user":
+            continue
+        messages[index] = Message(
+            role="user",
+            content=f"{message.content}\n\n{suffix}",
+            tool_calls=message.tool_calls,
+            tool_call_id=message.tool_call_id,
+        )
+        break
     return messages
 
 

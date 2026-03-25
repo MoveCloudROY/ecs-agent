@@ -21,6 +21,7 @@ from ecs_agent.components import (
     MessageBusSubscriptionComponent,
     OwnerComponent,
     PendingToolCallsComponent,
+    PendingSkillContextComponent,
     PlanComponent,
     PlanSearchComponent,
     UserPromptConfigComponent,
@@ -55,6 +56,8 @@ from ecs_agent.prompts.contracts import (
 from ecs_agent.types import ApprovalPolicy, EntityId, Message, ToolCall, ToolSchema
 
 NON_SERIALIZABLE_PLACEHOLDER = "<non-serializable>"
+
+EPHEMERAL_COMPONENT_TYPES: tuple[type[Any], ...] = (PendingSkillContextComponent,)
 
 COMPONENT_REGISTRY: dict[str, type[Any]] = {
     LLMComponent.__name__: LLMComponent,
@@ -114,6 +117,8 @@ class WorldSerializer:
             for component_type, entity_map in component_store.items():
                 component = entity_map.get(entity_id)
                 if component is None:
+                    continue
+                if isinstance(component, EPHEMERAL_COMPONENT_TYPES):
                     continue
                 serialized_components[component_type.__name__] = (
                     WorldSerializer._serialize_component(component)
