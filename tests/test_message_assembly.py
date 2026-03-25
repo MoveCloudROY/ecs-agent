@@ -30,12 +30,37 @@ def test_assemble_messages_orders_keyword_block_then_context_pool_then_original_
     assert user_message.content.endswith("Need @code help")
 
 
-async def test_conversation_override_injects_staged_skill_context() -> None:
+async def test_load_skill_details_returns_full_context_directly() -> None:
+    from ecs_agent import BuiltinToolsSkill, SkillManager
+    from ecs_agent.components import ConversationComponent, ToolRegistryComponent
+    from ecs_agent.core import World
+    from ecs_agent.types import Message
+
+    world = World()
+    entity = world.create_entity()
+    manager = SkillManager()
+    manager.install(world, entity, BuiltinToolsSkill())
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content="hello")]),
+    )
+
+    registry = world.get_component(entity, ToolRegistryComponent)
+    assert registry is not None
+    handler = registry.handlers["load_skill_details"]
+    result = await handler(skill_name="builtin-tools")
+
+    # The tool returns the full skill details as its return value.
+    # This is placed directly into the role='tool' message by ToolExecutionSystem.
+    assert "Skill: builtin-tools" in result
+    assert "## Tool Schemas" in result
+
+
+async def test_load_skill_details_does_not_stage_pending_context() -> None:
     from ecs_agent import BuiltinToolsSkill, SkillManager
     from ecs_agent.components import ConversationComponent, ToolRegistryComponent
     from ecs_agent.components.definitions import PendingSkillContextComponent
     from ecs_agent.core import World
-    from ecs_agent.prompts.message_assembly import prepare_outbound_messages
     from ecs_agent.types import Message
 
     world = World()
@@ -52,55 +77,5 @@ async def test_conversation_override_injects_staged_skill_context() -> None:
     handler = registry.handlers["load_skill_details"]
     await handler(skill_name="builtin-tools")
 
-    override = [Message(role="user", content="override message")]
-    msgs, _ = prepare_outbound_messages(
-        world,
-        entity,
-        current_tick=1,
-        conversation_override=override,
-    )
-
-    last_content = msgs[-1].content
-    assert "Skill: builtin-tools" in last_content
+    # No PendingSkillContextComponent should be set — the return value IS the context.
     assert world.get_component(entity, PendingSkillContextComponent) is None
-
-
-async def test_conversation_override_clears_skill_context_after_one_use() -> None:
-    from ecs_agent import BuiltinToolsSkill, SkillManager
-    from ecs_agent.components import ConversationComponent, ToolRegistryComponent
-    from ecs_agent.components.definitions import PendingSkillContextComponent
-    from ecs_agent.core import World
-    from ecs_agent.prompts.message_assembly import prepare_outbound_messages
-    from ecs_agent.types import Message
-
-    world = World()
-    entity = world.create_entity()
-    manager = SkillManager()
-    manager.install(world, entity, BuiltinToolsSkill())
-    world.add_component(
-        entity,
-        ConversationComponent(messages=[Message(role="user", content="hello")]),
-    )
-
-    registry = world.get_component(entity, ToolRegistryComponent)
-    assert registry is not None
-    handler = registry.handlers["load_skill_details"]
-    await handler(skill_name="builtin-tools")
-
-    override = [Message(role="user", content="override message")]
-    msgs1, _ = prepare_outbound_messages(
-        world,
-        entity,
-        current_tick=1,
-        conversation_override=override,
-    )
-    msgs2, _ = prepare_outbound_messages(
-        world,
-        entity,
-        current_tick=2,
-        conversation_override=override,
-    )
-
-    assert "Skill: builtin-tools" in msgs1[-1].content
-    assert world.get_component(entity, PendingSkillContextComponent) is None
-    assert "Skill: builtin-tools" not in msgs2[-1].content

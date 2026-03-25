@@ -151,32 +151,17 @@ def test_full_skill_lifecycle() -> None:
     assert "bash" in tool_names
     assert "load_skill_details" in tool_names
 
-    # Verify SkillComponent metadata
+    # BuiltinToolsSkill is a pure tool-bundle: it must NOT appear in SkillComponent.
     skill_comp = world.get_component(entity, SkillComponent)
-    assert skill_comp is not None
-    assert len(skill_comp.skills) == 1
-    metadata = skill_comp.skills["builtin-tools"]
-    assert metadata.name == "builtin-tools"
-    assert set(metadata.tool_names) == {
-        "read_file",
-        "write_file",
-        "edit_file",
-        "bash",
-        "glob",
-    }
+    assert skill_comp is None or "builtin-tools" not in skill_comp.skills
 
     # Uninstall skill
     manager.uninstall(world, entity, "builtin-tools")
 
-    # Verify tools are removed (meta-tool is also cleaned up when no skills remain)
+    # Verify tools are removed (meta-tool also cleaned up when no skills remain)
     registry = world.get_component(entity, ToolRegistryComponent)
     assert registry is not None
     assert len(registry.tools) == 0  # All tools removed including meta-tool
-
-    # Verify metadata removed
-    skill_comp = world.get_component(entity, SkillComponent)
-    assert skill_comp is not None
-    assert len(skill_comp.skills) == 0
 
 
 def test_multiple_skills_on_same_entity() -> None:
@@ -207,17 +192,16 @@ def test_multiple_skills_on_same_entity() -> None:
     assert "test_tool" in tool_names
     assert "load_skill_details" in tool_names
 
-    # Verify metadata for both skills
+    # BuiltinToolsSkill is a tool-bundle — only test_skill appears in SkillComponent.
     skill_comp = world.get_component(entity, SkillComponent)
     assert skill_comp is not None
-    assert len(skill_comp.skills) == 2
-    skill_names = set(skill_comp.skills.keys())
-    assert "builtin-tools" in skill_names
-    assert "test_skill" in skill_names
+    assert len(skill_comp.skills) == 1
+    assert "test_skill" in skill_comp.skills
+    assert "builtin-tools" not in skill_comp.skills
 
 
 async def test_load_skill_details_meta_tool() -> None:
-    """Test load_skill_details meta-tool provides Tier 2 full schema output."""
+    """Test load_skill_details meta-tool provides full skill instructions and tool schemas."""
     from ecs_agent import BuiltinToolsSkill, SkillManager
 
     world = World()
@@ -233,14 +217,14 @@ async def test_load_skill_details_meta_tool() -> None:
     assert registry is not None
     details_tool = registry.tools.get("load_skill_details")
     assert details_tool is not None
-    assert "Tier 2" in details_tool.description  # Check for Tier 2 description
+    assert "load_skill_details" in details_tool.description  # Check description references the tool
 
     # Call load_skill_details for builtin-tools
     handler = registry.handlers.get("load_skill_details")
     assert handler is not None
     result = await handler(skill_name="builtin-tools")
 
-    # Verify Tier 2 output (markdown with full schemas)
+    # Verify full skill output (markdown with instructions and schemas)
     assert "Skill: builtin-tools" in result
     assert "Description: Basic file manipulation" in result
     assert "read_file" in result
@@ -302,10 +286,13 @@ def test_no_use_skill_tool_in_registry() -> None:
 
 
 @pytest.mark.asyncio
-async def test_load_skill_details_stages_next_turn_context() -> None:
-    """Contract: successful load_skill_details must stage pending next-turn context."""
-    import ecs_agent.components.definitions as component_defs
+async def test_load_skill_details_returns_full_context_directly() -> None:
+    """Contract: load_skill_details returns full skill context as its return value.
 
+    The return value is placed into the role='tool' message by ToolExecutionSystem,
+    so the LLM sees the full skill details inline in the conversation.
+    No PendingSkillContextComponent staging is used.
+    """
     from ecs_agent import BuiltinToolsSkill, SkillManager
 
     world = World()
@@ -318,15 +305,10 @@ async def test_load_skill_details_stages_next_turn_context() -> None:
     handler = registry.handlers.get("load_skill_details")
     assert handler is not None
 
-    await handler(skill_name="builtin-tools")
+    result = await handler(skill_name="builtin-tools")
 
-    pending_context_component = getattr(
-        component_defs,
-        "PendingSkillContextComponent",
-        None,
-    )
-    assert pending_context_component is not None
-    assert world.get_component(entity, pending_context_component) is not None
+    assert "Skill: builtin-tools" in result
+    assert "## Tool Schemas" in result
 
 
 @pytest.mark.asyncio
@@ -358,13 +340,16 @@ async def test_load_skill_details_missing_skill_no_staged_context() -> None:
 
 
 @pytest.mark.asyncio
-async def test_staged_skill_context_cleared_after_one_use() -> None:
-    """Contract: staged skill context is injected once, then cleared for next turn."""
+async def test_load_skill_details_no_pending_context_component_set() -> None:
+    """Contract: load_skill_details does not set PendingSkillContextComponent.
+
+    The skill context is delivered via the tool's return value (role='tool' message),
+    not via PendingSkillContextComponent staging.
+    """
     import ecs_agent.components.definitions as component_defs
 
     from ecs_agent import BuiltinToolsSkill, SkillManager
     from ecs_agent.components import ConversationComponent
-    from ecs_agent.prompts.message_assembly import prepare_outbound_messages
     from ecs_agent.types import Message
 
     world = World()
@@ -381,7 +366,7 @@ async def test_staged_skill_context_cleared_after_one_use() -> None:
     handler = registry.handlers.get("load_skill_details")
     assert handler is not None
 
-    await handler(skill_name="builtin-tools")
+    result = await handler(skill_name="builtin-tools")
 
     pending_context_component = getattr(
         component_defs,
@@ -389,16 +374,9 @@ async def test_staged_skill_context_cleared_after_one_use() -> None:
         None,
     )
     assert pending_context_component is not None
-
-    first_messages, _ = prepare_outbound_messages(world, entity, current_tick=1)
-    second_messages, _ = prepare_outbound_messages(world, entity, current_tick=2)
-
-    first_user_content = first_messages[-1].content
-    second_user_content = second_messages[-1].content
-    assert "Skill: builtin-tools" in first_user_content
-    assert "Skill: builtin-tools" not in second_user_content
+    # No staging component should be set; context is in the return value.
     assert world.get_component(entity, pending_context_component) is None
-
+    assert "Skill: builtin-tools" in result
 
 def test_skill_uninstall_removes_only_owned_tools() -> None:
     """Test that uninstalling a skill only removes tools it owns."""
@@ -444,10 +422,9 @@ def test_skill_manager_duplicate_installation_raises_error() -> None:
     with pytest.raises(ValueError, match="Tool name collision"):
         manager.install(world, entity, skill)
 
-    # Verify only one instance in metadata
+    # BuiltinToolsSkill is a tool-bundle — no SkillComponent entry expected.
     skill_comp = world.get_component(entity, SkillComponent)
-    assert skill_comp is not None
-    assert len(skill_comp.skills) == 1
+    assert skill_comp is None or "builtin-tools" not in skill_comp.skills
 
     # Verify tools are not duplicated
     registry = world.get_component(entity, ToolRegistryComponent)
