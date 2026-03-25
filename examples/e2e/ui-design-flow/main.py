@@ -6,7 +6,7 @@ agent using ECS-based composition with dual-mode provider selection.
 Features exercised:
 - SystemPromptConfigSpec with ${name} placeholder templates
 - Built-in placeholders: ${_installed_tools}, ${_installed_skills}
-- Callable placeholder: ${skill_instructions} resolves skill-injected prompts at render time
+- Progressive disclosure: skills listed by name only; full details via load_skill_details tool
 - UserPromptConfigComponent with TriggerSpec-based keyword injection
 - SystemPromptRenderSystem (priority -20) and UserPromptNormalizationSystem (priority -10)
 - Skill discovery + SkillManager lifecycle (ui-navigator, ui-prompt, BuiltinToolsSkill)
@@ -28,7 +28,6 @@ from ecs_agent.components import (
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import configure_logging, get_logger
 from ecs_agent.prompts.contracts import (
-    PlaceholderSpec,
     PromptTemplateSource,
     SystemPromptConfigSpec,
     TriggerSpec,
@@ -66,42 +65,19 @@ ${_installed_tools}
 ## Available Skills
 ${_installed_skills}
 
-## Skill Instructions
-${skill_instructions}\
+To get full instructions and tool schemas for a skill, call: load_skill_details(skill_name="<name>")\
 """
 
 
-def _build_system_prompt_config(
-    world: World,
-    entity_id: EntityId,
-    manager: SkillManager,
-) -> SystemPromptConfigSpec:
-    """Build a SystemPromptConfigSpec that merges base template with skill prompts.
+def _build_system_prompt_config() -> SystemPromptConfigSpec:
+    """Build a SystemPromptConfigSpec using the base template.
 
-    The ``skill_instructions`` placeholder is a callable that reads each
-    installed skill's system prompt at render time via ``SkillManager``,
-    so skill-injected system prompts are included in the final rendered output.
+    Skills are listed by name/description only (progressive disclosure).
+    The LLM calls load_skill_details(skill_name=...) to fetch full instructions
+    and tool schemas on demand.
     """
-
-    def _resolve_skill_instructions() -> str:
-        skill_metas = manager.list_skills(world, entity_id)
-        parts: list[str] = []
-        for meta in skill_metas:
-            skill_obj = manager._installed_skills.get((entity_id, meta.name))
-            if skill_obj is not None:
-                prompt = skill_obj.system_prompt()
-                if prompt:
-                    parts.append(prompt)
-        return "\n\n".join(parts) if parts else "(none)"
-
     return SystemPromptConfigSpec(
         template_source=PromptTemplateSource(inline=_SYSTEM_PROMPT_TEMPLATE),
-        placeholders=[
-            PlaceholderSpec(
-                name="skill_instructions",
-                value=_resolve_skill_instructions,
-            ),
-        ],
     )
 
 
@@ -217,10 +193,10 @@ async def main() -> None:
         ConversationComponent(messages=[Message(role="user", content=initial_prompt)]),
     )
 
-    # System prompt: template with built-in + callable placeholders.
-    # Must be added AFTER skills are installed so ${skill_instructions} can
-    # resolve skill system prompts at render time via SkillManager.
-    world.add_component(agent_id, _build_system_prompt_config(world, agent_id, manager))
+    # System prompt: template with built-in placeholders only.
+    # Skills are listed by name/description (${_installed_skills}).
+    # Full details are loaded lazily via load_skill_details tool.
+    world.add_component(agent_id, _build_system_prompt_config())
 
     # --- Register Systems (priority order: lower = earlier execution) ---
     world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
