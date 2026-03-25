@@ -448,11 +448,6 @@ class RenderedSystemPromptComponent:
     placeholder_snapshot: dict[str, str] = field(default_factory=dict)
 
 
-@dataclass(slots=True)
-class PendingSkillContextComponent:
-    skill_name: str
-    rendered_context: str
-
 
 @dataclass(slots=True)
 class RenderedUserPromptComponent:

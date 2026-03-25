@@ -222,7 +222,7 @@ async def main() -> None:
 
     # Run agent loop
     runner = Runner()
-    await runner.run(world, max_ticks=10)
+    await runner.run(world, max_ticks=None)
 
     # Print results
     conv = world.get_component(agent_id, ConversationComponent)

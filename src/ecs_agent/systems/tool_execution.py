@@ -103,7 +103,7 @@ class ToolExecutionSystem:
         handlers: dict[str, Callable[..., Awaitable[str]]],
     ) -> str:
         # Log tool invocation
-        logger.info("tool_called", tool_name=tool_call.name)
+        logger.info("tool_called", tool_name=tool_call.name, arguments=tool_call.arguments)
 
         handler = handlers.get(tool_call.name)
         if handler is None:

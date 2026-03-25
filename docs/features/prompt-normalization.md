@@ -436,16 +436,6 @@ Please @code summarize latest findings
 ```
 
 The original user message is always preserved as the tail of the normalized text.
-## Staged Skill Context
-The skill system uses an ephemeral injection mechanism for Tier-2 progressive disclosure.
-
-- When `load_skill_details('<skill_name>')` is called, a `PendingSkillContextComponent` is staged on the entity.
-- `prepare_outbound_messages(...)` (the core assembly logic used by reasoning and planning systems) detects this component.
-- The rendered skill context is appended to the last outbound user message.
-- The component is removed immediately after injection, ensuring **exact-once semantics**.
-- This works on both normal and `conversation_override` paths.
-- The context is **not** persisted in conversation history; it is injected only into the rendered/normalized message sent to the provider.
-
 
 ## Callable Placeholders
 

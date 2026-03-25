@@ -329,14 +329,7 @@ async def test_load_skill_details_missing_skill_no_staged_context() -> None:
 
     result = await handler(skill_name="missing-skill")
 
-    pending_context_component = getattr(
-        component_defs,
-        "PendingSkillContextComponent",
-        None,
-    )
-    assert pending_context_component is not None
     assert "is not installed" in result
-    assert world.get_component(entity, pending_context_component) is None
 
 
 @pytest.mark.asyncio
@@ -368,14 +361,6 @@ async def test_load_skill_details_no_pending_context_component_set() -> None:
 
     result = await handler(skill_name="builtin-tools")
 
-    pending_context_component = getattr(
-        component_defs,
-        "PendingSkillContextComponent",
-        None,
-    )
-    assert pending_context_component is not None
-    # No staging component should be set; context is in the return value.
-    assert world.get_component(entity, pending_context_component) is None
     assert "Skill: builtin-tools" in result
 
 def test_skill_uninstall_removes_only_owned_tools() -> None:

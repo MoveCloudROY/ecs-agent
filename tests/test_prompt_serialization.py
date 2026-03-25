@@ -6,7 +6,6 @@ import json
 
 from ecs_agent.components import (
     ContextEntry,
-    PendingSkillContextComponent,
     PromptContextQueueComponent,
     PromptContextReservationComponent,
     UserPromptConfigComponent,
@@ -155,50 +154,6 @@ def test_prompt_context_reservation_component_roundtrip() -> None:
     assert reservation2.reserved_entries[0].source_label == "tool:search"
 
 
-def test_pending_skill_context_component_is_ephemeral_on_roundtrip() -> None:
-    world = World()
-    entity = world.create_entity()
-
-    pending = PendingSkillContextComponent(
-        skill_name="research_skill",
-        rendered_context="Skill context body",
-    )
-    world.add_component(entity, pending)
-
-    data = WorldSerializer.to_dict(world)
-    entity_data = data["entities"][str(int(entity))]
-    assert PendingSkillContextComponent.__name__ not in entity_data
-
-    providers = {"default": DummyProvider()}
-    world2 = WorldSerializer.from_dict(data, providers=providers, tool_handlers={})
-    pending2 = world2.get_component(entity, PendingSkillContextComponent)
-    assert pending2 is None
-
-
-def test_pending_skill_context_last_call_wins() -> None:
-    world = World()
-    entity = world.create_entity()
-
-    world.add_component(
-        entity,
-        PendingSkillContextComponent(
-            skill_name="skill_a",
-            rendered_context="context from first call",
-        ),
-    )
-    world.add_component(
-        entity,
-        PendingSkillContextComponent(
-            skill_name="skill_b",
-            rendered_context="context from latest call",
-        ),
-    )
-
-    pending = world.get_component(entity, PendingSkillContextComponent)
-    assert pending is not None
-    assert pending.skill_name == "skill_b"
-    assert pending.rendered_context == "context from latest call"
-
 
 def test_rendered_system_prompt_component_roundtrip() -> None:
     world = World()
@@ -277,4 +232,3 @@ def test_prompt_components_serializer_registered() -> None:
         assert name in COMPONENT_REGISTRY, f"{name} not in COMPONENT_REGISTRY"
         assert COMPONENT_REGISTRY[name] is not None
 
-    assert PendingSkillContextComponent.__name__ not in COMPONENT_REGISTRY
