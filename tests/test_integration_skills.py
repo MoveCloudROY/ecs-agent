@@ -330,6 +330,34 @@ async def test_load_skill_details_stages_next_turn_context() -> None:
 
 
 @pytest.mark.asyncio
+async def test_load_skill_details_missing_skill_no_staged_context() -> None:
+    import ecs_agent.components.definitions as component_defs
+
+    from ecs_agent import BuiltinToolsSkill, SkillManager
+
+    world = World()
+    entity = world.create_entity()
+    manager = SkillManager()
+    manager.install(world, entity, BuiltinToolsSkill())
+
+    registry = world.get_component(entity, ToolRegistryComponent)
+    assert registry is not None
+    handler = registry.handlers.get("load_skill_details")
+    assert handler is not None
+
+    result = await handler(skill_name="missing-skill")
+
+    pending_context_component = getattr(
+        component_defs,
+        "PendingSkillContextComponent",
+        None,
+    )
+    assert pending_context_component is not None
+    assert "is not installed" in result
+    assert world.get_component(entity, pending_context_component) is None
+
+
+@pytest.mark.asyncio
 async def test_staged_skill_context_cleared_after_one_use() -> None:
     """Contract: staged skill context is injected once, then cleared for next turn."""
     import ecs_agent.components.definitions as component_defs
