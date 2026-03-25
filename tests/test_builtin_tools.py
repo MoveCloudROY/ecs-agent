@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from ecs_agent.components import ToolRegistryComponent
+from ecs_agent.components.definitions import SkillComponent
 from ecs_agent.core import World
 from ecs_agent.skills import SkillManager
 from ecs_agent.skills.script_skill import ScriptSkill
@@ -564,3 +565,101 @@ def test_builtin_skill_install_includes_glob() -> None:
     assert registry is not None
     assert "glob" in registry.tools
     assert "glob" in registry.handlers
+
+
+# ---------------------------------------------------------------------------
+# is_tool_bundle contract tests (RED phase — written before implementation)
+# ---------------------------------------------------------------------------
+
+
+def test_builtin_tools_skill_is_tool_bundle_flag() -> None:
+    """BuiltinToolsSkill.is_tool_bundle must be True."""
+    skill = BuiltinToolsSkill()
+    assert skill.is_tool_bundle is True
+
+
+def test_tool_bundle_not_registered_in_skill_component() -> None:
+    """Installing a tool-bundle skill must NOT add it to SkillComponent."""
+    world = World()
+    entity_id = world.create_entity()
+    manager = SkillManager()
+
+    manager.install(world, entity_id, BuiltinToolsSkill())
+
+    skill_comp = world.get_component(entity_id, SkillComponent)
+    # SkillComponent may not be created at all, or if it is, builtin-tools must not be in it
+    if skill_comp is not None:
+        assert "builtin-tools" not in skill_comp.skills
+
+
+def test_tool_bundle_tools_still_registered_in_tool_registry() -> None:
+    """Tool-bundle tools must still appear in ToolRegistryComponent after install."""
+    world = World()
+    entity_id = world.create_entity()
+    manager = SkillManager()
+
+    manager.install(world, entity_id, BuiltinToolsSkill())
+
+    registry = world.get_component(entity_id, ToolRegistryComponent)
+    assert registry is not None
+    assert "read_file" in registry.tools
+    assert "write_file" in registry.tools
+    assert "bash" in registry.tools
+    assert "glob" in registry.tools
+
+
+def test_regular_skill_still_registered_in_skill_component() -> None:
+    """Non-tool-bundle skills must still appear in SkillComponent after install."""
+    from ecs_agent.types import ToolSchema
+
+    class _NormalSkill:
+        name = "normal-skill"
+        description = "A regular skill"
+        is_tool_bundle = False
+
+        def tools(self) -> dict[str, tuple[ToolSchema, object]]:
+            return {}
+
+        def system_prompt(self) -> str:
+            return ""
+
+        def install(self, world: object, entity_id: object) -> None:
+            pass
+
+        def uninstall(self, world: object, entity_id: object) -> None:
+            pass
+
+    world = World()
+    entity_id = world.create_entity()
+    manager = SkillManager()
+
+    manager.install(world, entity_id, _NormalSkill())  # type: ignore[arg-type]
+
+    skill_comp = world.get_component(entity_id, SkillComponent)
+    assert skill_comp is not None
+    assert "normal-skill" in skill_comp.skills
+
+
+def test_default_is_tool_bundle_is_false_for_protocol_compliant_skill() -> None:
+    """ScriptSkill that omits is_tool_bundle should default to False (via getattr)."""
+    from ecs_agent.types import ToolSchema
+
+    class _MinimalSkill:
+        name = "minimal"
+        description = "minimal"
+
+        def tools(self) -> dict[str, tuple[ToolSchema, object]]:
+            return {}
+
+        def system_prompt(self) -> str:
+            return ""
+
+        def install(self, world: object, entity_id: object) -> None:
+            pass
+
+        def uninstall(self, world: object, entity_id: object) -> None:
+            pass
+
+    skill = _MinimalSkill()
+    # getattr fallback used by SkillManager must resolve to False
+    assert getattr(skill, "is_tool_bundle", False) is False

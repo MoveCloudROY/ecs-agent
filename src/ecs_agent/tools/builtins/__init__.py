@@ -20,6 +20,7 @@ class BuiltinToolsSkill(ScriptSkill):
 
     name = "builtin-tools"
     description = "Basic file manipulation and bash execution tools."
+    is_tool_bundle = True
 
     def tools(self) -> dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]]:
         discovered: dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]] = {}
