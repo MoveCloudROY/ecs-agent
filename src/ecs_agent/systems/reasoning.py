@@ -41,6 +41,7 @@ from ecs_agent.types import (
     ToolCall,
     ToolSchema,
     InterruptionReason,
+    ReasoningCompleteEvent,
 )
 
 logger = get_logger(__name__)
@@ -174,6 +175,13 @@ class ReasoningSystem:
                         model=active_model,
                         duration_ms=round(duration_ms, 2),
                         system="ReasoningSystem",
+                    )
+                    await world.event_bus.publish(
+                        ReasoningCompleteEvent(
+                            entity_id=entity_id,
+                            model=active_model,
+                            duration_ms=round(duration_ms, 2),
+                        )
                     )
                     world.add_component(
                         entity_id,
