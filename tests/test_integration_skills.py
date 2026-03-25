@@ -312,9 +312,7 @@ async def test_load_skill_details_returns_full_context_directly() -> None:
 
 
 @pytest.mark.asyncio
-async def test_load_skill_details_missing_skill_no_staged_context() -> None:
-    import ecs_agent.components.definitions as component_defs
-
+async def test_load_skill_details_missing_skill_returns_error() -> None:
     from ecs_agent import BuiltinToolsSkill, SkillManager
 
     world = World()
@@ -333,14 +331,11 @@ async def test_load_skill_details_missing_skill_no_staged_context() -> None:
 
 
 @pytest.mark.asyncio
-async def test_load_skill_details_no_pending_context_component_set() -> None:
-    """Contract: load_skill_details does not set PendingSkillContextComponent.
+async def test_load_skill_details_context_delivered_via_return_value() -> None:
+    """Contract: load_skill_details returns full skill context directly.
 
-    The skill context is delivered via the tool's return value (role='tool' message),
-    not via PendingSkillContextComponent staging.
+    The skill context is delivered via the tool's return value (role='tool' message).
     """
-    import ecs_agent.components.definitions as component_defs
-
     from ecs_agent import BuiltinToolsSkill, SkillManager
     from ecs_agent.components import ConversationComponent
     from ecs_agent.types import Message
