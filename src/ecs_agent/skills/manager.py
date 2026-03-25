@@ -10,7 +10,6 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.components.definitions import (
-    PendingSkillContextComponent,
     SkillComponent,
     SkillMetadata,
 )
@@ -80,6 +79,12 @@ class SkillManager:
 
         self._ensure_skill_details_tool(world, entity_id, registry)
 
+        # Tool bundles are pure tool collections — they are not listed as skills.
+        # Skip SkillComponent registration entirely.
+        if getattr(skill, "is_tool_bundle", False):
+            self._installed_skills[(entity_id, skill.name)] = skill
+            return
+
         skill_component = world.get_component(entity_id, SkillComponent)
         if skill_component is None:
             skill_component = SkillComponent(skills={})
@@ -121,12 +126,19 @@ class SkillManager:
             None if skill_component is None else skill_component.skills.get(skill_name)
         )
         skill = self._installed_skills.get((entity_id, skill_name))
-        if metadata is None or skill is None:
+        if skill is None:
             raise ValueError(
                 f"Skill '{skill_name}' is not indexed for entity {entity_id}."
             )
 
-        if metadata.activated:
+        # Tool bundles have no SkillMetadata — check activated state via a sentinel.
+        is_tool_bundle = getattr(skill, "is_tool_bundle", False)
+        if not is_tool_bundle and metadata is None:
+            raise ValueError(
+                f"Skill '{skill_name}' is not indexed for entity {entity_id}."
+            )
+
+        if metadata is not None and metadata.activated:
             return
 
         registry = world.get_component(entity_id, ToolRegistryComponent)
@@ -157,20 +169,19 @@ class SkillManager:
 
         skill.install(world, entity_id)
 
-        refreshed_skill_component = world.get_component(entity_id, SkillComponent)
-        refreshed_metadata = (
-            None
-            if refreshed_skill_component is None
-            else refreshed_skill_component.skills.get(skill_name)
-        )
-        if refreshed_metadata is None:
-            metadata.has_system_prompt = bool(prompt)
-            metadata.activated = True
-            metadata.tool_names = list(skill_tools.keys())
-        else:
-            refreshed_metadata.has_system_prompt = bool(prompt)
-            refreshed_metadata.activated = True
-            refreshed_metadata.tool_names = list(skill_tools.keys())
+        # Update SkillMetadata only for real skills (not tool bundles).
+        if not is_tool_bundle:
+            refreshed_skill_component = world.get_component(entity_id, SkillComponent)
+            refreshed_metadata = (
+                None
+                if refreshed_skill_component is None
+                else refreshed_skill_component.skills.get(skill_name)
+            )
+            target_metadata = refreshed_metadata if refreshed_metadata is not None else metadata
+            assert target_metadata is not None
+            target_metadata.has_system_prompt = bool(prompt)
+            target_metadata.activated = True
+            target_metadata.tool_names = list(skill_tools.keys())
 
         # Publish SkillInstalledEvent
         self._publish_event(
@@ -201,6 +212,26 @@ class SkillManager:
         self.activate(world, entity_id, skill.name)
 
     def uninstall(self, world: World, entity_id: EntityId, skill_name: str) -> None:
+        skill = self._installed_skills.get((entity_id, skill_name))
+        is_tool_bundle = skill is not None and getattr(skill, "is_tool_bundle", False)
+
+        if is_tool_bundle:
+            # Tool bundles are not in SkillComponent; remove their tools directly.
+            registry = world.get_component(entity_id, ToolRegistryComponent)
+            if registry is not None and skill is not None:
+                for tool_name in skill.tools():
+                    registry.tools.pop(tool_name, None)
+                    registry.handlers.pop(tool_name, None)
+            self._installed_skills.pop((entity_id, skill_name), None)
+            if skill is not None:
+                skill.uninstall(world, entity_id)
+            self._cleanup_skill_details_tool(world, entity_id)
+            self._publish_event(
+                world,
+                SkillUninstalledEvent(entity_id=entity_id, skill_name=skill_name),
+            )
+            return
+
         skill_component = world.get_component(entity_id, SkillComponent)
         if skill_component is None:
             return
@@ -215,7 +246,7 @@ class SkillManager:
                 registry.tools.pop(tool_name, None)
                 registry.handlers.pop(tool_name, None)
 
-        skill = self._installed_skills.pop((entity_id, skill_name), None)
+        self._installed_skills.pop((entity_id, skill_name), None)
         if skill is not None:
             skill.uninstall(world, entity_id)
 
@@ -229,7 +260,6 @@ class SkillManager:
                 skill_name=skill_name,
             ),
         )
-
     def list_skills(self, world: World, entity_id: EntityId) -> list[SkillMetadata]:
         skill_component = world.get_component(entity_id, SkillComponent)
         if skill_component is None:
@@ -274,6 +304,23 @@ class SkillManager:
     def format_skill_details(
         self, world: World, entity_id: EntityId, skill_name: str
     ) -> str | None:
+        skill = self._installed_skills.get((entity_id, skill_name))
+
+        if skill is not None and getattr(skill, "is_tool_bundle", False):
+            # Tool bundles are not in SkillComponent; build details directly.
+            body = skill.system_prompt()
+            tool_schemas = [schema for schema, _ in skill.tools().values()]
+            return render_full_skill_context(
+                skill_name=skill.name,
+                description=skill.description,
+                body=body,
+                tool_schemas=tool_schemas,
+            )
+
+        # Regular skill path: read SkillMetadata from SkillComponent.
+        # Works for skills installed via SkillManager.install() as well as
+        # third-party adapters (e.g. MCPSkillAdapter) that write directly
+        # to SkillComponent without going through _installed_skills.
         metadata = self.get_skill_metadata(world, entity_id, skill_name)
         if metadata is None:
             return None
@@ -282,7 +329,6 @@ class SkillManager:
         if registry is None:
             return None
 
-        skill = self._installed_skills.get((entity_id, skill_name))
         body = skill.system_prompt() if skill is not None else ""
 
         schemas: list[ToolSchema] = []
@@ -308,24 +354,29 @@ class SkillManager:
             details = self.format_skill_details(world, entity_id, skill_name)
             if details is None:
                 return f"Skill '{skill_name}' is not installed."
-            world.add_component(
-                entity_id,
-                PendingSkillContextComponent(
-                    skill_name=skill_name,
-                    rendered_context=details,
-                ),
-            )
             return details
 
         registry.tools[self._DETAILS_TOOL_NAME] = ToolSchema(
             name=self._DETAILS_TOOL_NAME,
-            description=("Load detailed Tier 2 tool schemas for an installed skill."),
+            description=(
+                "Load the full instructions and tool schemas for an installed skill.\n"
+                "\n"
+                "Call this before using a skill for the first time. It returns the skill's\n"
+                "system prompt and the complete parameter schemas for every tool the skill\n"
+                "provides, so you know exactly what each tool does and how to call it.\n"
+                "\n"
+                "Usage:\n"
+                "  load_skill_details(skill_name=\"<name>\")\n"
+                "\n"
+                "Where <name> is one of the skill names listed under Available Skills.\n"
+                "Example: load_skill_details(skill_name=\"ui-navigator\")"
+            ),
             parameters={
                 "type": "object",
                 "properties": {
                     "skill_name": {
                         "type": "string",
-                        "description": "Installed skill name to inspect.",
+                        "description": "Name of the skill to load, exactly as listed under Available Skills.",
                     }
                 },
                 "required": ["skill_name"],
