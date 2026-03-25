@@ -159,6 +159,16 @@ class ScriptSkill(Protocol):
     name: str
     description: str
 
+    # Optional class attribute — default False.
+    # Set to True to mark this skill as a pure tool bundle:
+    #   - Tools are registered normally on ToolRegistryComponent.
+    #   - The skill is NOT listed in SkillComponent / ${_installed_skills}.
+    #   - load_skill_details cannot be called for it.
+    #   - No system prompt fragment is injected.
+    # Use this for infrastructure-level tool sets (e.g. BuiltinToolsSkill)
+    # that the LLM should not see or reason about as a "skill".
+    is_tool_bundle: bool  # default False
+
     def tools(self) -> dict[str, tuple[ToolSchema, ToolHandler]]:
         """Return tool schemas and their async handlers."""
         ...
