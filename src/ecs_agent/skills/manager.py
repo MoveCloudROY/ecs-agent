@@ -9,7 +9,11 @@ from ecs_agent.components import (
     SandboxConfigComponent,
     ToolRegistryComponent,
 )
-from ecs_agent.components.definitions import SkillComponent, SkillMetadata
+from ecs_agent.components.definitions import (
+    PendingSkillContextComponent,
+    SkillComponent,
+    SkillMetadata,
+)
 from ecs_agent.core.world import World
 from ecs_agent.tools.bwrap_sandbox import wrap_sandbox_handler
 from ecs_agent.types import (
@@ -304,6 +308,13 @@ class SkillManager:
             details = self.format_skill_details(world, entity_id, skill_name)
             if details is None:
                 return f"Skill '{skill_name}' is not installed."
+            world.add_component(
+                entity_id,
+                PendingSkillContextComponent(
+                    skill_name=skill_name,
+                    rendered_context=details,
+                ),
+            )
             return details
 
         registry.tools[self._DETAILS_TOOL_NAME] = ToolSchema(
