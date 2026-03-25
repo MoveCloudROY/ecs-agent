@@ -126,13 +126,16 @@ class ToolExecutionSystem:
                 )
             
             duration_ms = (time.monotonic() - start_time) * 1000
-            logger.info(
+            result_str = str(result)
+            result_tail = "\n".join(result_str.splitlines()[-10:])
+            logger.debug(
                 "tool_result",
                 tool_name=tool_call.name,
                 success=True,
                 duration_ms=duration_ms,
+                result_tail=result_tail,
             )
-            return str(result)
+            return result_str
         except Exception as exc:
             duration_ms = (time.monotonic() - start_time) * 1000
             reason = f"Error executing tool '{tool_call.name}': {exc}"

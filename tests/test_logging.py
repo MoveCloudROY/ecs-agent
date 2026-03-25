@@ -1030,7 +1030,7 @@ class TestToolExecutionLogging:
         import importlib
         from ecs_agent.logging import configure_logging
 
-        configure_logging(json_output=True, level="INFO")
+        configure_logging(json_output=True, level="DEBUG")
 
         # Reload module to get fresh logger with new config
         import ecs_agent.systems.tool_execution
@@ -1084,6 +1084,7 @@ class TestToolExecutionLogging:
         assert event["success"] is True
         assert "duration_ms" in event
         assert event["duration_ms"] >= 0
+        assert "result_tail" in event
 
     async def test_tool_failed_event_emitted_on_error(self, capsys):
         """Test ToolExecutionSystem emits tool_failed event on exception."""
