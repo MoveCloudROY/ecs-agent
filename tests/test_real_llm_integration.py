@@ -1258,7 +1258,7 @@ async def test_real_llm_rendered_user_prompt_trigger_injection() -> None:
 
 @pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
 @pytest.mark.asyncio
-async def test_real_llm_skill_prompt_context_staged_on_load_skill_details(
+async def test_real_llm_load_skill_details_returns_context_in_tool_message(
     tmp_path: Any,
 ) -> None:
     from ecs_agent import BuiltinToolsSkill
@@ -1326,11 +1326,11 @@ async def test_real_llm_skill_prompt_context_staged_on_load_skill_details(
     assert len(capturing.captured_messages) >= 1
     assert any(msg.role == "tool" for msg in capturing.captured_messages)
 
-    staged_user_messages = [
+    tool_messages_with_skill = [
         msg
         for msg in capturing.captured_messages
-        if msg.role == "user" and "Skill: builtin-tools" in msg.content
+        if msg.role == "tool" and "Skill: builtin-tools" in (msg.content or "")
     ]
-    assert staged_user_messages, (
-        "Expected post-tool outbound request to include injected full skill context block"
+    assert tool_messages_with_skill, (
+        "Expected load_skill_details to return skill context in a role='tool' message"
     )
