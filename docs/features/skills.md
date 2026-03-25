@@ -33,7 +33,7 @@ A Skill is a package of functionality that includes:
 To remain token-efficient, the `SkillManager` supports a two-phase loading process:
 
 1.  **Index**: Register skill metadata (name, description, tool names) into the `SkillComponent`. No tools are registered in the `ToolRegistryComponent` yet, and the system prompt is not loaded. `SkillMetadata.activated` is `False`.
-2.  **Activate**: Load the skill's system prompt into the `SystemPromptComponent.sections` and register tools into the `ToolRegistryComponent`. `SkillMetadata.activated` is `True`.
+2.  **Activate**: Call `skill.install(world, entity_id)` on the skill, which writes or appends the skill's system prompt to `SystemPromptComponent.content` and registers tools into the `ToolRegistryComponent`. `SkillMetadata.activated` is `True`.
 
 `manager.install()` is a convenience method that performs both `index()` and `activate()` in one call.
 
@@ -41,11 +41,11 @@ To remain token-efficient, the `SkillManager` supports a two-phase loading proce
 Skills use progressive disclosure to minimize the context window while keeping capabilities discoverable:
 
 1.  **Tier 1: Metadata Summary**: Included in the main system prompt. Lists available skill names and descriptions via the `${_installed_skills}` placeholder.
-2.  **Tier 2: Staged Skill Context**: The model calls `load_skill_details('<skill_name>')`. The tool executes and stages the skill's **full context block** — including skill name, description, markdown body (system prompt), and all tool schemas — for injection into the **next outbound request only**. The context is cleared after one use (exact-once semantics). Last-call-wins if multiple `load_skill_details` calls happen before the next outbound render.
+2.  **Tier 2: Full Context on Demand**: The model calls `load_skill_details('<skill_name>')`. The tool returns the skill's full formatted context block — including the skill name, description, markdown body (system prompt), and all tool schemas — as a string. The string is returned to the LLM via the normal `role=tool` message; the framework does not automatically stage or inject it into any future outbound message.
 3.  **Tier 3: Reference Docs**: Extensive documentation or guides can be requested by the agent (optional/custom implementation).
 
 ### Full Skill Context Block
-The `load_skill_details` tool returns and stages a formatted block containing the skill's complete definition. This block is injected into the next outbound user message to provide the model with the necessary context to use the skill's tools. This staged injection works on both the normal `UserPromptNormalizationSystem` path and the `conversation_override` path used by replanning systems.
+The `load_skill_details` tool returns a formatted block containing the skill's complete definition. This block is delivered to the LLM inline in the `role=tool` response message, giving the model the full context it needs to use the skill's tools in the same or subsequent turns.
 
 Format:
 ```
@@ -234,11 +234,11 @@ The `SkillManager` handles the installation lifecycle, tool registration, and pr
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `index` | `index(world, entity_id, skill)` | Register metadata only. No tools loaded. `activated=False`. |
-| `activate` | `activate(world, entity_id, skill_name)` | Load system prompt and register tools. Idempotent. |
+| `activate` | `activate(world, entity_id, skill_name)` | Call skill's install path, appending system prompt to `SystemPromptComponent.content` and registering tools. Idempotent. |
 | `install` | `install(world, entity_id, skill)` | Convenience: `index()` + `activate()` in one call. |
 | `uninstall` | `uninstall(world, entity_id, skill_name)` | Remove metadata, tools, and system prompt fragment. |
 | `list_skills` | `list_skills(world, entity_id)` | Return all `SkillMetadata` for installed skills. |
-| `get_skill_metadata` | `get_skill_metadata(world, entity_id, skill_name)` | Return metadata for a specific skill, or `None`. |
+| `get_skill_metadata` | `get_skill_metadata(world, entity_id, skill_name)` | Return `SkillMetadata` for a specific skill, or `None`. |
 | `can_invoke_via_slash` | `can_invoke_via_slash(world, entity, slash_cmd)` | Check if a slash command like `/skill-name` is user-invocable. |
 | `can_model_auto_invoke_skill` | `can_model_auto_invoke_skill(world, entity, skill_name)` | Check if model can auto-invoke this skill. |
 | `format_skill_details` | `format_skill_details(world, entity_id, skill_name)` | Return formatted Tier 2 details string for a skill. |
