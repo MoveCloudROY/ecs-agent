@@ -76,3 +76,334 @@ async def test_load_skill_details_does_not_stage_pending_context() -> None:
     handler = registry.handlers["load_skill_details"]
     await handler(skill_name="builtin-tools")
 
+
+async def test_slash_command_injects_skill_context_into_outbound_message() -> None:
+    """Red test: slash skill context WILL be injected (feature not yet implemented).
+
+    When a user message contains a slash command (e.g., '/testskill help'),
+    the outbound message should inject the skill context and preserve the
+    original slash command text at the end.
+    This test documents the EXPECTED slash context injection behavior (red).
+    """
+    from ecs_agent.components import (
+        SkillComponent,
+        SkillMetadata,
+        ConversationComponent,
+    )
+    from ecs_agent.core import World
+    from ecs_agent.types import Message
+    from ecs_agent.prompts.message_assembly import prepare_outbound_messages
+
+    world = World()
+    entity = world.create_entity()
+
+    # Create a fake skill with slash command
+    skill_metadata = SkillMetadata(
+        name="testskill",
+        description="A test skill",
+        tool_names=[],
+        has_system_prompt=False,
+        user_invocable=True,
+        slash_command="/testskill",
+    )
+
+    # Install skill metadata on entity
+    skill_component = SkillComponent(
+        skills={"testskill": skill_metadata},
+    )
+    world.add_component(entity, skill_component)
+
+    # Add user message with slash command
+    original_text = "/testskill help me understand this"
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content=original_text)]),
+    )
+
+    # Call prepare_outbound_messages
+    messages, _ = prepare_outbound_messages(
+        world,
+        entity,
+        current_tick=1,
+    )
+
+    # RED ASSERTION: Once implemented, message WILL contain slash skill context
+    user_msg = messages[-1]
+    assert "Skill: testskill" in user_msg.content, (
+        "Once slash context injection is implemented, skill context should be injected"
+    )
+    # RED ASSERTION: Original text WILL be preserved
+    assert user_msg.content.endswith(original_text), (
+        f"Final message should end with original text '{original_text}', "
+        f"but got: {user_msg.content[-50:]}"
+    )
+
+
+async def test_slash_command_with_context_pool_renders_order() -> None:
+    """Red test: slash context renders before context pool, then original text.
+
+    When both slash context and context pool entries exist, the render order
+    should be: slash skill context → context pool entries → original user text.
+    This test documents the expected ordering (red).
+    """
+    from ecs_agent.components import (
+        SkillComponent,
+        SkillMetadata,
+        ConversationComponent,
+        UserPromptConfigComponent,
+        PromptContextQueueComponent,
+        ContextEntry,
+    )
+    from ecs_agent.core import World
+    from ecs_agent.types import Message
+    from ecs_agent.prompts.message_assembly import prepare_outbound_messages
+
+    world = World()
+    entity = world.create_entity()
+
+    # Create a skill with slash command
+    skill_metadata = SkillMetadata(
+        name="queryskill",
+        description="A query skill",
+        tool_names=[],
+        has_system_prompt=False,
+        user_invocable=True,
+        slash_command="/queryskill",
+    )
+    skill_component = SkillComponent(
+        skills={"queryskill": skill_metadata},
+    )
+    world.add_component(entity, skill_component)
+
+    # Add context pool entry
+    context_entry = ContextEntry(
+        entry_id="context-0",
+        priority=10,
+        registration_order=0,
+        source_label="test:source",
+        content="CONTEXT_POOL_DATA",
+    )
+    world.add_component(
+        entity,
+        PromptContextQueueComponent(entries=[context_entry]),
+    )
+
+    # Enable context pool injection
+    world.add_component(
+        entity,
+        UserPromptConfigComponent(enable_context_pool=True),
+    )
+
+    # Add user message with slash command
+    original_text = "/queryskill find me resources"
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content=original_text)]),
+    )
+
+    # Call prepare_outbound_messages
+    messages, _ = prepare_outbound_messages(
+        world,
+        entity,
+        current_tick=1,
+    )
+
+    # RED ASSERTION: Message should contain skill context
+    user_msg = messages[-1]
+    assert "Skill: queryskill" in user_msg.content, (
+        "Slash skill context should be injected"
+    )
+    # RED ASSERTION: Message should contain context pool
+    assert "CONTEXT_POOL_DATA" in user_msg.content, "Context pool should be present"
+    # RED ASSERTION: Original text should be at the end
+    assert user_msg.content.endswith(original_text), (
+        f"Final message should end with original text '{original_text}'"
+    )
+    # RED ASSERTION: Render order should be skill context BEFORE context pool
+    skill_context_pos = user_msg.content.find("Skill: queryskill")
+    context_pool_pos = user_msg.content.find("CONTEXT_POOL_DATA")
+    assert skill_context_pos < context_pool_pos, (
+        "Skill context should render before context pool"
+    )
+
+
+async def test_prepare_outbound_messages_overlap_prefers_longest_slash_match() -> None:
+    from ecs_agent.components import (
+        ConversationComponent,
+        SkillComponent,
+        SkillMetadata,
+        ToolRegistryComponent,
+    )
+    from ecs_agent.core import World
+    from ecs_agent.prompts.message_assembly import prepare_outbound_messages
+    from ecs_agent.types import Message
+
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        ToolRegistryComponent(tools={}, handlers={}),
+    )
+    world.add_component(
+        entity,
+        SkillComponent(
+            skills={
+                "ui": SkillMetadata(
+                    name="ui",
+                    description="General UI skill",
+                    tool_names=[],
+                    has_system_prompt=False,
+                    user_invocable=True,
+                    slash_command="/ui",
+                ),
+                "ui-design": SkillMetadata(
+                    name="ui-design",
+                    description="Detailed UI design skill",
+                    tool_names=[],
+                    has_system_prompt=False,
+                    user_invocable=True,
+                    slash_command="/ui-design",
+                ),
+            }
+        ),
+    )
+    original_text = "please use /ui-design to refresh the landing page"
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content=original_text)]),
+    )
+
+    messages, reservation = prepare_outbound_messages(world, entity, current_tick=1)
+
+    assert reservation is None
+    user_message = messages[-1]
+    assert "Skill: ui-design" in user_message.content
+    assert "Skill: ui\n" not in user_message.content
+    assert user_message.content.endswith(original_text)
+
+
+async def test_prepare_outbound_messages_skips_non_invocable_slash_skill() -> None:
+    from ecs_agent.components import (
+        ConversationComponent,
+        SkillComponent,
+        SkillMetadata,
+        ToolRegistryComponent,
+    )
+    from ecs_agent.core import World
+    from ecs_agent.prompts.message_assembly import prepare_outbound_messages
+    from ecs_agent.types import Message
+
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        ToolRegistryComponent(tools={}, handlers={}),
+    )
+    world.add_component(
+        entity,
+        SkillComponent(
+            skills={
+                "private-skill": SkillMetadata(
+                    name="private-skill",
+                    description="Must never auto-inject",
+                    tool_names=[],
+                    has_system_prompt=False,
+                    user_invocable=False,
+                    slash_command="/private-skill",
+                )
+            }
+        ),
+    )
+    original_text = "please /private-skill reveal internal notes"
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content=original_text)]),
+    )
+
+    messages, reservation = prepare_outbound_messages(world, entity, current_tick=1)
+
+    assert reservation is None
+    assert messages[-1].content == original_text
+    assert "Skill: private-skill" not in messages[-1].content
+
+
+async def test_prepare_outbound_messages_retry_reuses_identical_slash_context() -> None:
+    from ecs_agent.components import (
+        ContextEntry,
+        ConversationComponent,
+        PromptContextQueueComponent,
+        SkillComponent,
+        SkillMetadata,
+        ToolRegistryComponent,
+        UserPromptConfigComponent,
+    )
+    from ecs_agent.core import World
+    from ecs_agent.prompts.message_assembly import prepare_outbound_messages
+    from ecs_agent.types import Message
+
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        ToolRegistryComponent(tools={}, handlers={}),
+    )
+    world.add_component(
+        entity,
+        SkillComponent(
+            skills={
+                "retryskill": SkillMetadata(
+                    name="retryskill",
+                    description="Retry-safe slash skill",
+                    tool_names=[],
+                    has_system_prompt=False,
+                    user_invocable=True,
+                    slash_command="/retryskill",
+                )
+            }
+        ),
+    )
+    world.add_component(
+        entity,
+        UserPromptConfigComponent(enable_context_pool=True),
+    )
+    world.add_component(
+        entity,
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="context-0",
+                    priority=10,
+                    registration_order=0,
+                    source_label="tool:search",
+                    content="context pool facts",
+                )
+            ]
+        ),
+    )
+    original_text = "please /retryskill summarize this"
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content=original_text)]),
+    )
+
+    first_messages, first_reservation = prepare_outbound_messages(
+        world,
+        entity,
+        current_tick=1,
+    )
+
+    assert first_reservation is not None
+    world.add_component(entity, first_reservation)
+
+    second_messages, second_reservation = prepare_outbound_messages(
+        world,
+        entity,
+        current_tick=2,
+    )
+
+    assert second_reservation is not None
+    assert second_reservation.reservation_id == first_reservation.reservation_id
+    assert first_messages[-1].content == second_messages[-1].content
+    assert "Skill: retryskill" in first_messages[-1].content
+    assert "Skill: retryskill" in second_messages[-1].content
+    assert first_messages[-1].content.endswith(original_text)
