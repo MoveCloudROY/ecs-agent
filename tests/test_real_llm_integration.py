@@ -1256,6 +1256,114 @@ async def test_real_llm_rendered_user_prompt_trigger_injection() -> None:
     assert "Please @test verify the output" in user_msg.content
 
 
+@pytest.mark.asyncio
+async def test_slash_skill_context_injection_real_llm() -> None:
+    if not os.environ.get("LLM_API_KEY"):
+        pytest.skip("LLM_API_KEY not set")
+
+    from ecs_agent.components import SkillComponent
+    from ecs_agent.prompts.message_assembly import prepare_outbound_messages
+    from ecs_agent.skills.manager import SkillManager
+    from ecs_agent.types import ToolSchema
+
+    class SlashContextSkill:
+        name = "test-skill"
+        description = "Test slash skill context for prompt assembly"
+        user_invocable = True
+
+        def tools(self) -> dict[str, tuple[ToolSchema, Any]]:
+            return {}
+
+        def system_prompt(self) -> str:
+            return "Use the slash skill context when helping the user."
+
+        def install(self, world: World, entity_id: Any) -> None:
+            return None
+
+        def uninstall(self, world: World, entity_id: Any) -> None:
+            return None
+
+    inner = OpenAIProvider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    world = World()
+    entity = world.create_entity()
+    world.add_component(entity, LLMComponent(provider=inner, model=MODEL))
+
+    original_text = "/test-skill please help"
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content=original_text)]),
+    )
+    world.add_component(
+        entity,
+        UserPromptConfigComponent(
+            triggers=[],
+            enable_context_pool=True,
+        ),
+    )
+
+    queue_entry = ContextEntry(
+        entry_id="tool-search-0",
+        priority=30,
+        registration_order=0,
+        source_label="tool:search",
+        content="source: tool:search\nstatus: success\nresult: citations\nerror: ",
+    )
+    world.add_component(entity, PromptContextQueueComponent(entries=[queue_entry]))
+
+    manager = SkillManager()
+    manager.install(world, entity, SlashContextSkill())
+
+    skill_component = world.get_component(entity, SkillComponent)
+    assert skill_component is not None
+    assert skill_component.skills["test-skill"].user_invocable is True
+
+    queue = world.get_component(entity, PromptContextQueueComponent)
+    assert queue is not None
+    entries_before = [
+        (
+            entry.entry_id,
+            entry.priority,
+            entry.registration_order,
+            entry.source_label,
+            entry.content,
+        )
+        for entry in queue.entries
+    ]
+
+    messages, reservation = prepare_outbound_messages(
+        world,
+        entity,
+        current_tick=1,
+    )
+
+    assert reservation is not None
+    assert [entry.entry_id for entry in reservation.reserved_entries] == [
+        "tool-search-0"
+    ]
+
+    user_msg = messages[-1]
+    assert user_msg.role == "user"
+    assert "Skill: test-skill" in user_msg.content
+    assert (
+        "Description: Test slash skill context for prompt assembly" in user_msg.content
+    )
+    assert "## Skill Body\n(none)\n\n## Tool Schemas\n- none" in user_msg.content
+    assert original_text in user_msg.content
+    assert user_msg.content.endswith(original_text)
+
+    entries_after = [
+        (
+            entry.entry_id,
+            entry.priority,
+            entry.registration_order,
+            entry.source_label,
+            entry.content,
+        )
+        for entry in queue.entries
+    ]
+    assert entries_after == entries_before
+
+
 @pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
 @pytest.mark.asyncio
 async def test_real_llm_load_skill_details_returns_context_in_tool_message(
