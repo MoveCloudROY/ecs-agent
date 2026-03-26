@@ -941,7 +941,7 @@ def test_slash_skill_context_injected_via_prepare_outbound_messages() -> None:
     assert reservation is None
     # RED ASSERTION: The slash context WILL be injected
     user_msg = messages[-1]
-    assert "Skill: helpskill" in user_msg.content, (
+    assert "调用 skill: helpskill" in user_msg.content, (
         "Slash skill context should be injected once feature is implemented"
     )
     # RED ASSERTION: Original text WILL be preserved
@@ -1104,9 +1104,15 @@ def test_slash_context_is_transient_not_persisted_to_queue() -> None:
 
     # Verify slash context IS in the outbound message
     user_msg = messages[-1]
-    assert "Skill: docskill" in user_msg.content, "Slash context should be injected in outbound message"
-    assert "RESERVED_CONTEXT_DATA" in user_msg.content, "Reserved context should also be present"
-    assert original_text in user_msg.content, "Original slash command text should be preserved"
+    assert "调用 skill: docskill" in user_msg.content, (
+        "Slash context should be injected in outbound message"
+    )
+    assert "RESERVED_CONTEXT_DATA" in user_msg.content, (
+        "Reserved context should also be present"
+    )
+    assert original_text in user_msg.content, (
+        "Original slash command text should be preserved"
+    )
 
     # HARDENING: Verify slash context is NOT persisted in the queue component
     queue_after = world.get_component(entity, PromptContextQueueComponent)
@@ -1122,7 +1128,9 @@ def test_slash_context_is_transient_not_persisted_to_queue() -> None:
         )
 
 
-def test_repeated_prepare_outbound_messages_with_slash_produces_stable_context() -> None:
+def test_repeated_prepare_outbound_messages_with_slash_produces_stable_context() -> (
+    None
+):
     """Hardening test: repeated prepare_outbound_messages calls with the same slash command
     produce identical slash context across multiple invocations.
 
@@ -1195,9 +1203,11 @@ def test_repeated_prepare_outbound_messages_with_slash_produces_stable_context()
     )
 
     first_user_msg = first_messages[-1]
-    first_slash_context_start = first_user_msg.content.find("Skill: querygen")
+    first_slash_context_start = first_user_msg.content.find("调用 skill: querygen")
     first_slash_context_end = first_user_msg.content.find("STABLE_CONTEXT_DATA")
-    first_slash_context = first_user_msg.content[first_slash_context_start:first_slash_context_end]
+    first_slash_context = first_user_msg.content[
+        first_slash_context_start:first_slash_context_end
+    ]
 
     # Simulate a retry by installing the reservation and calling again
     if first_reservation is not None:
@@ -1211,9 +1221,11 @@ def test_repeated_prepare_outbound_messages_with_slash_produces_stable_context()
     )
 
     second_user_msg = second_messages[-1]
-    second_slash_context_start = second_user_msg.content.find("Skill: querygen")
+    second_slash_context_start = second_user_msg.content.find("调用 skill: querygen")
     second_slash_context_end = second_user_msg.content.find("STABLE_CONTEXT_DATA")
-    second_slash_context = second_user_msg.content[second_slash_context_start:second_slash_context_end]
+    second_slash_context = second_user_msg.content[
+        second_slash_context_start:second_slash_context_end
+    ]
 
     # HARDENING: Verify both calls produce identical slash context
     assert first_slash_context == second_slash_context, (
