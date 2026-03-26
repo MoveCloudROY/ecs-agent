@@ -167,7 +167,7 @@ Frozen dataclass defining a pattern-based trigger rule applied by `UserPromptNor
 | :--- | :--- | :--- | :--- |
 | `pattern` | `str` | (required) | Text pattern to match against the user message |
 | `match_mode` | `"keyword" \| "prefix" \| "contains"` | (required) | How to match the pattern |
-| `action` | `"replace" \| "inject" \| "script"` | (required) | What to do on match |
+| `action` | `"replace" \| "inject"` | (required) | What to do on match |
 | `content` | `str` | (required) | Content to inject or replace with |
 | `priority` | `int` | `0` | Higher priority triggers are evaluated first |
 
@@ -341,7 +341,7 @@ Injects trigger templates into the last user message without mutating stored con
 Processing steps:
 1. Query entities with `ConversationComponent` or `ConversationTreeComponent`.
 2. Find the last user message.
-3. Apply trigger rules from `UserPromptConfigComponent.triggers` (`list[TriggerSpec]`): match each spec by `match_mode` (`keyword`, `prefix`, `contains`) and apply `action` (`replace`, `inject`, `script`). A `replace` action replaces the entire message; other actions prepend a `[PROMPT_INJECT:<pattern>]` block.
+3. Apply trigger rules from `UserPromptConfigComponent.triggers` (`list[TriggerSpec]`): match each spec by `match_mode` (`keyword`, `prefix`, `contains`) and apply `action` (`replace` or `inject`). A `replace` action replaces the entire message; any non-`replace` action prepends a `[PROMPT_INJECT:<pattern>]` block.
 4. Write a `RenderedUserPromptComponent` to the entity. Context pool injection is handled separately at call-time.
 5. If no user message is found, remove any existing `RenderedUserPromptComponent`.
 Deduplication: if a `[PROMPT_INJECT:...]` marker is already present in the user text, it is not doubled.
@@ -371,7 +371,7 @@ Trigger templates inject contextual prompt blocks into user messages based on pa
 
 ### Keyword Triggers
 
-A `TriggerSpec` with `match_mode="keyword"` matches when the pattern appears as a word token in the user message. The `action` field controls what happens on match: `"replace"` replaces the entire message with `content`; `"inject"` and `"script"` prepend the content as a `[PROMPT_INJECT:<pattern>]` block.
+A `TriggerSpec` with `match_mode="keyword"` matches when the pattern appears as a word token in the user message. The `action` field controls what happens on match: `"replace"` replaces the entire message with `content`; `"inject"` prepends the content as a `[PROMPT_INJECT:<pattern>]` block.
 
 ```python
 from ecs_agent.prompts.contracts import TriggerSpec
@@ -402,7 +402,8 @@ Please @code summarize findings
 ```python
 TriggerSpec(pattern="REPLACE_ME", match_mode="prefix", action="replace",
             content="[REPLACED]", priority=20)
-TriggerSpec(pattern="findings", match_mode="contains", action="script",
+TriggerSpec(pattern="findings", match_mode="contains", action="inject",
+            content="Look up related context.", priority=5)
             content="Look up related context.", priority=5)
 ```
 
@@ -476,6 +477,9 @@ The prompt normalization pipeline fails loudly. There are no silent fallbacks.
 | Reserved placeholder name (starts with `_`) | `ValueError` | `"names starting with '_' are reserved"` |
 | Callable returns non-str | `ValueError` | `"must return str"` |
 | Missing template file | `ValueError` | `"missing template file: {path}"` |
+| Unreadable template file | `ValueError` | `"unreadable template file: {path}"` |
+| Duplicate placeholder name | `ValueError` | `"Duplicate placeholder name: {name}"` |
+| Empty placeholder key | `ValueError` | `"Placeholder key cannot be empty"` |
 
 All errors are logged via structlog before re-raising.
 
