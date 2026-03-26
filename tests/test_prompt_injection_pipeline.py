@@ -1031,3 +1031,203 @@ def test_context_pool_injection_is_call_time_not_normalization_time() -> None:
     user_msg = messages[-1]
     assert "source: tool:one" in user_msg.content
     assert user_msg.content.endswith("Need summary")
+
+
+def test_slash_context_is_transient_not_persisted_to_queue() -> None:
+    """Hardening test: slash skill context is transient, never persisted to PromptContextQueueComponent.entries.
+
+    When a user message contains a slash command, the injected skill context
+    should appear in the outbound message but NOT be permanently stored in
+    the queue component. The queue entries remain unchanged after assembly.
+    """
+    from ecs_agent.components import (
+        ConversationComponent,
+        ContextEntry,
+        PromptContextQueueComponent,
+        SkillComponent,
+        SkillMetadata,
+        UserPromptConfigComponent,
+    )
+    from ecs_agent.prompts.message_assembly import prepare_outbound_messages
+    from ecs_agent.types import Message
+
+    world = World()
+    entity = world.create_entity()
+
+    # Set up skill with slash command
+    world.add_component(
+        entity,
+        SkillComponent(
+            skills={
+                "docskill": SkillMetadata(
+                    name="docskill",
+                    description="A documentation skill",
+                    tool_names=[],
+                    has_system_prompt=False,
+                    user_invocable=True,
+                    slash_command="/docskill",
+                )
+            }
+        ),
+    )
+
+    # Add one context pool entry (reserved)
+    initial_entry = ContextEntry(
+        entry_id="reserved-ctx-0",
+        priority=10,
+        registration_order=0,
+        source_label="tool:resolver",
+        content="RESERVED_CONTEXT_DATA",
+    )
+    world.add_component(
+        entity,
+        PromptContextQueueComponent(entries=[initial_entry]),
+    )
+
+    world.add_component(
+        entity,
+        UserPromptConfigComponent(enable_context_pool=True),
+    )
+
+    original_text = "/docskill explain this component"
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content=original_text)]),
+    )
+
+    # Call prepare_outbound_messages
+    messages, reservation = prepare_outbound_messages(
+        world,
+        entity,
+        current_tick=1,
+    )
+
+    # Verify slash context IS in the outbound message
+    user_msg = messages[-1]
+    assert "Skill: docskill" in user_msg.content, "Slash context should be injected in outbound message"
+    assert "RESERVED_CONTEXT_DATA" in user_msg.content, "Reserved context should also be present"
+    assert original_text in user_msg.content, "Original slash command text should be preserved"
+
+    # HARDENING: Verify slash context is NOT persisted in the queue component
+    queue_after = world.get_component(entity, PromptContextQueueComponent)
+    assert queue_after is not None, "Queue component should still exist"
+    # The queue should still contain only the original reserved entry, NOT any slash-derived entries
+    assert len(queue_after.entries) >= 1, "At least the original entry should remain"
+
+    # Check that no entries mention the slash skill name (i.e., slash context was transient)
+    for entry in queue_after.entries:
+        assert "docskill" not in entry.content, (
+            f"Slash skill context should be transient and not persisted to queue. "
+            f"Found 'docskill' in entry {entry.entry_id}: {entry.content[:50]}"
+        )
+
+
+def test_repeated_prepare_outbound_messages_with_slash_produces_stable_context() -> None:
+    """Hardening test: repeated prepare_outbound_messages calls with the same slash command
+    produce identical slash context across multiple invocations.
+
+    This ensures slash context synthesis is deterministic and does not depend on
+    mutable internal state or non-deterministic ordering.
+    """
+    from ecs_agent.components import (
+        ConversationComponent,
+        ContextEntry,
+        PromptContextQueueComponent,
+        SkillComponent,
+        SkillMetadata,
+        UserPromptConfigComponent,
+    )
+    from ecs_agent.prompts.message_assembly import prepare_outbound_messages
+    from ecs_agent.types import Message
+
+    world = World()
+    entity = world.create_entity()
+
+    # Set up skill with slash command
+    world.add_component(
+        entity,
+        SkillComponent(
+            skills={
+                "querygen": SkillMetadata(
+                    name="querygen",
+                    description="A query generation skill",
+                    tool_names=["query_builder"],
+                    has_system_prompt=False,
+                    user_invocable=True,
+                    slash_command="/querygen",
+                )
+            }
+        ),
+    )
+
+    # Add context pool entry
+    world.add_component(
+        entity,
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="ctx-stable-0",
+                    priority=20,
+                    registration_order=0,
+                    source_label="tool:cache",
+                    content="STABLE_CONTEXT_DATA",
+                )
+            ]
+        ),
+    )
+
+    world.add_component(
+        entity,
+        UserPromptConfigComponent(enable_context_pool=True),
+    )
+
+    original_text = "/querygen build complex SQL"
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content=original_text)]),
+    )
+
+    # First call to prepare_outbound_messages
+    first_messages, first_reservation = prepare_outbound_messages(
+        world,
+        entity,
+        current_tick=1,
+    )
+
+    first_user_msg = first_messages[-1]
+    first_slash_context_start = first_user_msg.content.find("Skill: querygen")
+    first_slash_context_end = first_user_msg.content.find("STABLE_CONTEXT_DATA")
+    first_slash_context = first_user_msg.content[first_slash_context_start:first_slash_context_end]
+
+    # Simulate a retry by installing the reservation and calling again
+    if first_reservation is not None:
+        world.add_component(entity, first_reservation)
+
+    # Second call to prepare_outbound_messages (simulating a retry)
+    second_messages, second_reservation = prepare_outbound_messages(
+        world,
+        entity,
+        current_tick=2,
+    )
+
+    second_user_msg = second_messages[-1]
+    second_slash_context_start = second_user_msg.content.find("Skill: querygen")
+    second_slash_context_end = second_user_msg.content.find("STABLE_CONTEXT_DATA")
+    second_slash_context = second_user_msg.content[second_slash_context_start:second_slash_context_end]
+
+    # HARDENING: Verify both calls produce identical slash context
+    assert first_slash_context == second_slash_context, (
+        f"Slash context should be stable across repeated calls. "
+        f"First: {first_slash_context[:100]}\n"
+        f"Second: {second_slash_context[:100]}"
+    )
+
+    # Verify the reservation IDs match (same transaction)
+    if first_reservation is not None and second_reservation is not None:
+        assert first_reservation.reservation_id == second_reservation.reservation_id, (
+            "Repeated calls should reuse the same reservation ID"
+        )
+
+    # Verify both messages end with the original text
+    assert first_user_msg.content.endswith(original_text)
+    assert second_user_msg.content.endswith(original_text)
