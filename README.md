@@ -104,7 +104,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 ### Prompt Normalization & Injection
 - **`SystemPromptConfigSpec`** — Declare system prompts as `${name}` placeholder templates with static strings, callable resolvers, or file paths as sources.
 - **`SystemPromptRenderSystem`** — ECS system (recommended priority -20) that resolves all `${name}` placeholders and writes a `RenderedSystemPromptComponent` for LLM callers.
-- **`UserPromptNormalizationSystem`** — ECS system (recommended priority -10) that injects trigger templates into outbound user messages and writes a `RenderedUserPromptComponent`.
+- **`UserPromptNormalizationSystem`** — ECS system (recommended priority -10) that injects trigger templates into outbound user messages and writes a `RenderedUserPromptComponent`. Slash-command skill context and ContextPool entries are injected later at call-time by `prepare_outbound_messages()`.
 - **Built-in Placeholders** — `${_installed_tools}`, `${_installed_skills}`, `${_installed_mcps}`, `${_installed_subagents}` automatically expand to the current inventory.
 - **Callable Placeholders** — Pass a `() -> str` callable as a placeholder resolver for dynamic content; must be side-effect-free and return a string.
 - **Trigger Templates** — `@keyword` or `event:<name>` trigger patterns inject pre-defined prompt blocks into user messages without mutating conversation history.

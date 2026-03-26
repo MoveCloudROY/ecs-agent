@@ -143,6 +143,17 @@ path = skill.resolve_supporting_path("../../../etc/passwd")
 
 ### Trigger Templates
 Skills can define trigger templates (keywords or events) that are automatically registered if the agent has a `UserPromptConfigComponent`. These triggers (e.g., `@help` or `event:tool_success`) trigger the injection of specific prompt blocks when detected in user messages or runtime state.
+### Slash Command Skill Context Injection
+
+When a user message contains a slash command (e.g., `/skill-name`) and the corresponding skill has `user_invocable=True`, the full skill context is injected transiently into the outbound user message. This injection is performed at call-time by `prepare_outbound_messages()` and does not mutate the stored conversation history or the `PromptContextQueueComponent`.
+
+Key behaviors:
+- **Longest Match Wins**: If multiple slash commands overlap in the user text, the longest matching command is selected.
+- **Transient Injection**: The context is resolved and injected only for the current LLM provider call. It is not persisted to the entity's components.
+- **Priority Placement**: Slash context is injected as a high-priority `ContextEntry` (priority 1,000,000), appearing before any reserved `ContextPool` entries and before the original user text.
+- **Preservation**: The original `/skill-name ...` text remains in the user message; it is not replaced by the context block.
+- **Distinct from Tool Calls**: This is a prompt-level injection, separate from the `load_skill_details` tool which returns context via a `role=tool` message.
+- **Normal Path Only**: Slash injection is skipped when using the `conversation_override` path in `prepare_outbound_messages()`.
 ## Script Skills (Advanced)
 
 Script Skills are Python classes that implement the `ScriptSkill` protocol. Use these when you need complex tool handlers, precise schema definitions, or custom installation logic.
