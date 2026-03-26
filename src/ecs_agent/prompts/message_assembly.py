@@ -408,15 +408,19 @@ def _resolve_slash_skill_context(
     raw_user_text: str,
 ) -> str | None:
     from ecs_agent.components.definitions import SkillComponent
+    from ecs_agent.skills.manager import SkillManager
 
     skill_component = world.get_component(entity_id, SkillComponent)
     if skill_component is None:
         return None
 
     matches: list[SkillMetadata] = []
+    skill_manager = SkillManager()
     for metadata in skill_component.skills.values():
         slash_command = metadata.slash_command.strip()
-        if not metadata.user_invocable or not slash_command:
+        if not slash_command or not skill_manager.can_invoke_via_slash(
+            world, entity_id, slash_command
+        ):
             continue
         if slash_command in raw_user_text:
             matches.append(metadata)
@@ -425,21 +429,21 @@ def _resolve_slash_skill_context(
         return None
 
     winning_skill = max(matches, key=lambda metadata: len(metadata.slash_command))
-    return _format_slash_skill_context(winning_skill)
+    return _format_slash_skill_context(world, entity_id, winning_skill.name)
 
 
-def _format_slash_skill_context(metadata: SkillMetadata) -> str:
-    lines = [
-        f"Skill: {metadata.name}",
-        f"Description: {metadata.description}",
-        "",
-        "## Skill Body",
-        "(none)",
-        "",
-        "## Tool Schemas",
-        "- none",
-    ]
-    return "\n".join(lines)
+def _format_slash_skill_context(
+    world: World,
+    entity_id: EntityId,
+    skill_name: str,
+) -> str:
+    from ecs_agent.skills.manager import SkillManager
+
+    header = f"调用 skill: {skill_name}"
+    details = SkillManager().format_skill_details(world, entity_id, skill_name)
+    if details is None:
+        return header
+    return f"{header}\n\n{details}"
 
 
 def _render_context_pool_block(

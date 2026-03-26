@@ -129,7 +129,7 @@ async def test_slash_command_injects_skill_context_into_outbound_message() -> No
 
     # RED ASSERTION: Once implemented, message WILL contain slash skill context
     user_msg = messages[-1]
-    assert "Skill: testskill" in user_msg.content, (
+    assert "调用 skill: testskill" in user_msg.content, (
         "Once slash context injection is implemented, skill context should be injected"
     )
     # RED ASSERTION: Original text WILL be preserved
@@ -210,7 +210,7 @@ async def test_slash_command_with_context_pool_renders_order() -> None:
 
     # RED ASSERTION: Message should contain skill context
     user_msg = messages[-1]
-    assert "Skill: queryskill" in user_msg.content, (
+    assert "调用 skill: queryskill" in user_msg.content, (
         "Slash skill context should be injected"
     )
     # RED ASSERTION: Message should contain context pool
@@ -220,7 +220,7 @@ async def test_slash_command_with_context_pool_renders_order() -> None:
         f"Final message should end with original text '{original_text}'"
     )
     # RED ASSERTION: Render order should be skill context BEFORE context pool
-    skill_context_pos = user_msg.content.find("Skill: queryskill")
+    skill_context_pos = user_msg.content.find("调用 skill: queryskill")
     context_pool_pos = user_msg.content.find("CONTEXT_POOL_DATA")
     assert skill_context_pos < context_pool_pos, (
         "Skill context should render before context pool"
@@ -277,8 +277,8 @@ async def test_prepare_outbound_messages_overlap_prefers_longest_slash_match() -
 
     assert reservation is None
     user_message = messages[-1]
-    assert "Skill: ui-design" in user_message.content
-    assert "Skill: ui\n" not in user_message.content
+    assert "调用 skill: ui-design" in user_message.content
+    assert "调用 skill: ui\n" not in user_message.content
     assert user_message.content.endswith(original_text)
 
 
@@ -324,7 +324,7 @@ async def test_prepare_outbound_messages_skips_non_invocable_slash_skill() -> No
 
     assert reservation is None
     assert messages[-1].content == original_text
-    assert "Skill: private-skill" not in messages[-1].content
+    assert "调用 skill: private-skill" not in messages[-1].content
 
 
 async def test_prepare_outbound_messages_retry_reuses_identical_slash_context() -> None:
@@ -404,6 +404,6 @@ async def test_prepare_outbound_messages_retry_reuses_identical_slash_context() 
     assert second_reservation is not None
     assert second_reservation.reservation_id == first_reservation.reservation_id
     assert first_messages[-1].content == second_messages[-1].content
-    assert "Skill: retryskill" in first_messages[-1].content
-    assert "Skill: retryskill" in second_messages[-1].content
+    assert "调用 skill: retryskill" in first_messages[-1].content
+    assert "调用 skill: retryskill" in second_messages[-1].content
     assert first_messages[-1].content.endswith(original_text)
