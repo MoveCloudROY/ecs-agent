@@ -218,7 +218,15 @@ def test_prepare_outbound_messages_reserves_reuses_and_commits_context_pool() ->
     world.add_component(
         entity_id,
         UserPromptConfigComponent(
-            triggers=[TriggerSpec(pattern="@code", match_mode="keyword", action="skill", content="Use code-first reasoning", priority=0)],
+            triggers=[
+                TriggerSpec(
+                    pattern="@code",
+                    match_mode="keyword",
+                    action="skill",
+                    content="Use code-first reasoning",
+                    priority=0,
+                )
+            ],
             enable_context_pool=True,
         ),
     )
@@ -339,7 +347,15 @@ async def test_retry_uses_reserved_payload_then_commit_clears_once_on_success() 
     world.add_component(
         entity_id,
         UserPromptConfigComponent(
-            triggers=[TriggerSpec(pattern="@code", match_mode="keyword", action="skill", content="Use code-first reasoning", priority=0)],
+            triggers=[
+                TriggerSpec(
+                    pattern="@code",
+                    match_mode="keyword",
+                    action="skill",
+                    content="Use code-first reasoning",
+                    priority=0,
+                )
+            ],
             enable_context_pool=True,
         ),
     )
@@ -408,7 +424,15 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
     world.add_component(
         entity_id,
         UserPromptConfigComponent(
-            triggers=[TriggerSpec(pattern="@code", match_mode="keyword", action="skill", content="Use code-first reasoning", priority=0)],
+            triggers=[
+                TriggerSpec(
+                    pattern="@code",
+                    match_mode="keyword",
+                    action="skill",
+                    content="Use code-first reasoning",
+                    priority=0,
+                )
+            ],
             enable_context_pool=True,
             context_pool_max_chars=10000,
         ),
@@ -500,7 +524,15 @@ async def test_keyword_trigger_injection_with_context_pool_preserves_user_tail()
     world.add_component(
         entity_id,
         UserPromptConfigComponent(
-            triggers=[TriggerSpec(pattern="summary", match_mode="keyword", action="skill", content="Prefer successful tool context", priority=0)],
+            triggers=[
+                TriggerSpec(
+                    pattern="summary",
+                    match_mode="keyword",
+                    action="skill",
+                    content="Prefer successful tool context",
+                    priority=0,
+                )
+            ],
             enable_context_pool=True,
         ),
     )
@@ -823,15 +855,17 @@ def test_conversation_override_applies_config_triggers_inline() -> None:
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        UserPromptConfigComponent(triggers=[
-            TriggerSpec(
-                pattern="@greet",
-                match_mode="keyword",
-                action="skill",
-                content="Be greeting",
-                priority=0,
-            )
-        ]),
+        UserPromptConfigComponent(
+            triggers=[
+                TriggerSpec(
+                    pattern="@greet",
+                    match_mode="keyword",
+                    action="skill",
+                    content="Be greeting",
+                    priority=0,
+                )
+            ]
+        ),
     )
 
     messages, reservation = prepare_outbound_messages(
@@ -859,3 +893,141 @@ def test_conversation_override_no_triggers_when_no_config() -> None:
 
     assert reservation is None
     assert messages[-1].content == "please @greet now"
+
+
+def test_slash_skill_context_injected_via_prepare_outbound_messages() -> None:
+    """Red test: slash skill context WILL be injected into prepare_outbound_messages output.
+
+    When prepare_outbound_messages is called with an entity that has a slash command
+    in its last user message, the returned message should contain the injected
+    slash skill context before the original text (once implemented).
+    """
+    from ecs_agent.components import (
+        SkillComponent,
+        SkillMetadata,
+        ConversationComponent,
+    )
+
+    world = World()
+    entity_id = world.create_entity()
+
+    # Install a skill with slash command on the entity
+    skill_metadata = SkillMetadata(
+        name="helpskill",
+        description="Help skill with documentation",
+        tool_names=[],
+        has_system_prompt=False,
+        user_invocable=True,
+        slash_command="/helpskill",
+    )
+    skill_component = SkillComponent(
+        skills={"helpskill": skill_metadata},
+    )
+    world.add_component(entity_id, skill_component)
+
+    # Add user message with slash command
+    original_text = "please /helpskill explain this feature"
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content=original_text)]),
+    )
+
+    messages, reservation = prepare_outbound_messages(
+        world,
+        entity_id,
+        current_tick=1,
+    )
+
+    assert reservation is None
+    # RED ASSERTION: The slash context WILL be injected
+    user_msg = messages[-1]
+    assert "Skill: helpskill" in user_msg.content, (
+        "Slash skill context should be injected once feature is implemented"
+    )
+    # RED ASSERTION: Original text WILL be preserved
+    assert user_msg.content.endswith(original_text), (
+        f"Final message should end with original text '{original_text}'"
+    )
+
+
+def test_slash_command_via_conversation_override_does_not_auto_inject() -> None:
+    from ecs_agent.components import (
+        SkillComponent,
+        SkillMetadata,
+        ToolRegistryComponent,
+    )
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ToolRegistryComponent(tools={}, handlers={}),
+    )
+
+    skill_metadata = SkillMetadata(
+        name="searchskill",
+        description="Search skill",
+        tool_names=[],
+        has_system_prompt=False,
+        user_invocable=True,
+        slash_command="/searchskill",
+    )
+    skill_component = SkillComponent(
+        skills={"searchskill": skill_metadata},
+    )
+    world.add_component(entity_id, skill_component)
+
+    original_text = "please /searchskill for resources about AI"
+    messages, reservation = prepare_outbound_messages(
+        world,
+        entity_id,
+        current_tick=1,
+        conversation_override=[Message(role="user", content=original_text)],
+    )
+
+    assert reservation is None
+    assert messages[-1].content == original_text
+    assert "Skill: searchskill" not in messages[-1].content
+
+
+def test_context_pool_injection_is_call_time_not_normalization_time() -> None:
+    # Contract: ContextPool injection is call-time (prepare_outbound_messages), not normalization-time (UserPromptNormalizationSystem)
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Need summary")]),
+    )
+    world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
+    world.add_component(
+        entity_id,
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="tool-one-0",
+                    priority=30,
+                    registration_order=0,
+                    source_label="tool:one",
+                    content="source: tool:one\nresult: A",
+                ),
+            ]
+        ),
+    )
+    world.add_component(entity_id, RenderedUserPromptComponent(text="Need summary"))
+
+    # 1. Verify ContextPool content is NOT in RenderedUserPromptComponent
+    rendered = world.get_component(entity_id, RenderedUserPromptComponent)
+    assert rendered is not None
+    assert "source: tool:one" not in rendered.text
+
+    # 2. Verify ContextPool content IS present in final assembled messages
+    messages, reservation = prepare_outbound_messages(
+        world,
+        entity_id,
+        current_tick=1,
+    )
+
+    assert reservation is not None
+    user_msg = messages[-1]
+    assert "source: tool:one" in user_msg.content
+    assert user_msg.content.endswith("Need summary")

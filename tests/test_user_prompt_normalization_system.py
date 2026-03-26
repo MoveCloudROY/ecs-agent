@@ -181,7 +181,9 @@ async def test_context_pool_entries_are_not_injected_by_normalization_system() -
         ),
     )
 
+    # Contract: ContextPool injection is call-time (prepare_outbound_messages), not normalization-time (UserPromptNormalizationSystem)
     await UserPromptNormalizationSystem().process(world)
+
 
     rendered = world.get_component(entity_id, RenderedUserPromptComponent)
     assert rendered is not None
