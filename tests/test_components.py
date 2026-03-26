@@ -722,7 +722,7 @@ class TestUserPromptConfigComponent:
         trigger = TriggerSpec(
             pattern="code",
             match_mode="keyword",
-            action="skill",
+            action="inject",
             content="coding-assistant",
             priority=0,
         )
@@ -760,7 +760,7 @@ class TestUserPromptConfigComponent:
             TriggerSpec(
                 pattern="x",
                 match_mode="keyword",
-                action="skill",
+                action="inject",
                 content="y",
                 priority=0,
             )

@@ -222,7 +222,7 @@ def test_prepare_outbound_messages_reserves_reuses_and_commits_context_pool() ->
                 TriggerSpec(
                     pattern="@code",
                     match_mode="keyword",
-                    action="skill",
+                    action="inject",
                     content="Use code-first reasoning",
                     priority=0,
                 )
@@ -351,7 +351,7 @@ async def test_retry_uses_reserved_payload_then_commit_clears_once_on_success() 
                 TriggerSpec(
                     pattern="@code",
                     match_mode="keyword",
-                    action="skill",
+                    action="inject",
                     content="Use code-first reasoning",
                     priority=0,
                 )
@@ -428,7 +428,7 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
                 TriggerSpec(
                     pattern="@code",
                     match_mode="keyword",
-                    action="skill",
+                    action="inject",
                     content="Use code-first reasoning",
                     priority=0,
                 )
@@ -528,7 +528,7 @@ async def test_keyword_trigger_injection_with_context_pool_preserves_user_tail()
                 TriggerSpec(
                     pattern="summary",
                     match_mode="keyword",
-                    action="skill",
+                    action="inject",
                     content="Prefer successful tool context",
                     priority=0,
                 )
@@ -860,7 +860,7 @@ def test_conversation_override_applies_config_triggers_inline() -> None:
                 TriggerSpec(
                     pattern="@greet",
                     match_mode="keyword",
-                    action="skill",
+                    action="inject",
                     content="Be greeting",
                     priority=0,
                 )

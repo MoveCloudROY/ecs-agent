@@ -47,7 +47,7 @@ def _ordered_trigger_specs(
                 TriggerSpec(
                     pattern=keyword,
                     match_mode="keyword",
-                    action="skill",
+                    action="inject",
                     content=template.template_id,
                     priority=0,
                 )

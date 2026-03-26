@@ -20,7 +20,7 @@ from ecs_agent.types import Message
 _GREET_TRIGGER = TriggerSpec(
     pattern="@greet",
     match_mode="keyword",
-    action="skill",
+    action="inject",
     content="Be greeting",
     priority=0,
 )

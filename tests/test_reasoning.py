@@ -561,7 +561,7 @@ async def test_event_trigger_injection_is_transient_for_reasoning_provider_call(
     world.add_component(
         entity_id,
         UserPromptConfigComponent(
-            triggers=[TriggerSpec(pattern="summary", match_mode="keyword", action="skill", content="Prefer using successful tool evidence", priority=0)],
+            triggers=[TriggerSpec(pattern="summary", match_mode="keyword", action="inject", content="Prefer using successful tool evidence", priority=0)],
             enable_context_pool=True,
         ),
     )

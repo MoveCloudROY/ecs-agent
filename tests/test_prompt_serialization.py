@@ -38,14 +38,14 @@ def test_prompt_config_component_roundtrip() -> None:
             TriggerSpec(
                 pattern="inject_coding",
                 match_mode="keyword",
-                action="skill",
+                action="inject",
                 content="template-1",
                 priority=0,
             ),
             TriggerSpec(
                 pattern="inject_context",
                 match_mode="keyword",
-                action="skill",
+                action="inject",
                 content="template-2",
                 priority=0,
             ),

@@ -491,7 +491,7 @@ async def test_real_llm_prompt_keyword_injection_smoke() -> None:
                 TriggerSpec(
                     pattern="@code",
                     match_mode="keyword",
-                    action="skill",
+                    action="inject",
                     content="KEYWORD_TEMPLATE_BLOCK",
                     priority=0,
                 )
@@ -596,7 +596,7 @@ async def test_real_llm_prompt_event_injection_smoke() -> None:
                 TriggerSpec(
                     pattern="summary",
                     match_mode="keyword",
-                    action="skill",
+                    action="inject",
                     content="EVENT_TEMPLATE_BLOCK",
                     priority=0,
                 )
@@ -1231,7 +1231,7 @@ async def test_real_llm_rendered_user_prompt_trigger_injection() -> None:
                 TriggerSpec(
                     pattern="@test",
                     match_mode="keyword",
-                    action="skill",
+                    action="inject",
                     content="Use testing best practices.",
                     priority=0,
                 )

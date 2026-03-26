@@ -58,7 +58,7 @@ def build_trigger_specs(triggers: dict[str, str]) -> list[TriggerSpec]:
             TriggerSpec(
                 pattern=trigger_key,
                 match_mode="keyword",
-                action="skill",
+                action="inject",
                 content=f"keyword-template-{index}",
                 priority=0,
             )

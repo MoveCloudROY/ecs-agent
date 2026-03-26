@@ -22,14 +22,14 @@ def test_inject_triggers_prioritizes_higher_priority_trigger_spec() -> None:
         TriggerSpec(
             pattern="@code",
             match_mode="keyword",
-            action="skill",
+            action="inject",
             content="low-tpl",
             priority=5,
         ),
         TriggerSpec(
             pattern="@debug",
             match_mode="keyword",
-            action="skill",
+            action="inject",
             content="high-tpl",
             priority=10,
         ),
@@ -57,14 +57,14 @@ def test_inject_triggers_tiebreaks_with_spec_order() -> None:
         TriggerSpec(
             pattern="@code",
             match_mode="keyword",
-            action="skill",
+            action="inject",
             content="tpl-a",
             priority=10,
         ),
         TriggerSpec(
             pattern="@code",
             match_mode="keyword",
-            action="skill",
+            action="inject",
             content="tpl-b",
             priority=10,
         ),
