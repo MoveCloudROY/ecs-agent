@@ -162,7 +162,7 @@ def _build_match_action_demo_outputs() -> dict[str, str]:
         TriggerSpec(
             pattern="@code",
             match_mode="keyword",
-            action="skill",
+            action="inject",
             content="[SKILL_ACTION_APPLIED]",
             priority=10,
         ),
@@ -368,14 +368,14 @@ async def main() -> None:
                 TriggerSpec(
                     pattern="@code",
                     match_mode="keyword",
-                    action="skill",
+                    action="inject",
                     content="Prioritize deterministic code-first reasoning.",
                     priority=0,
                 ),
                 TriggerSpec(
                     pattern="findings",
                     match_mode="keyword",
-                    action="skill",
+                    action="inject",
                     content="Prefer successful tool outputs as evidence.",
                     priority=0,
                 ),

@@ -647,7 +647,7 @@ async def test_local_backend_event_trigger_injection_is_transient() -> None:
     world.add_component(
         agent,
         UserPromptConfigComponent(
-            triggers=[TriggerSpec(pattern="work", match_mode="keyword", action="skill", content="Prefer successful tool outputs", priority=0)],
+            triggers=[TriggerSpec(pattern="work", match_mode="keyword", action="inject", content="Prefer successful tool outputs", priority=0)],
             enable_context_pool=True,
         ),
     )

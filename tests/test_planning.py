@@ -416,7 +416,7 @@ async def test_event_trigger_injection_is_transient_for_planning_provider_call()
     world.add_component(
         entity_id,
         UserPromptConfigComponent(
-            triggers=[TriggerSpec(pattern="Plan", match_mode="keyword", action="skill", content="Prefer successful tool context", priority=0)],
+            triggers=[TriggerSpec(pattern="Plan", match_mode="keyword", action="inject", content="Prefer successful tool context", priority=0)],
             enable_context_pool=True,
         ),
     )
