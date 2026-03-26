@@ -23,7 +23,7 @@ RenderedSystemPromptComponent  RenderedUserPromptComponent
 ```
 
 1. **SystemPromptRenderSystem** (priority -20) reads `SystemPromptConfigSpec`, resolves all `${name}` placeholders, and writes a `RenderedSystemPromptComponent` on the first successful render-system pass. This component is then cached and reused on subsequent ticks.
-2. **UserPromptNormalizationSystem** (priority -10) reads `UserPromptConfigComponent`, injects keyword/event triggers and context entries from `PromptContextQueueComponent` into the last user message, and writes a `RenderedUserPromptComponent`.
+2. **UserPromptNormalizationSystem** (priority -10) reads `UserPromptConfigComponent`, injects keyword/event triggers into the last user message, and writes a `RenderedUserPromptComponent`. Context entries from `PromptContextQueueComponent` are injected later at call-time by `prepare_outbound_messages()`.
 3. **LLM callers** (`ReasoningSystem`, `PlanningSystem`, `ReplanningSystem`) read the rendered components instead of assembling prompts themselves.
 
 Stored conversation history is never mutated. User prompt injections are transient and scoped to the current tick, while rendered system prompts are frozen after the first successful render-system pass.
@@ -333,7 +333,7 @@ world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
 
 ### UserPromptNormalizationSystem
 
-Injects trigger templates and context pool entries into the last user message without mutating stored conversation history.
+Injects trigger templates into the last user message without mutating stored conversation history. Context pool entries are NOT injected by this system; they are applied at call-time in `prepare_outbound_messages()` when LLM callers assemble outbound messages.
 
 **Constructor:** `UserPromptNormalizationSystem(priority: int = 0)`
 **Recommended priority:** `-10`
@@ -342,9 +342,8 @@ Processing steps:
 1. Query entities with `ConversationComponent` or `ConversationTreeComponent`.
 2. Find the last user message.
 3. Apply trigger rules from `UserPromptConfigComponent.triggers` (`list[TriggerSpec]`): match each spec by `match_mode` (`keyword`, `prefix`, `contains`) and apply `action` (`replace`, `skill`, `script`). A `replace` action replaces the entire message; other actions prepend a `[PROMPT_INJECT:<pattern>]` block.
-4. Apply context pool injection: if `UserPromptConfigComponent.enable_context_pool` is `True` and a `PromptContextQueueComponent` is present, render its entries sorted by priority (descending), wrapped in a `[PROMPT_CONTEXT_POOL]` marker.
-5. Write a `RenderedUserPromptComponent` to the entity.
-6. If no user message is found, remove any existing `RenderedUserPromptComponent`.
+4. Write a `RenderedUserPromptComponent` to the entity. Context pool injection is handled separately at call-time.
+5. If no user message is found, remove any existing `RenderedUserPromptComponent`.
 Deduplication: if a `[PROMPT_INJECT:...]` marker is already present in the user text, it is not doubled.
 
 ```python
@@ -411,9 +410,9 @@ TriggerSpec(pattern="findings", match_mode="contains", action="script",
 
 If a `[PROMPT_INJECT:...]` marker for a given keyword is already present in the user text, the system does not inject it again.
 
-## Context Pool Injection
+## Context Pool Injection (Call-Time)
 
-When `UserPromptConfigComponent.enable_context_pool` is `True` and a `PromptContextQueueComponent` is present, context entries are injected into the user message.
+When `UserPromptConfigComponent.enable_context_pool` is `True` and a `PromptContextQueueComponent` is present, context entries are injected into the user message at call-time by `prepare_outbound_messages()`. This ensures that the most up-to-date context is available for the LLM provider call.
 
 Items are sorted by priority (descending), then by registration order (ascending). The rendered block is wrapped in a `[PROMPT_CONTEXT_POOL]` marker and placed before the original user text.
 

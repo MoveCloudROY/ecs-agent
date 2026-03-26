@@ -22,7 +22,7 @@ The table below summarizes the recommended priorities for each system. Priority 
 | UserInputSystem | -10 | Captures async user input before reasoning. |
 | RAGSystem | -10 | Retrieves context via vector search before reasoning. |
 | SystemPromptRenderSystem | -20 | Resolves `${name}` placeholders from `SystemPromptConfigSpec` and produces a cached `RenderedSystemPromptComponent` on first render. |
-| UserPromptNormalizationSystem | -10 | Injects trigger templates into user messages and produces `RenderedUserPromptComponent`. |
+| UserPromptNormalizationSystem | -10 | Injects trigger templates into user messages and produces `RenderedUserPromptComponent`. ContextPool injection happens later at call-time. |
 | PromptContextCollectorSystem | 0 | Collects tool/subagent results into the context pool. |
 | ToolApprovalSystem | -5 | Filters pending tool calls before execution. |
 | ReasoningSystem | 0 | Generates responses using an LLM. |
@@ -111,7 +111,7 @@ world.register_system(SystemPromptRenderSystem(), priority=-20)
 
 ## 1b. UserPromptNormalizationSystem
 
-The `UserPromptNormalizationSystem` processes the latest user message in `ConversationComponent`, injects any matching `@keyword` or `event:<name>` trigger templates, and writes a `RenderedUserPromptComponent`. Stored conversation history is never mutated.
+The `UserPromptNormalizationSystem` processes the latest user message in `ConversationComponent`, injects any matching `@keyword` or `event:<name>` trigger templates, and writes a `RenderedUserPromptComponent`. ContextPool injection is handled separately at call-time by `prepare_outbound_messages()`. Stored conversation history is never mutated.
 
 - **Constructor**: `__init__(self)`
 - **Queries**: `UserPromptConfigComponent`, `ConversationComponent`
@@ -119,7 +119,7 @@ The `UserPromptNormalizationSystem` processes the latest user message in `Conver
 - **Recommended Priority**: -10 (must run before reasoning)
 
 ### Behavior
-Scans the last user message for registered trigger patterns. Matched triggers prepend their template content to the rendered user prompt. Subagent status injections follow triggers, and the original user text comes last. The `RenderedUserPromptComponent.text` is what LLM callers send to the provider — the stored message is unchanged.
+Scans the last user message for registered trigger patterns. Matched triggers prepend their template content to the rendered user prompt. The original user text comes last. The `RenderedUserPromptComponent.text` is what LLM callers send to the provider — the stored message is unchanged. Note that ContextPool injection is NOT performed by this system; it is applied at call-time by `prepare_outbound_messages()`.
 
 ### Usage Example
 ```python
