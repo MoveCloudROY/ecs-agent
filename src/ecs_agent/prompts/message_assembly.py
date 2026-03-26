@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from ecs_agent.components.definitions import (
         PromptContextQueueComponent,
         PromptContextReservationComponent,
+        SkillMetadata,
     )
 
 
@@ -177,6 +178,7 @@ def prepare_outbound_messages(
     context_pool_enabled = (
         prompt_config.enable_context_pool if prompt_config is not None else False
     )
+    slash_skill_context: str | None = None
 
     # -------------------------------------------------------------------
     # Resolve conversation messages
@@ -200,6 +202,14 @@ def prepare_outbound_messages(
                 conversation_messages.extend(linearize(tree, active_leaf_id))
         elif conversation is not None:
             conversation_messages.extend(conversation.messages)
+
+        raw_last_user_text = _last_user_text(conversation_messages)
+        if raw_last_user_text is not None:
+            slash_skill_context = _resolve_slash_skill_context(
+                world,
+                entity_id,
+                raw_last_user_text,
+            )
 
         rendered_user_prompt = world.get_component(
             entity_id, RenderedUserPromptComponent
@@ -232,15 +242,36 @@ def prepare_outbound_messages(
         )
         reserved_context_pool_items = context_reservation.reserved_entries
 
+    context_pool_items_for_assembly = reserved_context_pool_items
+    if slash_skill_context is not None:
+        from ecs_agent.components.definitions import ContextEntry
+
+        slash_context_entry = ContextEntry(
+            entry_id="slash-skill-context",
+            priority=1_000_000,
+            source_label="slash:skill",
+            content=slash_skill_context,
+            registration_order=-1,
+        )
+        existing_items = (
+            list(reserved_context_pool_items)
+            if reserved_context_pool_items is not None
+            else []
+        )
+        context_pool_items_for_assembly = [slash_context_entry, *existing_items]
+
+    enable_context_pool_for_assembly = context_pool_enabled or (
+        slash_skill_context is not None
+    )
+
     messages = assemble_messages(
         system_prompt=system_prompt,
         prefix_messages=prefix_messages,
         conversation_messages=messages_for_assembly,
-        enable_context_pool=context_pool_enabled,
-        context_pool_items=reserved_context_pool_items,
+        enable_context_pool=enable_context_pool_for_assembly,
+        context_pool_items=context_pool_items_for_assembly,
         trigger_specs=trigger_specs,
     )
-
 
     logger.debug(
         "outbound_messages_assembled",
@@ -361,6 +392,54 @@ def _append_to_last_user_message(
         )
         break
     return messages
+
+
+def _last_user_text(conversation_messages: list[Message]) -> str | None:
+    for index in range(len(conversation_messages) - 1, -1, -1):
+        message = conversation_messages[index]
+        if message.role == "user":
+            return message.content
+    return None
+
+
+def _resolve_slash_skill_context(
+    world: World,
+    entity_id: EntityId,
+    raw_user_text: str,
+) -> str | None:
+    from ecs_agent.components.definitions import SkillComponent
+
+    skill_component = world.get_component(entity_id, SkillComponent)
+    if skill_component is None:
+        return None
+
+    matches: list[SkillMetadata] = []
+    for metadata in skill_component.skills.values():
+        slash_command = metadata.slash_command.strip()
+        if not metadata.user_invocable or not slash_command:
+            continue
+        if slash_command in raw_user_text:
+            matches.append(metadata)
+
+    if not matches:
+        return None
+
+    winning_skill = max(matches, key=lambda metadata: len(metadata.slash_command))
+    return _format_slash_skill_context(winning_skill)
+
+
+def _format_slash_skill_context(metadata: SkillMetadata) -> str:
+    lines = [
+        f"Skill: {metadata.name}",
+        f"Description: {metadata.description}",
+        "",
+        "## Skill Body",
+        "(none)",
+        "",
+        "## Tool Schemas",
+        "- none",
+    ]
+    return "\n".join(lines)
 
 
 def _render_context_pool_block(
