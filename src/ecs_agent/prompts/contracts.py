@@ -49,7 +49,7 @@ class SystemPromptConfigSpec:
 class TriggerSpec:
     pattern: str
     match_mode: Literal["keyword", "prefix", "contains"]
-    action: Literal["replace", "skill", "script"]
+    action: Literal["replace", "skill"]
     content: str
     priority: int = 0
 
