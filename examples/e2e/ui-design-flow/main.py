@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 from pathlib import Path
 
 from ecs_agent.components import (
@@ -167,14 +166,6 @@ async def main() -> None:
     builtin_skill.bind_workspace(str(workspace_dir))
     manager.install(world, agent_id, builtin_skill)
 
-    # Read initial prompt from file
-    prompt_path = Path(__file__).parent / "assets/prompt.txt"
-    try:
-        initial_prompt = prompt_path.read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
-        logger.error("prompt_file_not_found", path=str(prompt_path))
-        print(f"Error: Prompt file not found: {prompt_path}")
-        sys.exit(1)
 
     # --- Add components ---
 
@@ -190,7 +181,8 @@ async def main() -> None:
     # Conversation seed
     world.add_component(
         agent_id,
-        ConversationComponent(messages=[Message(role="user", content=initial_prompt)]),
+        # Conversation starts empty — UserInputSystem provides the first user message.
+        ConversationComponent(messages=[]),
     )
 
     # System prompt: template with built-in placeholders only.
