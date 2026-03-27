@@ -1206,7 +1206,8 @@ class SubagentSystem:
         ):
             effective_system_prompt = parent_llm.system_prompt
 
-        child_world = World()
+        child_world_name = f"{config.name}-{uuid.uuid4().hex[:8]}"
+        child_world = World(name=child_world_name)
         child_world_entity_id = child_world.create_entity()
         child_world.add_component(
             child_world_entity_id,
