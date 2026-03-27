@@ -174,6 +174,13 @@ class SubagentSystem:
             world, entity_id
         )
 
+        logger.info(
+            "subagent_tool_installed",
+            entity_id=entity_id,
+            tool_name=tool_name,
+            available_subagents=list(registry.subagents.keys()),
+        )
+
     def install_delegate_tool(
         self,
         world: World,
@@ -216,6 +223,12 @@ class SubagentSystem:
         # Install handler (helper respects override parameter)
         self._install_delegate_handler(world, entity_id, tool_name, override)
 
+        logger.info(
+            "delegate_tool_installed",
+            entity_id=entity_id,
+            tool_name=tool_name,
+            available_subagents=list(registry.subagents.keys()),
+        )
     async def process(self, world: World) -> None:
         """Register delegate tool for entities with SubagentRegistryComponent.
 
@@ -333,6 +346,12 @@ class SubagentSystem:
                 render_subagent_session_reminder_table,
             )
 
+            logger.debug(
+                "subagent_status_queried",
+                parent_entity=parent_entity_id,
+                session_id=session_id,
+            )
+
             table = world.get_component(parent_entity_id, SubagentSessionTableComponent)
             if table is None:
                 return json.dumps({"error": "SubagentSessionTableComponent not found"})
@@ -356,6 +375,12 @@ class SubagentSystem:
                     }
                 )
 
+            logger.debug(
+                "subagent_status_found",
+                parent_entity=parent_entity_id,
+                session_id=session_id,
+                lifecycle_status=session.status,
+            )
             return json.dumps(
                 {
                     "status": "ok",
@@ -375,6 +400,12 @@ class SubagentSystem:
         """Create handler for subagent_result tool."""
 
         async def result_handler(session_id: str, timeout: float | None = None) -> str:
+            logger.info(
+                "subagent_result_requested",
+                parent_entity=parent_entity_id,
+                session_id=session_id,
+                timeout=timeout,
+            )
             session = await self._runtime_manager.get_session(session_id)
             if session is None:
                 return json.dumps(
@@ -396,6 +427,12 @@ class SubagentSystem:
                 )
 
             if session.status == "Idle":
+                logger.info(
+                    "subagent_result_ready",
+                    parent_entity=parent_entity_id,
+                    session_id=session_id,
+                    result_length=len(session.result_excerpt or ""),
+                )
                 return json.dumps(
                     {
                         "status": "success",
@@ -414,6 +451,12 @@ class SubagentSystem:
                     }
                 )
 
+            logger.info(
+                "subagent_result_awaiting",
+                parent_entity=parent_entity_id,
+                session_id=session_id,
+                timeout=timeout,
+            )
             try:
                 if timeout is not None:
                     await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
@@ -429,6 +472,12 @@ class SubagentSystem:
                         }
                     )
 
+                logger.info(
+                    "subagent_result_collected",
+                    parent_entity=parent_entity_id,
+                    session_id=session_id,
+                    lifecycle_status=session.status,
+                )
                 return json.dumps(
                     {
                         "status": "completed",
@@ -440,6 +489,12 @@ class SubagentSystem:
                 )
 
             except asyncio.TimeoutError:
+                logger.warning(
+                    "subagent_result_timeout",
+                    parent_entity=parent_entity_id,
+                    session_id=session_id,
+                    timeout=timeout,
+                )
                 return json.dumps(
                     {
                         "error": f"Timeout waiting for session result after {timeout}s",
@@ -448,6 +503,11 @@ class SubagentSystem:
                     }
                 )
             except asyncio.CancelledError:
+                logger.warning(
+                    "subagent_result_cancelled",
+                    parent_entity=parent_entity_id,
+                    session_id=session_id,
+                )
                 return json.dumps(
                     {
                         "error": f"Session was cancelled: {session_id}",
@@ -461,6 +521,11 @@ class SubagentSystem:
         """Create handler for subagent_cancel tool."""
 
         async def cancel_handler(session_id: str) -> str:
+            logger.info(
+                "subagent_cancel_requested",
+                parent_entity=parent_entity_id,
+                session_id=session_id,
+            )
             session = await self._runtime_manager.get_session(session_id)
             if session is None:
                 return json.dumps(
@@ -484,6 +549,12 @@ class SubagentSystem:
 
             session = await self._runtime_manager.get_session(session_id)
 
+            logger.info(
+                "subagent_cancel_completed",
+                parent_entity=parent_entity_id,
+                session_id=session_id,
+                final_status=session.status if session else "Cancelled",
+            )
             return json.dumps(
                 {
                     "status": "cancelled",
@@ -635,7 +706,15 @@ class SubagentSystem:
             timeout: float | None = None,
         ) -> str:
             effective_load_skills = [] if load_skills is None else load_skills
-            self._validate_subagent_params(category, prompt, effective_load_skills)
+            logger.info(
+                "subagent_handler_called",
+                parent_entity=parent_entity_id,
+                category=category,
+                background=background,
+                load_skills=effective_load_skills,
+                timeout=timeout,
+                prompt_length=len(prompt),
+            )
 
             registry_comp = world.get_component(
                 parent_entity_id, SubagentRegistryComponent
@@ -693,6 +772,12 @@ class SubagentSystem:
                         "subagent_timeout", timeout=resolved_timeout, category=category
                     )
                     result = error_msg
+                logger.info(
+                    "subagent_sync_completed",
+                    parent_entity=parent_entity_id,
+                    category=category,
+                    result_length=len(result),
+                )
                 return result
 
             session_id = self._runtime_manager.create_session()
@@ -745,9 +830,24 @@ class SubagentSystem:
                     metadata.status = "Dead"
                     metadata.error = error
                 await self._runtime_manager.update_status(session_id, metadata.status)
+                logger.info(
+                    "subagent_background_finished",
+                    session_id=session_id,
+                    category=category,
+                    status=metadata.status,
+                    result_length=len(result) if success else 0,
+                    error=error,
+                )
                 # Hook: Sync to component after completion/error
                 await self._runtime_manager.sync_to_component(world, parent_entity_id)
 
+            logger.info(
+                "subagent_background_launched",
+                parent_entity=parent_entity_id,
+                session_id=session_id,
+                category=category,
+                timeout=resolved_timeout,
+            )
             background_task = asyncio.create_task(run_in_background())
             await self._runtime_manager.register_task(
                 session_id, background_task, metadata
