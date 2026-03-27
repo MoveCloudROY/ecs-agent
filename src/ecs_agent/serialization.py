@@ -140,6 +140,7 @@ class WorldSerializer:
             "entities": entities,
             "_entity_registry": entity_registry,
             "_entity_tags": entity_tags,
+            "world_name": world._name,
         }
 
     @staticmethod
@@ -148,7 +149,7 @@ class WorldSerializer:
         providers: dict[str, Any],
         tool_handlers: dict[str, Any],
     ) -> World:
-        world = World()
+        world = World(name=data.get("world_name"))
 
         entities_data = data.get("entities", {})
         for entity_id_str, serialized_components in entities_data.items():
