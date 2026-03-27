@@ -284,3 +284,49 @@ def test_world_unregister_entity_cleans_up_tags() -> None:
     assert entity not in world.list_entities_by_tag("tag2")
     assert entity not in world.list_entities_by_tag("tag3")
     assert world.resolve_entity("multi_tag") is None
+
+
+def test_world_default_name_is_none() -> None:
+    world = World()
+    assert world.name is None
+
+
+def test_world_accepts_name_kwarg() -> None:
+    world = World(name="my-agent")
+    assert world.name == "my-agent"
+
+
+def test_world_create_entity_log_includes_world_name(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging(json_output=True, level="DEBUG")
+    world = World(name="test-world")
+    world.create_entity()
+    captured = capsys.readouterr()
+    events = _json_events(captured.out)
+    entity_event = next(e for e in events if e.get("event") == "entity_created")
+    assert entity_event["world_name"] == "test-world"
+
+
+def test_world_add_component_log_includes_world_name(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging(json_output=True, level="INFO")
+
+    @dataclass(slots=True)
+    class Dummy:
+        x: int = 0
+
+    world = World(name="named")
+    e = world.create_entity()
+    world.add_component(e, Dummy())
+    captured = capsys.readouterr()
+    events = _json_events(captured.out)
+    comp_event = next(ev for ev in events if ev.get("event") == "component_added")
+    assert comp_event["world_name"] == "named"
+
+
+def test_world_unnamed_log_has_none_world_name(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging(json_output=True, level="DEBUG")
+    world = World()
+    world.create_entity()
+    captured = capsys.readouterr()
+    events = _json_events(captured.out)
+    entity_event = next(e for e in events if e.get("event") == "entity_created")
+    assert entity_event.get("world_name") is None
