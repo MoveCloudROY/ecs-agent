@@ -1442,3 +1442,117 @@ async def test_real_llm_load_skill_details_returns_context_in_tool_message(
     assert tool_messages_with_skill, (
         "Expected load_skill_details to return skill context in a role='tool' message"
     )
+
+
+# ============================================================================
+# Task 6 — Named World: real-LLM test verifying child world name in logs
+# ============================================================================
+
+
+@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+async def test_real_subagent_child_world_name_in_logs(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Child world spawned by SubagentSystem carries a structured name in log output."""
+    import re
+
+    from ecs_agent.logging import configure_logging
+    from ecs_agent.components.definitions import (
+        SubagentRegistryComponent,
+        SubagentSessionTableComponent,
+        ToolRegistryComponent,
+    )
+    from ecs_agent.systems.subagent import SubagentSystem
+    from ecs_agent.systems.tool_execution import ToolExecutionSystem
+    from ecs_agent.types import SubagentConfig
+
+    configure_logging(json_output=True, level="DEBUG")
+
+    provider = OpenAIProvider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+
+    # Parent world — named
+    world = World(name="test-parent")
+    manager = world.create_entity()
+    world.add_component(
+        manager,
+        LLMComponent(
+            provider=provider,
+            model=MODEL,
+            system_prompt=(
+                "You are a helpful assistant. "
+                "When asked to delegate, use the subagent tool."
+            ),
+        ),
+    )
+    world.add_component(
+        manager,
+        ConversationComponent(
+            messages=[
+                Message(
+                    role="user",
+                    content="Use the subagent tool with name 'echo' to say hello.",
+                )
+            ]
+        ),
+    )
+    world.add_component(manager, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(
+        manager,
+        SubagentRegistryComponent(
+            subagents={
+                "echo": SubagentConfig(
+                    name="echo",
+                    provider=provider,
+                    model=MODEL,
+                    system_prompt="Echo back the user's message verbatim.",
+                    max_ticks=3,
+                )
+            }
+        ),
+    )
+    world.add_component(manager, SubagentSessionTableComponent())
+
+    subagent_system = SubagentSystem()
+    subagent_system.install_subagent_tool(world, manager)
+    subagent_system.install_subagent_control_tools(world, manager)
+
+    world.register_system(subagent_system, priority=0)
+    world.register_system(ReasoningSystem(), priority=1)
+    world.register_system(ToolExecutionSystem(), priority=5)
+    world.register_system(MemorySystem(), priority=10)
+    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
+
+    runner = Runner()
+    await runner.run(world, max_ticks=10)
+
+    captured = capsys.readouterr()
+    events = _json_events(captured.out)
+
+    # Parent world logs must carry world_name="test-parent"
+    parent_run_start = next(
+        (
+            e
+            for e in events
+            if e.get("event") == "run_start" and e.get("world_name") == "test-parent"
+        ),
+        None,
+    )
+    assert parent_run_start is not None, (
+        "run_start event for parent world not found in logs"
+    )
+
+    # Child world entity_created events must carry a name matching the pattern
+    child_entity_events = [
+        e
+        for e in events
+        if e.get("event") == "entity_created"
+        and e.get("world_name") is not None
+        and e.get("world_name") != "test-parent"
+    ]
+    assert len(child_entity_events) > 0, "No child world log events found"
+
+    child_world_name = child_entity_events[0]["world_name"]
+    pattern = re.compile(r"^echo-[0-9a-f]{8}$")
+    assert pattern.match(str(child_world_name)), (
+        f"Child world name {child_world_name!r} does not match 'echo-<hex8>'"
+    )
