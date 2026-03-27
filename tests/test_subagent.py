@@ -154,6 +154,33 @@ def test_delegation_completed_event() -> None:
     )
 
 
+
+
+def test_delegation_started_event_has_child_world_name_field() -> None:
+    from ecs_agent.types import EntityId
+    world = World()
+    entity = world.create_entity()
+    evt = DelegationStartedEvent(
+        entity_id=entity,
+        subagent_name="researcher",
+        task="do work",
+        correlation_id="c1",
+        traceparent="t1",
+        child_world_name="researcher-abc12345",
+    )
+    assert evt.child_world_name == "researcher-abc12345"
+
+
+def test_delegation_completed_event_has_child_world_name_field() -> None:
+    world = World()
+    entity = world.create_entity()
+    evt = DelegationCompletedEvent(
+        entity_id=entity,
+        subagent_name="researcher",
+        result="done",
+        child_world_name="researcher-abc12345",
+    )
+    assert evt.child_world_name == "researcher-abc12345"
 @pytest.mark.parametrize(
     ("from_status", "to_status"),
     [
