@@ -20,6 +20,7 @@ Overview of the included examples for the ECS-based LLM Agent framework.
 | [Tree Search Agent](#tree-search-agent) | MCTS planning for complex goals | No | PlanSearchComponent, TreeSearchSystem |
 | [RAG Agent](#rag-agent) | Vector search retrieval-augmented generation | No | RAGTriggerComponent, RAGSystem |
 | [Sub-Agent Delegation](#sub-agent-delegation) | Parent agent delegates to child agents | No | Subagent components, MessageBusSystem |
+| [Task Orchestration System](#task-orchestration-system) | Dependency-aware task execution with persistence and mixed backends | No | TaskComponent, WavePlanner, TaskExecutor, Scratchbook, WorldSerializer |
 | [Claude Agent](#claude-agent) | Native Anthropic Claude provider | Yes (Anthropic) | ClaudeProvider |
 | [LiteLLM Agent](#litellm-agent) | Unified access to 100+ LLM providers | Yes (varies) | LiteLLMProvider |
 | [System Streaming](#system-streaming) | System-level streaming with events | Optional | StreamingComponent, StreamStartEvent |
@@ -214,6 +215,25 @@ STEP 3: LOAD WORLD FROM JSON
 
 STEP 4: VERIFY LOADED STATE
 ✓ All checks passed!
+```
+
+---
+
+### Task Orchestration System
+- **File:** `examples/task_orchestration_system.py`
+- **What it demonstrates:** Dependency analysis, wave-based dispatch, local and subagent task routing, task snapshots/event logs, scratchbook result indexing, and world serialization roundtrip in one deterministic demo.
+- **Run:** `uv run python examples/task_orchestration_system.py`
+- **Pattern:** `TaskComponent` + `analyze_task_dependencies()` + `WavePlanner` + `TaskFetchingUnit` + `TaskExecutor` + `TaskPersistenceService` + `WorldSerializer.save/load()`.
+
+#### Expected Output
+Task waves, completed tasks, and a final generated brief:
+```text
+Task orchestration waves:
+  Wave 1: collect_requirements, background_research
+  Wave 2: draft_execution_plan
+  Wave 3: risk_review, publish_brief
+Completed tasks: collect_requirements, background_research, draft_execution_plan, risk_review, publish_brief
+Final brief: write_brief: packaged final brief ...
 ```
 
 ---
