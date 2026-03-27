@@ -1,7 +1,9 @@
 """Sub-agent delegation example using the ECS-based LLM Agent framework.
 
 This example demonstrates:
-- A manager agent that delegates a research task to a sub-agent using both 'delegate' (sync) and 'subagent' (async) tools.
+- A manager agent that delegates a research task to a sub-agent using the 'subagent' tool.
+- SystemPromptRenderSystem resolving ${name} placeholders (including ${_installed_subagents}).
+- UserPromptNormalizationSystem normalizing outbound user messages.
 - SubagentSystem unified API for session management and background execution.
 - Tool-driven roundtrip workflow: manager calls subagent → SubagentSystem executes child → result retrieved via session tools.
 - OwnerComponent linking the sub-agent to its parent.
@@ -21,8 +23,14 @@ from ecs_agent.components import (
     SubagentRegistryComponent,
     SubagentSessionTableComponent,
     ToolRegistryComponent,
+    UserPromptConfigComponent,
 )
 from ecs_agent.core import Runner, World
+from ecs_agent.prompts.contracts import (
+    PlaceholderSpec,
+    PromptTemplateSource,
+    SystemPromptConfigSpec,
+)
 from ecs_agent.providers import FakeProvider
 from ecs_agent.providers.openai_provider import OpenAIProvider
 from ecs_agent.providers.protocol import LLMProvider
@@ -30,7 +38,11 @@ from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.subagent import SubagentSystem
+from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
+from ecs_agent.systems.user_prompt_normalization_system import (
+    UserPromptNormalizationSystem,
+)
 from ecs_agent.types import (
     CompletionResult,
     EntityId,
@@ -42,15 +54,16 @@ from ecs_agent.types import (
 
 
 async def main() -> None:
-    """Run a sub-agent delegation example using unified subagent tools.
+    """Run a sub-agent delegation example using the unified subagent tool.
 
     Flow:
-      1. Manager receives user question.
-      2. Manager calls legacy 'delegate' tool (sync).
-      3. Manager calls new 'subagent' tool in background mode (async).
-      4. SubagentSystem creates and executes child entities.
-      5. Results delivered to manager conversation.
-      6. Manager synthesizes final summary.
+      1. SystemPromptRenderSystem resolves ${_installed_subagents} and custom
+         placeholders into the manager's rendered system prompt.
+      2. UserPromptNormalizationSystem normalises the outbound user message.
+      3. Manager receives user question and calls the 'subagent' tool.
+      4. SubagentSystem creates and executes the child entity.
+      5. Result is delivered back to the manager conversation.
+      6. Manager synthesises a final summary.
     """
     world = World()
 
@@ -83,32 +96,15 @@ async def main() -> None:
             api_key=api_key, base_url=base_url, model=model
         )
     else:
-        # FakeProvider for manager: first response calls legacy delegate tool,
-        # second calls new subagent background tool, then produces summary.
+        # FakeProvider for manager: first response calls the 'subagent' tool,
+        # then produces a final summary once results are available.
         manager_provider = FakeProvider(
             responses=[
-                # 1. Call legacy 'delegate' tool (sync)
+                # 1. Call 'subagent' tool (background=True)
                 CompletionResult(
                     message=Message(
                         role="assistant",
-                        content="I'll first use my legacy researcher subagent to get a quick overview.",
-                        tool_calls=[
-                            ToolCall(
-                                id="call_sync_001",
-                                name="delegate",
-                                arguments={
-                                    "subagent_name": "researcher",
-                                    "task": "Provide a 1-sentence overview of quantum computing.",
-                                },
-                            )
-                        ],
-                    )
-                ),
-                # 2. Call new 'subagent' tool (background=True)
-                CompletionResult(
-                    message=Message(
-                        role="assistant",
-                        content="Now I'll start a deep-dive research task in the background.",
+                        content="I'll start a deep-dive research task in the background.",
                         tool_calls=[
                             ToolCall(
                                 id="call_async_001",
@@ -122,12 +118,12 @@ async def main() -> None:
                         ],
                     )
                 ),
-                # 3. Final summary
+                # 2. Final summary
                 CompletionResult(
                     message=Message(
                         role="assistant",
                         content=(
-                            "Based on both sync and async research, here is the summary:\n\n"
+                            "Based on the research, here is the summary:\n\n"
                             "Quantum computing uses qubits to perform calculations impossible for classical computers.\n"
                             "Key near-term applications include:\n"
                             "1. Drug discovery — simulating molecular interactions\n"
@@ -138,23 +134,15 @@ async def main() -> None:
                 ),
             ]
         )
-        # Type check bypass for FakeProvider-specific method
+        # Pre-wire the tool response for the subagent call
         getattr(manager_provider, "add_tool_response")(
             "subagent",
             '{"session_id": "session_001", "status": "Working", "category": "researcher"}',
         )
 
-        # FakeProvider for subagent (used for both sync and async calls)
+        # FakeProvider for the researcher subagent
         subagent_provider = FakeProvider(
             responses=[
-                # Response for sync call
-                CompletionResult(
-                    message=Message(
-                        role="assistant",
-                        content="Quantum computing uses quantum-mechanical phenomena like superposition and entanglement.",
-                    )
-                ),
-                # Response for async call
                 CompletionResult(
                     message=Message(
                         role="assistant",
@@ -171,16 +159,32 @@ async def main() -> None:
 
     # ── Manager Entity Setup ────────────────────────────────────────
     manager_id = world.create_entity()
+
+    # LLMComponent — system_prompt left empty; rendered by SystemPromptRenderSystem
     world.add_component(
         manager_id,
         LLMComponent(
             provider=manager_provider,
             model=model if api_key else "fake-manager",
-            system_prompt=(
-                "You are a manager agent. When given a complex question, "
-                "use the 'delegate' tool for sync tasks or 'subagent' tool for background tasks. "
-                "After receiving the results, synthesize them into a concise summary."
+        ),
+    )
+
+    # SystemPromptConfigSpec — uses ${_installed_subagents} builtin placeholder
+    world.add_component(
+        manager_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(
+                inline=(
+                    "You are a manager agent. When given a complex question, "
+                    "use the 'subagent' tool to delegate work to background workers. "
+                    "After receiving the results, synthesize them into a concise summary.\n\n"
+                    "Available subagents:\n${_installed_subagents}\n\n"
+                    "Session: ${session_label}"
+                )
             ),
+            placeholders=[
+                PlaceholderSpec(name="session_label", value="subagent-delegation-demo"),
+            ],
         ),
     )
 
@@ -199,6 +203,12 @@ async def main() -> None:
         ),
     )
 
+    # UserPromptConfigComponent — opts the manager into user-prompt normalization
+    world.add_component(
+        manager_id,
+        UserPromptConfigComponent(),
+    )
+
     # Configure subagent registry with explicit inheritance policy
     world.add_component(
         manager_id,
@@ -208,6 +218,7 @@ async def main() -> None:
                     name="researcher",
                     provider=subagent_provider,
                     model=model if api_key else "fake-researcher",
+                    description="Research and gather information on any topic",
                     system_prompt=(
                         "You are a research sub-agent. Investigate the given topic "
                         "thoroughly and report your findings back to the manager."
@@ -216,7 +227,7 @@ async def main() -> None:
                     inheritance_policy=InheritancePolicy(
                         inherit_system_prompt=True,
                         inherit_tools=[],
-                        allow_delegate_tool=True,
+                        allow_delegate_tool=False,
                     ),
                 )
             }
@@ -228,11 +239,14 @@ async def main() -> None:
     world.add_component(manager_id, SubagentSessionTableComponent(sessions={}))
 
     # ── Systems Registration ────────────────────────────────────────
+    # Prompt rendering systems run first (negative priority)
+    world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
+    world.register_system(UserPromptNormalizationSystem(priority=-10), priority=-10)
+
     subagent_system = SubagentSystem(priority=-1)
     world.register_system(subagent_system, priority=-1)
 
-    # Install tools
-    subagent_system.install_delegate_tool(world, manager_id, tool_name="delegate")
+    # Install the unified 'subagent' tool (async/background delegation)
     subagent_system.install_subagent_tool(world, manager_id, tool_name="subagent")
     subagent_system.install_subagent_control_tools(world, manager_id)
 
@@ -243,7 +257,7 @@ async def main() -> None:
 
     # ── Run Agent ───────────────────────────────────────────────────
     runner = Runner()
-    await runner.run(world, max_ticks=20)
+    await runner.run(world, max_ticks=None)
 
     # ── Print Results ───────────────────────────────────────────────
     print("=" * 60)
