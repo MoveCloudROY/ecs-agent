@@ -42,7 +42,7 @@ from ecs_agent.types import Message
 
 
 async def main() -> None:
-    world = World()
+    world = World(name="my-agent")  # optional name — appears in all log events
 
     # Create a provider (any OpenAI-compatible API works)
     provider = OpenAIProvider(
@@ -86,6 +86,7 @@ asyncio.run(main())
 ### Composition-First Architecture
 Mix 35+ components to build custom agents without inheritance bloat. The Entity-Component-System (ECS) pattern keeps logic and data strictly separated, making agents modular, serializable, and easy to test. Fully type-safe with strict mypy and `dataclass(slots=True)`.
 
+- **Named Worlds** — Pass `name="my-agent"` to `World(name=...)` to tag every log event (`entity_created`, `component_added`, `run_start`, `tick_start`, etc.) with `world_name`. Child worlds spawned by `SubagentSystem` are automatically named `<subagent_name>-<hex8>` for end-to-end log correlation across nested agent calls.
 ### Multi-Agent Orchestration
 - **Subagent Delegation** — Spawn child agents for subtasks with skill and permission inheritance.
 - **MessageBus** — Parent-child and sibling messaging via pub/sub or request-response patterns.

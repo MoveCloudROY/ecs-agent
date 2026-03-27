@@ -36,7 +36,8 @@ This internal class manages how components are mapped to entities. It uses an in
 
 The `World` is the primary entry point for interacting with the ECS. It integrates the storage, event bus, and execution logic.
 
-- `__init__(self) -> None`: Creates the `EntityIdGenerator`, `ComponentStore`, `SystemExecutor`, `EventBus`, and `Query` instances.
+- `__init__(self, name: str | None = None) -> None`: Creates the `EntityIdGenerator`, `ComponentStore`, `SystemExecutor`, `EventBus`, and `Query` instances. The optional `name` is stored as `world.name` and included in all log events.
+- `name`: Read-only property returning the optional name set at construction.
 - `event_bus`: Property that provides access to the `EventBus`.
 - `create_entity(self) -> EntityId`: Creates a new entity and returns its ID.
 - `add_component(self, entity_id: EntityId, component: Any) -> None`: Attaches a component to an entity.
@@ -61,6 +62,22 @@ results = world.query(Position)
 for entity_id, (pos,) in results:
     print(f"Entity {entity_id} is at {pos.x}, {pos.y}")
 ```
+
+### World Naming
+
+Pass an optional `name` to `World` to tag every log event with `world_name`:
+
+```python
+world = World(name="research-agent")
+```
+
+All log events emitted by `World` (`entity_created`, `component_added`) and by `Runner`
+(`run_start`, `run_complete`, `tick_start`, `tick_complete`) include a `world_name` field,
+enabling log filtering and correlation across parent/child agent hierarchies.
+
+**Subagent child worlds** are automatically named `<subagent_name>-<uuid_hex8>`
+(e.g. `researcher-a1b2c3d4`), making it easy to grep logs for a specific subagent's
+activity. The name is also persisted and restored by `WorldSerializer`.
 
 ## System Protocol
 `ecs_agent.core.system`
