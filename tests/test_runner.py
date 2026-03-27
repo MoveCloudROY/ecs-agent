@@ -727,3 +727,53 @@ class TestRunnerLogging:
         assert "duration_ms" in event
         assert isinstance(event["duration_ms"], (int, float))
         assert event["duration_ms"] >= 0
+
+
+async def test_runner_run_start_log_includes_world_name(capsys: pytest.CaptureFixture[str]) -> None:
+    import json
+    from ecs_agent.logging import configure_logging, STANDARD_EVENT_NAMES
+    configure_logging(json_output=True, level="INFO")
+    world = World(name="runner-world")
+    runner = Runner()
+    await runner.run(world, max_ticks=1)
+    captured = capsys.readouterr()
+    events = []
+    for line in captured.out.strip().split("\n"):
+        if line.strip() and line.strip().startswith("{"):
+            events.append(json.loads(line))
+    run_start = next(e for e in events if e.get("event") == STANDARD_EVENT_NAMES["RUN_START"])
+    assert run_start["world_name"] == "runner-world"
+
+
+async def test_runner_run_complete_log_includes_world_name(capsys: pytest.CaptureFixture[str]) -> None:
+    import json
+    from ecs_agent.logging import configure_logging, STANDARD_EVENT_NAMES
+    configure_logging(json_output=True, level="INFO")
+    world = World(name="complete-world")
+    runner = Runner()
+    await runner.run(world, max_ticks=1)
+    captured = capsys.readouterr()
+    events = []
+    for line in captured.out.strip().split("\n"):
+        if line.strip() and line.strip().startswith("{"):
+            events.append(json.loads(line))
+    run_complete = next(e for e in events if e.get("event") == STANDARD_EVENT_NAMES["RUN_COMPLETE"])
+    assert run_complete["world_name"] == "complete-world"
+
+
+async def test_runner_tick_log_includes_world_name(capsys: pytest.CaptureFixture[str]) -> None:
+    import json
+    from ecs_agent.logging import configure_logging, STANDARD_EVENT_NAMES
+    configure_logging(json_output=True, level="DEBUG")
+    world = World(name="tick-world")
+    runner = Runner()
+    await runner.run(world, max_ticks=2)
+    captured = capsys.readouterr()
+    events = []
+    for line in captured.out.strip().split("\n"):
+        if line.strip() and line.strip().startswith("{"):
+            events.append(json.loads(line))
+    tick_events = [e for e in events if e.get("event") in (STANDARD_EVENT_NAMES["TICK_START"], STANDARD_EVENT_NAMES["TICK_COMPLETE"])]
+    assert len(tick_events) > 0
+    for e in tick_events:
+        assert e["world_name"] == "tick-world"

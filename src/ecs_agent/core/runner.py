@@ -46,6 +46,7 @@ class Runner:
             STANDARD_EVENT_NAMES["RUN_START"],
             max_ticks=max_ticks,
             start_tick=start_tick,
+            world_name=world.name,
         )
 
         # Create or update RunnerStateComponent
@@ -62,10 +63,10 @@ class Runner:
             if max_ticks is not None and tick >= max_ticks:
                 entity_id = world.create_entity()
                 world.add_component(entity_id, TerminalComponent(reason="max_ticks"))
-                logger.info(STANDARD_EVENT_NAMES["RUN_COMPLETE"], reason="max_ticks")
+                logger.info(STANDARD_EVENT_NAMES["RUN_COMPLETE"], reason="max_ticks", world_name=world.name)
                 return
 
-            logger.debug(STANDARD_EVENT_NAMES["TICK_START"], tick=tick)
+            logger.debug(STANDARD_EVENT_NAMES["TICK_START"], tick=tick, world_name=world.name)
             tick_start_time = time.monotonic()
             interrupted_before_tick = self._has_top_level_component(
                 world, InterruptionComponent
@@ -82,6 +83,7 @@ class Runner:
                     logger.info(
                         STANDARD_EVENT_NAMES["RUN_COMPLETE"],
                         reason="interruption_component",
+                        world_name=world.name,
                     )
                     return
                 raise
@@ -90,13 +92,14 @@ class Runner:
                 world, InterruptionComponent
             )
             if interrupted_after_tick and not interrupted_before_tick:
-                logger.debug("interruption_detected", tick=tick)
+                logger.debug("interruption_detected", tick=tick, world_name=world.name)
 
             tick_duration_ms = (time.monotonic() - tick_start_time) * 1000
             logger.debug(
                 STANDARD_EVENT_NAMES["TICK_COMPLETE"],
                 tick=tick,
                 duration_ms=tick_duration_ms,
+                world_name=world.name,
             )
 
             tick += 1
@@ -105,7 +108,7 @@ class Runner:
             has_terminal = self._has_top_level_component(world, TerminalComponent)
             if has_terminal:
                 logger.info(
-                    STANDARD_EVENT_NAMES["RUN_COMPLETE"], reason="terminal_component"
+                    STANDARD_EVENT_NAMES["RUN_COMPLETE"], reason="terminal_component", world_name=world.name
                 )
                 return
 
