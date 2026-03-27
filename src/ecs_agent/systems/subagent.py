@@ -135,32 +135,47 @@ class SubagentSystem:
         tool_registry.tools[tool_name] = ToolSchema(
             name=tool_name,
             description=(
-                "Execute a category-based subagent task either synchronously or in "
-                "background mode."
+                "Spawn a subagent to handle a self-contained task. The subagent runs in its own "
+                "isolated World with inherited tools and skills, then returns its final answer.\n\n"
+                "WHEN TO CALL:\n"
+                "  - Use when a subtask is independent and can be fully delegated (research, "
+                "    code generation, analysis, tool-heavy work).\n"
+                "  - Use background=True when you want to launch multiple subagents in parallel "
+                "    and collect results later via subagent_result.\n"
+                "  - Use background=False (default) when you need the result before continuing.\n\n"
+                "INTERFACE:\n"
+                "  category (required) — subagent type/name registered in SubagentRegistryComponent.\n"
+                "  prompt   (required) — full task instruction for the subagent; be specific.\n"
+                "  load_skills        — extra skill names to inject on top of category defaults.\n"
+                "  background         — if True, returns a JSON payload with session_id immediately; "
+                "                       use subagent_result(session_id) to retrieve the answer later.\n"
+                "  timeout            — max seconds to wait before aborting (null = no limit).\n\n"
+                "RETURNS (sync): final answer string from the subagent.\n"
+                "RETURNS (background): JSON {session_id, status, category, created_at}."
             ),
             parameters={
                 "type": "object",
                 "properties": {
                     "category": {
                         "type": "string",
-                        "description": "Subagent category/name to execute",
+                        "description": "Registered subagent type/name (e.g. \"researcher\", \"coder\"). Must match a key in SubagentRegistryComponent.",
                     },
                     "prompt": {
                         "type": "string",
-                        "description": "Task prompt for the subagent",
+                        "description": "Full task instruction for the subagent. Be explicit: include goal, context, expected output format, and any constraints.",
                     },
                     "load_skills": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Additional skills to merge with category defaults",
+                        "description": "Extra skill names to load on top of this category's defaults. Use when the task requires capabilities not in the base skill set.",
                     },
                     "background": {
                         "type": "boolean",
-                        "description": "Run asynchronously and return a session payload",
+                        "description": "If true, launch the subagent asynchronously and return immediately with a session_id. Use subagent_result(session_id) to collect the answer later. Default false (synchronous — blocks until done).",
                     },
                     "timeout": {
                         "type": ["number", "null"],
-                        "description": "Optional timeout in seconds",
+                        "description": "Maximum seconds to wait before aborting. null means no timeout. Only respected in sync mode and for background collection in subagent_result.",
                     },
                 },
                 "required": ["category", "prompt"],
@@ -277,13 +292,25 @@ class SubagentSystem:
         # Install subagent_status tool
         tool_registry.tools["subagent_status"] = ToolSchema(
             name="subagent_status",
-            description="Query subagent session status - returns summary table or single session details",
+            description=(
+                "Check the status of background subagent sessions. Use this to decide when "
+                "to call subagent_result.\n\n"
+                "WHEN TO CALL:\n"
+                "  - After launching one or more background subagents (background=True) to see "
+                "    which have finished (Idle) and which are still running (Working).\n"
+                "  - Without arguments to get a summary table of all active sessions.\n"
+                "  - With a specific session_id to get detailed info on one session.\n\n"
+                "INTERFACE:\n"
+                "  session_id (optional) — omit to list all sessions; provide to inspect one.\n\n"
+                "RETURNS (no session_id): JSON {status, session_count, summary_table}.\n"
+                "RETURNS (with session_id): JSON {session_id, status, category, created_at, ...}."
+            ),
             parameters={
                 "type": "object",
                 "properties": {
                     "session_id": {
                         "type": ["string", "null"],
-                        "description": "Optional session ID - if None, returns summary table of all sessions",
+                        "description": "Session ID returned by a background subagent call. Omit to list all active sessions.",
                     }
                 },
                 "required": [],
@@ -296,17 +323,28 @@ class SubagentSystem:
         # Install subagent_result tool
         tool_registry.tools["subagent_result"] = ToolSchema(
             name="subagent_result",
-            description="Await and retrieve result from a background subagent session",
+            description=(
+                "Block until a background subagent session finishes, then return its result.\n\n"
+                "WHEN TO CALL:\n"
+                "  - After launching a subagent with background=True and you are ready to use "
+                "    its output.\n"
+                "  - You may call subagent_status first to check if the session is already Idle "
+                "    (avoiding unnecessary blocking).\n\n"
+                "INTERFACE:\n"
+                "  session_id (required) — the session_id from the background subagent response.\n"
+                "  timeout    (optional) — max seconds to wait; null = wait indefinitely.\n\n"
+                "RETURNS: final answer string from the subagent, or an error/timeout message."
+            ),
             parameters={
                 "type": "object",
                 "properties": {
                     "session_id": {
                         "type": "string",
-                        "description": "Session ID to retrieve result from",
+                        "description": "Session ID of the background subagent to wait for. Obtained from the subagent(background=True) response.",
                     },
                     "timeout": {
                         "type": ["number", "null"],
-                        "description": "Optional timeout in seconds (default: wait indefinitely)",
+                        "description": "Max seconds to wait before returning a timeout error. null = wait indefinitely until the session finishes.",
                     },
                 },
                 "required": ["session_id"],
@@ -319,13 +357,22 @@ class SubagentSystem:
         # Install subagent_cancel tool
         tool_registry.tools["subagent_cancel"] = ToolSchema(
             name="subagent_cancel",
-            description="Cancel a running background subagent session",
+            description=(
+                "Abort a running background subagent session and free its resources.\n\n"
+                "WHEN TO CALL:\n"
+                "  - When a background subagent is no longer needed (e.g. another session "
+                "    already produced the answer, or the task was superseded).\n"
+                "  - After a timeout or error, to clean up a stuck session.\n\n"
+                "INTERFACE:\n"
+                "  session_id (required) — the session_id to cancel.\n\n"
+                "RETURNS: JSON {status, session_id, lifecycle_status}."
+            ),
             parameters={
                 "type": "object",
                 "properties": {
                     "session_id": {
                         "type": "string",
-                        "description": "Session ID to cancel",
+                        "description": "Session ID of the background subagent to abort. Obtained from the subagent(background=True) response.",
                     }
                 },
                 "required": ["session_id"],
@@ -573,19 +620,26 @@ class SubagentSystem:
             "function": {
                 "name": "delegate",
                 "description": (
-                    "Delegate a task to a named subagent. The subagent will execute "
-                    "the task independently and return its result."
+                    "Delegate a self-contained task to a named subagent and return its result synchronously.\n\n"
+                    "WHEN TO CALL:\n"
+                    "  - Use when a subtask can be fully handled by a specific registered subagent.\n"
+                    "  - This is a synchronous, fire-and-forget call: it blocks until the subagent completes.\n"
+                    "  - For parallel execution or finer control, prefer the 'subagent' tool with background=True.\n\n"
+                    "INTERFACE:\n"
+                    "  subagent_name (required) — name of the registered subagent to invoke.\n"
+                    "  task          (required) — full task description; include goal, context, and expected output.\n\n"
+                    "RETURNS: final answer string from the subagent."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "subagent_name": {
                             "type": "string",
-                            "description": "Name of the subagent to delegate to",
+                            "description": "Name of the registered subagent to invoke. Must match a key in SubagentRegistryComponent.",
                         },
                         "task": {
                             "type": "string",
-                            "description": "Task description for the subagent",
+                            "description": "Full task description for the subagent. Be explicit: include goal, context, expected output format, and any constraints.",
                         },
                     },
                     "required": ["subagent_name", "task"],

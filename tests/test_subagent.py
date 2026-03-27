@@ -64,7 +64,7 @@ def test_subagent_config_defaults() -> None:
 
     assert config.system_prompt == ""
     assert config.skills == []
-    assert config.max_ticks == 10
+    assert config.max_ticks is None
     # Verify inheritance_policy has correct defaults
     assert config.inheritance_policy is not None
     assert config.inheritance_policy.enabled is True
@@ -103,7 +103,7 @@ def test_subagent_registry_register_and_lookup() -> None:
     retrieved = registry.subagents["researcher"]
     assert retrieved.name == "researcher"
     assert retrieved.provider is provider
-    assert retrieved.max_ticks == 10
+    assert retrieved.max_ticks is None
 
 
 def test_delegation_started_event() -> None:

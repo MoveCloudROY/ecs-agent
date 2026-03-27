@@ -197,7 +197,7 @@ def test_compile_subagent_config_maps_expected_fields() -> None:
     assert helper.name == "helper"
     assert helper.model == "gpt-helper"
     assert helper.system_prompt == "Helper prompt"
-    assert helper.max_ticks == 10
+    assert helper.max_ticks is None
     assert helper.skills == []
 
 
@@ -370,7 +370,7 @@ def test_compiler_subagent_registry_maps_three_subagents_correctly() -> None:
     assert set(registry.subagents.keys()) == {"researcher", "planner", "writer"}
     assert registry.subagents["researcher"].model == "gpt-research"
     assert registry.subagents["planner"].system_prompt == "Plan"
-    assert registry.subagents["writer"].max_ticks == 10
+    assert registry.subagents["writer"].max_ticks is None
 
 
 def test_compiler_subagent_registry_keeps_distinct_provider_objects() -> None:
