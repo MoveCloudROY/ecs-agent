@@ -1054,6 +1054,7 @@ class SubagentSystem:
                 result=result,
                 success=True,
                 error=None,
+                child_world_name=child_world.name,
             )
 
             return (result, True, None)
@@ -1471,6 +1472,7 @@ class SubagentSystem:
         result: str | None = None,
         success: bool | None = None,
         error: str | None = None,
+        child_world_name: str | None = None,
     ) -> None:
         """Publish start/completion delegation events via one wrapper API."""
         if task is not None:
@@ -1481,6 +1483,7 @@ class SubagentSystem:
                     task=task,
                     correlation_id=correlation_id,
                     traceparent=traceparent,
+                    child_world_name=child_world_name,
                 )
             )
 
@@ -1494,5 +1497,6 @@ class SubagentSystem:
                     error=error,
                     correlation_id=correlation_id,
                     traceparent=traceparent,
+                    child_world_name=child_world_name,
                 )
             )

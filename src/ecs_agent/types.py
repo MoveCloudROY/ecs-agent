@@ -421,7 +421,7 @@ class SubagentConfig:
     description: str = ""
     system_prompt: str = ""
     skills: list[str] = field(default_factory=list)  # skill names to install
-    max_ticks: int = None
+    max_ticks: int | None = None
     inheritance_policy: InheritancePolicy = field(default_factory=InheritancePolicy)
 
 
@@ -515,6 +515,7 @@ class DelegationStartedEvent:
     task: str
     correlation_id: str
     traceparent: str
+    child_world_name: str | None = None
 
 
 @dataclass(slots=True)
@@ -528,6 +529,7 @@ class DelegationCompletedEvent:
     error: str | None = None
     correlation_id: str = ""
     traceparent: str = ""
+    child_world_name: str | None = None
 
 
 @dataclass(slots=True)
