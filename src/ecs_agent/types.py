@@ -421,7 +421,7 @@ class SubagentConfig:
     description: str = ""
     system_prompt: str = ""
     skills: list[str] = field(default_factory=list)  # skill names to install
-    max_ticks: int = 10
+    max_ticks: int = None
     inheritance_policy: InheritancePolicy = field(default_factory=InheritancePolicy)
 
 
