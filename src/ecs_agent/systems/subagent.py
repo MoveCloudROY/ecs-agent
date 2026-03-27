@@ -151,7 +151,15 @@ class SubagentSystem:
                 "                       use subagent_result(session_id) to retrieve the answer later.\n"
                 "  timeout            — max seconds to wait before aborting (null = no limit).\n\n"
                 "RETURNS (sync): final answer string from the subagent.\n"
-                "RETURNS (background): JSON {session_id, status, category, created_at}."
+                "RETURNS (background): JSON {session_id, status, category, created_at}.\n\n"
+                "EXAMPLES:\n"
+                '  // Synchronous — block until done\n'
+                '  subagent(category="researcher", prompt="Summarize the latest papers on RAG.")\n\n'
+                '  // Parallel — launch two subagents, collect later\n'
+                '  subagent(category="coder", prompt="Write unit tests for auth.py.", background=True)\n'
+                '  subagent(category="reviewer", prompt="Review auth.py for security issues.", background=True)\n\n'
+                '  // With extra skill and timeout\n'
+                '  subagent(category="analyst", prompt="Analyze Q1 sales data.", load_skills=["sql"], timeout=120)'
             ),
             parameters={
                 "type": "object",
@@ -303,7 +311,12 @@ class SubagentSystem:
                 "INTERFACE:\n"
                 "  session_id (optional) — omit to list all sessions; provide to inspect one.\n\n"
                 "RETURNS (no session_id): JSON {status, session_count, summary_table}.\n"
-                "RETURNS (with session_id): JSON {session_id, status, category, created_at, ...}."
+                "RETURNS (with session_id): JSON {session_id, status, category, created_at, ...}.\n\n"
+                "EXAMPLES:\n"
+                '  // List all running background sessions\n'
+                '  subagent_status()\n\n'
+                '  // Inspect a specific session\n'
+                '  subagent_status(session_id="ses_abc123")',
             ),
             parameters={
                 "type": "object",
@@ -333,7 +346,12 @@ class SubagentSystem:
                 "INTERFACE:\n"
                 "  session_id (required) — the session_id from the background subagent response.\n"
                 "  timeout    (optional) — max seconds to wait; null = wait indefinitely.\n\n"
-                "RETURNS: final answer string from the subagent, or an error/timeout message."
+                "RETURNS: final answer string from the subagent, or an error/timeout message.\n\n"
+                "EXAMPLES:\n"
+                '  // Wait for a previously launched background subagent\n'
+                '  subagent_result(session_id="ses_abc123")\n\n'
+                '  // Wait with a 60-second timeout\n'
+                '  subagent_result(session_id="ses_abc123", timeout=60)',
             ),
             parameters={
                 "type": "object",
@@ -365,7 +383,10 @@ class SubagentSystem:
                 "  - After a timeout or error, to clean up a stuck session.\n\n"
                 "INTERFACE:\n"
                 "  session_id (required) — the session_id to cancel.\n\n"
-                "RETURNS: JSON {status, session_id, lifecycle_status}."
+                "RETURNS: JSON {status, session_id, lifecycle_status}.\n\n"
+                "EXAMPLES:\n"
+                '  // Cancel a session that is no longer needed\n'
+                '  subagent_cancel(session_id="ses_abc123")',
             ),
             parameters={
                 "type": "object",
@@ -628,7 +649,12 @@ class SubagentSystem:
                     "INTERFACE:\n"
                     "  subagent_name (required) — name of the registered subagent to invoke.\n"
                     "  task          (required) — full task description; include goal, context, and expected output.\n\n"
-                    "RETURNS: final answer string from the subagent."
+                    "RETURNS: final answer string from the subagent.\n\n"
+                    "EXAMPLES:\n"
+                    "  // Delegate a research task synchronously\n"
+                    '  delegate(subagent_name="researcher", task="Summarize the latest papers on RAG.")\n\n'
+                    "  // Delegate a coding task with explicit output format\n"
+                    '  delegate(subagent_name="coder", task="Write a Python function to parse ISO 8601 dates. Return only the function code.")'
                 ),
                 "parameters": {
                     "type": "object",
