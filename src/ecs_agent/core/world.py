@@ -25,6 +25,8 @@ class World:
         self._query = Query(self._components)
         self._entity_registry: dict[str, EntityId] = {}
         self._entity_tags: dict[str, set[EntityId]] = {}
+        self._entity_ids: set[EntityId] = set()
+
     @property
     def event_bus(self) -> EventBus:
         return self._event_bus
@@ -33,10 +35,9 @@ class World:
     def name(self) -> str | None:
         """Optional human-readable name for this World instance."""
         return self._name
-
-
     def create_entity(self) -> EntityId:
         entity_id = self._entity_gen.next()
+        self._entity_ids.add(entity_id)
         logger.debug(STANDARD_EVENT_NAMES["ENTITY_CREATED"], entity_id=int(entity_id), world_name=self._name)
         return entity_id
 
@@ -58,9 +59,14 @@ class World:
     def has_component(self, entity_id: EntityId, component_type: type[Any]) -> bool:
         return self._components.has(entity_id, component_type)
 
+    def has_entity(self, entity_id: EntityId) -> bool:
+        """Return True if entity_id was created in this world."""
+        return entity_id in self._entity_ids
+
     def delete_entity(self, entity_id: EntityId) -> None:
         self.unregister_entity(entity_id)
         self._components.delete_entity(entity_id)
+        self._entity_ids.discard(entity_id)
 
     def register_entity(
         self, entity_id: EntityId, name: str, tags: set[str] | None = None

@@ -11,6 +11,7 @@ from ecs_agent.components.definitions import (
     RunnerStateComponent,
     TerminalComponent,
 )
+from ecs_agent.types import EntityId
 from ecs_agent.core.world import World
 from ecs_agent.logging import STANDARD_EVENT_NAMES, get_logger
 from ecs_agent.serialization import WorldSerializer
@@ -79,13 +80,16 @@ class Runner:
                 interrupted_after_cancellation = self._has_top_level_component(
                     world, InterruptionComponent
                 )
-                if interrupted_before_tick or interrupted_after_cancellation:
+                if interrupted_before_tick:
+                    # Pre-existing interruption — intentional stop, swallow CancelledError
                     logger.info(
                         STANDARD_EVENT_NAMES["RUN_COMPLETE"],
                         reason="interruption_component",
                         world_name=world.name,
                     )
                     return
+                # CancelledError arrived from outside (e.g. asyncio.wait_for timeout)
+                # — re-raise so the caller's timeout handler fires correctly
                 raise
 
             interrupted_after_tick = self._has_top_level_component(
@@ -117,13 +121,7 @@ class Runner:
         world: World,
         component_type: type[TerminalComponent] | type[InterruptionComponent],
     ) -> bool:
-        from ecs_agent.components import OwnerComponent
-
-        return any(
-            world.has_component(eid, component_type)
-            and not world.has_component(eid, OwnerComponent)
-            for eid, _ in world.query(component_type)
-        )
+        return any(True for _ in world.query(component_type))
 
     def save_checkpoint(self, world: World, path: str | Path) -> None:
         """Save world state and runner state to checkpoint file.

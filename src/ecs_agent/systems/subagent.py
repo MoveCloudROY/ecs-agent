@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ecs_agent.components import (
+    ChildStubComponent,
     ConversationComponent,
     LLMComponent,
     OwnerComponent,
@@ -786,6 +787,10 @@ class SubagentSystem:
             timeout: float | None = None,
         ) -> str:
             effective_load_skills = [] if load_skills is None else load_skills
+            # Coerce timeout to float: LLM may pass it as a JSON string (e.g. '180')
+            resolved_timeout_raw: float | None = (
+                float(timeout) if timeout is not None else None
+            )
             logger.info(
                 "subagent_handler_called",
                 parent_entity=parent_entity_id,
@@ -801,6 +806,9 @@ class SubagentSystem:
             )
             if registry_comp is None:
                 return f"Error: SubagentRegistryComponent not found on entity {parent_entity_id}"
+
+            # Validate parameters BEFORE the try/except — raise so callers can catch
+            self._validate_subagent_params(category, prompt, effective_load_skills)
 
             try:
                 config = self._resolve_subagent_config(registry_comp, category)
@@ -820,7 +828,7 @@ class SubagentSystem:
             traceparent = generate_traceparent()
 
             # Resolve timeout for this subagent execution
-            resolved_timeout = self._resolve_timeout(timeout)
+            resolved_timeout = self._resolve_timeout(resolved_timeout_raw)
 
             async def execute_with_effective_skills() -> tuple[str, bool, str | None]:
                 original_config = registry_comp.subagents[category]
@@ -1021,6 +1029,7 @@ class SubagentSystem:
                 subagent_name=subagent_name,
             )
 
+
             world.add_component(
                 child_entity_id,
                 LLMComponent(
@@ -1029,14 +1038,15 @@ class SubagentSystem:
                     system_prompt=config.system_prompt,
                 ),
             )
-
             world.add_component(
                 child_entity_id,
                 ConversationComponent(messages=[Message(role="user", content=task)]),
             )
-
             world.add_component(
                 child_entity_id, OwnerComponent(owner_id=parent_entity_id)
+            )
+            world.add_component(
+                child_entity_id, ChildStubComponent()
             )
 
             child_world, child_world_entity_id = self._assemble_child_world(
@@ -1045,6 +1055,11 @@ class SubagentSystem:
                 config,
                 parent_child_entity=child_entity_id,
             )
+            # Sync effective system prompt (may be inherited) to parent-world stub
+            child_llm = child_world.get_component(child_world_entity_id, LLMComponent)
+            stub_llm = world.get_component(child_entity_id, LLMComponent)
+            if child_llm is not None and stub_llm is not None:
+                stub_llm.system_prompt = child_llm.system_prompt
             result = await self._execute_delegation(
                 child_world,
                 child_world_entity_id,
@@ -1259,23 +1274,6 @@ class SubagentSystem:
             child_world_entity_id,
             OwnerComponent(owner_id=parent_entity),
         )
-
-        if parent_child_entity is not None:
-            parent_world.add_component(
-                parent_child_entity,
-                LLMComponent(
-                    provider=config.provider,
-                    model=config.model,
-                    system_prompt=effective_system_prompt,
-                ),
-            )
-            parent_world.add_component(
-                parent_child_entity,
-                SystemPromptComponent(
-                    template=effective_system_prompt,
-                    content=effective_system_prompt,
-                ),
-            )
 
         target_entities: list[tuple[World, EntityId]] = [
             (child_world, child_world_entity_id)

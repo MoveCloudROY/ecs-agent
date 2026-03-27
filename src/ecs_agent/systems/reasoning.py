@@ -7,6 +7,7 @@ from typing import Any
 
 from ecs_agent.logging import get_logger
 from ecs_agent.components import (
+    ChildStubComponent,
     ConversationComponent,
     ConversationTreeComponent,
     ErrorComponent,
@@ -54,6 +55,10 @@ class ReasoningSystem:
     async def process(self, world: World) -> None:
         for entity_id, (llm_component,) in world.query(LLMComponent):
             if world.has_component(entity_id, InterruptionComponent):
+                continue
+            # Skip parent-world delegation stubs — they are tracked records,
+            # not runnable agents. ReasoningSystem must not infer over them.
+            if world.has_component(entity_id, ChildStubComponent):
                 continue
 
             start_time = time.time()

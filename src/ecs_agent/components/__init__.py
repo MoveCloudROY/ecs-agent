@@ -42,6 +42,7 @@ from ecs_agent.components.definitions import (
     UserPromptConfigComponent,
     RenderedSystemPromptComponent,
     RenderedUserPromptComponent,
+    ChildStubComponent,
     PromptContextQueueComponent,
     PromptContextReservationComponent,
     VectorStoreComponent,
@@ -92,4 +93,5 @@ __all__ = [
     "RenderedUserPromptComponent",
     "PromptContextQueueComponent",
     "PromptContextReservationComponent",
+    "ChildStubComponent",
 ]
