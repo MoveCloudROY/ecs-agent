@@ -222,3 +222,5 @@ task-*.txt
 .evidence-task*
 QA_REPORT.md
 .worktrees/
+
+docs/plans/

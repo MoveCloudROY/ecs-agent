@@ -249,7 +249,7 @@ World
 
 ## Examples
 
-The `examples/` directory contains 24 runnable demos:
+The `examples/` directory contains 25 runnable demos:
 
 | Example | Description |
 |---------|-------------|
@@ -266,6 +266,7 @@ The `examples/` directory contains 24 runnable demos:
 | [`tree_search_agent.py`](examples/tree_search_agent.py) | MCTS-based planning for complex goals (dual-mode) |
 | [`rag_agent.py`](examples/rag_agent.py) | Retrieval-Augmented Generation demo (dual-mode with real embeddings) |
 | [`subagent_delegation.py`](examples/subagent_delegation.py) | Parent agent delegates subtasks via legacy `delegate` and new unified `subagent` tools (dual-mode) |
+| [`task_orchestration_system.py`](examples/task_orchestration_system.py) | Dependency-aware task orchestration with wave planning, mixed local/subagent backends, scratchbook persistence, and serialization |
 | [`claude_agent.py`](examples/claude_agent.py) | Native Anthropic Claude provider usage |
 | [`litellm_agent.py`](examples/litellm_agent.py) | LiteLLM unified provider for 100+ models |
 | [`streaming_system_agent.py`](examples/streaming_system_agent.py) | System-level streaming with events |
