@@ -452,3 +452,13 @@ class RenderedSystemPromptComponent:
 @dataclass(slots=True)
 class RenderedUserPromptComponent:
     text: str
+
+
+@dataclass(slots=True)
+class ChildStubComponent:
+    """Marker: this entity is a parent-world stub tracking a delegated child subagent.
+
+    Entities with this component should be skipped by ReasoningSystem so that
+    the parent world does not attempt LLM inference on delegation stubs.
+    """
+
