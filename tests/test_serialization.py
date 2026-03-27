@@ -1121,3 +1121,28 @@ def test_subagent_session_table_rejects_runtime_handles() -> None:
     restored_comp = restored.get_component(entity, SubagentSessionTableComponent)
     assert restored_comp is not None
     assert "sess_003" in restored_comp.sessions
+
+
+def test_serialization_preserves_world_name() -> None:
+    """Test that WorldSerializer persists and restores the world name."""
+    world = World(name="my-world")
+    data = WorldSerializer.to_dict(world)
+    assert data["world_name"] == "my-world"
+    restored = WorldSerializer.from_dict(data, providers={}, tool_handlers={})
+    assert restored.name == "my-world"
+
+
+def test_serialization_preserves_none_world_name() -> None:
+    """Test that WorldSerializer correctly handles a World with no name."""
+    world = World()
+    data = WorldSerializer.to_dict(world)
+    assert data["world_name"] is None
+    restored = WorldSerializer.from_dict(data, providers={}, tool_handlers={})
+    assert restored.name is None
+
+
+def test_serialization_backward_compat_missing_world_name() -> None:
+    """Old serialized data without world_name key deserializes to name=None."""
+    data = {"next_entity_id": 1, "entities": {}, "_entity_registry": {}, "_entity_tags": {}}
+    restored = WorldSerializer.from_dict(data, providers={}, tool_handlers={})
+    assert restored.name is None
