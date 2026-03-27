@@ -2945,3 +2945,67 @@ async def test_subagent_cancel_terminal_session() -> None:
     assert cancel_result["status"] == "cancelled"
     assert cancel_result["lifecycle_status"] == "Cancelled"
     assert cancel_result["session_id"] == session_id
+
+
+def test_assemble_child_world_name_follows_convention() -> None:
+    """Child world name must be '<subagent_name>-<8hex>' format."""
+    import re
+    from ecs_agent.systems.subagent import SubagentSystem
+    from ecs_agent.types import SubagentConfig
+    from ecs_agent.components.definitions import (
+        ToolRegistryComponent,
+        ConversationComponent,
+        LLMComponent,
+    )
+
+    provider = FakeProvider(responses=[
+        CompletionResult(message=Message(role="assistant", content="done"))
+    ])
+    world = World(name="parent-world")
+    parent = world.create_entity()
+    world.add_component(parent, LLMComponent(
+        provider=provider, model="m", system_prompt=""
+    ))
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(parent, ConversationComponent(messages=[]))
+
+    config = SubagentConfig(
+        name="researcher",
+        provider=provider,
+        model="m",
+        system_prompt="",
+    )
+
+    system = SubagentSystem()
+    child_world, _ = system._assemble_child_world(world, parent, config)
+
+    assert child_world.name is not None
+    pattern = re.compile(r"^researcher-[0-9a-f]{8}$")
+    assert pattern.match(child_world.name), f"Got: {child_world.name!r}"
+
+
+def test_assemble_child_world_different_calls_produce_unique_names() -> None:
+    """Each call must produce a distinct child world name."""
+    from ecs_agent.systems.subagent import SubagentSystem
+    from ecs_agent.types import SubagentConfig
+    from ecs_agent.components.definitions import (
+        ToolRegistryComponent,
+        ConversationComponent,
+        LLMComponent,
+    )
+
+    provider = FakeProvider(responses=[
+        CompletionResult(message=Message(role="assistant", content="done"))
+    ] * 4)
+    world = World(name="parent")
+    parent = world.create_entity()
+    world.add_component(parent, LLMComponent(provider=provider, model="m", system_prompt=""))
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(parent, ConversationComponent(messages=[]))
+
+    config = SubagentConfig(name="worker", provider=provider, model="m")
+    system = SubagentSystem()
+
+    w1, _ = system._assemble_child_world(world, parent, config)
+    w2, _ = system._assemble_child_world(world, parent, config)
+    assert w1.name != w2.name
