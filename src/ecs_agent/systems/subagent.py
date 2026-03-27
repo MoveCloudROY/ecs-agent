@@ -316,7 +316,7 @@ class SubagentSystem:
                 '  // List all running background sessions\n'
                 '  subagent_status()\n\n'
                 '  // Inspect a specific session\n'
-                '  subagent_status(session_id="ses_abc123")',
+                '  subagent_status(session_id="ses_abc123")'
             ),
             parameters={
                 "type": "object",
@@ -351,7 +351,7 @@ class SubagentSystem:
                 '  // Wait for a previously launched background subagent\n'
                 '  subagent_result(session_id="ses_abc123")\n\n'
                 '  // Wait with a 60-second timeout\n'
-                '  subagent_result(session_id="ses_abc123", timeout=60)',
+                '  subagent_result(session_id="ses_abc123", timeout=60)'
             ),
             parameters={
                 "type": "object",
@@ -386,7 +386,7 @@ class SubagentSystem:
                 "RETURNS: JSON {status, session_id, lifecycle_status}.\n\n"
                 "EXAMPLES:\n"
                 '  // Cancel a session that is no longer needed\n'
-                '  subagent_cancel(session_id="ses_abc123")',
+                '  subagent_cancel(session_id="ses_abc123")'
             ),
             parameters={
                 "type": "object",
