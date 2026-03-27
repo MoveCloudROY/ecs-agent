@@ -16,7 +16,8 @@ T = TypeVar("T")
 
 
 class World:
-    def __init__(self) -> None:
+    def __init__(self, name: str | None = None) -> None:
+        self._name: str | None = name
         self._entity_gen = EntityIdGenerator()
         self._components = ComponentStore()
         self._systems = SystemExecutor()
@@ -28,9 +29,15 @@ class World:
     def event_bus(self) -> EventBus:
         return self._event_bus
 
+    @property
+    def name(self) -> str | None:
+        """Optional human-readable name for this World instance."""
+        return self._name
+
+
     def create_entity(self) -> EntityId:
         entity_id = self._entity_gen.next()
-        logger.debug(STANDARD_EVENT_NAMES["ENTITY_CREATED"], entity_id=int(entity_id))
+        logger.debug(STANDARD_EVENT_NAMES["ENTITY_CREATED"], entity_id=int(entity_id), world_name=self._name)
         return entity_id
 
     def add_component(self, entity_id: EntityId, component: Any) -> None:
@@ -39,6 +46,7 @@ class World:
             STANDARD_EVENT_NAMES["COMPONENT_ADDED"],
             entity_id=int(entity_id),
             component_type=type(component).__name__,
+            world_name=self._name,
         )
 
     def get_component(self, entity_id: EntityId, component_type: type[T]) -> T | None:
