@@ -275,6 +275,7 @@ def prepare_outbound_messages(
 
     logger.debug(
         "outbound_messages_assembled",
+        world_name=world.name,
         entity_id=entity_id,
         message_count=len(messages),
         system_prompt_preview=f"{messages[0].content[:200]} ... (only the first 200)"

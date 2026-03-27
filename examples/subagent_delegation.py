@@ -178,6 +178,7 @@ async def main() -> None:
                     "You are a manager agent. When given a complex question, "
                     "use the 'subagent' tool to delegate work to background workers. "
                     "After receiving the results, synthesize them into a concise summary.\n\n"
+                    "Available tools:\n${_installed_tools}\n\n"
                     "Available subagents:\n${_installed_subagents}\n\n"
                     "Session: ${session_label}"
                 )
@@ -257,7 +258,7 @@ async def main() -> None:
 
     # ── Run Agent ───────────────────────────────────────────────────
     runner = Runner()
-    await runner.run(world, max_ticks=None)
+    await runner.run(world, max_ticks=10)
 
     # ── Print Results ───────────────────────────────────────────────
     print("=" * 60)
