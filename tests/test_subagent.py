@@ -3182,3 +3182,79 @@ async def test_subagent_inherits_parent_workspace_binding() -> None:
     assert child_binding.workspace_root == parent_workspace, (
         "Child workspace root must match parent workspace root"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 9: subagent prompt rendering via SystemPromptRenderSystem
+# ---------------------------------------------------------------------------
+
+
+async def test_subagent_child_world_registers_system_prompt_render_system() -> None:
+    """Child world must have SystemPromptRenderSystem registered at priority < 0."""
+    from ecs_agent.systems.subagent import SubagentSystem
+    from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
+
+    world = World()
+    parent_entity = world.create_entity()
+    world.add_component(parent_entity, LLMComponent(
+        provider=FakeProvider(responses=[]),
+        model="fake",
+        system_prompt="parent-prompt",
+    ))
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    config = SubagentConfig(
+        name="child",
+        provider=FakeProvider(responses=[CompletionResult(message=Message(role="assistant", content="done"))]),
+        model="fake",
+    )
+
+    system = SubagentSystem()
+    child_world, _child_entity_id = system._assemble_child_world(world, parent_entity, config)
+
+    # Apply queued operations so _systems list is populated
+    child_world._systems.apply_queued_operations()
+
+    # Verify SystemPromptRenderSystem is registered at priority < 0 (before ReasoningSystem at 0)
+    render_system_found = False
+    for entry in child_world._systems._systems:
+        if isinstance(entry.system, SystemPromptRenderSystem):
+            render_system_found = True
+            assert entry.priority < 0, (
+                f"SystemPromptRenderSystem must be at priority < 0, got {entry.priority}"
+            )
+    assert render_system_found, "Child world must have SystemPromptRenderSystem registered"
+
+
+async def test_subagent_child_world_has_system_prompt_config_spec() -> None:
+    """Child entity must have SystemPromptConfigSpec attached (for renderer to consume)."""
+    from ecs_agent.systems.subagent import SubagentSystem
+    from ecs_agent.prompts.contracts import SystemPromptConfigSpec
+
+    world = World()
+    parent_entity = world.create_entity()
+    world.add_component(parent_entity, LLMComponent(
+        provider=FakeProvider(responses=[]),
+        model="fake",
+        system_prompt="parent-prompt",
+    ))
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    config = SubagentConfig(
+        name="child",
+        provider=FakeProvider(responses=[CompletionResult(message=Message(role="assistant", content="done"))]),
+        model="fake",
+        system_prompt="explicit-child-prompt",
+    )
+
+    system = SubagentSystem()
+    child_world, child_entity_id = system._assemble_child_world(world, parent_entity, config)
+
+    # After Task 9: child entity must have SystemPromptConfigSpec so the renderer can resolve it
+    spec = child_world.get_component(child_entity_id, SystemPromptConfigSpec)
+    assert spec is not None, (
+        "Child entity must have SystemPromptConfigSpec for SystemPromptRenderSystem to consume"
+    )
+    assert spec.template_source.inline == "explicit-child-prompt", (
+        f"SystemPromptConfigSpec template must match config.system_prompt, got: {spec.template_source.inline!r}"
+    )

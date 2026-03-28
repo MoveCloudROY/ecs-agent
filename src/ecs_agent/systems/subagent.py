@@ -29,6 +29,8 @@ from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
+from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
 from ecs_agent.systems.subagent_runtime import SubagentRuntimeManager
 from ecs_agent.observability import generate_traceparent
 from ecs_agent.types import (
@@ -1056,17 +1058,17 @@ class SubagentSystem:
                 config,
                 parent_child_entity=child_entity_id,
             )
-            # Sync effective system prompt (may be inherited) to parent-world stub
-            child_llm = child_world.get_component(child_world_entity_id, LLMComponent)
-            stub_llm = world.get_component(child_entity_id, LLMComponent)
-            if child_llm is not None and stub_llm is not None:
-                stub_llm.system_prompt = child_llm.system_prompt
             result = await self._execute_delegation(
                 child_world,
                 child_world_entity_id,
                 task,
                 config,
             )
+            # Sync rendered system prompt (populated by SystemPromptRenderSystem) to parent-world stub
+            child_llm = child_world.get_component(child_world_entity_id, LLMComponent)
+            stub_llm = world.get_component(child_entity_id, LLMComponent)
+            if child_llm is not None and stub_llm is not None:
+                stub_llm.system_prompt = child_llm.system_prompt
 
             child_conv = child_world.get_component(
                 child_world_entity_id,
@@ -1257,7 +1259,7 @@ class SubagentSystem:
             LLMComponent(
                 provider=config.provider,
                 model=config.model,
-                system_prompt=effective_system_prompt,
+                system_prompt="",  # SystemPromptRenderSystem will populate this
             ),
         )
         child_world.add_component(
@@ -1265,6 +1267,14 @@ class SubagentSystem:
             SystemPromptComponent(
                 template=effective_system_prompt,
                 content=effective_system_prompt,
+            ),
+        )
+        child_world.add_component(
+            child_world_entity_id,
+            SystemPromptConfigSpec(
+                template_source=PromptTemplateSource(
+                    inline=effective_system_prompt or "",
+                ),
             ),
         )
         child_world.add_component(
@@ -1362,6 +1372,7 @@ class SubagentSystem:
                         ),
                     )
 
+        child_world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
         child_world.register_system(ReasoningSystem(priority=0), priority=0)
         child_world.register_system(MemorySystem(), priority=10)
         child_world.register_system(
