@@ -140,7 +140,7 @@ world.register_system(SubagentSystem(priority=-1), priority=-1)
 
 1. **Register subagents** with `SubagentRegistryComponent`
 2. **Register SubagentSystem** (priority -1, before ReasoningSystem)
-3. **SubagentSystem creates a new child entity** with the subagent's provider, model, and `SystemPromptComponent` (template/content from effective system prompt)
+3. **SubagentSystem creates a new child entity** with the subagent's provider, model, and `SystemPromptComponent` (template/content from effective system prompt), plus a `ChildStubComponent` to mark the parent-world stub entity
 4. **LLM calls delegate tool** to invoke subagent
 5. **SubagentSystem executes** child and returns result
 ```python
@@ -334,6 +334,8 @@ result = "Error: Subagent 'researcher' failed: <error details>"
 ```
 
 The parent can handle this via normal tool result processing.
+
+> **Note on validation errors**: Parameter validation (empty `category`, empty `prompt`, non-list `load_skills`) happens *before* execution and raises `ValueError` immediately rather than returning an error string. Ensure tool call arguments are well-formed before invocation.
 
 ## Inheritance Policy (Detailed)
 
@@ -578,8 +580,8 @@ task="Help me with this"
 - Subagents can delegate to other subagents if `allow_delegate_tool=True` in `InheritancePolicy` (recursive delegation supported)
 - Subagent state is not persisted after execution completes
 - Tool calls from subagents are isolated (cannot access parent tools)
-- `TerminalComponent` from child world is NOT copied to parent (prevents premature runner termination)
-
+- `TerminalComponent` from child world is NOT copied to parent (prevents premature runner termination). Additionally, the parent-world stub entity for each delegation carries a `ChildStubComponent`, which causes `ReasoningSystem` to skip it — preventing unintended LLM inference on completed delegation stubs
+- After child world completes, the stub entity's `LLMComponent.system_prompt` is updated to reflect the effective (post-inheritance) system prompt used by the child
 ## See Also
 
 - [Multi-Agent Collaboration](./multi-agent.md) — Entity-to-entity messaging
