@@ -167,9 +167,7 @@ class Skill:
                     skill_path=str(self._skill_path),
                     exception=str(exc),
                 )
-                _stdlib_logger.warning(
-                    "skill_invalid_yaml: %s", str(self._skill_path)
-                )
+                _stdlib_logger.warning("skill_invalid_yaml: %s", str(self._skill_path))
                 self.valid = False
                 self._name = ""
                 self._description = ""
@@ -368,8 +366,7 @@ class Skill:
         """
         return self._body_bytes.decode("utf-8", errors="replace").strip()
 
-
-    def resolve_path_references(self, workspace_root: str | Path) -> None:
+    def resolve_path_references(self, workspace_root: str | Path) -> "Skill":
         """Resolve ``@``-prefixed relative paths in the skill body.
 
         Paths of the form ``@../../../some/file.md`` are interpreted relative
@@ -398,6 +395,7 @@ class Skill:
 
         body = _AT_PATH_RE.sub(_resolve_at_path, body)
         self._body_bytes = body.encode("utf-8")
+        return self
 
     def tools(self) -> dict[str, tuple[ToolSchema, ToolHandler]]:
         """Discover tools from scripts/ directory.
@@ -550,6 +548,7 @@ class Skill:
             skill_dir_path=str(self.skill_dir_path),
             slash_command=self.slash_command,
         )
+
     def uninstall(self, world: World, entity_id: EntityId) -> None:
         """Uninstall skill by removing system prompt and tools.
 
