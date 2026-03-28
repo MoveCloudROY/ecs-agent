@@ -12,7 +12,11 @@ import yaml
 
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
-from ecs_agent.skills.catalog import SkillDescriptor, SkillType, register as _catalog_register
+from ecs_agent.skills.catalog import (
+    SkillDescriptor,
+    SkillType,
+    register as _catalog_register,
+)
 from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, SkillDiscoveryEvent
 
@@ -209,6 +213,7 @@ class DiscoveryManager:
                     markdown_descriptors = discover_skills([base_dir])
                     for descriptor in markdown_descriptors:
                         try:
+                            _catalog_register(descriptor)
                             runtime_skill = descriptor.materialize()
                             if not isinstance(runtime_skill, ScriptSkill):
                                 raise TypeError(

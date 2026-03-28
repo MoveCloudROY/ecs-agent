@@ -264,13 +264,33 @@ async def test_discovery_manager_markdown_name_collision_is_rejected(
 @pytest.mark.asyncio
 async def test_discovery_manager_auto_discover_registers_descriptors_in_catalog(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Discovered markdown skills must be registered as SkillDescriptor in the catalog."""
-    from ecs_agent.skills.catalog import clear_catalog, lookup
+    from ecs_agent.skills.catalog import (
+        SkillDescriptor,
+        SkillType,
+        clear_catalog,
+        lookup,
+    )
+    from ecs_agent.skills.discovery import _build_markdown_materializer
 
     skill_dir = tmp_path / "skills" / "my-skill"
     skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text("---\nname: catalog-skill\ndescription: test\n---\nBody")
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text("---\nname: catalog-skill\ndescription: test\n---\nBody")
+
+    descriptor = SkillDescriptor(
+        name="catalog-skill",
+        skill_type=SkillType.MARKDOWN,
+        source_path=skill_file,
+        metadata={"description": "test"},
+        _materializer=_build_markdown_materializer(skill_file),
+    )
+
+    monkeypatch.setattr(
+        "ecs_agent.skills.discovery.discover_skills", lambda _dirs: [descriptor]
+    )
 
     clear_catalog()
     world = World()
@@ -279,18 +299,18 @@ async def test_discovery_manager_auto_discover_registers_descriptors_in_catalog(
 
     manager = SkillManager()
 
-
     report = await DiscoveryManager().auto_discover_and_install(
         world, entity_id, manager, directories=[tmp_path]
     )
 
     assert "catalog-skill" in report.installed_skills
-    descriptor = lookup("catalog-skill")
-    assert descriptor is not None
-    assert descriptor.name == "catalog-skill"
-    assert descriptor.metadata.get("description") == "test"
+    catalog_descriptor = lookup("catalog-skill")
+    assert catalog_descriptor is not None
+    assert isinstance(catalog_descriptor, SkillDescriptor)
+    assert catalog_descriptor.name == "catalog-skill"
+    assert catalog_descriptor.metadata.get("description") == "test"
     # Must be frozen — should not raise on access
-    assert hasattr(descriptor, "source_path")
+    assert hasattr(catalog_descriptor, "source_path")
 
 
 @pytest.mark.asyncio
@@ -300,10 +320,13 @@ async def test_discovery_manager_auto_discover_indexes_skills_without_activating
     """After discovery, entity has skill metadata but the skill is NOT yet activated."""
     from ecs_agent.skills.catalog import clear_catalog
     from ecs_agent.components.definitions import SkillComponent
+    from ecs_agent.components import ToolRegistryComponent
 
     skill_dir = tmp_path / "skills" / "lazy-skill"
     skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text("---\nname: lazy-skill\ndescription: lazy\n---\nBody")
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: lazy-skill\ndescription: lazy\n---\nBody"
+    )
 
     clear_catalog()
     world = World()
@@ -311,7 +334,6 @@ async def test_discovery_manager_auto_discover_indexes_skills_without_activating
     entity_id = world.create_entity()
 
     manager = SkillManager()
-
 
     report = await DiscoveryManager().auto_discover_and_install(
         world, entity_id, manager, directories=[tmp_path]
@@ -323,3 +345,9 @@ async def test_discovery_manager_auto_discover_indexes_skills_without_activating
     assert "lazy-skill" in skill_comp.skills
     # Metadata-only: activated should be False at index time
     assert skill_comp.skills["lazy-skill"].activated is False
+    assert skill_comp.skills["lazy-skill"].tool_names == []
+
+    registry = world.get_component(entity_id, ToolRegistryComponent)
+    assert registry is not None
+    assert set(registry.tools) == {"load_skill_details"}
+    assert world.skill_runtime.get_installed_skill(entity_id, "lazy-skill") is not None
