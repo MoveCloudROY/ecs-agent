@@ -581,7 +581,7 @@ task="Help me with this"
 - Subagent state is not persisted after execution completes
 - Tool calls from subagents are isolated (cannot access parent tools)
 - `TerminalComponent` from child world is NOT copied to parent (prevents premature runner termination). Additionally, the parent-world stub entity for each delegation carries a `ChildStubComponent`, which causes `ReasoningSystem` to skip it — preventing unintended LLM inference on completed delegation stubs
-- After child world completes, the stub entity's `LLMComponent.system_prompt` is updated to reflect the effective (post-inheritance) system prompt used by the child
+- After child world completes, the stub entity's `LLMComponent.system_prompt` reflects the effective rendered prompt produced by `SystemPromptRenderSystem` in the child world during execution.
 ## See Also
 
 - [Multi-Agent Collaboration](./multi-agent.md) — Entity-to-entity messaging

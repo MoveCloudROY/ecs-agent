@@ -736,3 +736,25 @@ Tracks an active reservation snapshot for deterministic prompt context injection
 | `reservation_id` | `str` | (required) | Unique reservation identifier |
 | `created_at_tick` | `int` | (required) | Tick when reservation was created |
 | `reserved_entries` | `list[ContextEntry]` | (required) | Snapshot of reserved context entries |
+
+
+### WorkspaceBindingComponent
+Binds a filesystem workspace root to an agent entity. Used by `BuiltinToolsSkill` and other
+workspace-aware skills to scope file operations. The workspace is owned by the **entity**,
+not the skill object, so the same skill can be installed on different agents with different
+workspace roots without any shared-state conflicts.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `workspace_root` | `Path \| str` | (required) | Absolute path to the agent's workspace root |
+
+**Used by:** `BuiltinToolsSkill`, `SkillRuntime` (workspace-bound skill materialization), `SubagentSystem` (workspace inheritance)
+
+**Usage:**
+```python
+from ecs_agent.components.definitions import WorkspaceBindingComponent
+from pathlib import Path
+
+world.add_component(agent, WorkspaceBindingComponent(workspace_root=Path("/workspace")))
+# When a subagent is spawned, it inherits this binding by default (InheritancePolicy).
+```
