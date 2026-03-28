@@ -69,6 +69,12 @@ class SkillManager:
     _DETAILS_TOOL_NAME = "load_skill_details"
 
     def index(self, world: World, entity_id: EntityId, skill: ScriptSkill) -> None:
+        materialized_skill = world.skill_runtime.materialize_skill_for_entity(
+            world,
+            entity_id,
+            skill,
+        )
+
         registry = world.get_component(entity_id, ToolRegistryComponent)
         if registry is None:
             registry = ToolRegistryComponent(tools={}, handlers={})
@@ -78,8 +84,12 @@ class SkillManager:
 
         # Tool bundles are pure tool collections — they are not listed as skills.
         # Skip SkillComponent registration entirely.
-        if getattr(skill, "is_tool_bundle", False):
-            world.skill_runtime.set_installed_skill(entity_id, skill.name, skill)
+        if getattr(materialized_skill, "is_tool_bundle", False):
+            world.skill_runtime.set_installed_skill(
+                entity_id,
+                materialized_skill.name,
+                materialized_skill,
+            )
             return
 
         skill_component = world.get_component(entity_id, SkillComponent)
@@ -87,24 +97,32 @@ class SkillManager:
             skill_component = SkillComponent(skills={})
             world.add_component(entity_id, skill_component)
 
-        skill_component.skills[skill.name] = SkillMetadata(
-            name=skill.name,
-            description=skill.description,
+        skill_component.skills[materialized_skill.name] = SkillMetadata(
+            name=materialized_skill.name,
+            description=materialized_skill.description,
             tool_names=[],
             has_system_prompt=False,
             activated=False,
-            user_invocable=getattr(skill, "user_invocable", True),
-            disable_model_invocation=getattr(skill, "disable_model_invocation", False),
-            argument_hint=getattr(skill, "argument_hint", ""),
-            allowed_tools=getattr(skill, "allowed_tools", []),
-            context=getattr(skill, "context", None),
-            agent=getattr(skill, "agent", None),
-            model=getattr(skill, "model", None),
-            hooks=getattr(skill, "hooks", {}),
-            skill_dir_path=getattr(skill, "skill_dir_path", None),
-            slash_command=getattr(skill, "slash_command", f"/{skill.name}"),
+            user_invocable=getattr(materialized_skill, "user_invocable", True),
+            disable_model_invocation=getattr(
+                materialized_skill,
+                "disable_model_invocation",
+                False,
+            ),
+            argument_hint=getattr(materialized_skill, "argument_hint", ""),
+            allowed_tools=getattr(materialized_skill, "allowed_tools", []),
+            context=getattr(materialized_skill, "context", None),
+            agent=getattr(materialized_skill, "agent", None),
+            model=getattr(materialized_skill, "model", None),
+            hooks=getattr(materialized_skill, "hooks", {}),
+            skill_dir_path=getattr(materialized_skill, "skill_dir_path", None),
+            slash_command=getattr(
+                materialized_skill,
+                "slash_command",
+                f"/{materialized_skill.name}",
+            ),
             substitution_variables=getattr(
-                skill,
+                materialized_skill,
                 "substitution_variables",
                 [
                     "$ARGUMENTS",
@@ -115,7 +133,11 @@ class SkillManager:
                 ],
             ),
         )
-        world.skill_runtime.set_installed_skill(entity_id, skill.name, skill)
+        world.skill_runtime.set_installed_skill(
+            entity_id,
+            materialized_skill.name,
+            materialized_skill,
+        )
 
     def activate(self, world: World, entity_id: EntityId, skill_name: str) -> None:
         skill_component = world.get_component(entity_id, SkillComponent)

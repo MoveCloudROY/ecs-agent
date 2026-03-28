@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import copy
 from typing import TYPE_CHECKING
 
-from ecs_agent.components.definitions import SkillComponent, SkillMetadata
+from ecs_agent.components.definitions import (
+    SkillComponent,
+    SkillMetadata,
+    WorkspaceBindingComponent,
+)
 from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId
 
@@ -35,6 +40,49 @@ class SkillRuntime:
         skill_name: str,
     ) -> ScriptSkill | None:
         return self._installed_skills.pop((entity_id, skill_name), None)
+
+    def materialize_skill_for_entity(
+        self,
+        world: World,
+        entity_id: EntityId,
+        skill: ScriptSkill,
+    ) -> ScriptSkill:
+        binding = world.get_component(entity_id, WorkspaceBindingComponent)
+        if binding is None:
+            return skill
+
+        materialized = copy.deepcopy(skill)
+        workspace_root = binding.workspace_root
+
+        resolver = getattr(materialized, "resolve_path_references", None)
+        if callable(resolver):
+            resolved_skill = resolver(workspace_root)
+            if resolved_skill is not None:
+                materialized = resolved_skill
+
+        binder = getattr(materialized, "bind_workspace", None)
+        if callable(binder):
+            bound_skill = binder(str(workspace_root))
+            if bound_skill is not None:
+                materialized = bound_skill
+
+        return materialized
+
+    def inherit_workspace_binding(
+        self,
+        world: World,
+        *,
+        parent_entity: EntityId,
+        child_entity: EntityId,
+    ) -> None:
+        parent_binding = world.get_component(parent_entity, WorkspaceBindingComponent)
+        if parent_binding is None:
+            return
+
+        world.add_component(
+            child_entity,
+            WorkspaceBindingComponent(workspace_root=parent_binding.workspace_root),
+        )
 
     def list_skills(self, world: World, entity_id: EntityId) -> list[SkillMetadata]:
         skill_component = world.get_component(entity_id, SkillComponent)
