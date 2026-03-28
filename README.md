@@ -223,6 +223,8 @@ World
 | `RenderedUserPromptComponent` | Normalized user prompt text produced by `UserPromptNormalizationSystem` for the current tick |
 | `KVStoreComponent` | Generic key-value scratch space |
 | `ErrorComponent` | Error details for failed operations |
+| `InterruptionComponent` | Signals graceful stop with partial content preservation (user or system requested) |
+| `TerminalComponent` | Signals agent completion |
 | `TerminalComponent` | Signals agent completion |
 | `ToolApprovalComponent` | Policy-based tool call filtering |
 | `SandboxConfigComponent` | Execution limits for tools |
@@ -247,6 +249,7 @@ World
 | `TaskComponent` | Multi-step task definition and tracking |
 | `ScratchbookRefComponent` | Reference to a scratchbook artifact |
 | `ScratchbookIndexComponent` | Index of scratchbook artifacts |
+| `ChildStubComponent` | Marker for parent-world stub entities tracking delegated child subagents; skipped by `ReasoningSystem` |
 
 ## Examples
 

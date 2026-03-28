@@ -44,6 +44,7 @@ The `World` is the primary entry point for interacting with the ECS. It integrat
 - `get_component(self, entity_id: EntityId, component_type: type[T]) -> T | None`: Finds a component for an entity.
 - `remove_component(self, entity_id: EntityId, component_type: type[Any]) -> None`: Removes a component.
 - `has_component(self, entity_id: EntityId, component_type: type[Any]) -> bool`: Verifies if an entity has a component.
+- `has_entity(self, entity_id: EntityId) -> bool`: Returns `True` if the entity exists in this world.
 - `delete_entity(self, entity_id: EntityId) -> None`: Fully removes an entity and its data.
 - `register_system(self, system: System, priority: int) -> None`: Adds a system to the executor with a set priority.
 - `async process(self) -> None`: Triggers the system execution cycle.

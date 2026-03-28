@@ -1,6 +1,6 @@
 # Component Reference
 
-This page documents all 24 core component dataclasses used in the ECS agent architecture. All components use `@dataclass(slots=True)` for memory efficiency and can be imported from `ecs_agent.components`.
+This page documents all 26 core component dataclasses used in the ECS agent architecture. All components use `@dataclass(slots=True)` for memory efficiency and can be imported from `ecs_agent.components`.
 
 ## Core Agent Components
 
@@ -319,6 +319,21 @@ from ecs_agent.components import OwnerComponent
 world.add_component(child, OwnerComponent(owner_id=root_agent_id))
 ```
 
+### ChildStubComponent
+Marker component placed on parent-world stub entities that track a delegated child subagent. Entities with this component are skipped by `ReasoningSystem` so the parent world never attempts LLM inference on delegation stubs.
+
+No fields — this is a pure marker component.
+
+**Added by:** `SubagentSystem` (on the parent-world stub entity at delegation time)
+**Checked by:** `ReasoningSystem` (skips entities that have this component)
+
+**Usage:**
+```python
+from ecs_agent.components import ChildStubComponent
+
+# Normally added automatically by SubagentSystem, not manually
+world.add_component(stub_entity, ChildStubComponent())
+```
 ### KVStoreComponent
 Provides a generic key-value store for custom system memory.
 
