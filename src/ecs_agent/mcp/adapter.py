@@ -58,7 +58,6 @@ class MCPSkillAdapter(ScriptSkill):
         self._mcp_client = mcp_client
         self._server_name = server_name
         self._converter = converter
-        self._manager = SkillManager()
         self._tool_bundle: dict[str, tuple[ToolSchema, ToolHandler]] = {}
         self._is_installing = False
         self._is_uninstalling = False
@@ -93,7 +92,7 @@ class MCPSkillAdapter(ScriptSkill):
         self._is_installing = True
         try:
             self._ensure_loaded()
-            self._manager.install(world, entity_id, self)
+            SkillManager().install(world, entity_id, self)
             # Publish MCPConnectedEvent after successful connection
             self._run_sync(
                 world.event_bus.publish(
