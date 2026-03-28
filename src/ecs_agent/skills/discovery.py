@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import importlib.util
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
+
+import yaml
 
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
+from ecs_agent.skills.catalog import SkillDescriptor, SkillType
 from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, SkillDiscoveryEvent
 
@@ -43,22 +47,15 @@ class _MCPClientConfig:
 
 
 class SkillDiscovery:
-    """Discover and load ScriptSkill implementations from filesystem paths.
-
-    Args:
-        skill_paths: List of directory paths to scan for Python modules containing ScriptSkill classes.
-    """
+    """Discover and load script-skill descriptors from filesystem paths."""
 
     def __init__(self, skill_paths: list[str | Path]) -> None:
         self.skill_paths = skill_paths
 
-    def discover(self) -> list[ScriptSkill]:
-        """Scan configured paths and return all discovered ScriptSkill instances.
+    def discover(self) -> list[SkillDescriptor]:
+        """Scan configured paths and return discovered script-skill descriptors."""
 
-        Returns:
-            List of ScriptSkill instances found in the configured paths.
-        """
-        skills: list[ScriptSkill] = []
+        descriptors: list[SkillDescriptor] = []
 
         for base_path in self.skill_paths:
             path = Path(base_path)
@@ -87,55 +84,59 @@ class SkillDiscovery:
 
                     for attr_name in dir(module):
                         obj = getattr(module, attr_name)
-                        # Skip non-classes
                         if not isinstance(obj, type):
                             continue
-                        # Skip the ScriptSkill protocol itself
                         if obj.__name__ == "ScriptSkill":
                             continue
-                        # Try to instantiate and check if it's a ScriptSkill
+
                         try:
                             skill_instance = obj()
-                            # Verify it's actually a ScriptSkill instance
                             if isinstance(skill_instance, ScriptSkill):
-                                skills.append(skill_instance)
+                                descriptors.append(
+                                    SkillDescriptor(
+                                        name=skill_instance.name,
+                                        skill_type=SkillType.SCRIPT,
+                                        source_path=file_path.resolve(),
+                                        metadata={},
+                                        _materializer=_build_script_materializer(obj),
+                                    )
+                                )
                                 logger.info(
                                     "skill_discovered",
                                     path=str(file_path),
                                     skill_name=skill_instance.name,
                                 )
                         except Exception:
-                            # Not a ScriptSkill class or instantiation failed
-                            # This is normal for non-ScriptSkill classes, don't log
                             continue
 
                 except Exception as exc:
                     logger.warning(
-                        "skill_load_failed", path=str(file_path), error=str(exc)
+                        "skill_load_failed",
+                        path=str(file_path),
+                        error=str(exc),
                     )
 
-        return skills
+        return descriptors
 
     def discover_and_install(
-        self, world: World, entity_id: EntityId, manager: "SkillManager"
+        self,
+        world: World,
+        entity_id: EntityId,
+        manager: "SkillManager",
     ) -> list[str]:
-        """Discover skills and install them via SkillManager.
+        """Discover script skills and install them via SkillManager."""
 
-        Args:
-            world: World instance for installation.
-            entity_id: Entity to install skills on.
-            manager: SkillManager to handle installation.
-
-        Returns:
-            List of installed skill names.
-        """
-
-        skills = self.discover()
+        descriptors = self.discover()
         skill_names: list[str] = []
 
-        for skill in skills:
-            manager.install(world, entity_id, skill)
-            skill_names.append(skill.name)
+        for descriptor in descriptors:
+            runtime_skill = descriptor.materialize()
+            if not isinstance(runtime_skill, ScriptSkill):
+                raise TypeError(
+                    f"Descriptor '{descriptor.name}' materialized a non-ScriptSkill object"
+                )
+            manager.install(world, entity_id, runtime_skill)
+            skill_names.append(descriptor.name)
 
         return skill_names
 
@@ -174,11 +175,17 @@ class DiscoveryManager:
             source_installed: list[str] = []
             source_errors: list[str] = []
 
-            for skill in discovered:
+            for descriptor in discovered:
                 try:
-                    manager.install(world, entity_id, skill)
-                    report.installed_skills.append(skill.name)
-                    source_installed.append(skill.name)
+                    runtime_skill = descriptor.materialize()
+                    if not isinstance(runtime_skill, ScriptSkill):
+                        raise TypeError(
+                            f"Descriptor '{descriptor.name}' materialized a non-ScriptSkill object"
+                        )
+
+                    manager.install(world, entity_id, runtime_skill)
+                    report.installed_skills.append(descriptor.name)
+                    source_installed.append(descriptor.name)
                 except Exception as exc:
                     error = str(exc)
                     report.failed_sources.append((source, error))
@@ -186,11 +193,12 @@ class DiscoveryManager:
 
             await world.event_bus.publish(
                 SkillDiscoveryEvent(
-                    source=source, skills_found=source_installed, errors=source_errors
+                    source=source,
+                    skills_found=source_installed,
+                    errors=source_errors,
                 )
             )
 
-        # Discover and install markdown skills if directories provided
         if directories:
             for base_dir in directories:
                 source = str(base_dir)
@@ -198,12 +206,18 @@ class DiscoveryManager:
                 md_source_errors: list[str] = []
 
                 try:
-                    markdown_skills = discover_skills([base_dir])
-                    for skill in markdown_skills:
+                    markdown_descriptors = discover_skills([base_dir])
+                    for descriptor in markdown_descriptors:
                         try:
-                            manager.index(world, entity_id, skill)
-                            report.installed_skills.append(skill.name)
-                            md_source_installed.append(skill.name)
+                            runtime_skill = descriptor.materialize()
+                            if not isinstance(runtime_skill, ScriptSkill):
+                                raise TypeError(
+                                    f"Descriptor '{descriptor.name}' materialized a non-ScriptSkill object"
+                                )
+
+                            manager.index(world, entity_id, runtime_skill)
+                            report.installed_skills.append(descriptor.name)
+                            md_source_installed.append(descriptor.name)
                         except Exception as exc:
                             error = str(exc)
                             report.failed_sources.append((source, error))
@@ -240,7 +254,9 @@ class DiscoveryManager:
 
                 await world.event_bus.publish(
                     SkillDiscoveryEvent(
-                        source=server_name, skills_found=[skill.name], errors=[]
+                        source=server_name,
+                        skills_found=[skill.name],
+                        errors=[],
                     )
                 )
             except Exception as exc:
@@ -263,7 +279,9 @@ class DiscoveryManager:
         return "mcp"
 
     def _to_mcp_component(
-        self, server_name: str, mcp_config: dict[str, Any]
+        self,
+        server_name: str,
+        mcp_config: dict[str, Any],
     ) -> _MCPClientConfig:
         transport_raw = mcp_config.get("transport_type", "stdio")
         transport_type = (
@@ -285,20 +303,12 @@ class DiscoveryManager:
         )
 
 
-def discover_skills(directories: list[Path]) -> list[ScriptSkill]:
-    """Discover markdown Skill instances from SKILL.md files.
+def discover_skills(directories: list[Path]) -> list[SkillDescriptor]:
+    """Discover markdown skill descriptors from SKILL.md files."""
 
-    Recursively scans directories for SKILL.md files and creates Skill instances.
-
-    Args:
-        directories: List of directory paths to scan
-
-    Returns:
-        List of markdown Skill instances found
-    """
     from ecs_agent.skills.skill import Skill
 
-    discovered_by_name: dict[str, ScriptSkill] = {}
+    discovered_by_name: dict[str, SkillDescriptor] = {}
     discovered_path_by_name: dict[str, str] = {}
 
     for base_dir in directories:
@@ -306,7 +316,6 @@ def discover_skills(directories: list[Path]) -> list[ScriptSkill]:
             logger.warning("skill_path_not_found", path=str(base_dir))
             continue
 
-        # Recursively find all SKILL.md files
         for skill_file in sorted(base_dir.rglob("SKILL.md")):
             try:
                 skill = Skill(skill_file)
@@ -317,6 +326,7 @@ def discover_skills(directories: list[Path]) -> list[ScriptSkill]:
                         skill_name=skill.name,
                     )
                     continue
+
                 skill_name = skill.name
                 if skill_name in discovered_by_name:
                     raise ValueError(
@@ -327,7 +337,14 @@ def discover_skills(directories: list[Path]) -> list[ScriptSkill]:
                         "Remove one SKILL.md or rename the skill."
                     )
 
-                discovered_by_name[skill_name] = cast(ScriptSkill, skill)
+                resolved_skill_file = skill_file.resolve()
+                discovered_by_name[skill_name] = SkillDescriptor(
+                    name=skill_name,
+                    skill_type=SkillType.MARKDOWN,
+                    source_path=resolved_skill_file,
+                    metadata=_read_frontmatter_metadata(skill_file),
+                    _materializer=_build_markdown_materializer(resolved_skill_file),
+                )
                 discovered_path_by_name[skill_name] = str(skill_file)
                 logger.info(
                     "skill_discovered",
@@ -343,3 +360,56 @@ def discover_skills(directories: list[Path]) -> list[ScriptSkill]:
                     error=str(exc),
                 )
     return list(discovered_by_name.values())
+
+
+def _build_script_materializer(skill_class: type[Any]) -> Callable[[], Any]:
+    def _materialize() -> Any:
+        return skill_class()
+
+    return _materialize
+
+
+def _build_markdown_materializer(skill_path: Path) -> Callable[[], Any]:
+    from ecs_agent.skills.skill import Skill
+
+    def _materialize() -> Any:
+        return Skill(skill_path)
+
+    return _materialize
+
+
+def _read_frontmatter_metadata(skill_file: Path) -> dict[str, Any]:
+    try:
+        raw = skill_file.read_bytes()
+    except Exception:
+        return {}
+
+    lines = [line.rstrip(b"\r") for line in raw.split(b"\n")]
+    first_non_empty_idx: int | None = None
+    for idx, line in enumerate(lines):
+        if line.strip():
+            first_non_empty_idx = idx
+            break
+
+    if first_non_empty_idx is None or lines[first_non_empty_idx] != b"---":
+        return {}
+
+    closing_idx: int | None = None
+    for idx in range(first_non_empty_idx + 1, len(lines)):
+        if lines[idx] == b"---":
+            closing_idx = idx
+            break
+
+    if closing_idx is None:
+        return {}
+
+    frontmatter_bytes = b"\n".join(lines[first_non_empty_idx + 1 : closing_idx])
+    try:
+        frontmatter_text = frontmatter_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return {}
+
+    parsed = yaml.safe_load(frontmatter_text)
+    if isinstance(parsed, dict):
+        return dict(parsed)
+    return {}
