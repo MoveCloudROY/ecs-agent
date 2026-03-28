@@ -12,7 +12,7 @@ import yaml
 
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
-from ecs_agent.skills.catalog import SkillDescriptor, SkillType
+from ecs_agent.skills.catalog import SkillDescriptor, SkillType, register as _catalog_register
 from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, SkillDiscoveryEvent
 
@@ -345,6 +345,7 @@ def discover_skills(directories: list[Path]) -> list[SkillDescriptor]:
                     metadata=_read_frontmatter_metadata(skill_file),
                     _materializer=_build_markdown_materializer(resolved_skill_file),
                 )
+                _catalog_register(discovered_by_name[skill_name])
                 discovered_path_by_name[skill_name] = str(skill_file)
                 logger.info(
                     "skill_discovered",

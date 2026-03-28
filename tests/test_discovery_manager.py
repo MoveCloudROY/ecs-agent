@@ -259,3 +259,67 @@ async def test_discovery_manager_markdown_name_collision_is_rejected(
     )
     assert report.installed_skills == []
     assert report.failed_sources == [(str(tmp_path), expected_error)]
+
+
+@pytest.mark.asyncio
+async def test_discovery_manager_auto_discover_registers_descriptors_in_catalog(
+    tmp_path: Path,
+) -> None:
+    """Discovered markdown skills must be registered as SkillDescriptor in the catalog."""
+    from ecs_agent.skills.catalog import clear_catalog, lookup
+
+    skill_dir = tmp_path / "skills" / "my-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: catalog-skill\ndescription: test\n---\nBody")
+
+    clear_catalog()
+    world = World()
+
+    entity_id = world.create_entity()
+
+    manager = SkillManager()
+
+
+    report = await DiscoveryManager().auto_discover_and_install(
+        world, entity_id, manager, directories=[tmp_path]
+    )
+
+    assert "catalog-skill" in report.installed_skills
+    descriptor = lookup("catalog-skill")
+    assert descriptor is not None
+    assert descriptor.name == "catalog-skill"
+    assert descriptor.metadata.get("description") == "test"
+    # Must be frozen — should not raise on access
+    assert hasattr(descriptor, "source_path")
+
+
+@pytest.mark.asyncio
+async def test_discovery_manager_auto_discover_indexes_skills_without_activating(
+    tmp_path: Path,
+) -> None:
+    """After discovery, entity has skill metadata but the skill is NOT yet activated."""
+    from ecs_agent.skills.catalog import clear_catalog
+    from ecs_agent.components.definitions import SkillComponent
+
+    skill_dir = tmp_path / "skills" / "lazy-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: lazy-skill\ndescription: lazy\n---\nBody")
+
+    clear_catalog()
+    world = World()
+
+    entity_id = world.create_entity()
+
+    manager = SkillManager()
+
+
+    report = await DiscoveryManager().auto_discover_and_install(
+        world, entity_id, manager, directories=[tmp_path]
+    )
+
+    assert "lazy-skill" in report.installed_skills
+    skill_comp = world.get_component(entity_id, SkillComponent)
+    assert skill_comp is not None
+    assert "lazy-skill" in skill_comp.skills
+    # Metadata-only: activated should be False at index time
+    assert skill_comp.skills["lazy-skill"].activated is False
