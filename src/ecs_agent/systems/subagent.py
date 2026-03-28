@@ -19,11 +19,12 @@ from ecs_agent.components import (
     SystemPromptComponent,
     ToolRegistryComponent,
 )
-from ecs_agent.components.definitions import SkillComponent, SkillMetadata
+from ecs_agent.components.definitions import SkillComponent, SkillMetadata, WorkspaceBindingComponent
 from ecs_agent.core.runner import Runner
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.skills.manager import SkillManager
+from ecs_agent.skills import catalog as _skill_catalog
 from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -1340,6 +1341,27 @@ class SubagentSystem:
                     ),
                 )
 
+        # Inherit parent workspace binding onto child entity when policy allows.
+        if policy.enabled:
+            parent_binding = parent_world.get_component(
+                parent_entity, WorkspaceBindingComponent
+            )
+            if parent_binding is not None:
+                child_world.add_component(
+                    child_world_entity_id,
+                    WorkspaceBindingComponent(
+                        workspace_root=parent_binding.workspace_root
+                    ),
+                )
+                # Also stamp the stub entity in the parent world (for test visibility).
+                if parent_child_entity is not None:
+                    parent_world.add_component(
+                        parent_child_entity,
+                        WorkspaceBindingComponent(
+                            workspace_root=parent_binding.workspace_root
+                        ),
+                    )
+
         child_world.register_system(ReasoningSystem(priority=0), priority=0)
         child_world.register_system(MemorySystem(), priority=10)
         child_world.register_system(
@@ -1385,10 +1407,16 @@ class SubagentSystem:
         policy: InheritancePolicy,
     ) -> ScriptSkill | None:
         if parent_skills is None or parent_tools is None:
+            catalog_skill = self._resolve_from_catalog(skill_name)
+            if catalog_skill is not None:
+                return catalog_skill
             return self._handle_missing_skill(parent_entity, skill_name, policy)
 
         metadata = parent_skills.skills.get(skill_name)
         if metadata is None:
+            catalog_skill = self._resolve_from_catalog(skill_name)
+            if catalog_skill is not None:
+                return catalog_skill
             return self._handle_missing_skill(parent_entity, skill_name, policy)
 
         tools: dict[str, tuple[ToolSchema, Any]] = {}
@@ -1420,6 +1448,14 @@ class SubagentSystem:
         raise ValueError(
             f"Invalid missing_skill_policy '{policy.missing_skill_policy}' for subagent inheritance"
         )
+
+    def _resolve_from_catalog(self, skill_name: str) -> ScriptSkill | None:
+        """Try to materialize a skill by name from the process-level catalog."""
+        descriptor = _skill_catalog.lookup(skill_name)
+        if descriptor is None:
+            return None
+        skill: ScriptSkill = descriptor.materialize()
+        return skill
 
     def _inherit_tool_to_target_entities(
         self,

@@ -3036,3 +3036,149 @@ def test_assemble_child_world_different_calls_produce_unique_names() -> None:
     w1, _ = system._assemble_child_world(world, parent, config)
     w2, _ = system._assemble_child_world(world, parent, config)
     assert w1.name != w2.name
+
+
+# ---------------------------------------------------------------------------
+# Task 8: catalog skill resolution + workspace inheritance
+# ---------------------------------------------------------------------------
+
+
+async def test_subagent_resolves_skill_from_catalog_when_not_in_parent() -> None:
+    """Subagent installs a skill from the global catalog even if parent never had it."""
+    from ecs_agent.skills import catalog
+    from ecs_agent.skills.catalog import SkillDescriptor, SkillType
+    from ecs_agent.skills.script_skill import ScriptSkill
+    from ecs_agent.skills.manager import SkillManager
+    from ecs_agent.components.definitions import SkillComponent
+    from pathlib import Path
+
+    class CatalogOnlySkill(ScriptSkill):
+        name: str = "catalog-only-skill"
+        description: str = "A skill that lives in the catalog but not on parent"
+
+        def tools(self) -> dict[str, tuple[ToolSchema, Any]]:
+            async def catalog_tool() -> str:
+                return "catalog_tool_result"
+
+            return {
+                "catalog_tool": (
+                    ToolSchema(
+                        name="catalog_tool",
+                        description="A tool from catalog-only skill",
+                        parameters={"type": "object", "properties": {}},
+                    ),
+                    catalog_tool,
+                )
+            }
+
+        def system_prompt(self) -> str:
+            return "Catalog skill system prompt"
+
+        def install(self, world: World, entity_id: EntityId) -> None:
+            pass
+
+        def uninstall(self, world: World, entity_id: EntityId) -> None:
+            pass
+
+    catalog.clear_catalog()
+    descriptor = SkillDescriptor(
+        name="catalog-only-skill",
+        skill_type=SkillType.SCRIPT,
+        source_path=Path("fake/catalog_only_skill"),
+        _materializer=CatalogOnlySkill,
+        metadata={},
+    )
+    catalog.register(descriptor)
+
+    world = World()
+    parent_entity = world.create_entity()
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    child_provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(
+        name="child",
+        provider=child_provider,
+        model="fake",
+        skills=["catalog-only-skill"],
+        inheritance_policy=InheritancePolicy(
+            missing_skill_policy="error",  # should NOT raise — catalog has it
+        ),
+    )
+
+    registry = SubagentRegistryComponent(subagents={"child": config})
+    world.add_component(parent_entity, registry)
+    _register_message_bus(world, parent_entity)
+
+    system = SubagentSystem()
+    await system.process(world)
+
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    delegate_handler = tool_registry.handlers["delegate"]
+
+    result = await delegate_handler(subagent_name="child", task="test task")
+    assert isinstance(result, str)
+
+    child_entity = _find_child_entity(world, parent_entity)
+
+    child_skills = world.get_component(child_entity, SkillComponent)
+    assert child_skills is not None, "Child should have SkillComponent after catalog skill install"
+    assert "catalog-only-skill" in child_skills.skills, (
+        "catalog-only-skill must be installed on child via catalog lookup"
+    )
+
+    child_tools = world.get_component(child_entity, ToolRegistryComponent)
+    assert child_tools is not None
+    assert "catalog_tool" in child_tools.handlers, "Child should have catalog_tool handler"
+    assert "catalog_tool" in child_tools.tools, "Child should have catalog_tool schema"
+
+    catalog.clear_catalog()
+
+
+async def test_subagent_inherits_parent_workspace_binding() -> None:
+    """Child entity inherits WorkspaceBindingComponent from parent when policy allows."""
+    from ecs_agent.components.definitions import (
+        WorkspaceBindingComponent,
+    )
+    from pathlib import Path
+
+    parent_workspace = Path("/tmp/parent-workspace")
+
+    world = World()
+    parent_entity = world.create_entity()
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(parent_entity, WorkspaceBindingComponent(workspace_root=parent_workspace))
+
+    child_provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(
+        name="child",
+        provider=child_provider,
+        model="fake",
+        inheritance_policy=InheritancePolicy(enabled=True),
+    )
+
+    registry = SubagentRegistryComponent(subagents={"child": config})
+    world.add_component(parent_entity, registry)
+    _register_message_bus(world, parent_entity)
+
+    system = SubagentSystem()
+    await system.process(world)
+
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    delegate_handler = tool_registry.handlers["delegate"]
+
+    result = await delegate_handler(subagent_name="child", task="test task")
+    assert isinstance(result, str)
+
+    child_entity = _find_child_entity(world, parent_entity)
+
+    child_binding = world.get_component(child_entity, WorkspaceBindingComponent)
+    assert child_binding is not None, "Child should inherit WorkspaceBindingComponent from parent"
+    assert child_binding.workspace_root == parent_workspace, (
+        "Child workspace root must match parent workspace root"
+    )
