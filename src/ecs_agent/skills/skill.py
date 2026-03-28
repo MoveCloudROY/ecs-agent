@@ -4,6 +4,7 @@ Loads skills from SKILL.md files with YAML frontmatter.
 """
 
 import asyncio
+import copy
 import logging
 import json
 import re
