@@ -12,6 +12,7 @@ from ecs_agent.components import (
     RenderedSystemPromptComponent,
     SkillComponent,
     SubagentRegistryComponent,
+    SystemPromptComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
@@ -44,12 +45,30 @@ class SystemPromptRenderSystem:
 
     async def process(self, world: World) -> None:
         for entity_id, (prompt_config,) in world.query(SystemPromptConfigSpec):
-            if world.get_component(entity_id, RenderedSystemPromptComponent) is not None:
-                continue
+            cache_key = _render_cache_key(world, entity_id)
+            rendered_component = world.get_component(
+                entity_id, RenderedSystemPromptComponent
+            )
+            if rendered_component is not None:
+                previous_cache_key = rendered_component.placeholder_snapshot.get(
+                    "_cache_key"
+                )
+                if previous_cache_key == cache_key:
+                    _bridge_rendered_prompt(world, entity_id, rendered_component.text)
+                    continue
+                world.remove_component(entity_id, RenderedSystemPromptComponent)
+
+                logger.debug(
+                    "system_prompt_render_invalidated",
+                    entity_id=entity_id,
+                    previous_cache_key=previous_cache_key,
+                    current_cache_key=cache_key,
+                )
             try:
                 rendered, snapshot = _render_system_prompt(
                     world, entity_id, prompt_config
                 )
+                snapshot["_cache_key"] = cache_key
                 world.add_component(
                     entity_id,
                     RenderedSystemPromptComponent(
@@ -66,9 +85,7 @@ class SystemPromptRenderSystem:
                     prompt_text=rendered,
                 )
 
-                llm_component = world.get_component(entity_id, LLMComponent)
-                if llm_component is not None:
-                    llm_component.system_prompt = rendered
+                _bridge_rendered_prompt(world, entity_id, rendered)
             except Exception as exc:
                 logger.error(
                     "system_prompt_render_failed",
@@ -125,6 +142,27 @@ def _resolve_builtin_placeholders(world: World, entity_id: EntityId) -> dict[str
         "_installed_mcps": _format_bullets(_mcp_tool_entries(world, entity_id)),
         "_installed_subagents": _format_bullets(_subagent_entries(world, entity_id)),
     }
+
+
+def _render_cache_key(world: World, entity_id: EntityId) -> str:
+    tool_names = tuple(name for name, _ in _tool_entries(world, entity_id))
+    skill_names = tuple(name for name, _ in _skill_entries(world, entity_id))
+    subagent_names = tuple(name for name, _ in _subagent_entries(world, entity_id))
+    return (
+        f"tools:{','.join(tool_names)}|"
+        f"skills:{','.join(skill_names)}|"
+        f"subagents:{','.join(subagent_names)}"
+    )
+
+
+def _bridge_rendered_prompt(world: World, entity_id: EntityId, rendered: str) -> None:
+    llm_component = world.get_component(entity_id, LLMComponent)
+    if llm_component is not None:
+        llm_component.system_prompt = rendered
+
+    legacy_system_prompt = world.get_component(entity_id, SystemPromptComponent)
+    if legacy_system_prompt is not None:
+        legacy_system_prompt.content = rendered
 
 
 def _tool_entries(world: World, entity_id: EntityId) -> list[tuple[str, str]]:
