@@ -1,15 +1,17 @@
-"""Agent DSL Markdown example - Load agent configuration from Markdown file.
+"""Agent DSL Markdown example - Load agent configuration from Markdown files.
 
 This example demonstrates:
-- Loading agent specification from a Markdown file using Agent DSL
+- Loading agent specifications from Markdown files using Agent DSL
 - Markdown format: YAML frontmatter (config) + markdown body (prompt)
+- Loading both primary agent (assistant.md) and subagent (researcher.md)
+- Compiling multiple specs into ECS World with subagent registry
 - Dual-mode LLM provider selection (FakeProvider or OpenAIProvider)
-- Compiling DSL spec into ECS World with primary entity
 - Running the agent with conversation history
 
-The Markdown file (assistant.md) contains:
+The Markdown files contain:
 - YAML frontmatter: mode, model, tools, metadata
 - Markdown body: System prompt with formatting
+- Subagent registry built from compiled specs
 
 Without LLM_API_KEY: Uses FakeProvider for deterministic testing
 With LLM_API_KEY: Uses OpenAIProvider with DashScope/Qwen
@@ -19,9 +21,9 @@ import asyncio
 import os
 from pathlib import Path
 
-from ecs_agent.components import ConversationComponent
+from ecs_agent.components import ConversationComponent, SubagentRegistryComponent
 from ecs_agent.core import Runner
-from ecs_agent.dsl import compile_agent_specs, load_markdown_agent
+from ecs_agent.dsl import compile_agent_specs, load_markdown_agent, resolve_agent_specs
 from ecs_agent.logging import configure_logging
 from ecs_agent.providers import FakeProvider, OpenAIProvider
 from ecs_agent.providers.protocol import LLMProvider
@@ -73,19 +75,24 @@ async def main() -> None:
     config_path = Path(__file__).parent / "assistant.md"
     print(f"Loading agent configuration from: {config_path}")
 
+    # Load primary agent
     spec = load_markdown_agent(config_path)
-    print("Loaded agent specification:")
-    print(f"  - Name: {spec.name} (from filename)")
-    print(f"  - Mode: {spec.mode}")
-    print(f"  - Model: {spec.model}")
-    print(f"  - Prompt length: {len(spec.prompt)} characters")
-    print(f"  - Tools: {list(spec.tools.keys()) if spec.tools else 'none'}")
+    # Load subagent
+    researcher_path = Path(__file__).parent / "researcher.md"
+    researcher_spec = load_markdown_agent(researcher_path)
+    print("Loaded agent specifications:")
+    for s in [spec, researcher_spec]:
+        print(f"  - {s.name}: mode={s.mode}, model={s.model}")
 
-    # Compile spec into ECS World
-    print("\nCompiling agent spec into ECS World...")
-    specs = {spec.name: spec}
+    # Compile both specs into ECS World
+    print("\nCompiling agent specs into ECS World...")
+    specs = resolve_agent_specs([spec, researcher_spec])
     primary_entity, world = compile_agent_specs(specs, provider_factory=create_provider)
-    print(f"Created primary entity: {primary_entity}")
+
+    # Print subagent registry
+    registry = world.get_component(primary_entity, SubagentRegistryComponent)
+    if registry and registry.subagents:
+        print(f"Subagent registry: {list(registry.subagents.keys())}")
 
     # Add conversation with initial user message
     initial_message = Message(

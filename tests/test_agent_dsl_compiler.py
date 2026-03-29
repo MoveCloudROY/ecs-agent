@@ -8,10 +8,10 @@ from ecs_agent.components import (
     LLMComponent,
     PermissionComponent,
     SubagentRegistryComponent,
-    SystemPromptComponent,
 )
 from ecs_agent.core import World
 from ecs_agent.dsl.schema import AgentSpec
+from ecs_agent.prompts.contracts import SystemPromptConfigSpec
 from ecs_agent.types import SubagentConfig
 
 
@@ -91,7 +91,7 @@ def test_compile_primary_and_subagent_creates_runnable_world() -> None:
     ]
 
 
-def test_compile_links_markdown_prompt_into_system_prompt_component() -> None:
+def test_compile_links_markdown_prompt_into_system_prompt_config_spec() -> None:
     from ecs_agent.dsl.compiler import compile_agent_specs
 
     specs = {
@@ -104,11 +104,14 @@ def test_compile_links_markdown_prompt_into_system_prompt_component() -> None:
     }
 
     primary_entity_id, world = compile_agent_specs(specs, _ProviderFactorySpy())
-    system_prompt = world.get_component(primary_entity_id, SystemPromptComponent)
+    system_prompt = world.get_component(primary_entity_id, SystemPromptConfigSpec)
 
     assert system_prompt is not None
-    assert system_prompt.template == "## Role\n\nYou are a markdown-defined assistant."
-    assert system_prompt.content == "## Role\n\nYou are a markdown-defined assistant."
+    assert (
+        system_prompt.template_source.inline
+        == "## Role\n\nYou are a markdown-defined assistant."
+    )
+    assert system_prompt.placeholders == []
 
 
 def test_compile_missing_primary_raises_value_error() -> None:
