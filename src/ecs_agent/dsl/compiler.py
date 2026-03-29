@@ -3,17 +3,28 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Literal, cast
 
 from ecs_agent.components import (
     LLMComponent,
     PermissionComponent,
     SubagentRegistryComponent,
-    SystemPromptComponent,
 )
+from ecs_agent.components.definitions import UserPromptConfigComponent
 from ecs_agent.core import World
 from ecs_agent.dsl.schema import AgentSpec
 from ecs_agent.logging import get_logger
+from ecs_agent.prompts.contracts import (
+    PlaceholderSpec,
+    PromptTemplateSource,
+    SystemPromptConfigSpec,
+    TriggerSpec,
+)
 from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
+from ecs_agent.systems.user_prompt_normalization_system import (
+    UserPromptNormalizationSystem,
+)
 from ecs_agent.types import EntityId, SubagentConfig
 
 logger = get_logger(__name__)
@@ -50,13 +61,40 @@ def compile_agent_specs(
             system_prompt=primary_spec.prompt,
         ),
     )
+    placeholder_specs = [
+        PlaceholderSpec(name=ph["name"], value=ph["value"])
+        for ph in primary_spec.placeholders
+    ]
     world.add_component(
         primary_entity,
-        SystemPromptComponent(
-            template=primary_spec.prompt,
-            content=primary_spec.prompt,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline=primary_spec.prompt),
+            placeholders=placeholder_specs,
         ),
     )
+
+    if primary_spec.triggers:
+        trigger_specs = [
+            TriggerSpec(
+                pattern=cast(str, t["pattern"]),
+                match_mode=cast(
+                    Literal["keyword", "prefix", "contains"],
+                    t["match_mode"],
+                ),
+                action=cast(Literal["replace", "inject"], t["action"]),
+                content=cast(str, t["content"]),
+                priority=int(t.get("priority", 0)),
+            )
+            for t in primary_spec.triggers
+        ]
+        world.add_component(
+            primary_entity,
+            UserPromptConfigComponent(triggers=trigger_specs),
+        )
+
+    world.register_system(SystemPromptRenderSystem(), priority=-20)
+    if primary_spec.triggers:
+        world.register_system(UserPromptNormalizationSystem(), priority=-10)
 
     # Add permission component if tools are specified
     if primary_spec.tools:
