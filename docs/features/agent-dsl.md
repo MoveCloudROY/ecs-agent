@@ -53,18 +53,16 @@ class AgentSpec:
 {
   "assistant": {
     "mode": "primary",
-    "model": "gpt-4",
-    "prompt": "You are a helpful assistant.",
-    "tools": {
-      "read_file": true,
-      "write_file": true,
-      "execute_bash": false
-    }
+    "model": "qwen3.5-flash",
+    "prompt": "You are a manager agent. When given a complex question, use the 'subagent' tool to delegate work to background workers. After receiving the results, synthesize them into a concise summary.\n\nAvailable tools:\n${_installed_tools}\n\nAvailable subagents:\n${_installed_subagents}\n\nSession: ${session_label}",
+    "placeholders": [
+      {"name": "session_label", "value": "subagent-delegation-demo"}
+    ]
   },
   "researcher": {
     "mode": "subagent",
-    "model": "gpt-3.5-turbo",
-    "prompt": "You are a research specialist."
+    "model": "qwen3.5-flash",
+    "prompt": "You are a research sub-agent. Investigate the given topic thoroughly and report your findings back to the manager."
   }
 }
 ```
@@ -107,31 +105,21 @@ Filename: `assistant.md`
 ```markdown
 ---
 mode: primary
-model: claude-3-opus
-tools:
-  analyze_code: true
-  run_tests: true
-  git_commit: false
-metadata:
-  department: engineering
-  priority: high
+model: qwen3.5-flash
+placeholders:
+  - name: session_label
+    value: subagent-delegation-demo
 ---
 
-# Code Review Assistant
+You are a manager agent. When given a complex question, use the 'subagent' tool to delegate work to background workers. After receiving the results, synthesize them into a concise summary.
 
-You are an expert code reviewer. Your responsibilities:
+Available tools:
+${_installed_tools}
 
-1. Analyze code for bugs and security issues
-2. Check adherence to style guidelines
-3. Suggest improvements for readability
-4. Run automated tests before approval
+Available subagents:
+${_installed_subagents}
 
-## Review Checklist
-
-- [ ] Code is well-documented
-- [ ] Edge cases handled
-- [ ] Tests present and passing
-- [ ] No security vulnerabilities
+Session: ${session_label}
 ```
 
 **Key Points:**
@@ -205,7 +193,8 @@ primary_entity, world = compile_agent_specs(resolved, provider_factory)
 
 **5. compile_agent_specs(specs: dict[str, AgentSpec], factory) → tuple[EntityId, World]**
 - Creates exactly ONE runnable primary entity
-- Attaches `LLMComponent`, `SystemPromptConfigSpec`, `PermissionComponent`, `SubagentRegistryComponent`. Conditionally attaches `UserPromptConfigComponent` (when `triggers` present). Auto-registers `SystemPromptRenderSystem` (priority `-20`) and optionally `UserPromptNormalizationSystem` (priority `-10`).
+- Creates exactly ONE runnable primary entity
+- Attaches `LLMComponent`, `SystemPromptConfigSpec`, `PermissionComponent` (when `tools` present), `SubagentRegistryComponent`, `UserPromptConfigComponent` (always), `ToolRegistryComponent` (always). When subagents are declared, also attaches `SubagentSessionTableComponent` and installs `SubagentSystem` with the `subagent` tool. Auto-registers `SystemPromptRenderSystem` (priority `-20`) and `UserPromptNormalizationSystem` (priority `-10`) unconditionally.
 - Subagents become `SubagentConfig` in registry
 - Raises `ValueError` if zero or multiple primaries
 
@@ -399,8 +388,9 @@ Declare trigger rules that inject context into user messages via `UserPromptNorm
 ### Compilation
 
 When `triggers` are present, `compile_agent_specs`:
-1. Attaches `UserPromptConfigComponent` with `TriggerSpec` objects to the primary entity
-2. Auto-registers `UserPromptNormalizationSystem` at priority `-10`
+1. Attaches `UserPromptConfigComponent` with the declared `TriggerSpec` objects to the primary entity
+
+`UserPromptNormalizationSystem` (priority `-10`) is **always** registered regardless of whether triggers are present, because skill slash-command injection also requires it.
 
 
 ## Skills

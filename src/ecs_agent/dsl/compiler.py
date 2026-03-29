@@ -10,6 +10,8 @@ from ecs_agent.components import (
     LLMComponent,
     PermissionComponent,
     SubagentRegistryComponent,
+    SubagentSessionTableComponent,
+    ToolRegistryComponent,
 )
 from ecs_agent.components.definitions import UserPromptConfigComponent
 from ecs_agent.core import World
@@ -29,6 +31,7 @@ from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSyst
 from ecs_agent.systems.user_prompt_normalization_system import (
     UserPromptNormalizationSystem,
 )
+from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.types import EntityId, SubagentConfig
 
 logger = get_logger(__name__)
@@ -97,10 +100,11 @@ def compile_agent_specs(
             primary_entity,
             UserPromptConfigComponent(triggers=trigger_specs),
         )
+    else:
+        world.add_component(primary_entity, UserPromptConfigComponent())
 
     world.register_system(SystemPromptRenderSystem(), priority=-20)
-    if primary_spec.triggers:
-        world.register_system(UserPromptNormalizationSystem(), priority=-10)
+    world.register_system(UserPromptNormalizationSystem(), priority=-10)
 
     # Add permission component if tools are specified
     if primary_spec.tools:
@@ -135,6 +139,10 @@ def compile_agent_specs(
                     entity_id=int(primary_entity),
                     skill_name=skill_obj.name,
                 )
+    # Always attach ToolRegistryComponent so skills and subagent tools have
+    # a registry to write into, regardless of whether subagents are declared.
+    world.add_component(primary_entity, ToolRegistryComponent(tools={}, handlers={}))
+
     subagents: dict[str, SubagentConfig] = {}
     for agent_name, spec in specs.items():
         if spec.mode != "subagent":
@@ -147,6 +155,20 @@ def compile_agent_specs(
         )
 
     world.add_component(primary_entity, SubagentRegistryComponent(subagents=subagents))
+
+    if subagents:
+        world.add_component(
+            primary_entity, SubagentSessionTableComponent(sessions={})
+        )
+        subagent_system = SubagentSystem(priority=-1)
+        world.register_system(subagent_system, priority=-1)
+        subagent_system.install_subagent_tool(world, primary_entity)
+        subagent_system.install_subagent_control_tools(world, primary_entity)
+        logger.info(
+            "agent_subagent_system_installed",
+            entity_id=int(primary_entity),
+            subagent_count=len(subagents),
+        )
 
     logger.info(
         "agent_specs_compiled",
