@@ -68,10 +68,13 @@ def render_full_skill_context(
 class SkillManager:
     _DETAILS_TOOL_NAME = "load_skill_details"
 
-    def __init__(self) -> None:
-        self._installed_skills: dict[tuple[EntityId, str], ScriptSkill] = {}
-
     def index(self, world: World, entity_id: EntityId, skill: ScriptSkill) -> None:
+        materialized_skill = world.skill_runtime.materialize_skill_for_entity(
+            world,
+            entity_id,
+            skill,
+        )
+
         registry = world.get_component(entity_id, ToolRegistryComponent)
         if registry is None:
             registry = ToolRegistryComponent(tools={}, handlers={})
@@ -81,8 +84,12 @@ class SkillManager:
 
         # Tool bundles are pure tool collections — they are not listed as skills.
         # Skip SkillComponent registration entirely.
-        if getattr(skill, "is_tool_bundle", False):
-            self._installed_skills[(entity_id, skill.name)] = skill
+        if getattr(materialized_skill, "is_tool_bundle", False):
+            world.skill_runtime.set_installed_skill(
+                entity_id,
+                materialized_skill.name,
+                materialized_skill,
+            )
             return
 
         skill_component = world.get_component(entity_id, SkillComponent)
@@ -90,24 +97,32 @@ class SkillManager:
             skill_component = SkillComponent(skills={})
             world.add_component(entity_id, skill_component)
 
-        skill_component.skills[skill.name] = SkillMetadata(
-            name=skill.name,
-            description=skill.description,
+        skill_component.skills[materialized_skill.name] = SkillMetadata(
+            name=materialized_skill.name,
+            description=materialized_skill.description,
             tool_names=[],
             has_system_prompt=False,
             activated=False,
-            user_invocable=getattr(skill, "user_invocable", True),
-            disable_model_invocation=getattr(skill, "disable_model_invocation", False),
-            argument_hint=getattr(skill, "argument_hint", ""),
-            allowed_tools=getattr(skill, "allowed_tools", []),
-            context=getattr(skill, "context", None),
-            agent=getattr(skill, "agent", None),
-            model=getattr(skill, "model", None),
-            hooks=getattr(skill, "hooks", {}),
-            skill_dir_path=getattr(skill, "skill_dir_path", None),
-            slash_command=getattr(skill, "slash_command", f"/{skill.name}"),
+            user_invocable=getattr(materialized_skill, "user_invocable", True),
+            disable_model_invocation=getattr(
+                materialized_skill,
+                "disable_model_invocation",
+                False,
+            ),
+            argument_hint=getattr(materialized_skill, "argument_hint", ""),
+            allowed_tools=getattr(materialized_skill, "allowed_tools", []),
+            context=getattr(materialized_skill, "context", None),
+            agent=getattr(materialized_skill, "agent", None),
+            model=getattr(materialized_skill, "model", None),
+            hooks=getattr(materialized_skill, "hooks", {}),
+            skill_dir_path=getattr(materialized_skill, "skill_dir_path", None),
+            slash_command=getattr(
+                materialized_skill,
+                "slash_command",
+                f"/{materialized_skill.name}",
+            ),
             substitution_variables=getattr(
-                skill,
+                materialized_skill,
                 "substitution_variables",
                 [
                     "$ARGUMENTS",
@@ -118,14 +133,18 @@ class SkillManager:
                 ],
             ),
         )
-        self._installed_skills[(entity_id, skill.name)] = skill
+        world.skill_runtime.set_installed_skill(
+            entity_id,
+            materialized_skill.name,
+            materialized_skill,
+        )
 
     def activate(self, world: World, entity_id: EntityId, skill_name: str) -> None:
         skill_component = world.get_component(entity_id, SkillComponent)
         metadata = (
             None if skill_component is None else skill_component.skills.get(skill_name)
         )
-        skill = self._installed_skills.get((entity_id, skill_name))
+        skill = world.skill_runtime.get_installed_skill(entity_id, skill_name)
         if skill is None:
             raise ValueError(
                 f"Skill '{skill_name}' is not indexed for entity {entity_id}."
@@ -177,7 +196,9 @@ class SkillManager:
                 if refreshed_skill_component is None
                 else refreshed_skill_component.skills.get(skill_name)
             )
-            target_metadata = refreshed_metadata if refreshed_metadata is not None else metadata
+            target_metadata = (
+                refreshed_metadata if refreshed_metadata is not None else metadata
+            )
             assert target_metadata is not None
             target_metadata.has_system_prompt = bool(prompt)
             target_metadata.activated = True
@@ -212,7 +233,7 @@ class SkillManager:
         self.activate(world, entity_id, skill.name)
 
     def uninstall(self, world: World, entity_id: EntityId, skill_name: str) -> None:
-        skill = self._installed_skills.get((entity_id, skill_name))
+        skill = world.skill_runtime.get_installed_skill(entity_id, skill_name)
         is_tool_bundle = skill is not None and getattr(skill, "is_tool_bundle", False)
 
         if is_tool_bundle:
@@ -222,7 +243,7 @@ class SkillManager:
                 for tool_name in skill.tools():
                     registry.tools.pop(tool_name, None)
                     registry.handlers.pop(tool_name, None)
-            self._installed_skills.pop((entity_id, skill_name), None)
+            world.skill_runtime.pop_installed_skill(entity_id, skill_name)
             if skill is not None:
                 skill.uninstall(world, entity_id)
             self._cleanup_skill_details_tool(world, entity_id)
@@ -246,7 +267,7 @@ class SkillManager:
                 registry.tools.pop(tool_name, None)
                 registry.handlers.pop(tool_name, None)
 
-        self._installed_skills.pop((entity_id, skill_name), None)
+        world.skill_runtime.pop_installed_skill(entity_id, skill_name)
         if skill is not None:
             skill.uninstall(world, entity_id)
 
@@ -260,19 +281,14 @@ class SkillManager:
                 skill_name=skill_name,
             ),
         )
+
     def list_skills(self, world: World, entity_id: EntityId) -> list[SkillMetadata]:
-        skill_component = world.get_component(entity_id, SkillComponent)
-        if skill_component is None:
-            return []
-        return list(skill_component.skills.values())
+        return world.skill_runtime.list_skills(world, entity_id)
 
     def get_skill_metadata(
         self, world: World, entity_id: EntityId, skill_name: str
     ) -> SkillMetadata | None:
-        skill_component = world.get_component(entity_id, SkillComponent)
-        if skill_component is None:
-            return None
-        return skill_component.skills.get(skill_name)
+        return world.skill_runtime.get_skill_metadata(world, entity_id, skill_name)
 
     def can_invoke_via_slash(
         self, world: World, entity: EntityId, slash_cmd: str
@@ -304,7 +320,7 @@ class SkillManager:
     def format_skill_details(
         self, world: World, entity_id: EntityId, skill_name: str
     ) -> str | None:
-        skill = self._installed_skills.get((entity_id, skill_name))
+        skill = world.skill_runtime.get_installed_skill(entity_id, skill_name)
 
         if skill is not None and getattr(skill, "is_tool_bundle", False):
             # Tool bundles are not in SkillComponent; build details directly.
@@ -366,10 +382,10 @@ class SkillManager:
                 "provides, so you know exactly what each tool does and how to call it.\n"
                 "\n"
                 "Usage:\n"
-                "  load_skill_details(skill_name=\"<name>\")\n"
+                '  load_skill_details(skill_name="<name>")\n'
                 "\n"
                 "Where <name> is one of the skill names listed under Available Skills.\n"
-                "Example: load_skill_details(skill_name=\"ui-navigator\")"
+                'Example: load_skill_details(skill_name="ui-navigator")'
             ),
             parameters={
                 "type": "object",

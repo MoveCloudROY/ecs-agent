@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from ecs_agent.core.component import ComponentStore
 from ecs_agent.core.entity import EntityIdGenerator
@@ -14,6 +14,9 @@ from ecs_agent.logging import STANDARD_EVENT_NAMES, get_logger
 logger = get_logger(__name__)
 T = TypeVar("T")
 
+if TYPE_CHECKING:
+    from ecs_agent.skills.runtime import SkillRuntime
+
 
 class World:
     def __init__(self, name: str | None = None) -> None:
@@ -23,6 +26,7 @@ class World:
         self._systems = SystemExecutor()
         self._event_bus = EventBus()
         self._query = Query(self._components)
+        self._skill_runtime: SkillRuntime | None = None
         self._entity_registry: dict[str, EntityId] = {}
         self._entity_tags: dict[str, set[EntityId]] = {}
         self._entity_ids: set[EntityId] = set()
@@ -35,10 +39,23 @@ class World:
     def name(self) -> str | None:
         """Optional human-readable name for this World instance."""
         return self._name
+
+    @property
+    def skill_runtime(self) -> SkillRuntime:
+        if self._skill_runtime is None:
+            from ecs_agent.skills.runtime import SkillRuntime
+
+            self._skill_runtime = SkillRuntime()
+        return self._skill_runtime
+
     def create_entity(self) -> EntityId:
         entity_id = self._entity_gen.next()
         self._entity_ids.add(entity_id)
-        logger.debug(STANDARD_EVENT_NAMES["ENTITY_CREATED"], entity_id=int(entity_id), world_name=self._name)
+        logger.debug(
+            STANDARD_EVENT_NAMES["ENTITY_CREATED"],
+            entity_id=int(entity_id),
+            world_name=self._name,
+        )
         return entity_id
 
     def add_component(self, entity_id: EntityId, component: Any) -> None:
@@ -72,20 +89,20 @@ class World:
         self, entity_id: EntityId, name: str, tags: set[str] | None = None
     ) -> None:
         """Register entity with unique name and optional tags.
-        
+
         Args:
             entity_id: Entity to register
             name: Unique name for entity lookup
             tags: Optional set of tags for entity grouping
-            
+
         Raises:
             ValueError: If name already registered
         """
         if name in self._entity_registry:
             raise ValueError(f"Entity name '{name}' already registered")
-        
+
         self._entity_registry[name] = entity_id
-        
+
         if tags:
             for tag in tags:
                 if tag not in self._entity_tags:
@@ -94,10 +111,10 @@ class World:
 
     def resolve_entity(self, name: str) -> EntityId | None:
         """Lookup entity by registered name.
-        
+
         Args:
             name: Registered entity name
-            
+
         Returns:
             EntityId if found, None otherwise
         """
@@ -105,10 +122,10 @@ class World:
 
     def list_entities_by_tag(self, tag: str) -> list[EntityId]:
         """Find all entities with given tag.
-        
+
         Args:
             tag: Tag to search for
-            
+
         Returns:
             List of entity IDs with the tag (empty if tag not found)
         """
@@ -116,7 +133,7 @@ class World:
 
     def unregister_entity(self, entity_id: EntityId) -> None:
         """Remove entity from registry and tag indexes.
-        
+
         Args:
             entity_id: Entity to unregister
         """
@@ -126,13 +143,14 @@ class World:
             if eid == entity_id:
                 name_to_remove = name
                 break
-        
+
         if name_to_remove:
             del self._entity_registry[name_to_remove]
-        
+
         # Remove from all tag indexes
         for tag_set in self._entity_tags.values():
             tag_set.discard(entity_id)
+
     def register_system(self, system: System, priority: int) -> SystemHandle:
         return self._systems.register(system, priority)
 

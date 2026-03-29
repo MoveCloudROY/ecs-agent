@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from ecs_agent.core.world import World
+from ecs_agent.skills.catalog import SkillType
 from ecs_agent.skills.discovery import SkillDiscovery, discover_skills
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.skill import Skill
@@ -45,7 +46,7 @@ class DemoSkill(ScriptSkill):
 
     assert len(skills) == 1
     assert skills[0].name == "demo"
-    assert skills[0].description == "Demo skill"
+    assert skills[0].materialize().description == "Demo skill"
 
 
 def test_skill_discovery_skips_non_skill_classes(tmp_path: Path) -> None:
@@ -325,7 +326,7 @@ def test_discover_skills_returns_metadata_without_eager_system_prompt_call(
 
     assert len(skills) == 1
     assert skills[0].name == "lazy"
-    assert skills[0].description == "metadata only"
+    assert skills[0].metadata["description"] == "metadata only"
 
 
 def test_discover_skills_skips_invalid_file_and_keeps_valid_skills(
@@ -348,8 +349,7 @@ def test_discover_skills_skips_invalid_file_and_keeps_valid_skills(
 
     assert [skill.name for skill in skills] == ["valid"]
     assert any(
-        "skill_invalid" in record.getMessage()
-        or "invalid_yaml" in record.getMessage()
+        "skill_invalid" in record.getMessage() or "invalid_yaml" in record.getMessage()
         for record in caplog.records
     )
 
@@ -377,3 +377,66 @@ def test_discover_skills_duplicate_name_conflict_raises_value_error(
         f"'{first / 'SKILL.md'}' and '{second / 'SKILL.md'}'. "
         "Remove one SKILL.md or rename the skill."
     )
+
+
+def test_discover_skills_returns_markdown_descriptors(tmp_path: Path) -> None:
+    skill_dir = tmp_path / ".claude" / "skills" / "writer"
+    skill_dir.mkdir(parents=True)
+    skill_path = skill_dir / "SKILL.md"
+    skill_path.write_text(
+        "---\nname: writer\ndescription: Compose docs\nversion: 1.2.0\ncategory: docs\n---\nBody"
+    )
+
+    descriptors = discover_skills([tmp_path])
+
+    assert len(descriptors) == 1
+    descriptor = descriptors[0]
+    assert descriptor.name == "writer"
+    assert descriptor.skill_type is SkillType.MARKDOWN
+    assert descriptor.source_path == skill_path
+    assert descriptor.metadata["description"] == "Compose docs"
+    assert descriptor.metadata["version"] == "1.2.0"
+    assert descriptor.metadata["category"] == "docs"
+
+    runtime_skill = descriptor.materialize()
+    assert isinstance(runtime_skill, Skill)
+    assert runtime_skill.name == "writer"
+
+
+def test_script_discovery_returns_descriptors(tmp_path: Path) -> None:
+    skill_file = tmp_path / "demo_skill.py"
+    skill_file.write_text(
+        """
+from collections.abc import Awaitable, Callable
+from ecs_agent.core.world import World
+from ecs_agent.skills.script_skill import ScriptSkill
+from ecs_agent.types import EntityId, ToolSchema
+
+
+class DemoSkill(ScriptSkill):
+    name = "demo"
+    description = "Demo skill"
+
+    def tools(self) -> dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]]:
+        return {}
+
+    def system_prompt(self) -> str:
+        return ""
+
+    def install(self, world: World, entity_id: EntityId) -> None:
+        pass
+
+    def uninstall(self, world: World, entity_id: EntityId) -> None:
+        pass
+"""
+    )
+
+    descriptors = SkillDiscovery(skill_paths=[tmp_path]).discover()
+
+    assert len(descriptors) == 1
+    descriptor = descriptors[0]
+    assert descriptor.name == "demo"
+    assert descriptor.skill_type is SkillType.SCRIPT
+    assert descriptor.source_path == skill_file
+    runtime_skill = descriptor.materialize()
+    assert runtime_skill.name == "demo"

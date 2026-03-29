@@ -157,7 +157,8 @@ async def main() -> None:
 
     workspace_root = str(workspace_dir)
     for skill_name in required_skill_names:
-        skill = discovered_by_name[skill_name]
+        descriptor = discovered_by_name[skill_name]
+        skill = descriptor.materialize()
         skill.resolve_path_references(workspace_root)
         manager.install(world, agent_id, skill)
 

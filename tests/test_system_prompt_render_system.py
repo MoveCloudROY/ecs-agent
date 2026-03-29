@@ -11,6 +11,7 @@ from ecs_agent.components import (
     SkillComponent,
     SkillMetadata,
     SubagentRegistryComponent,
+    SystemPromptComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.core import World
@@ -169,6 +170,7 @@ async def test_render_system_renders_inline_template_and_bridges_to_llm() -> Non
         "_installed_skills": "- none",
         "_installed_mcps": "- none",
         "_installed_subagents": "- none",
+        "_cache_key": "tools:write_file|skills:|subagents:",
     }
     assert llm.system_prompt == rendered.text
 
@@ -861,7 +863,9 @@ async def test_render_system_skill_activate_then_render() -> None:
 
 
 @pytest.mark.asyncio
-async def test_render_system_skill_uninstall_removed_from_snapshot() -> None:
+async def test_system_prompt_render_system_invalidates_when_installed_skills_change() -> (
+    None
+):
     world = World()
     entity_id = world.create_entity()
     skill_component = SkillComponent(
@@ -869,12 +873,6 @@ async def test_render_system_skill_uninstall_removed_from_snapshot() -> None:
             "python": SkillMetadata(
                 name="python",
                 description="python skill",
-                tool_names=[],
-                has_system_prompt=False,
-            ),
-            "shell": SkillMetadata(
-                name="shell",
-                description="shell skill",
                 tool_names=[],
                 has_system_prompt=False,
             ),
@@ -891,14 +889,79 @@ async def test_render_system_skill_uninstall_removed_from_snapshot() -> None:
     await SystemPromptRenderSystem().process(world)
     first_render = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert first_render is not None
-    assert first_render.text == "- python: python skill\n- shell: shell skill"
+    assert first_render.text == "- python: python skill"
 
-    del skill_component.skills["shell"]
+    skill_component.skills["shell"] = SkillMetadata(
+        name="shell",
+        description="shell skill",
+        tool_names=[],
+        has_system_prompt=False,
+    )
 
     await SystemPromptRenderSystem().process(world)
 
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
-    # After freeze, the rendered text should remain unchanged despite skill uninstall
     assert rendered.text == "- python: python skill\n- shell: shell skill"
-    assert "shell" in rendered.text  # Shell is still in the frozen snapshot
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_render_system_renders_once_when_no_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_installed_skills}"),
+        ),
+    )
+    world.add_component(entity_id, SkillComponent(skills={}))
+
+    call_count = 0
+    original_render = render_module._render_system_prompt
+
+    def _counting_render(
+        target_world: World,
+        target_entity_id: object,
+        prompt_config: SystemPromptConfigSpec,
+    ) -> tuple[str, dict[str, str]]:
+        nonlocal call_count
+        call_count += 1
+        return original_render(target_world, target_entity_id, prompt_config)
+
+    monkeypatch.setattr(render_module, "_render_system_prompt", _counting_render)
+
+    system = SystemPromptRenderSystem()
+    await system.process(world)
+    await system.process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text == "- none"
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_render_system_bridges_legacy_system_prompt_component() -> (
+    None
+):
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="Hello ${name}"),
+            placeholders=[PlaceholderSpec(name="name", value="Bridge")],
+        ),
+    )
+    world.add_component(entity_id, SystemPromptComponent())
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    legacy_prompt = world.get_component(entity_id, SystemPromptComponent)
+    assert rendered is not None
+    assert legacy_prompt is not None
+    assert legacy_prompt.content == rendered.text == "Hello Bridge"

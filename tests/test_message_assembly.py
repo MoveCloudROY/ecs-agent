@@ -407,3 +407,26 @@ async def test_prepare_outbound_messages_retry_reuses_identical_slash_context() 
     assert "调用 skill: retryskill" in first_messages[-1].content
     assert "调用 skill: retryskill" in second_messages[-1].content
     assert first_messages[-1].content.endswith(original_text)
+
+
+async def test_multiple_skill_manager_facades_share_world_state() -> None:
+    """Two separate SkillManager() instances observe the same installed skill state on one world."""
+    from ecs_agent import BuiltinToolsSkill, SkillManager
+    from ecs_agent.core import World
+
+    world = World()
+    entity = world.create_entity()
+
+    manager_a = SkillManager()
+    manager_b = SkillManager()  # completely separate instance
+
+    manager_a.install(world, entity, BuiltinToolsSkill())
+
+    # Both facades must see the same installed skill via the world runtime
+    details_a = manager_a.format_skill_details(world, entity, "builtin-tools")
+    details_b = manager_b.format_skill_details(world, entity, "builtin-tools")
+
+    assert details_a is not None
+    assert details_b is not None
+    assert details_a == details_b
+    assert manager_a.get_skill_metadata(world, entity, "builtin-tools") == manager_b.get_skill_metadata(world, entity, "builtin-tools")

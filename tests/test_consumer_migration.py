@@ -11,10 +11,12 @@ from ecs_agent.components import (
     SystemPromptComponent,
 )
 from ecs_agent.core import World
+from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
 from ecs_agent.providers import FakeProvider
 from ecs_agent.systems.planning import PlanningSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.replanning import ReplanningSystem
+from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.types import CompletionResult, Message
 
 
@@ -151,3 +153,24 @@ async def test_no_rendered_component_fallback() -> None:
 
     sent = provider.calls[0]
     assert sent[0] == Message(role="system", content="legacy sys")
+
+
+@pytest.mark.asyncio
+async def test_legacy_consumer_reads_bridged_content() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="Bridged rendered prompt")
+        ),
+    )
+    world.add_component(entity_id, SystemPromptComponent())
+
+    await SystemPromptRenderSystem().process(world)
+
+    legacy_prompt = world.get_component(entity_id, SystemPromptComponent)
+    rendered_prompt = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert legacy_prompt is not None
+    assert rendered_prompt is not None
+    assert legacy_prompt.content == rendered_prompt.text == "Bridged rendered prompt"

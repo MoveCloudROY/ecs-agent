@@ -16,18 +16,24 @@ from ecs_agent.components import (
     OwnerComponent,
     PermissionComponent,
     SubagentRegistryComponent,
-    SystemPromptComponent,
     ToolRegistryComponent,
 )
-from ecs_agent.components.definitions import SkillComponent, SkillMetadata
+from ecs_agent.components.definitions import (
+    SkillComponent,
+    SkillMetadata,
+    WorkspaceBindingComponent,
+)
 from ecs_agent.core.runner import Runner
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.skills.manager import SkillManager
+from ecs_agent.skills import catalog as _skill_catalog
 from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
+from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
 from ecs_agent.systems.subagent_runtime import SubagentRuntimeManager
 from ecs_agent.observability import generate_traceparent
 from ecs_agent.types import (
@@ -48,6 +54,28 @@ from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.providers.retry_provider import RetryProvider
 
 logger = get_logger(__name__)
+
+
+def _build_child_prompt_template(user_prompt: str) -> str:
+    """Build the system-prompt template for a child world.
+
+    Ensures the template always includes ${_installed_tools} and
+    ${_installed_skills} placeholder sections so SystemPromptRenderSystem
+    can expand them at runtime. If the caller's prompt already contains
+    a placeholder, it is NOT duplicated.
+
+    Args:
+        user_prompt: Raw system prompt text from SubagentConfig.
+
+    Returns:
+        Template string ready for PromptTemplateSource(inline=...).
+    """
+    suffix_parts: list[str] = []
+    if "${_installed_tools}" not in user_prompt:
+        suffix_parts.append("\n\n## Available Tools\n${_installed_tools}")
+    if "${_installed_skills}" not in user_prompt:
+        suffix_parts.append("\n\n## Available Skills\n${_installed_skills}")
+    return user_prompt + "".join(suffix_parts)
 
 
 class _InheritedSkill:
@@ -154,12 +182,12 @@ class SubagentSystem:
                 "RETURNS (sync): final answer string from the subagent.\n"
                 "RETURNS (background): JSON {session_id, status, category, created_at}.\n\n"
                 "EXAMPLES:\n"
-                '  // Synchronous — block until done\n'
+                "  // Synchronous — block until done\n"
                 '  subagent(category="researcher", prompt="Summarize the latest papers on RAG.")\n\n'
-                '  // Parallel — launch two subagents, collect later\n'
+                "  // Parallel — launch two subagents, collect later\n"
                 '  subagent(category="coder", prompt="Write unit tests for auth.py.", background=True)\n'
                 '  subagent(category="reviewer", prompt="Review auth.py for security issues.", background=True)\n\n'
-                '  // With extra skill and timeout\n'
+                "  // With extra skill and timeout\n"
                 '  subagent(category="analyst", prompt="Analyze Q1 sales data.", load_skills=["sql"], timeout=120)'
             ),
             parameters={
@@ -167,7 +195,7 @@ class SubagentSystem:
                 "properties": {
                     "category": {
                         "type": "string",
-                        "description": "Registered subagent type/name (e.g. \"researcher\", \"coder\"). Must match a key in SubagentRegistryComponent.",
+                        "description": 'Registered subagent type/name (e.g. "researcher", "coder"). Must match a key in SubagentRegistryComponent.',
                     },
                     "prompt": {
                         "type": "string",
@@ -253,6 +281,7 @@ class SubagentSystem:
             tool_name=tool_name,
             available_subagents=list(registry.subagents.keys()),
         )
+
     async def process(self, world: World) -> None:
         """Register delegate tool for entities with SubagentRegistryComponent.
 
@@ -314,9 +343,9 @@ class SubagentSystem:
                 "RETURNS (no session_id): JSON {status, session_count, summary_table}.\n"
                 "RETURNS (with session_id): JSON {session_id, status, category, created_at, ...}.\n\n"
                 "EXAMPLES:\n"
-                '  // List all running background sessions\n'
-                '  subagent_status()\n\n'
-                '  // Inspect a specific session\n'
+                "  // List all running background sessions\n"
+                "  subagent_status()\n\n"
+                "  // Inspect a specific session\n"
                 '  subagent_status(session_id="ses_abc123")'
             ),
             parameters={
@@ -349,9 +378,9 @@ class SubagentSystem:
                 "  timeout    (optional) — max seconds to wait; null = wait indefinitely.\n\n"
                 "RETURNS: final answer string from the subagent, or an error/timeout message.\n\n"
                 "EXAMPLES:\n"
-                '  // Wait for a previously launched background subagent\n'
+                "  // Wait for a previously launched background subagent\n"
                 '  subagent_result(session_id="ses_abc123")\n\n'
-                '  // Wait with a 60-second timeout\n'
+                "  // Wait with a 60-second timeout\n"
                 '  subagent_result(session_id="ses_abc123", timeout=60)'
             ),
             parameters={
@@ -386,7 +415,7 @@ class SubagentSystem:
                 "  session_id (required) — the session_id to cancel.\n\n"
                 "RETURNS: JSON {status, session_id, lifecycle_status}.\n\n"
                 "EXAMPLES:\n"
-                '  // Cancel a session that is no longer needed\n'
+                "  // Cancel a session that is no longer needed\n"
                 '  subagent_cancel(session_id="ses_abc123")'
             ),
             parameters={
@@ -1029,7 +1058,6 @@ class SubagentSystem:
                 subagent_name=subagent_name,
             )
 
-
             world.add_component(
                 child_entity_id,
                 LLMComponent(
@@ -1045,9 +1073,7 @@ class SubagentSystem:
             world.add_component(
                 child_entity_id, OwnerComponent(owner_id=parent_entity_id)
             )
-            world.add_component(
-                child_entity_id, ChildStubComponent()
-            )
+            world.add_component(child_entity_id, ChildStubComponent())
 
             child_world, child_world_entity_id = self._assemble_child_world(
                 world,
@@ -1055,17 +1081,17 @@ class SubagentSystem:
                 config,
                 parent_child_entity=child_entity_id,
             )
-            # Sync effective system prompt (may be inherited) to parent-world stub
-            child_llm = child_world.get_component(child_world_entity_id, LLMComponent)
-            stub_llm = world.get_component(child_entity_id, LLMComponent)
-            if child_llm is not None and stub_llm is not None:
-                stub_llm.system_prompt = child_llm.system_prompt
             result = await self._execute_delegation(
                 child_world,
                 child_world_entity_id,
                 task,
                 config,
             )
+            # Sync rendered system prompt (populated by SystemPromptRenderSystem) to parent-world stub
+            child_llm = child_world.get_component(child_world_entity_id, LLMComponent)
+            stub_llm = world.get_component(child_entity_id, LLMComponent)
+            if child_llm is not None and stub_llm is not None:
+                stub_llm.system_prompt = child_llm.system_prompt
 
             child_conv = child_world.get_component(
                 child_world_entity_id,
@@ -1256,14 +1282,15 @@ class SubagentSystem:
             LLMComponent(
                 provider=config.provider,
                 model=config.model,
-                system_prompt=effective_system_prompt,
+                system_prompt="",  # SystemPromptRenderSystem will populate this
             ),
         )
         child_world.add_component(
             child_world_entity_id,
-            SystemPromptComponent(
-                template=effective_system_prompt,
-                content=effective_system_prompt,
+            SystemPromptConfigSpec(
+                template_source=PromptTemplateSource(
+                    inline=_build_child_prompt_template(effective_system_prompt or ""),
+                ),
             ),
         )
         child_world.add_component(
@@ -1340,6 +1367,30 @@ class SubagentSystem:
                     ),
                 )
 
+        # Inherit parent workspace binding onto child entity when policy allows.
+        if policy.enabled:
+            parent_binding = parent_world.get_component(
+                parent_entity, WorkspaceBindingComponent
+            )
+            if parent_binding is not None:
+                child_world.add_component(
+                    child_world_entity_id,
+                    WorkspaceBindingComponent(
+                        workspace_root=parent_binding.workspace_root
+                    ),
+                )
+                # Also stamp the stub entity in the parent world (for test visibility).
+                if parent_child_entity is not None:
+                    parent_world.add_component(
+                        parent_child_entity,
+                        WorkspaceBindingComponent(
+                            workspace_root=parent_binding.workspace_root
+                        ),
+                    )
+
+        child_world.register_system(
+            SystemPromptRenderSystem(priority=-20), priority=-20
+        )
         child_world.register_system(ReasoningSystem(priority=0), priority=0)
         child_world.register_system(MemorySystem(), priority=10)
         child_world.register_system(
@@ -1385,10 +1436,16 @@ class SubagentSystem:
         policy: InheritancePolicy,
     ) -> ScriptSkill | None:
         if parent_skills is None or parent_tools is None:
+            catalog_skill = self._resolve_from_catalog(skill_name)
+            if catalog_skill is not None:
+                return catalog_skill
             return self._handle_missing_skill(parent_entity, skill_name, policy)
 
         metadata = parent_skills.skills.get(skill_name)
         if metadata is None:
+            catalog_skill = self._resolve_from_catalog(skill_name)
+            if catalog_skill is not None:
+                return catalog_skill
             return self._handle_missing_skill(parent_entity, skill_name, policy)
 
         tools: dict[str, tuple[ToolSchema, Any]] = {}
@@ -1420,6 +1477,14 @@ class SubagentSystem:
         raise ValueError(
             f"Invalid missing_skill_policy '{policy.missing_skill_policy}' for subagent inheritance"
         )
+
+    def _resolve_from_catalog(self, skill_name: str) -> ScriptSkill | None:
+        """Try to materialize a skill by name from the process-level catalog."""
+        descriptor = _skill_catalog.lookup(skill_name)
+        if descriptor is None:
+            return None
+        skill: ScriptSkill = descriptor.materialize()
+        return skill
 
     def _inherit_tool_to_target_entities(
         self,

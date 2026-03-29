@@ -11,12 +11,16 @@ from ecs_agent.skills import discover_skills
 from ecs_agent.skills.manager import SkillManager
 from pathlib import Path
 
+# discover_skills returns list[SkillDescriptor] — immutable catalog descriptors.
+# SkillManager is a facade over the world-local SkillRuntime; pass the same world
+# to multiple SkillManager instances and they will share the same runtime state.
+descriptors = discover_skills([Path(".claude/skills")])
 manager = SkillManager()
-# Discover all SKILL.md skills in the directory
-skills = discover_skills([Path(".claude/skills")])
 
-for skill in skills:
-    # Install registers metadata, system prompt, and tools
+for descriptor in descriptors:
+    # materialize() returns a Skill instance bound to the descriptor metadata.
+    skill = descriptor.materialize()
+    # install() indexes metadata and activates (registers tools + system prompt).
     manager.install(world, agent_entity, skill)
 ```
 
@@ -33,7 +37,7 @@ A Skill is a package of functionality that includes:
 To remain token-efficient, the `SkillManager` supports a two-phase loading process:
 
 1.  **Index**: Register skill metadata (name, description, tool names) into the `SkillComponent`. No tools are registered in the `ToolRegistryComponent` yet, and the system prompt is not loaded. `SkillMetadata.activated` is `False`.
-2.  **Activate**: Call `skill.install(world, entity_id)` on the skill, which writes or appends the skill's system prompt to `SystemPromptComponent.content` and registers tools into the `ToolRegistryComponent`. `SkillMetadata.activated` is `True`.
+2.  **Activate**: Call `skill.install(world, entity_id)` on the skill, which registers tools into the `ToolRegistryComponent` and (for standalone agents using `SystemPromptComponent`) appends the skill's system prompt to `SystemPromptComponent.content`. `SkillMetadata.activated` is `True`. In child worlds spawned by `SubagentSystem`, the system prompt is managed via `SystemPromptConfigSpec` and expanded by `SystemPromptRenderSystem`; installed skills appear via the `${_installed_skills}` built-in placeholder.
 
 `manager.install()` is a convenience method that performs both `index()` and `activate()` in one call.
 
@@ -238,14 +242,25 @@ class CalculatorSkill:
 
 ## SkillManager API
 
-The `SkillManager` handles the installation lifecycle, tool registration, and prompt management.
+`SkillManager` is a **thin facade** over the world-local `SkillRuntime`. Installed-skill state
+lives on the `World` instance, not inside any individual `SkillManager` object.
+Creating multiple `SkillManager()` instances that operate on the same `World` is safe — they
+all share the same underlying runtime state.
+
+```python
+# Two facades — one world. Both see the same installed skills.
+m1 = SkillManager()
+m2 = SkillManager()
+m1.install(world, entity, skill)
+assert m2.get_skill_metadata(world, entity, skill.name) is not None  # same runtime
+```
 
 ### Methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `index` | `index(world, entity_id, skill)` | Register metadata only. No tools loaded. `activated=False`. |
-| `activate` | `activate(world, entity_id, skill_name)` | Call skill's install path, appending system prompt to `SystemPromptComponent.content` and registering tools. Idempotent. |
+| `activate` | `activate(world, entity_id, skill_name)` | Call skill's install path, registering tools into `ToolRegistryComponent` and (for agents using `SystemPromptComponent`) appending system prompt. Idempotent. |
 | `install` | `install(world, entity_id, skill)` | Convenience: `index()` + `activate()` in one call. |
 | `uninstall` | `uninstall(world, entity_id, skill_name)` | Remove metadata, tools, and system prompt fragment. |
 | `list_skills` | `list_skills(world, entity_id)` | Return all `SkillMetadata` for installed skills. |
@@ -257,13 +272,18 @@ The `SkillManager` handles the installation lifecycle, tool registration, and pr
 ## Skill Discovery
 
 ### Discover Markdown Skills
-Recursively scans directories for `SKILL.md` files and returns a list of `Skill` instances.
+Recursively scans directories for `SKILL.md` files and returns a list of `SkillDescriptor` objects.
+Each `SkillDescriptor` is a frozen, immutable catalog record. Call `.materialize()` to obtain a
+runnable `Skill` instance when you need to install it at runtime.
 
 ```python
 from ecs_agent.skills import discover_skills
 from pathlib import Path
 
-skills = discover_skills([Path(".claude/skills")])
+descriptors = discover_skills([Path(".claude/skills")])
+# descriptors is list[SkillDescriptor] — globally shareable and immutable.
+# Materialize to a Skill before installing:
+skill = descriptors[0].materialize()
 ```
 
 ### Discover Python Skills
@@ -318,6 +338,28 @@ Stored in the `SkillComponent` for each installed skill.
 
 ## Built-in Skills
 - **BuiltinToolsSkill**: Basic file manipulation (`read_file`, `write_file`, `edit_file`, `glob`) and shell execution (`bash`). See [Built-in Tools](builtin-tools.md).
+
+## Workspace Binding
+
+Skills that access the filesystem (e.g., `BuiltinToolsSkill`) need a **workspace root**.
+The workspace belongs to the **agent entity**, not the skill object. Bind it by attaching
+`WorkspaceBindingComponent` to the entity before installing the skill:
+
+```python
+from ecs_agent.components.definitions import WorkspaceBindingComponent
+from ecs_agent.skills.manager import SkillManager
+from ecs_agent.tools.builtins import BuiltinToolsSkill
+from pathlib import Path
+
+world.add_component(agent, WorkspaceBindingComponent(workspace_root=Path("/workspace")))
+SkillManager().install(world, agent, BuiltinToolsSkill())
+# The runtime materializes a workspace-bound copy of the skill tools for this entity.
+# The shared BuiltinToolsSkill instance is never mutated.
+```
+
+When a subagent is spawned, the child entity **inherits** the parent workspace binding by
+default (controlled by `InheritancePolicy`). The child can therefore use the same
+workspace-scoped file tools without any additional configuration.
 
 ## See Also
 - [Tool Discovery & Approval](./tool-discovery.md)
