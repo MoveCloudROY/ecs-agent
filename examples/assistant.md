@@ -10,6 +10,8 @@ triggers:
     action: inject
     content: "The user is requesting help. Briefly describe your capabilities."
     priority: 0
+skills:
+  - path: skills/ui-ux-reviewer
 tools:
   read_file: true
   write_file: true

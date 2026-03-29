@@ -162,3 +162,96 @@ def test_validate_agent_spec_empty_triggers_ok() -> None:
     data = {"mode": "primary", "model": "gpt-4", "prompt": "Hi.", "triggers": []}
     spec = validate_agent_spec(data)
     assert spec.triggers == []
+
+
+# ============================================================================
+# Skills field tests
+# ============================================================================
+
+
+def test_validate_agent_spec_accepts_empty_skills_list() -> None:
+    data = {"mode": "primary", "model": "gpt-4", "prompt": "Hi.", "skills": []}
+    spec = validate_agent_spec(data)
+    assert spec.skills == []
+
+
+def test_validate_agent_spec_accepts_valid_skills_path() -> None:
+    data = {
+        "mode": "primary",
+        "model": "gpt-4",
+        "prompt": "Hi.",
+        "skills": [{"path": "skills/ui-ux-reviewer"}],
+    }
+    spec = validate_agent_spec(data)
+    assert spec.skills == [{"path": "skills/ui-ux-reviewer"}]
+
+
+def test_validate_agent_spec_accepts_multiple_skills() -> None:
+    data = {
+        "mode": "primary",
+        "model": "gpt-4",
+        "prompt": "Hi.",
+        "skills": [
+            {"path": "skills/code-reviewer"},
+            {"path": "skills/test-writer"},
+        ],
+    }
+    spec = validate_agent_spec(data)
+    assert len(spec.skills) == 2
+    assert spec.skills[0]["path"] == "skills/code-reviewer"
+    assert spec.skills[1]["path"] == "skills/test-writer"
+
+
+def test_validate_agent_spec_rejects_skills_non_list() -> None:
+    data = {
+        "mode": "primary",
+        "model": "gpt-4",
+        "prompt": "Hi.",
+        "skills": "skills/foo",
+    }
+    with pytest.raises(TypeError, match="'skills' must be list"):
+        validate_agent_spec(data, source_name="test")
+
+
+def test_validate_agent_spec_rejects_skill_entry_missing_path_key() -> None:
+    data = {
+        "mode": "primary",
+        "model": "gpt-4",
+        "prompt": "Hi.",
+        "skills": [{"name": "some-skill"}],
+    }
+    with pytest.raises(ValueError, match="missing required key 'path'"):
+        validate_agent_spec(data, source_name="test")
+
+
+def test_validate_agent_spec_rejects_skill_absolute_path() -> None:
+    data = {
+        "mode": "primary",
+        "model": "gpt-4",
+        "prompt": "Hi.",
+        "skills": [{"path": "/abs/path/to/skill"}],
+    }
+    with pytest.raises(ValueError, match="must not be absolute"):
+        validate_agent_spec(data, source_name="test")
+
+
+def test_validate_agent_spec_rejects_skill_path_traversal() -> None:
+    data = {
+        "mode": "primary",
+        "model": "gpt-4",
+        "prompt": "Hi.",
+        "skills": [{"path": "../some/skill"}],
+    }
+    with pytest.raises(ValueError, match="'..' traversal"):
+        validate_agent_spec(data, source_name="test")
+
+
+def test_validate_agent_spec_rejects_skill_empty_path() -> None:
+    data = {
+        "mode": "primary",
+        "model": "gpt-4",
+        "prompt": "Hi.",
+        "skills": [{"path": ""}],
+    }
+    with pytest.raises(ValueError, match="must not be empty"):
+        validate_agent_spec(data, source_name="test")

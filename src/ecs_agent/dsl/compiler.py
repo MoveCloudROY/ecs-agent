@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Literal, cast
 
 from ecs_agent.components import (
@@ -21,6 +22,9 @@ from ecs_agent.prompts.contracts import (
     TriggerSpec,
 )
 from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.skills.manager import SkillManager
+from ecs_agent.skills.script_skill import ScriptSkill
+from ecs_agent.skills.skill import Skill
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.systems.user_prompt_normalization_system import (
     UserPromptNormalizationSystem,
@@ -33,6 +37,8 @@ logger = get_logger(__name__)
 def compile_agent_specs(
     specs: dict[str, AgentSpec],
     provider_factory: Callable[[str, str], LLMProvider],
+    *,
+    source_dir: Path | None = None,
 ) -> tuple[EntityId, World]:
     primary_specs = [
         (agent_name, spec)
@@ -111,6 +117,24 @@ def compile_agent_specs(
             allowed_count=len(allowed_tools),
         )
 
+    # Install skills declared in DSL
+    if primary_spec.skills:
+        if source_dir is None:
+            logger.warning(
+                "agent_spec_skills_skipped_no_source_dir",
+                skill_count=len(primary_spec.skills),
+            )
+        else:
+            skill_manager = SkillManager()
+            for skill_entry in primary_spec.skills:
+                skill_path = (source_dir / skill_entry["path"] / "SKILL.md").resolve()
+                skill_obj = Skill(skill_path=skill_path)
+                skill_manager.install(world, primary_entity, cast(ScriptSkill, skill_obj))
+                logger.info(
+                    "agent_skill_installed",
+                    entity_id=int(primary_entity),
+                    skill_name=skill_obj.name,
+                )
     subagents: dict[str, SubagentConfig] = {}
     for agent_name, spec in specs.items():
         if spec.mode != "subagent":
