@@ -879,3 +879,91 @@ def test_compile_without_triggers_no_user_prompt_normalization_system() -> None:
     world._systems.apply_queued_operations()
     registered_types = [type(entry.system) for entry in world._systems._systems]
     assert UserPromptNormalizationSystem not in registered_types
+
+
+# ============================================================================
+# Skills DSL integration tests
+# ============================================================================
+
+
+def _make_skill_dir(parent: Path, skill_name: str) -> Path:
+    """Create a minimal SKILL.md in a subdirectory and return the skill dir path."""
+    skill_dir = parent / skill_name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text(
+        f"---\nname: {skill_name}\ndescription: A test skill\n---\n\nDo helpful things.\n",
+        encoding="utf-8",
+    )
+    return skill_dir
+
+
+def test_compile_with_skills_installs_skill_component() -> None:
+    """When skills are declared and source_dir provided, SkillComponent is attached."""
+    from ecs_agent.components.definitions import SkillComponent
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        _make_skill_dir(tmpdir_path, "test-skill")
+
+        spec = AgentSpec(
+            name="bot",
+            mode="primary",
+            model="m",
+            prompt="You are a bot.",
+            skills=[{"path": "test-skill"}],
+        )
+        primary_entity, world = compile_agent_specs(
+            resolve_agent_specs([spec]),
+            create_fake_provider_factory([]),
+            source_dir=tmpdir_path,
+        )
+
+        skill_comp = world.get_component(primary_entity, SkillComponent)
+        assert skill_comp is not None
+        assert "test-skill" in skill_comp.skills
+
+
+def test_compile_with_skills_no_source_dir_skips_gracefully() -> None:
+    """When source_dir is None and skills declared, compilation succeeds (skills skipped)."""
+    from ecs_agent.components.definitions import SkillComponent
+
+    spec = AgentSpec(
+        name="bot",
+        mode="primary",
+        model="m",
+        prompt="You are a bot.",
+        skills=[{"path": "skills/some-skill"}],
+    )
+    # No source_dir — should not raise, just skip skills
+    primary_entity, world = compile_agent_specs(
+        resolve_agent_specs([spec]),
+        create_fake_provider_factory([]),
+    )
+
+    # SkillComponent may or may not be present (it wasn't installed)
+    skill_comp = world.get_component(primary_entity, SkillComponent)
+    # If present, our skill was not installed into it
+    if skill_comp is not None:
+        assert "some-skill" not in skill_comp.skills
+
+
+def test_compile_with_empty_skills_list_no_skill_component() -> None:
+    """Empty skills list → SkillComponent not attached (no skills installed)."""
+    from ecs_agent.components.definitions import SkillComponent
+
+    spec = AgentSpec(
+        name="bot",
+        mode="primary",
+        model="m",
+        prompt="You are a bot.",
+        skills=[],
+    )
+    primary_entity, world = compile_agent_specs(
+        resolve_agent_specs([spec]),
+        create_fake_provider_factory([]),
+    )
+
+    skill_comp = world.get_component(primary_entity, SkillComponent)
+    # No skills were installed, so SkillComponent was never added
+    assert skill_comp is None

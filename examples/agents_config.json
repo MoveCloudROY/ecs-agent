@@ -15,6 +15,9 @@
         "priority": 0
       }
     ],
+    "skills": [
+      {"path": "skills/ui-ux-reviewer"}
+    ],
     "tools": {
       "read_file": true,
       "write_file": true,

@@ -44,6 +44,7 @@ class AgentSpec:
 - `name`: Agent name (overridden by dict key in JSON)
 - `placeholders`: List of `{name, value}` dicts declaring `${name}` template variables in `prompt`
 - `triggers`: List of trigger dicts enabling `UserPromptNormalizationSystem` (see Triggers section)
+- `skills`: List of skill path dicts (`[{"path": "relative/dir"}]`); installs SKILL.md-based skills on compile (primary only)
 
 ### JSON Example
 
@@ -401,6 +402,62 @@ When `triggers` are present, `compile_agent_specs`:
 2. Auto-registers `UserPromptNormalizationSystem` at priority `-10`
 
 
+## Skills
+
+Declare SKILL.md-based skills to install onto the primary agent at compile time.
+
+### JSON Example
+
+```json
+{
+  "assistant": {
+    "mode": "primary",
+    "model": "gpt-4",
+    "prompt": "You are a helpful assistant.",
+    "skills": [
+      {"path": "skills/ui-ux-reviewer"}
+    ]
+  }
+}
+```
+
+### Markdown Example
+
+```yaml
+skills:
+  - path: skills/ui-ux-reviewer
+```
+
+### Skill Path Rules
+
+Each `path` entry is a directory (relative to the DSL source file) that contains a `SKILL.md` file.
+
+**Validation rules:**
+- Must be a relative path (absolute paths are rejected)
+- Must not contain `..` path traversal
+- Must be non-empty string
+
+### Compilation
+
+When `skills` are present, pass `source_dir` to `compile_agent_specs`:
+
+```python
+from pathlib import Path
+
+primary_entity, world = compile_agent_specs(
+    resolved,
+    provider_factory,
+    source_dir=Path("./examples"),  # skill paths resolved relative to this
+)
+```
+
+For each skill entry, the compiler:
+1. Resolves `(source_dir / path / "SKILL.md").resolve()`
+2. Loads the skill with `Skill(skill_path=...)`
+3. Installs it via `SkillManager().install(world, primary_entity, skill)`
+
+If `source_dir` is `None` and skills are declared, a warning is logged and skills are skipped (no exception raised).
+
 ## Error Handling
 
 ### Fail-Fast Policy
@@ -623,6 +680,7 @@ class AgentSpec:
     name: str = ""
     placeholders: list[dict[str, str]] = field(default_factory=list)
     triggers: list[dict[str, str | int]] = field(default_factory=list)
+    skills: list[dict[str, str]] = field(default_factory=list)
 ```
 
 **validate_agent_spec(data, *, source_name="") → AgentSpec**
@@ -652,11 +710,12 @@ class AgentSpec:
 - Returns dict mapping agent names to specs
 - Raises `ValueError` for empty agent names
 
-**compile_agent_specs(specs, provider_factory) → tuple[EntityId, World]**
+**compile_agent_specs(specs, provider_factory, *, source_dir: Path | None = None) → tuple[EntityId, World]**
 - Compiles agent specs into ECS World with components
 - Creates exactly one runnable primary entity
 - Subagents populate `SubagentRegistryComponent`
 - `provider_factory: Callable[[str, str], LLMProvider]` creates providers
+- `source_dir`: Optional base directory for resolving skill paths; required when `skills` are declared
 - Raises `ValueError` if zero or multiple primaries
 
 ### ecs_agent.dsl.prompt_resolver

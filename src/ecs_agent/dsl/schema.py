@@ -24,8 +24,8 @@ class AgentSpec:
         name: Agent name for registry and logging
         placeholders: Placeholder name-value dicts for ${name} substitution in prompt
         triggers: Trigger rule dicts for UserPromptNormalizationSystem
+        skills: List of skill entries, each with a 'path' key pointing to a skill directory
     """
-
     mode: Literal["primary", "subagent"]
     model: str
     prompt: str
@@ -34,6 +34,7 @@ class AgentSpec:
     name: str = ""
     placeholders: list[dict[str, str]] = field(default_factory=list)
     triggers: list[dict[str, str | int]] = field(default_factory=list)
+    skills: list[dict[str, str]] = field(default_factory=list)
 
 
 def validate_agent_spec(data: dict[str, Any], *, source_name: str = "") -> AgentSpec:
@@ -70,6 +71,7 @@ def validate_agent_spec(data: dict[str, Any], *, source_name: str = "") -> Agent
         "name",
         "placeholders",
         "triggers",
+        "skills",
     }
     unknown = data.keys() - known_fields
     if unknown:
@@ -182,6 +184,29 @@ def validate_agent_spec(data: dict[str, Any], *, source_name: str = "") -> Agent
             }
         )
 
+    # Validate skills field type and content
+    skills_data = data.get("skills", [])
+    if not isinstance(skills_data, list):
+        raise TypeError(f"Field 'skills' must be list{source_context}")
+    normalized_skills: list[dict[str, str]] = []
+    for i, skill_entry in enumerate(skills_data):
+        if not isinstance(skill_entry, dict):
+            raise TypeError(f"Skill entry at index {i} must be dict{source_context}")
+        if "path" not in skill_entry:
+            raise ValueError(
+                f"Skill entry at index {i} missing required key 'path'{source_context}"
+            )
+        skill_path = skill_entry["path"]
+        if not isinstance(skill_path, str):
+            raise TypeError(f"Skill 'path' at index {i} must be str{source_context}")
+        if not skill_path:
+            raise ValueError(f"Skill 'path' at index {i} must not be empty{source_context}")
+        if skill_path.startswith("/"):
+            raise ValueError(f"Skill 'path' at index {i} must not be absolute{source_context}")
+        if ".." in skill_path.split("/"):
+            raise ValueError(f"Skill 'path' at index {i} must not contain '..' traversal{source_context}")
+        normalized_skills.append({"path": skill_path})
+
     logger.info(
         "agent_spec_validated",
         mode=mode,
@@ -200,6 +225,7 @@ def validate_agent_spec(data: dict[str, Any], *, source_name: str = "") -> Agent
         name=name,
         placeholders=normalized_placeholders,
         triggers=normalized_triggers,
+        skills=normalized_skills,
     )
 
 
