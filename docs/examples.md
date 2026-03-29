@@ -530,3 +530,56 @@ world.register_system(SubagentSystem(priority=-1), priority=-1)
 - **Pattern:** `CheckpointSystem` + `CompactionSystem` + `CheckpointComponent` + `CompactionConfigComponent`.
 
 > **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
+
+---
+
+## Agent DSL
+
+The Agent DSL examples demonstrate how to define agents declaratively using JSON or Markdown files.
+
+---
+
+### Agent DSL — JSON
+
+- **File:** `examples/agent_dsl_json.py`
+- **Config:** `examples/agents_config.json`
+- **What it demonstrates:** Loading a multi-agent configuration from a JSON file. Defines a primary `assistant` agent (with placeholders, triggers, and skills) and a `researcher` subagent. The compiler produces a fully wired ECS World with `SubagentRegistryComponent`.
+- **Run:** `uv run python examples/agent_dsl_json.py`
+- **Pattern:** `load_json_agents` → `resolve_agent_specs` → `compile_agent_specs`
+
+#### Key Code
+```python
+spec_list = load_json_agents(Path("examples/agents_config.json"))
+specs = resolve_agent_specs(spec_list)
+primary_entity, world = compile_agent_specs(specs, provider_factory=create_provider)
+
+# Access subagent registry
+registry = world.get_component(primary_entity, SubagentRegistryComponent)
+assert "researcher" in registry.subagents
+```
+
+> **Dual-Mode Support**: Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
+
+---
+
+### Agent DSL — Markdown
+
+- **File:** `examples/agent_dsl_markdown.py`
+- **Config:** `examples/assistant.md` (primary), `examples/researcher.md` (subagent)
+- **What it demonstrates:** Loading multiple Markdown DSL files — one primary agent (`assistant.md`) with placeholders, triggers, and skills, and one subagent (`researcher.md`). Both are compiled together into a single ECS World, populating the subagent registry.
+- **Run:** `uv run python examples/agent_dsl_markdown.py`
+- **Pattern:** `load_markdown_agent` × 2 → `resolve_agent_specs` → `compile_agent_specs`
+
+#### Key Code
+```python
+spec = load_markdown_agent(Path("examples/assistant.md"))
+researcher_spec = load_markdown_agent(Path("examples/researcher.md"))
+
+specs = resolve_agent_specs([spec, researcher_spec])
+primary_entity, world = compile_agent_specs(specs, provider_factory=create_provider)
+
+registry = world.get_component(primary_entity, SubagentRegistryComponent)
+# registry.subagents == {"researcher": SubagentConfig(...)}
+```
+
+> **Dual-Mode Support**: Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.

@@ -13,6 +13,7 @@ The Agent DSL (Domain-Specific Language) allows you to define agent configuratio
 - **Security**: Path traversal protection for prompt file references
 - **Last-One-Wins**: Predictable conflict resolution for duplicate agent names
 - **Permission Mapping**: Boolean tool dictionaries compile to `PermissionComponent` allowlists
+- **Skill Installation**: Declare SKILL.md-based skills to auto-install onto the primary agent at compile time
 
 ## JSON DSL Format
 
