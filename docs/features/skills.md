@@ -37,7 +37,7 @@ A Skill is a package of functionality that includes:
 To remain token-efficient, the `SkillManager` supports a two-phase loading process:
 
 1.  **Index**: Register skill metadata (name, description, tool names) into the `SkillComponent`. No tools are registered in the `ToolRegistryComponent` yet, and the system prompt is not loaded. `SkillMetadata.activated` is `False`.
-2.  **Activate**: Call `skill.install(world, entity_id)` on the skill, which writes or appends the skill's system prompt to `SystemPromptComponent.content` and registers tools into the `ToolRegistryComponent`. `SkillMetadata.activated` is `True`.
+2.  **Activate**: Call `skill.install(world, entity_id)` on the skill, which registers tools into the `ToolRegistryComponent` and (for standalone agents using `SystemPromptComponent`) appends the skill's system prompt to `SystemPromptComponent.content`. `SkillMetadata.activated` is `True`. In child worlds spawned by `SubagentSystem`, the system prompt is managed via `SystemPromptConfigSpec` and expanded by `SystemPromptRenderSystem`; installed skills appear via the `${_installed_skills}` built-in placeholder.
 
 `manager.install()` is a convenience method that performs both `index()` and `activate()` in one call.
 
@@ -260,7 +260,7 @@ assert m2.get_skill_metadata(world, entity, skill.name) is not None  # same runt
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `index` | `index(world, entity_id, skill)` | Register metadata only. No tools loaded. `activated=False`. |
-| `activate` | `activate(world, entity_id, skill_name)` | Call skill's install path, appending system prompt to `SystemPromptComponent.content` and registering tools. Idempotent. |
+| `activate` | `activate(world, entity_id, skill_name)` | Call skill's install path, registering tools into `ToolRegistryComponent` and (for agents using `SystemPromptComponent`) appending system prompt. Idempotent. |
 | `install` | `install(world, entity_id, skill)` | Convenience: `index()` + `activate()` in one call. |
 | `uninstall` | `uninstall(world, entity_id, skill_name)` | Remove metadata, tools, and system prompt fragment. |
 | `list_skills` | `list_skills(world, entity_id)` | Return all `SkillMetadata` for installed skills. |

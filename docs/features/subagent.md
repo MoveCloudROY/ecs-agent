@@ -10,7 +10,7 @@ Subagent delegation provides:
 - **Isolated Execution**: Each subagent runs in its own `World` with independent state
 - **Automatic Result Aggregation**: Results flow back to parent via tool result messages.
 - **Event Tracking**: Monitor delegation lifecycle with `DelegationStartedEvent` and `DelegationCompletedEvent`.
-- **Skill Inheritance**: Subagents can inherit specific skills, system prompts (via `SystemPromptComponent`), and tools from their parent agent via `InheritancePolicy`.
+- **Skill Inheritance**: Subagents can inherit specific skills, system prompts (via `SystemPromptConfigSpec` and `SystemPromptRenderSystem`), and tools from their parent agent via `InheritancePolicy`.
 - **Sync and Background Modes**: Execute tasks immediately or as background sessions with ID tracking.
 - **Lifecycle Management**: Track background sessions through `Idle`, `Working`, `Dead`, `Timeout`, and `Cancelled` states.
 - **Control Tools**: Tools to query status, retrieve results, and cancel background sessions.
@@ -37,6 +37,39 @@ researcher_config = SubagentConfig(
     max_ticks=10,
     skills=[],  # Skill names to load and install on this subagent
     inheritance_policy=InheritancePolicy(inherit_system_prompt=True),  # Optional configuration
+)
+```
+### Automatic Placeholder Injection
+
+When `_assemble_child_world` builds the child world, it calls `_build_child_prompt_template` on the effective system prompt before storing it in `SystemPromptConfigSpec`. This helper appends standard sections for `${_installed_tools}` and `${_installed_skills}` unless those placeholders are already present in the prompt string:
+
+```python
+# If SubagentConfig.system_prompt does NOT contain ${_installed_tools} or ${_installed_skills},
+# the following sections are automatically appended:
+#
+#   
+
+## Available Tools
+${_installed_tools}
+#   
+
+## Available Skills
+${_installed_skills}
+```
+
+`SystemPromptRenderSystem` (priority -20) then resolves these placeholders at runtime from the child entity's `ToolRegistryComponent` and `SkillComponent`, so the child agent's rendered system prompt always reflects its actual installed tools and skills.
+
+To suppress the auto-append for a specific placeholder, simply include it yourself in `SubagentConfig.system_prompt`:
+
+```python
+SubagentConfig(
+    name="researcher",
+    provider=provider,
+    model="gpt-4o",
+    system_prompt=(
+        "You are a research specialist.\n\n"
+        "## My Tools\n${_installed_tools}"  # prevents auto-append of tools section
+    ),
 )
 ```
 
@@ -140,7 +173,7 @@ world.register_system(SubagentSystem(priority=-1), priority=-1)
 
 1. **Register subagents** with `SubagentRegistryComponent`
 2. **Register SubagentSystem** (priority -1, before ReasoningSystem)
-3. **SubagentSystem creates a new child entity** with the subagent's provider, model, and `SystemPromptComponent` (template/content from effective system prompt), plus a `ChildStubComponent` to mark the parent-world stub entity
+3. **SubagentSystem creates a new child entity** with the subagent's provider, model, and a `SystemPromptConfigSpec` whose inline template is built by `_build_child_prompt_template` (auto-appending `${_installed_tools}` and `${_installed_skills}` sections if not already present), plus a `ChildStubComponent` to mark the parent-world stub entity
 4. **LLM calls delegate tool** to invoke subagent
 5. **SubagentSystem executes** child and returns result
 ```python
@@ -581,7 +614,7 @@ task="Help me with this"
 - Subagent state is not persisted after execution completes
 - Tool calls from subagents are isolated (cannot access parent tools)
 - `TerminalComponent` from child world is NOT copied to parent (prevents premature runner termination). Additionally, the parent-world stub entity for each delegation carries a `ChildStubComponent`, which causes `ReasoningSystem` to skip it — preventing unintended LLM inference on completed delegation stubs
-- After child world completes, the stub entity's `LLMComponent.system_prompt` reflects the effective rendered prompt produced by `SystemPromptRenderSystem` in the child world during execution.
+- After child world completes, the stub entity's `LLMComponent.system_prompt` reflects the effective rendered prompt (including expanded `${_installed_tools}` and `${_installed_skills}` sections) produced by `SystemPromptRenderSystem` in the child world during execution.
 ## See Also
 
 - [Multi-Agent Collaboration](./multi-agent.md) — Entity-to-entity messaging

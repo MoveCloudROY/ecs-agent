@@ -365,6 +365,8 @@ These placeholders are automatically resolved by `SystemPromptRenderSystem` from
 
 If a source component is absent from the entity, the placeholder resolves to `"- none"`.
 
+> **Subagent child worlds**: `SubagentSystem` automatically appends `${_installed_tools}` and `${_installed_skills}` sections to a child world's system prompt template if they are not already present. See [Subagent Delegation](./subagent.md#automatic-placeholder-injection) for details.
+
 ## Trigger Templates
 
 Trigger templates inject contextual prompt blocks into user messages based on pattern matching. They are configured via `UserPromptConfigComponent.triggers` as a `list[TriggerSpec]`.
