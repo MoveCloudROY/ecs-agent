@@ -543,9 +543,9 @@ The Agent DSL examples demonstrate how to define agents declaratively using JSON
 
 - **File:** `examples/agent_dsl_json.py`
 - **Config:** `examples/agents_config.json`
-- **What it demonstrates:** Loading a multi-agent configuration from a JSON file. Defines a primary `assistant` agent (with placeholders, triggers, and skills) and a `researcher` subagent. The compiler produces a fully wired ECS World with `SubagentRegistryComponent`.
-- **Run:** `uv run python examples/agent_dsl_json.py`
-- **Pattern:** `load_json_agents` → `resolve_agent_specs` → `compile_agent_specs`
+- **What it demonstrates:** Loading a multi-agent configuration from a JSON file. Defines a primary `assistant` agent and a `researcher` subagent. The compiler auto-wires `ToolRegistryComponent`, `SubagentSessionTableComponent`, `SubagentSystem`, `SystemPromptRenderSystem`, and `UserPromptNormalizationSystem`. The manager delegates a quantum-computing research task via the `subagent` tool, and the example prints the full conversation and `OwnerComponent` parent-child relationship.
+- **Run:** `LLM_API_KEY=your-key uv run python examples/agent_dsl_json.py`
+- **Pattern:** `load_json_agents` → `resolve_agent_specs` → `compile_agent_specs` → `ToolExecutionSystem` + `ReasoningSystem`
 
 #### Key Code
 ```python
@@ -553,12 +553,14 @@ spec_list = load_json_agents(Path("examples/agents_config.json"))
 specs = resolve_agent_specs(spec_list)
 primary_entity, world = compile_agent_specs(specs, provider_factory=create_provider)
 
-# Access subagent registry
-registry = world.get_component(primary_entity, SubagentRegistryComponent)
-assert "researcher" in registry.subagents
+# Compiler auto-wires subagent infrastructure when subagents are present:
+#   ToolRegistryComponent, SubagentSessionTableComponent, SubagentSystem
+world.register_system(ReasoningSystem(priority=0), priority=0)
+world.register_system(ToolExecutionSystem(priority=5), priority=5)
+await Runner().run(world, max_ticks=10)
 ```
 
-> **Dual-Mode Support**: Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
+> **Requires `LLM_API_KEY`**: Unlike most examples, the DSL examples use real LLM providers only. Set `LLM_API_KEY` (and optionally `LLM_BASE_URL`, `LLM_MODEL`) before running.
 
 ---
 
@@ -566,9 +568,9 @@ assert "researcher" in registry.subagents
 
 - **File:** `examples/agent_dsl_markdown.py`
 - **Config:** `examples/assistant.md` (primary), `examples/researcher.md` (subagent)
-- **What it demonstrates:** Loading multiple Markdown DSL files — one primary agent (`assistant.md`) with placeholders, triggers, and skills, and one subagent (`researcher.md`). Both are compiled together into a single ECS World, populating the subagent registry.
-- **Run:** `uv run python examples/agent_dsl_markdown.py`
-- **Pattern:** `load_markdown_agent` × 2 → `resolve_agent_specs` → `compile_agent_specs`
+- **What it demonstrates:** Loading multiple Markdown DSL files — one primary agent (`assistant.md`) and one subagent (`researcher.md`). The compiler auto-wires `ToolRegistryComponent`, `SubagentSessionTableComponent`, `SubagentSystem`, `SystemPromptRenderSystem`, and `UserPromptNormalizationSystem`. The manager delegates a quantum-computing research task via the `subagent` tool, and the example prints the full conversation and `OwnerComponent` parent-child relationship.
+- **Run:** `LLM_API_KEY=your-key uv run python examples/agent_dsl_markdown.py`
+- **Pattern:** `load_markdown_agent` × 2 → `resolve_agent_specs` → `compile_agent_specs` → `ToolExecutionSystem` + `ReasoningSystem`
 
 #### Key Code
 ```python
@@ -578,8 +580,11 @@ researcher_spec = load_markdown_agent(Path("examples/researcher.md"))
 specs = resolve_agent_specs([spec, researcher_spec])
 primary_entity, world = compile_agent_specs(specs, provider_factory=create_provider)
 
-registry = world.get_component(primary_entity, SubagentRegistryComponent)
-# registry.subagents == {"researcher": SubagentConfig(...)}
+# Compiler auto-wires subagent infrastructure when subagents are present:
+#   ToolRegistryComponent, SubagentSessionTableComponent, SubagentSystem
+world.register_system(ReasoningSystem(priority=0), priority=0)
+world.register_system(ToolExecutionSystem(priority=5), priority=5)
+await Runner().run(world, max_ticks=10)
 ```
 
-> **Dual-Mode Support**: Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
+> **Requires `LLM_API_KEY`**: Unlike most examples, the DSL examples use real LLM providers only. Set `LLM_API_KEY` (and optionally `LLM_BASE_URL`, `LLM_MODEL`) before running.

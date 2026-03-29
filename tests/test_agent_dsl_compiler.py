@@ -8,6 +8,8 @@ from ecs_agent.components import (
     LLMComponent,
     PermissionComponent,
     SubagentRegistryComponent,
+    SubagentSessionTableComponent,
+    ToolRegistryComponent,
 )
 from ecs_agent.core import World
 from ecs_agent.dsl.schema import AgentSpec
@@ -300,6 +302,7 @@ def test_compiler_primary_entity_has_expected_components_after_compile() -> None
 
     assert world.get_component(primary_entity_id, LLMComponent) is not None
     assert world.get_component(primary_entity_id, SubagentRegistryComponent) is not None
+    assert world.get_component(primary_entity_id, ToolRegistryComponent) is not None
     assert world.get_component(primary_entity_id, PermissionComponent) is None
 
 
@@ -561,3 +564,61 @@ def test_compiler_world_state_consistency_after_repeated_compilation() -> None:
     assert int(second_primary) == 1
     assert len(first_world.query(LLMComponent)) == 1
     assert len(second_world.query(LLMComponent)) == 1
+
+
+def test_compile_without_subagents_no_subagent_session_table() -> None:
+    """Primary-only spec must NOT attach SubagentSessionTableComponent."""
+    from ecs_agent.dsl.compiler import compile_agent_specs
+
+    specs = {
+        "main": AgentSpec(name="main", mode="primary", model="gpt-main", prompt="P"),
+    }
+
+    primary_entity_id, world = compile_agent_specs(specs, _ProviderFactorySpy())
+
+    assert world.get_component(primary_entity_id, SubagentSessionTableComponent) is None
+
+
+def test_compile_with_subagents_attaches_subagent_session_table() -> None:
+    """When subagents are present, SubagentSessionTableComponent must be attached."""
+    from ecs_agent.dsl.compiler import compile_agent_specs
+
+    specs = {
+        "main": AgentSpec(name="main", mode="primary", model="gpt-main", prompt="P"),
+        "helper": AgentSpec(name="helper", mode="subagent", model="gpt-h", prompt="H"),
+    }
+
+    primary_entity_id, world = compile_agent_specs(specs, _ProviderFactorySpy())
+
+    assert world.get_component(primary_entity_id, SubagentSessionTableComponent) is not None
+
+
+def test_compile_with_subagents_installs_subagent_tool_in_registry() -> None:
+    """When subagents are present, 'subagent' tool must appear in ToolRegistryComponent."""
+    from ecs_agent.dsl.compiler import compile_agent_specs
+
+    specs = {
+        "main": AgentSpec(name="main", mode="primary", model="gpt-main", prompt="P"),
+        "helper": AgentSpec(name="helper", mode="subagent", model="gpt-h", prompt="H"),
+    }
+
+    primary_entity_id, world = compile_agent_specs(specs, _ProviderFactorySpy())
+
+    registry = world.get_component(primary_entity_id, ToolRegistryComponent)
+    assert registry is not None
+    assert "subagent" in registry.tools
+
+
+def test_compile_without_subagents_tool_registry_is_empty() -> None:
+    """Primary-only spec must attach empty ToolRegistryComponent (no subagent tool)."""
+    from ecs_agent.dsl.compiler import compile_agent_specs
+
+    specs = {
+        "main": AgentSpec(name="main", mode="primary", model="gpt-main", prompt="P"),
+    }
+
+    primary_entity_id, world = compile_agent_specs(specs, _ProviderFactorySpy())
+
+    registry = world.get_component(primary_entity_id, ToolRegistryComponent)
+    assert registry is not None
+    assert "subagent" not in registry.tools

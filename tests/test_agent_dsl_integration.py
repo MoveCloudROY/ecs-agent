@@ -806,7 +806,7 @@ def test_compile_with_triggers_attaches_user_prompt_config_component() -> None:
     assert t.priority == 0
 
 
-def test_compile_without_triggers_no_user_prompt_config_component() -> None:
+def test_compile_without_triggers_attaches_empty_user_prompt_config_component() -> None:
     from ecs_agent.components.definitions import UserPromptConfigComponent
 
     resolved = resolve_agent_specs(
@@ -817,7 +817,8 @@ def test_compile_without_triggers_no_user_prompt_config_component() -> None:
     )
 
     upc = world.get_component(primary_entity, UserPromptConfigComponent)
-    assert upc is None
+    assert upc is not None
+    assert upc.triggers == []
 
 
 def test_compile_auto_registers_system_prompt_render_system() -> None:
@@ -864,7 +865,7 @@ def test_compile_with_triggers_registers_user_prompt_normalization_system() -> N
     assert UserPromptNormalizationSystem in registered_types
 
 
-def test_compile_without_triggers_no_user_prompt_normalization_system() -> None:
+def test_compile_always_registers_user_prompt_normalization_system() -> None:
     from ecs_agent.systems.user_prompt_normalization_system import (
         UserPromptNormalizationSystem,
     )
@@ -878,7 +879,7 @@ def test_compile_without_triggers_no_user_prompt_normalization_system() -> None:
 
     world._systems.apply_queued_operations()
     registered_types = [type(entry.system) for entry in world._systems._systems]
-    assert UserPromptNormalizationSystem not in registered_types
+    assert UserPromptNormalizationSystem in registered_types
 
 
 # ============================================================================

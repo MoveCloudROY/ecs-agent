@@ -2,37 +2,17 @@
   "assistant": {
     "mode": "primary",
     "model": "qwen3.5-flash",
-    "prompt": "You are a ${role}. You can help users with various tasks. Always be polite, clear, and concise.",
+    "prompt": "You are a manager agent. When given a complex question, use the 'subagent' tool to delegate work to background workers. After receiving the results, synthesize them into a concise summary.\n\nAvailable tools:\n${_installed_tools}\n\nAvailable subagents:\n${_installed_subagents}\n\nSession: ${session_label}",
     "placeholders": [
-      {"name": "role", "value": "helpful AI assistant"}
-    ],
-    "triggers": [
-      {
-        "pattern": "@help",
-        "match_mode": "keyword",
-        "action": "inject",
-        "content": "The user is requesting help. Provide a brief overview of your capabilities.",
-        "priority": 0
-      }
-    ],
-    "skills": [
-      {"path": "skills/ui-ux-reviewer"}
-    ],
-    "tools": {
-      "read_file": true,
-      "write_file": true,
-      "execute_bash": false
-    },
-    "metadata": {
-      "description": "General-purpose helpful assistant",
-      "version": "1.0"
-    }
+      {"name": "session_label", "value": "subagent-delegation-demo"}
+    ]
   },
   "researcher": {
     "mode": "subagent",
     "model": "qwen3.5-flash",
-    "prompt": "You are a research specialist focused on gathering and analyzing information. Provide detailed, well-researched answers with sources when possible.",
+    "prompt": "You are a research sub-agent. Investigate the given topic thoroughly and report your findings back to the manager.",
     "metadata": {
+      "description": "Research and gather information on any topic",
       "specialty": "research and analysis"
     }
   }
