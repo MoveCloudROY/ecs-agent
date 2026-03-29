@@ -85,6 +85,8 @@ async def main() -> None:
     print("\nCompiling agent spec into ECS World...")
     specs = {spec.name: spec}
     primary_entity, world = compile_agent_specs(specs, provider_factory=create_provider)
+    # Note: compile_agent_specs auto-registers SystemPromptRenderSystem (priority=-20)
+    # and UserPromptNormalizationSystem (priority=-10) when placeholders/triggers are present.
     print(f"Created primary entity: {primary_entity}")
 
     # Add conversation with initial user message
