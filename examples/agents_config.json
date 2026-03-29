@@ -24,7 +24,7 @@
       "description": "General-purpose helpful assistant",
       "version": "1.0"
     }
-  }
+  },
   "researcher": {
     "mode": "subagent",
     "model": "qwen3.5-flash",
