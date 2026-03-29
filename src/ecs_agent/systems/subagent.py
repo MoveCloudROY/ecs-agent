@@ -16,10 +16,13 @@ from ecs_agent.components import (
     OwnerComponent,
     PermissionComponent,
     SubagentRegistryComponent,
-    SystemPromptComponent,
     ToolRegistryComponent,
 )
-from ecs_agent.components.definitions import SkillComponent, SkillMetadata, WorkspaceBindingComponent
+from ecs_agent.components.definitions import (
+    SkillComponent,
+    SkillMetadata,
+    WorkspaceBindingComponent,
+)
 from ecs_agent.core.runner import Runner
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
@@ -51,6 +54,28 @@ from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.providers.retry_provider import RetryProvider
 
 logger = get_logger(__name__)
+
+
+def _build_child_prompt_template(user_prompt: str) -> str:
+    """Build the system-prompt template for a child world.
+
+    Ensures the template always includes ${_installed_tools} and
+    ${_installed_skills} placeholder sections so SystemPromptRenderSystem
+    can expand them at runtime. If the caller's prompt already contains
+    a placeholder, it is NOT duplicated.
+
+    Args:
+        user_prompt: Raw system prompt text from SubagentConfig.
+
+    Returns:
+        Template string ready for PromptTemplateSource(inline=...).
+    """
+    suffix_parts: list[str] = []
+    if "${_installed_tools}" not in user_prompt:
+        suffix_parts.append("\n\n## Available Tools\n${_installed_tools}")
+    if "${_installed_skills}" not in user_prompt:
+        suffix_parts.append("\n\n## Available Skills\n${_installed_skills}")
+    return user_prompt + "".join(suffix_parts)
 
 
 class _InheritedSkill:
@@ -157,12 +182,12 @@ class SubagentSystem:
                 "RETURNS (sync): final answer string from the subagent.\n"
                 "RETURNS (background): JSON {session_id, status, category, created_at}.\n\n"
                 "EXAMPLES:\n"
-                '  // Synchronous — block until done\n'
+                "  // Synchronous — block until done\n"
                 '  subagent(category="researcher", prompt="Summarize the latest papers on RAG.")\n\n'
-                '  // Parallel — launch two subagents, collect later\n'
+                "  // Parallel — launch two subagents, collect later\n"
                 '  subagent(category="coder", prompt="Write unit tests for auth.py.", background=True)\n'
                 '  subagent(category="reviewer", prompt="Review auth.py for security issues.", background=True)\n\n'
-                '  // With extra skill and timeout\n'
+                "  // With extra skill and timeout\n"
                 '  subagent(category="analyst", prompt="Analyze Q1 sales data.", load_skills=["sql"], timeout=120)'
             ),
             parameters={
@@ -170,7 +195,7 @@ class SubagentSystem:
                 "properties": {
                     "category": {
                         "type": "string",
-                        "description": "Registered subagent type/name (e.g. \"researcher\", \"coder\"). Must match a key in SubagentRegistryComponent.",
+                        "description": 'Registered subagent type/name (e.g. "researcher", "coder"). Must match a key in SubagentRegistryComponent.',
                     },
                     "prompt": {
                         "type": "string",
@@ -256,6 +281,7 @@ class SubagentSystem:
             tool_name=tool_name,
             available_subagents=list(registry.subagents.keys()),
         )
+
     async def process(self, world: World) -> None:
         """Register delegate tool for entities with SubagentRegistryComponent.
 
@@ -317,9 +343,9 @@ class SubagentSystem:
                 "RETURNS (no session_id): JSON {status, session_count, summary_table}.\n"
                 "RETURNS (with session_id): JSON {session_id, status, category, created_at, ...}.\n\n"
                 "EXAMPLES:\n"
-                '  // List all running background sessions\n'
-                '  subagent_status()\n\n'
-                '  // Inspect a specific session\n'
+                "  // List all running background sessions\n"
+                "  subagent_status()\n\n"
+                "  // Inspect a specific session\n"
                 '  subagent_status(session_id="ses_abc123")'
             ),
             parameters={
@@ -352,9 +378,9 @@ class SubagentSystem:
                 "  timeout    (optional) — max seconds to wait; null = wait indefinitely.\n\n"
                 "RETURNS: final answer string from the subagent, or an error/timeout message.\n\n"
                 "EXAMPLES:\n"
-                '  // Wait for a previously launched background subagent\n'
+                "  // Wait for a previously launched background subagent\n"
                 '  subagent_result(session_id="ses_abc123")\n\n'
-                '  // Wait with a 60-second timeout\n'
+                "  // Wait with a 60-second timeout\n"
                 '  subagent_result(session_id="ses_abc123", timeout=60)'
             ),
             parameters={
@@ -389,7 +415,7 @@ class SubagentSystem:
                 "  session_id (required) — the session_id to cancel.\n\n"
                 "RETURNS: JSON {status, session_id, lifecycle_status}.\n\n"
                 "EXAMPLES:\n"
-                '  // Cancel a session that is no longer needed\n'
+                "  // Cancel a session that is no longer needed\n"
                 '  subagent_cancel(session_id="ses_abc123")'
             ),
             parameters={
@@ -1032,7 +1058,6 @@ class SubagentSystem:
                 subagent_name=subagent_name,
             )
 
-
             world.add_component(
                 child_entity_id,
                 LLMComponent(
@@ -1048,9 +1073,7 @@ class SubagentSystem:
             world.add_component(
                 child_entity_id, OwnerComponent(owner_id=parent_entity_id)
             )
-            world.add_component(
-                child_entity_id, ChildStubComponent()
-            )
+            world.add_component(child_entity_id, ChildStubComponent())
 
             child_world, child_world_entity_id = self._assemble_child_world(
                 world,
@@ -1264,16 +1287,9 @@ class SubagentSystem:
         )
         child_world.add_component(
             child_world_entity_id,
-            SystemPromptComponent(
-                template=effective_system_prompt,
-                content=effective_system_prompt,
-            ),
-        )
-        child_world.add_component(
-            child_world_entity_id,
             SystemPromptConfigSpec(
                 template_source=PromptTemplateSource(
-                    inline=effective_system_prompt or "",
+                    inline=_build_child_prompt_template(effective_system_prompt or ""),
                 ),
             ),
         )
@@ -1372,7 +1388,9 @@ class SubagentSystem:
                         ),
                     )
 
-        child_world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
+        child_world.register_system(
+            SystemPromptRenderSystem(priority=-20), priority=-20
+        )
         child_world.register_system(ReasoningSystem(priority=0), priority=0)
         child_world.register_system(MemorySystem(), priority=10)
         child_world.register_system(
