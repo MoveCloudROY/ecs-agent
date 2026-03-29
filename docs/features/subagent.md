@@ -47,14 +47,10 @@ When `_assemble_child_world` builds the child world, it calls `_build_child_prom
 # If SubagentConfig.system_prompt does NOT contain ${_installed_tools} or ${_installed_skills},
 # the following sections are automatically appended:
 #
-#   
-
-## Available Tools
-${_installed_tools}
-#   
-
-## Available Skills
-${_installed_skills}
+#   \n\n## Available Tools
+#   ${_installed_tools}
+#   \n\n## Available Skills
+#   ${_installed_skills}
 ```
 
 `SystemPromptRenderSystem` (priority -20) then resolves these placeholders at runtime from the child entity's `ToolRegistryComponent` and `SkillComponent`, so the child agent's rendered system prompt always reflects its actual installed tools and skills.
