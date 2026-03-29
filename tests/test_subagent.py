@@ -154,10 +154,9 @@ def test_delegation_completed_event() -> None:
     )
 
 
-
-
 def test_delegation_started_event_has_child_world_name_field() -> None:
     from ecs_agent.types import EntityId
+
     world = World()
     entity = world.create_entity()
     evt = DelegationStartedEvent(
@@ -181,6 +180,8 @@ def test_delegation_completed_event_has_child_world_name_field() -> None:
         child_world_name="researcher-abc12345",
     )
     assert evt.child_world_name == "researcher-abc12345"
+
+
 @pytest.mark.parametrize(
     ("from_status", "to_status"),
     [
@@ -369,7 +370,7 @@ async def test_delegate_creates_child_entity() -> None:
     child_llm = world.get_component(child_entity, LLMComponent)
     assert child_llm is not None
     assert child_llm.model == "fake"
-    assert child_llm.system_prompt == "Test prompt"
+    assert child_llm.system_prompt.startswith("Test prompt")
 
     child_conv = world.get_component(child_entity, ConversationComponent)
     assert child_conv is not None
@@ -1326,9 +1327,11 @@ async def test_inheritance_policy_explicit_child_system_prompt_authoritative() -
 
     child_llm = world.get_component(child_entity, LLMComponent)
     assert child_llm is not None
-    assert child_llm.system_prompt == "child prompt", (
+    assert child_llm.system_prompt.startswith("child prompt"), (
         "Child explicit system_prompt must remain authoritative over inherited prompt"
     )
+    assert "## Available Tools" in child_llm.system_prompt
+    assert "## Available Skills" in child_llm.system_prompt
 
 
 async def test_inheritance_policy_whitelist_only_inherits_named_tools() -> None:
@@ -1366,9 +1369,11 @@ async def test_inheritance_policy_enabled_false_skips_all_inheritance() -> None:
 
     child_llm = world.get_component(child_entity, LLMComponent)
     assert child_llm is not None
-    assert child_llm.system_prompt == "", (
+    assert child_llm.system_prompt != "", (
         "enabled=False must disable system_prompt inheritance"
     )
+    assert "## Available Tools" in child_llm.system_prompt
+    assert "## Available Skills" in child_llm.system_prompt
 
     child_tools = world.get_component(child_entity, ToolRegistryComponent)
     if child_tools is not None:
@@ -1389,9 +1394,11 @@ async def test_inheritance_policy_inherit_system_prompt_when_child_empty() -> No
 
     child_llm = world.get_component(child_entity, LLMComponent)
     assert child_llm is not None
-    assert child_llm.system_prompt == "parent inherited prompt", (
+    assert child_llm.system_prompt.startswith("parent inherited prompt"), (
         "inherit_system_prompt=True should copy parent prompt when child prompt is empty"
     )
+    assert "## Available Tools" in child_llm.system_prompt
+    assert "## Available Skills" in child_llm.system_prompt
 
 
 async def test_inheritance_policy_inherit_permissions_true_copies_permission_component() -> (
@@ -2985,14 +2992,14 @@ def test_assemble_child_world_name_follows_convention() -> None:
         LLMComponent,
     )
 
-    provider = FakeProvider(responses=[
-        CompletionResult(message=Message(role="assistant", content="done"))
-    ])
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
     world = World(name="parent-world")
     parent = world.create_entity()
-    world.add_component(parent, LLMComponent(
-        provider=provider, model="m", system_prompt=""
-    ))
+    world.add_component(
+        parent, LLMComponent(provider=provider, model="m", system_prompt="")
+    )
     world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
     world.add_component(parent, ConversationComponent(messages=[]))
 
@@ -3021,12 +3028,15 @@ def test_assemble_child_world_different_calls_produce_unique_names() -> None:
         LLMComponent,
     )
 
-    provider = FakeProvider(responses=[
-        CompletionResult(message=Message(role="assistant", content="done"))
-    ] * 4)
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+        * 4
+    )
     world = World(name="parent")
     parent = world.create_entity()
-    world.add_component(parent, LLMComponent(provider=provider, model="m", system_prompt=""))
+    world.add_component(
+        parent, LLMComponent(provider=provider, model="m", system_prompt="")
+    )
     world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
     world.add_component(parent, ConversationComponent(messages=[]))
 
@@ -3036,3 +3046,334 @@ def test_assemble_child_world_different_calls_produce_unique_names() -> None:
     w1, _ = system._assemble_child_world(world, parent, config)
     w2, _ = system._assemble_child_world(world, parent, config)
     assert w1.name != w2.name
+
+
+# ---------------------------------------------------------------------------
+# Task 8: catalog skill resolution + workspace inheritance
+# ---------------------------------------------------------------------------
+
+
+async def test_subagent_resolves_skill_from_catalog_when_not_in_parent() -> None:
+    """Subagent installs a skill from the global catalog even if parent never had it."""
+    from ecs_agent.skills import catalog
+    from ecs_agent.skills.catalog import SkillDescriptor, SkillType
+    from ecs_agent.skills.script_skill import ScriptSkill
+    from ecs_agent.skills.manager import SkillManager
+    from ecs_agent.components.definitions import SkillComponent
+    from pathlib import Path
+
+    class CatalogOnlySkill(ScriptSkill):
+        name: str = "catalog-only-skill"
+        description: str = "A skill that lives in the catalog but not on parent"
+
+        def tools(self) -> dict[str, tuple[ToolSchema, Any]]:
+            async def catalog_tool() -> str:
+                return "catalog_tool_result"
+
+            return {
+                "catalog_tool": (
+                    ToolSchema(
+                        name="catalog_tool",
+                        description="A tool from catalog-only skill",
+                        parameters={"type": "object", "properties": {}},
+                    ),
+                    catalog_tool,
+                )
+            }
+
+        def system_prompt(self) -> str:
+            return "Catalog skill system prompt"
+
+        def install(self, world: World, entity_id: EntityId) -> None:
+            pass
+
+        def uninstall(self, world: World, entity_id: EntityId) -> None:
+            pass
+
+    catalog.clear_catalog()
+    descriptor = SkillDescriptor(
+        name="catalog-only-skill",
+        skill_type=SkillType.SCRIPT,
+        source_path=Path("fake/catalog_only_skill"),
+        _materializer=CatalogOnlySkill,
+        metadata={},
+    )
+    catalog.register(descriptor)
+
+    world = World()
+    parent_entity = world.create_entity()
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    child_provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(
+        name="child",
+        provider=child_provider,
+        model="fake",
+        skills=["catalog-only-skill"],
+        inheritance_policy=InheritancePolicy(
+            missing_skill_policy="error",  # should NOT raise — catalog has it
+        ),
+    )
+
+    registry = SubagentRegistryComponent(subagents={"child": config})
+    world.add_component(parent_entity, registry)
+    _register_message_bus(world, parent_entity)
+
+    system = SubagentSystem()
+    await system.process(world)
+
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    delegate_handler = tool_registry.handlers["delegate"]
+
+    result = await delegate_handler(subagent_name="child", task="test task")
+    assert isinstance(result, str)
+
+    child_entity = _find_child_entity(world, parent_entity)
+
+    child_skills = world.get_component(child_entity, SkillComponent)
+    assert child_skills is not None, (
+        "Child should have SkillComponent after catalog skill install"
+    )
+    assert "catalog-only-skill" in child_skills.skills, (
+        "catalog-only-skill must be installed on child via catalog lookup"
+    )
+
+    child_tools = world.get_component(child_entity, ToolRegistryComponent)
+    assert child_tools is not None
+    assert "catalog_tool" in child_tools.handlers, (
+        "Child should have catalog_tool handler"
+    )
+    assert "catalog_tool" in child_tools.tools, "Child should have catalog_tool schema"
+
+    catalog.clear_catalog()
+
+
+async def test_subagent_inherits_parent_workspace_binding() -> None:
+    """Child entity inherits WorkspaceBindingComponent from parent when policy allows."""
+    from ecs_agent.components.definitions import (
+        WorkspaceBindingComponent,
+    )
+    from pathlib import Path
+
+    parent_workspace = Path("/tmp/parent-workspace")
+
+    world = World()
+    parent_entity = world.create_entity()
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(
+        parent_entity, WorkspaceBindingComponent(workspace_root=parent_workspace)
+    )
+
+    child_provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
+    )
+    config = SubagentConfig(
+        name="child",
+        provider=child_provider,
+        model="fake",
+        inheritance_policy=InheritancePolicy(enabled=True),
+    )
+
+    registry = SubagentRegistryComponent(subagents={"child": config})
+    world.add_component(parent_entity, registry)
+    _register_message_bus(world, parent_entity)
+
+    system = SubagentSystem()
+    await system.process(world)
+
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    delegate_handler = tool_registry.handlers["delegate"]
+
+    result = await delegate_handler(subagent_name="child", task="test task")
+    assert isinstance(result, str)
+
+    child_entity = _find_child_entity(world, parent_entity)
+
+    child_binding = world.get_component(child_entity, WorkspaceBindingComponent)
+    assert child_binding is not None, (
+        "Child should inherit WorkspaceBindingComponent from parent"
+    )
+    assert child_binding.workspace_root == parent_workspace, (
+        "Child workspace root must match parent workspace root"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Task 9: subagent prompt rendering via SystemPromptRenderSystem
+# ---------------------------------------------------------------------------
+
+
+async def test_subagent_child_world_registers_system_prompt_render_system() -> None:
+    """Child world must have SystemPromptRenderSystem registered at priority < 0."""
+    from ecs_agent.systems.subagent import SubagentSystem
+    from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
+
+    world = World()
+    parent_entity = world.create_entity()
+    world.add_component(
+        parent_entity,
+        LLMComponent(
+            provider=FakeProvider(responses=[]),
+            model="fake",
+            system_prompt="parent-prompt",
+        ),
+    )
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    config = SubagentConfig(
+        name="child",
+        provider=FakeProvider(
+            responses=[
+                CompletionResult(message=Message(role="assistant", content="done"))
+            ]
+        ),
+        model="fake",
+    )
+
+    system = SubagentSystem()
+    child_world, _child_entity_id = system._assemble_child_world(
+        world, parent_entity, config
+    )
+
+    # Apply queued operations so _systems list is populated
+    child_world._systems.apply_queued_operations()
+
+    # Verify SystemPromptRenderSystem is registered at priority < 0 (before ReasoningSystem at 0)
+    render_system_found = False
+    for entry in child_world._systems._systems:
+        if isinstance(entry.system, SystemPromptRenderSystem):
+            render_system_found = True
+            assert entry.priority < 0, (
+                f"SystemPromptRenderSystem must be at priority < 0, got {entry.priority}"
+            )
+    assert render_system_found, (
+        "Child world must have SystemPromptRenderSystem registered"
+    )
+
+
+async def test_subagent_child_world_has_system_prompt_config_spec() -> None:
+    """Child entity must have SystemPromptConfigSpec attached (for renderer to consume)."""
+    from ecs_agent.systems.subagent import SubagentSystem
+    from ecs_agent.prompts.contracts import SystemPromptConfigSpec
+
+    world = World()
+    parent_entity = world.create_entity()
+    world.add_component(
+        parent_entity,
+        LLMComponent(
+            provider=FakeProvider(responses=[]),
+            model="fake",
+            system_prompt="parent-prompt",
+        ),
+    )
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    config = SubagentConfig(
+        name="child",
+        provider=FakeProvider(
+            responses=[
+                CompletionResult(message=Message(role="assistant", content="done"))
+            ]
+        ),
+        model="fake",
+        system_prompt="explicit-child-prompt",
+    )
+
+    system = SubagentSystem()
+    child_world, child_entity_id = system._assemble_child_world(
+        world, parent_entity, config
+    )
+
+    # After Task 9: child entity must have SystemPromptConfigSpec so the renderer can resolve it
+    spec = child_world.get_component(child_entity_id, SystemPromptConfigSpec)
+    assert spec is not None, (
+        "Child entity must have SystemPromptConfigSpec for SystemPromptRenderSystem to consume"
+    )
+    assert spec.template_source.inline is not None, (
+        f"SystemPromptConfigSpec template must be non-None, got: {spec.template_source.inline!r}"
+    )
+    assert spec.template_source.inline.startswith("explicit-child-prompt"), (
+        f"SystemPromptConfigSpec template must start with config.system_prompt, got: {spec.template_source.inline!r}"
+    )
+    assert "${_installed_tools}" in spec.template_source.inline, (
+        f"SystemPromptConfigSpec template must include ${{_installed_tools}}, got: {spec.template_source.inline!r}"
+    )
+    assert "${_installed_skills}" in spec.template_source.inline, (
+        f"SystemPromptConfigSpec template must include ${{_installed_skills}}, got: {spec.template_source.inline!r}"
+    )
+
+
+def test_build_child_prompt_template_appends_both_when_absent() -> None:
+    """When neither placeholder is present, both are appended."""
+    from ecs_agent.systems.subagent import _build_child_prompt_template
+
+    result = _build_child_prompt_template("You are a coder.")
+    assert "${_installed_tools}" in result
+    assert "${_installed_skills}" in result
+    assert result.startswith("You are a coder.")
+
+
+def test_build_child_prompt_template_no_duplicate_tools() -> None:
+    """When tools placeholder is already present, it is not duplicated."""
+    from ecs_agent.systems.subagent import _build_child_prompt_template
+
+    prompt = "Tools: ${_installed_tools}"
+    result = _build_child_prompt_template(prompt)
+    assert result.count("${_installed_tools}") == 1
+    assert "${_installed_skills}" in result
+
+
+def test_build_child_prompt_template_no_duplicate_skills() -> None:
+    """When skills placeholder is already present, it is not duplicated."""
+    from ecs_agent.systems.subagent import _build_child_prompt_template
+
+    prompt = "Skills: ${_installed_skills}"
+    result = _build_child_prompt_template(prompt)
+    assert result.count("${_installed_skills}") == 1
+    assert "${_installed_tools}" in result
+
+
+def test_build_child_prompt_template_no_append_when_both_present() -> None:
+    """When both placeholders are already present, the prompt is returned unchanged."""
+    from ecs_agent.systems.subagent import _build_child_prompt_template
+
+    prompt = "Tools: ${_installed_tools}\nSkills: ${_installed_skills}"
+    result = _build_child_prompt_template(prompt)
+    assert result == prompt
+
+
+def test_build_child_prompt_template_empty_prompt() -> None:
+    """An empty prompt still gets both placeholders appended."""
+    from ecs_agent.systems.subagent import _build_child_prompt_template
+
+    result = _build_child_prompt_template("")
+    assert "${_installed_tools}" in result
+    assert "${_installed_skills}" in result
+
+
+def test_build_child_prompt_template_only_appends_missing_skills() -> None:
+    from ecs_agent.systems.subagent import _build_child_prompt_template
+
+    prompt = "Base prompt\n\nTools block:\n${_installed_tools}"
+    result = _build_child_prompt_template(prompt)
+
+    assert result.startswith(prompt)
+    assert result.count("${_installed_tools}") == 1
+    assert result.count("${_installed_skills}") == 1
+    assert "## Available Skills" in result
+
+
+def test_build_child_prompt_template_only_appends_missing_tools() -> None:
+    from ecs_agent.systems.subagent import _build_child_prompt_template
+
+    prompt = "Base prompt\n\nSkills block:\n${_installed_skills}"
+    result = _build_child_prompt_template(prompt)
+
+    assert result.startswith(prompt)
+    assert result.count("${_installed_skills}") == 1
+    assert result.count("${_installed_tools}") == 1
+    assert "## Available Tools" in result

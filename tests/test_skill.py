@@ -1376,8 +1376,8 @@ Write to @../../../output.md please.
 """)
 
         skill = Skill(skill_path)
-        skill.resolve_path_references(str(workspace))
-        prompt = skill.system_prompt()
+        bound_skill = skill.resolve_path_references(str(workspace))
+        prompt = bound_skill.system_prompt()
 
         assert "output.md" in prompt
         # The @../../.. prefix should be gone
@@ -1399,8 +1399,8 @@ Contact @admin for help.
 """)
 
         skill = Skill(skill_path)
-        skill.resolve_path_references(str(workspace))
-        prompt = skill.system_prompt()
+        bound_skill = skill.resolve_path_references(str(workspace))
+        prompt = bound_skill.system_prompt()
 
         assert "@admin" in prompt
 
@@ -1421,8 +1421,8 @@ See @../../../escape.md for details.
 """)
 
         skill = Skill(skill_path)
-        skill.resolve_path_references(str(workspace))
-        prompt = skill.system_prompt()
+        bound_skill = skill.resolve_path_references(str(workspace))
+        prompt = bound_skill.system_prompt()
 
         # Original @-reference preserved since it escapes workspace
         assert "@../../../escape.md" in prompt
@@ -1443,8 +1443,8 @@ Write draft to @../../../ui/draft.md and prompts to @../../../ui/prompts.md.
 """)
 
         skill = Skill(skill_path)
-        skill.resolve_path_references(str(workspace))
-        prompt = skill.system_prompt()
+        bound_skill = skill.resolve_path_references(str(workspace))
+        prompt = bound_skill.system_prompt()
 
         assert "ui/draft.md" in prompt
         assert "ui/prompts.md" in prompt
@@ -1466,8 +1466,8 @@ Read @./notes.txt for context.
 """)
 
         skill = Skill(skill_path)
-        skill.resolve_path_references(str(workspace))
-        prompt = skill.system_prompt()
+        bound_skill = skill.resolve_path_references(str(workspace))
+        prompt = bound_skill.system_prompt()
 
         assert "skills/s1/notes.txt" in prompt
         assert "@./notes.txt" not in prompt

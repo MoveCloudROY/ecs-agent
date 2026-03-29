@@ -1,6 +1,7 @@
 """Component dataclass definitions for ECS-based LLM Agent."""
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 import asyncio
@@ -341,6 +342,11 @@ class SubagentRegistryComponent:
 
 
 @dataclass(slots=True)
+class WorkspaceBindingComponent:
+    workspace_root: Path | str
+
+
+@dataclass(slots=True)
 class EntityRegistryComponent:
     """Entity registry metadata for runtime naming and tagging."""
 
@@ -448,7 +454,6 @@ class RenderedSystemPromptComponent:
     placeholder_snapshot: dict[str, str] = field(default_factory=dict)
 
 
-
 @dataclass(slots=True)
 class RenderedUserPromptComponent:
     text: str
@@ -461,4 +466,3 @@ class ChildStubComponent:
     Entities with this component should be skipped by ReasoningSystem so that
     the parent world does not attempt LLM inference on delegation stubs.
     """
-

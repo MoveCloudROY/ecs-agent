@@ -368,3 +368,18 @@ def test_tier2_details_contain_full_schema_json() -> None:
     assert details is not None
     assert '"path"' in details
     assert '"type": "string"' in details
+
+
+def test_mcp_adapter_does_not_own_private_manager_state() -> None:
+    """MCPSkillAdapter must not store a private _manager attribute after refactor."""
+    adapter_module = _import_adapter_module()
+    world = World()
+    entity_id = world.create_entity()
+    client = FakeMCPClient(server_name="fs", tools_payload=[_tool_payload("read")])
+    adapter = adapter_module.MCPSkillAdapter(client, "fs")
+
+    # Adapter must not own a private _manager instance
+    assert not hasattr(adapter, "_manager"), (
+        "MCPSkillAdapter should not own a private _manager attribute; ",
+        "use SkillManager() facade directly in install()"
+    )

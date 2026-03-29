@@ -56,3 +56,4 @@ root_logger.setLevel(logging.INFO)
 
 # Now safe to import pytest and ecs_agent
 import pytest
+

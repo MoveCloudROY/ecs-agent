@@ -1556,3 +1556,139 @@ async def test_real_subagent_child_world_name_in_logs(
     assert pattern.match(str(child_world_name)), (
         f"Child world name {child_world_name!r} does not match 'echo-<hex8>'"
     )
+
+
+# ============================================================================
+# Task 11 — Subagent Prompt Rendering and Workspace Inheritance Real-LLM Tests
+# ============================================================================
+
+
+@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.asyncio
+async def test_real_subagent_rendered_prompt() -> None:
+    """Child world SystemPromptRenderSystem renders the configured system prompt.
+
+    Directly assembles a child world via SubagentSystem._assemble_child_world,
+    adds a user message, runs the child for one tick with a capturing provider,
+    and verifies that:
+    - RenderedSystemPromptComponent is present on the child entity
+    - LLMComponent.system_prompt matches the rendered text
+    - The configured system_prompt string is present in the rendered text
+    - The capturing provider received the rendered text as the system message
+    """
+    from ecs_agent.components.definitions import RenderedSystemPromptComponent
+    from ecs_agent.systems.subagent import SubagentSystem
+    from ecs_agent.types import SubagentConfig
+
+    _SYSTEM_PROMPT = "You are a specialized subagent for Task 11 verification."
+
+    inner = OpenAIProvider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    capturing: _CapturingProvider = _CapturingProvider(inner)
+
+    # Build a minimal parent world so _assemble_child_world has something to inspect.
+    parent_world = World(name="test-parent-t11")
+    parent_entity = parent_world.create_entity()
+    parent_world.add_component(
+        parent_entity,
+        LLMComponent(provider=inner, model=MODEL, system_prompt="Parent prompt."),  # type: ignore[arg-type]
+    )
+
+    config = SubagentConfig(
+        name="rendered-prompt-test",
+        provider=capturing,  # type: ignore[arg-type]
+        model=MODEL,
+        system_prompt=_SYSTEM_PROMPT,
+        max_ticks=1,
+    )
+
+    system = SubagentSystem()
+    child_world, child_entity_id = system._assemble_child_world(
+        parent_world, parent_entity, config
+    )
+
+    # Give the child a user message so ReasoningSystem actually calls the provider.
+    child_conv = child_world.get_component(child_entity_id, ConversationComponent)
+    assert child_conv is not None, "Child entity missing ConversationComponent"
+    child_conv.messages.append(Message(role="user", content="Say hello briefly."))
+
+    await Runner().run(child_world, max_ticks=1)
+
+    rendered = child_world.get_component(child_entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None, (
+        "RenderedSystemPromptComponent missing — SystemPromptRenderSystem did not run"
+    )
+    assert _SYSTEM_PROMPT in rendered.text, (
+        f"Configured system prompt not found in rendered text: {rendered.text!r}"
+    )
+
+    child_llm = child_world.get_component(child_entity_id, LLMComponent)
+    assert child_llm is not None
+    assert child_llm.system_prompt == rendered.text, (
+        "LLMComponent.system_prompt does not match RenderedSystemPromptComponent.text"
+    )
+
+    assert len(capturing.captured_messages) >= 1, (
+        "Capturing provider received no messages — ReasoningSystem did not run"
+    )
+    sys_msg = capturing.captured_messages[0]
+    assert sys_msg.role == "system", (
+        f"First provider message has role {sys_msg.role!r}, expected 'system'"
+    )
+    assert sys_msg.content == rendered.text, (
+        "Provider system message does not match RenderedSystemPromptComponent.text"
+    )
+
+
+@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.asyncio
+async def test_real_subagent_workspace_inherits() -> None:
+    """Subagent child entity inherits the parent workspace binding.
+
+    Directly assembles a child world via SubagentSystem._assemble_child_world
+    when the parent entity carries a WorkspaceBindingComponent, and verifies that:
+    - The child entity has WorkspaceBindingComponent
+    - Its workspace_root matches the parent's workspace_root
+    """
+    import tempfile
+    from pathlib import Path as _Path
+    from ecs_agent.components.definitions import WorkspaceBindingComponent
+    from ecs_agent.systems.subagent import SubagentSystem
+    from ecs_agent.types import SubagentConfig
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        workspace_root = _Path(tmp_dir)
+
+        inner = OpenAIProvider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+
+        parent_world = World(name="test-parent-workspace-t11")
+        parent_entity = parent_world.create_entity()
+        parent_world.add_component(
+            parent_entity,
+            LLMComponent(provider=inner, model=MODEL, system_prompt="Parent."),  # type: ignore[arg-type]
+        )
+        parent_world.add_component(
+            parent_entity,
+            WorkspaceBindingComponent(workspace_root=workspace_root),
+        )
+
+        config = SubagentConfig(
+            name="workspace-test",
+            provider=inner,  # type: ignore[arg-type]
+            model=MODEL,
+            system_prompt="You are a subagent.",
+            max_ticks=1,
+        )
+
+        system = SubagentSystem()
+        child_world, child_entity_id = system._assemble_child_world(
+            parent_world, parent_entity, config
+        )
+
+        child_binding = child_world.get_component(child_entity_id, WorkspaceBindingComponent)
+        assert child_binding is not None, (
+            "Child entity missing WorkspaceBindingComponent — workspace inheritance failed"
+        )
+        assert _Path(child_binding.workspace_root) == workspace_root, (
+            f"Child workspace_root {child_binding.workspace_root!r} does not match "
+            f"parent workspace_root {workspace_root!r}"
+        )
