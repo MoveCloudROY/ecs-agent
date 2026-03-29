@@ -18,6 +18,7 @@ from ecs_agent.components import (
     SubagentRegistryComponent,
     SystemPromptComponent,
 )
+from ecs_agent.prompts.contracts import SystemPromptConfigSpec
 from ecs_agent.core import Runner
 from ecs_agent.dsl import (
     compile_agent_specs,
@@ -212,10 +213,10 @@ def test_subagent_runtime_prompt_component_uses_compiled_prompt_template() -> No
         config,
     )
 
-    child_prompt = child_world.get_component(child_entity, SystemPromptComponent)
-    assert child_prompt is not None
-    assert child_prompt.template == "Research prompt from DSL"
-    assert child_prompt.content == "Research prompt from DSL"
+    child_spec = child_world.get_component(child_entity, SystemPromptConfigSpec)
+    assert child_spec is not None
+    assert child_spec.template_source.inline is not None
+    assert child_spec.template_source.inline.startswith("Research prompt from DSL")
 
 
 # ============================================================================
