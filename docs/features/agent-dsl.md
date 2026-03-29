@@ -28,7 +28,9 @@ class AgentSpec:
     prompt: str                            # Required
     tools: dict[str, bool] = {}            # Optional
     metadata: dict[str, Any] = {}          # Optional
-    name: str = ""                         # Optional
+    name: str = ""                              # Optional
+    placeholders: list[dict[str, str]] = []    # Optional (primary only)
+    triggers: list[dict[str, str | int]] = []  # Optional (primary only)
 ```
 
 **Required Fields:**
@@ -40,6 +42,9 @@ class AgentSpec:
 - `tools`: Tool permission mapping (`{tool_name: true/false}`)
 - `metadata`: Arbitrary user-defined metadata
 - `name`: Agent name (overridden by dict key in JSON)
+- `placeholders`: List of `{name, value}` dicts declaring `${name}` template variables in `prompt`
+- `triggers`: List of trigger dicts enabling `UserPromptNormalizationSystem` (see Triggers section)
+- `skills`: List of skill path dicts (`[{"path": "relative/dir"}]`); installs SKILL.md-based skills on compile (primary only)
 
 ### JSON Example
 
@@ -199,7 +204,7 @@ primary_entity, world = compile_agent_specs(resolved, provider_factory)
 
 **5. compile_agent_specs(specs: dict[str, AgentSpec], factory) → tuple[EntityId, World]**
 - Creates exactly ONE runnable primary entity
-- Attaches `LLMComponent`, `SystemPromptComponent`, `PermissionComponent`, `SubagentRegistryComponent`
+- Attaches `LLMComponent`, `SystemPromptConfigSpec`, `PermissionComponent`, `SubagentRegistryComponent`. Conditionally attaches `UserPromptConfigComponent` (when `triggers` present). Auto-registers `SystemPromptRenderSystem` (priority `-20`) and optionally `UserPromptNormalizationSystem` (priority `-10`).
 - Subagents become `SubagentConfig` in registry
 - Raises `ValueError` if zero or multiple primaries
 
@@ -324,6 +329,134 @@ if permission.allowed_tools:  # Non-empty list
 else:  # Empty list
     raise PermissionError("All tools denied (empty allowlist)")
 ```
+## Placeholders
+
+Declare `${name}` template variables in your `prompt` field and resolve them via `placeholders`:
+
+### JSON Example
+
+```json
+{
+  "assistant": {
+    "mode": "primary",
+    "model": "gpt-4",
+    "prompt": "You are a ${role}. Your tone is ${tone}.",
+    "placeholders": [
+[object Object]
+[object Object]
+    ]
+  }
+}
+```
+
+### Validation Rules
+
+- Each entry must have `name` (str) and `value` (str)
+- `name` must match `[A-Za-z_][A-Za-z0-9_]*`
+- Names starting with `_` are reserved (e.g., `_installed_tools`)
+
+### Compilation
+
+`compile_agent_specs` builds `SystemPromptConfigSpec` with `PlaceholderSpec` objects from these entries.
+`SystemPromptRenderSystem` (auto-registered at priority `-20`) resolves `${name}` → value before the LLM call.
+
+## Triggers
+
+Declare trigger rules that inject context into user messages via `UserPromptNormalizationSystem`:
+
+### JSON Example
+,
+```json
+{
+  "assistant": {
+    "mode": "primary",
+    "model": "gpt-4",
+    "prompt": "You are an assistant.",
+    "triggers": [
+      {
+        "pattern": "@help",
+        "match_mode": "keyword",
+        "action": "inject",
+        "content": "The user is requesting help. Show available commands.",
+        "priority": 0
+      }
+    ]
+  }
+}
+```
+
+### Trigger Schema
+
+| Field | Type | Required | Values |
+|-------|------|----------|--------|
+| `pattern` | str | yes | any string |
+| `match_mode` | str | yes | `keyword`, `prefix`, `contains` |
+| `action` | str | yes | `replace`, `inject` |
+| `content` | str | yes | any string |
+| `priority` | int | no (default 0) | integer |
+
+### Compilation
+
+When `triggers` are present, `compile_agent_specs`:
+1. Attaches `UserPromptConfigComponent` with `TriggerSpec` objects to the primary entity
+2. Auto-registers `UserPromptNormalizationSystem` at priority `-10`
+
+
+## Skills
+
+Declare SKILL.md-based skills to install onto the primary agent at compile time.
+
+### JSON Example
+
+```json
+{
+  "assistant": {
+    "mode": "primary",
+    "model": "gpt-4",
+    "prompt": "You are a helpful assistant.",
+    "skills": [
+      {"path": "skills/ui-ux-reviewer"}
+    ]
+  }
+}
+```
+
+### Markdown Example
+
+```yaml
+skills:
+  - path: skills/ui-ux-reviewer
+```
+
+### Skill Path Rules
+
+Each `path` entry is a directory (relative to the DSL source file) that contains a `SKILL.md` file.
+
+**Validation rules:**
+- Must be a relative path (absolute paths are rejected)
+- Must not contain `..` path traversal
+- Must be non-empty string
+
+### Compilation
+
+When `skills` are present, pass `source_dir` to `compile_agent_specs`:
+
+```python
+from pathlib import Path
+
+primary_entity, world = compile_agent_specs(
+    resolved,
+    provider_factory,
+    source_dir=Path("./examples"),  # skill paths resolved relative to this
+)
+```
+
+For each skill entry, the compiler:
+1. Resolves `(source_dir / path / "SKILL.md").resolve()`
+2. Loads the skill with `Skill(skill_path=...)`
+3. Installs it via `SkillManager().install(world, primary_entity, skill)`
+
+If `source_dir` is `None` and skills are declared, a warning is logged and skills are skipped (no exception raised).
 
 ## Error Handling
 
@@ -545,6 +678,9 @@ class AgentSpec:
     tools: dict[str, bool] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     name: str = ""
+    placeholders: list[dict[str, str]] = field(default_factory=list)
+    triggers: list[dict[str, str | int]] = field(default_factory=list)
+    skills: list[dict[str, str]] = field(default_factory=list)
 ```
 
 **validate_agent_spec(data, *, source_name="") → AgentSpec**
@@ -574,11 +710,12 @@ class AgentSpec:
 - Returns dict mapping agent names to specs
 - Raises `ValueError` for empty agent names
 
-**compile_agent_specs(specs, provider_factory) → tuple[EntityId, World]**
+**compile_agent_specs(specs, provider_factory, *, source_dir: Path | None = None) → tuple[EntityId, World]**
 - Compiles agent specs into ECS World with components
 - Creates exactly one runnable primary entity
 - Subagents populate `SubagentRegistryComponent`
 - `provider_factory: Callable[[str, str], LLMProvider]` creates providers
+- `source_dir`: Optional base directory for resolving skill paths; required when `skills` are declared
 - Raises `ValueError` if zero or multiple primaries
 
 ### ecs_agent.dsl.prompt_resolver

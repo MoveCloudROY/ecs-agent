@@ -1,6 +1,17 @@
 ---
 mode: primary
 model: qwen3.5-flash
+placeholders:
+  - name: style
+    value: polite and professional
+triggers:
+  - pattern: "@help"
+    match_mode: keyword
+    action: inject
+    content: "The user is requesting help. Briefly describe your capabilities."
+    priority: 0
+skills:
+  - path: skills/ui-ux-reviewer
 tools:
   read_file: true
   write_file: true
@@ -12,7 +23,7 @@ metadata:
 
 # Helpful AI Assistant
 
-You are a helpful AI assistant loaded from a Markdown configuration file.
+You are a helpful AI assistant loaded from a Markdown configuration file. Your communication style is ${style}.
 
 ## Your Capabilities
 

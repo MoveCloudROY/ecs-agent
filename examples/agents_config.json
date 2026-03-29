@@ -2,7 +2,22 @@
   "assistant": {
     "mode": "primary",
     "model": "qwen3.5-flash",
-    "prompt": "You are a helpful AI assistant. You can help users with various tasks including answering questions, providing information, and solving problems. Always be polite, clear, and concise in your responses.",
+    "prompt": "You are a ${role}. You can help users with various tasks. Always be polite, clear, and concise.",
+    "placeholders": [
+      {"name": "role", "value": "helpful AI assistant"}
+    ],
+    "triggers": [
+      {
+        "pattern": "@help",
+        "match_mode": "keyword",
+        "action": "inject",
+        "content": "The user is requesting help. Provide a brief overview of your capabilities.",
+        "priority": 0
+      }
+    ],
+    "skills": [
+      {"path": "skills/ui-ux-reviewer"}
+    ],
     "tools": {
       "read_file": true,
       "write_file": true,

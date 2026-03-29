@@ -16,7 +16,6 @@ from ecs_agent.components import (
     LLMComponent,
     PermissionComponent,
     SubagentRegistryComponent,
-    SystemPromptComponent,
 )
 from ecs_agent.prompts.contracts import SystemPromptConfigSpec
 from ecs_agent.core import Runner
@@ -729,3 +728,242 @@ async def test_subagent_tools_no_permission_on_primary() -> None:
         registry = world.get_component(primary_entity, SubagentRegistryComponent)
         assert registry is not None
         assert "worker" in registry.subagents
+
+
+def test_compile_attaches_system_prompt_config_spec_not_legacy_component() -> None:
+    from ecs_agent.components import SystemPromptComponent
+
+    resolved = resolve_agent_specs(
+        [AgentSpec(name="bot", mode="primary", model="m", prompt="You are a bot.")]
+    )
+    primary_entity, world = compile_agent_specs(
+        resolved, create_fake_provider_factory([])
+    )
+
+    config_spec = world.get_component(primary_entity, SystemPromptConfigSpec)
+    assert config_spec is not None
+    assert config_spec.template_source.inline == "You are a bot."
+    assert config_spec.placeholders == []
+
+    legacy = world.get_component(primary_entity, SystemPromptComponent)
+    assert legacy is None
+
+
+def test_compile_with_placeholders_builds_correct_placeholder_specs() -> None:
+    from ecs_agent.prompts.contracts import PlaceholderSpec
+
+    spec = AgentSpec(
+        name="bot",
+        mode="primary",
+        model="m",
+        prompt="You are ${role}.",
+        placeholders=[{"name": "role", "value": "a helpful assistant"}],
+    )
+    primary_entity, world = compile_agent_specs(
+        resolve_agent_specs([spec]), create_fake_provider_factory([])
+    )
+
+    config_spec = world.get_component(primary_entity, SystemPromptConfigSpec)
+    assert config_spec is not None
+    assert len(config_spec.placeholders) == 1
+    assert isinstance(config_spec.placeholders[0], PlaceholderSpec)
+    assert config_spec.placeholders[0].name == "role"
+    assert config_spec.placeholders[0].value == "a helpful assistant"
+
+
+def test_compile_with_triggers_attaches_user_prompt_config_component() -> None:
+    from ecs_agent.components.definitions import UserPromptConfigComponent
+    from ecs_agent.prompts.contracts import TriggerSpec
+
+    spec = AgentSpec(
+        name="bot",
+        mode="primary",
+        model="m",
+        prompt="You are an assistant.",
+        triggers=[
+            {
+                "pattern": "@help",
+                "match_mode": "keyword",
+                "action": "inject",
+                "content": "Show help.",
+                "priority": 0,
+            }
+        ],
+    )
+    primary_entity, world = compile_agent_specs(
+        resolve_agent_specs([spec]), create_fake_provider_factory([])
+    )
+
+    upc = world.get_component(primary_entity, UserPromptConfigComponent)
+    assert upc is not None
+    assert len(upc.triggers) == 1
+    t = upc.triggers[0]
+    assert isinstance(t, TriggerSpec)
+    assert t.pattern == "@help"
+    assert t.match_mode == "keyword"
+    assert t.action == "inject"
+    assert t.content == "Show help."
+    assert t.priority == 0
+
+
+def test_compile_without_triggers_no_user_prompt_config_component() -> None:
+    from ecs_agent.components.definitions import UserPromptConfigComponent
+
+    resolved = resolve_agent_specs(
+        [AgentSpec(name="bot", mode="primary", model="m", prompt="You are a bot.")]
+    )
+    primary_entity, world = compile_agent_specs(
+        resolved, create_fake_provider_factory([])
+    )
+
+    upc = world.get_component(primary_entity, UserPromptConfigComponent)
+    assert upc is None
+
+
+def test_compile_auto_registers_system_prompt_render_system() -> None:
+    from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
+
+    resolved = resolve_agent_specs(
+        [AgentSpec(name="bot", mode="primary", model="m", prompt="You are a bot.")]
+    )
+    _primary_entity, world = compile_agent_specs(
+        resolved, create_fake_provider_factory([])
+    )
+
+    world._systems.apply_queued_operations()
+    registered_types = [type(entry.system) for entry in world._systems._systems]
+    assert SystemPromptRenderSystem in registered_types
+
+
+def test_compile_with_triggers_registers_user_prompt_normalization_system() -> None:
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+
+    spec = AgentSpec(
+        name="bot",
+        mode="primary",
+        model="m",
+        prompt="You are an assistant.",
+        triggers=[
+            {
+                "pattern": "@help",
+                "match_mode": "keyword",
+                "action": "inject",
+                "content": "Show help.",
+                "priority": 0,
+            }
+        ],
+    )
+    _primary_entity, world = compile_agent_specs(
+        resolve_agent_specs([spec]), create_fake_provider_factory([])
+    )
+
+    world._systems.apply_queued_operations()
+    registered_types = [type(entry.system) for entry in world._systems._systems]
+    assert UserPromptNormalizationSystem in registered_types
+
+
+def test_compile_without_triggers_no_user_prompt_normalization_system() -> None:
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+
+    resolved = resolve_agent_specs(
+        [AgentSpec(name="bot", mode="primary", model="m", prompt="You are a bot.")]
+    )
+    _primary_entity, world = compile_agent_specs(
+        resolved, create_fake_provider_factory([])
+    )
+
+    world._systems.apply_queued_operations()
+    registered_types = [type(entry.system) for entry in world._systems._systems]
+    assert UserPromptNormalizationSystem not in registered_types
+
+
+# ============================================================================
+# Skills DSL integration tests
+# ============================================================================
+
+
+def _make_skill_dir(parent: Path, skill_name: str) -> Path:
+    """Create a minimal SKILL.md in a subdirectory and return the skill dir path."""
+    skill_dir = parent / skill_name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text(
+        f"---\nname: {skill_name}\ndescription: A test skill\n---\n\nDo helpful things.\n",
+        encoding="utf-8",
+    )
+    return skill_dir
+
+
+def test_compile_with_skills_installs_skill_component() -> None:
+    """When skills are declared and source_dir provided, SkillComponent is attached."""
+    from ecs_agent.components.definitions import SkillComponent
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        _make_skill_dir(tmpdir_path, "test-skill")
+
+        spec = AgentSpec(
+            name="bot",
+            mode="primary",
+            model="m",
+            prompt="You are a bot.",
+            skills=[{"path": "test-skill"}],
+        )
+        primary_entity, world = compile_agent_specs(
+            resolve_agent_specs([spec]),
+            create_fake_provider_factory([]),
+            source_dir=tmpdir_path,
+        )
+
+        skill_comp = world.get_component(primary_entity, SkillComponent)
+        assert skill_comp is not None
+        assert "test-skill" in skill_comp.skills
+
+
+def test_compile_with_skills_no_source_dir_skips_gracefully() -> None:
+    """When source_dir is None and skills declared, compilation succeeds (skills skipped)."""
+    from ecs_agent.components.definitions import SkillComponent
+
+    spec = AgentSpec(
+        name="bot",
+        mode="primary",
+        model="m",
+        prompt="You are a bot.",
+        skills=[{"path": "skills/some-skill"}],
+    )
+    # No source_dir — should not raise, just skip skills
+    primary_entity, world = compile_agent_specs(
+        resolve_agent_specs([spec]),
+        create_fake_provider_factory([]),
+    )
+
+    # SkillComponent may or may not be present (it wasn't installed)
+    skill_comp = world.get_component(primary_entity, SkillComponent)
+    # If present, our skill was not installed into it
+    if skill_comp is not None:
+        assert "some-skill" not in skill_comp.skills
+
+
+def test_compile_with_empty_skills_list_no_skill_component() -> None:
+    """Empty skills list → SkillComponent not attached (no skills installed)."""
+    from ecs_agent.components.definitions import SkillComponent
+
+    spec = AgentSpec(
+        name="bot",
+        mode="primary",
+        model="m",
+        prompt="You are a bot.",
+        skills=[],
+    )
+    primary_entity, world = compile_agent_specs(
+        resolve_agent_specs([spec]),
+        create_fake_provider_factory([]),
+    )
+
+    skill_comp = world.get_component(primary_entity, SkillComponent)
+    # No skills were installed, so SkillComponent was never added
+    assert skill_comp is None
