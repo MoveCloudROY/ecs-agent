@@ -413,7 +413,7 @@ async def test_all_new_components_serializable() -> None:
     assert restored_config.inheritance_policy.inherit_system_prompt is True
     assert restored_config.inheritance_policy.inherit_tools == []
     assert restored_config.inheritance_policy.inherit_permissions is False
-    assert restored_config.inheritance_policy.allow_delegate_tool is True
+    assert restored_config.inheritance_policy.allow_delegate_tool is False
     assert restored_config.inheritance_policy.tool_conflict_policy == "skip"
     assert restored_config.inheritance_policy.missing_skill_policy == "warn"
 

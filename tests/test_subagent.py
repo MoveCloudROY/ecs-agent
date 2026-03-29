@@ -71,7 +71,7 @@ def test_subagent_config_defaults() -> None:
     assert config.inheritance_policy.inherit_system_prompt is True
     assert config.inheritance_policy.inherit_tools == []
     assert config.inheritance_policy.inherit_permissions is False
-    assert config.inheritance_policy.allow_delegate_tool is True
+    assert config.inheritance_policy.allow_delegate_tool is False
     assert config.inheritance_policy.tool_conflict_policy == "skip"
     assert config.inheritance_policy.missing_skill_policy == "warn"
 
