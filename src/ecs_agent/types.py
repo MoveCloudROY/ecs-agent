@@ -6,6 +6,8 @@ from enum import Enum
 from datetime import datetime, timezone
 from typing import Any, Literal, NewType
 
+from ecs_agent.accounting.models import LLMInvocationEvent, UsageRecord
+
 EntityId = NewType("EntityId", int)
 SystemHandle = NewType("SystemHandle", str)
 
@@ -20,11 +22,38 @@ class ToolCall:
 
 
 @dataclass(slots=True)
+class TextPart:
+    """A plain text message part."""
+
+    text: str
+
+
+@dataclass(slots=True)
+class ImageUrlPart:
+    """An image URL message part."""
+
+    url: str
+    detail: str | None = None
+
+
+@dataclass(slots=True)
+class FileRefPart:
+    """A file reference message part."""
+
+    file_id: str
+    filename: str | None = None
+
+
+MessagePart = TextPart | ImageUrlPart | FileRefPart
+
+
+@dataclass(slots=True)
 class Message:
     """Represents a message in the conversation."""
 
     role: str
     content: str
+    parts: list[MessagePart] | None = None
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
 
@@ -61,13 +90,7 @@ class ToolSchema:
     sandbox_compatible: bool = False
 
 
-@dataclass(slots=True)
-class Usage:
-    """Token usage statistics."""
-
-    prompt_tokens: int
-    completion_tokens: int
-    total_tokens: int
+Usage = UsageRecord
 
 
 @dataclass(slots=True)
@@ -755,7 +778,6 @@ class MessageBusResponseEvent:
     envelope: MessageBusEnvelope
 
 
-
 @dataclass(slots=True)
 class ReasoningCompleteEvent:
     """Event emitted when ReasoningSystem produces a final text response (no tool calls)."""
@@ -763,6 +785,7 @@ class ReasoningCompleteEvent:
     entity_id: EntityId
     model: str
     duration_ms: float
+
 
 @dataclass(slots=True)
 class RevertRequest:
@@ -796,13 +819,17 @@ __all__ = [
     "DelegationStartedEvent",
     "EntityId",
     "ErrorOccurredEvent",
+    "FileRefPart",
+    "ImageUrlPart",
     "InheritancePolicy",
     "InterruptionReason",
+    "LLMInvocationEvent",
     "MCPConnectedEvent",
     "MCPDisconnectedEvent",
     "MCPToolCallEvent",
     "MCTSNodeScoredEvent",
     "Message",
+    "MessagePart",
     "MessageDeliveredEvent",
     "MessageBusDeliveredEvent",
     "MessageBusEnvelope",
@@ -844,6 +871,7 @@ __all__ = [
     "TaskStateChangedEvent",
     "TaskStatus",
     "TaskUnblockedEvent",
+    "TextPart",
     "ToolApprovalRequestedEvent",
     "ToolApprovedEvent",
     "ToolCall",
