@@ -3,7 +3,10 @@
 import pytest
 from ecs_agent.types import (
     EntityId,
+    FileRefPart,
+    ImageUrlPart,
     Message,
+    TextPart,
     ToolCall,
     ToolSchema,
     CompletionResult,
@@ -25,6 +28,7 @@ class TestMessage:
     def test_message_optional_fields_default_none(self) -> None:
         """Test that optional fields default to None."""
         msg = Message(role="assistant", content="response")
+        assert msg.parts is None
         assert msg.tool_calls is None
         assert msg.tool_call_id is None
 
@@ -62,6 +66,52 @@ class TestToolCall:
         tc = ToolCall(id="1", name="test", arguments={})
         with pytest.raises(AttributeError):
             tc.extra = "bad"  # type: ignore
+
+
+class TestMessagePart:
+    """Test multimodal message part dataclasses."""
+
+    def test_message_parts_can_be_constructed(self) -> None:
+        text = TextPart(text="hello")
+        image = ImageUrlPart(url="https://example.com/a.png", detail="high")
+        file_ref = FileRefPart(file_id="file_123", filename="a.txt")
+
+        assert text.text == "hello"
+        assert image.url == "https://example.com/a.png"
+        assert image.detail == "high"
+        assert file_ref.file_id == "file_123"
+        assert file_ref.filename == "a.txt"
+
+    def test_message_with_multimodal_parts(self) -> None:
+        msg = Message(
+            role="user",
+            content="",
+            parts=[
+                TextPart(text="describe this image"),
+                ImageUrlPart(url="https://example.com/a.png", detail="auto"),
+                FileRefPart(file_id="file_abc", filename="notes.pdf"),
+            ],
+        )
+
+        assert msg.role == "user"
+        assert msg.content == ""
+        assert msg.parts is not None
+        assert len(msg.parts) == 3
+        assert isinstance(msg.parts[0], TextPart)
+        assert isinstance(msg.parts[1], ImageUrlPart)
+        assert isinstance(msg.parts[2], FileRefPart)
+
+    def test_message_part_slots_prevent_extra_attributes(self) -> None:
+        text = TextPart(text="t")
+        image = ImageUrlPart(url="https://example.com/img.png")
+        file_ref = FileRefPart(file_id="file_1")
+
+        with pytest.raises(AttributeError):
+            text.extra = "bad"  # type: ignore
+        with pytest.raises(AttributeError):
+            image.extra = "bad"  # type: ignore
+        with pytest.raises(AttributeError):
+            file_ref.extra = "bad"  # type: ignore
 
 
 class TestToolSchema:

@@ -52,7 +52,17 @@ from ecs_agent.prompts.contracts import (
     PromptTemplateSource,
     TriggerSpec,
 )
-from ecs_agent.types import ApprovalPolicy, EntityId, Message, ToolCall, ToolSchema
+from ecs_agent.types import (
+    ApprovalPolicy,
+    EntityId,
+    FileRefPart,
+    ImageUrlPart,
+    Message,
+    MessagePart,
+    TextPart,
+    ToolCall,
+    ToolSchema,
+)
 
 NON_SERIALIZABLE_PLACEHOLDER = "<non-serializable>"
 
@@ -223,6 +233,12 @@ class WorldSerializer:
         if isinstance(component, VectorStoreComponent):
             serialized["store"] = NON_SERIALIZABLE_PLACEHOLDER
 
+        if isinstance(component, ConversationComponent):
+            serialized["messages"] = [
+                WorldSerializer._message_to_dict(message)
+                for message in component.messages
+            ]
+
         # MessageBusSubscriptionComponent: convert set[str] to list[str]
         if isinstance(component, MessageBusSubscriptionComponent):
             subscriptions_dict = {}
@@ -234,6 +250,10 @@ class WorldSerializer:
         # MessageBusConversationComponent: convert EntityId to int
         if isinstance(component, MessageBusConversationComponent):
             serialized["entity_id"] = int(serialized["entity_id"])
+            serialized["messages"] = [
+                WorldSerializer._message_to_dict(message)
+                for message in component.messages
+            ]
 
         # TaskComponent: convert EntityId assigned_agent to int for JSON serialization
         if isinstance(component, TaskComponent):
@@ -506,9 +526,72 @@ class WorldSerializer:
         if tool_calls_data is not None:
             tool_calls = [ToolCall(**tool_call) for tool_call in tool_calls_data]
 
+        parts_data = data.get("parts")
+        parts = None
+        if parts_data is not None:
+            parts = [
+                WorldSerializer._message_part_from_dict(part) for part in parts_data
+            ]
+
         return Message(
             role=data["role"],
-            content=data["content"],
+            content=data.get("content", ""),
+            parts=parts,
             tool_calls=tool_calls,
             tool_call_id=data.get("tool_call_id"),
         )
+
+    @staticmethod
+    def _message_to_dict(message: Message) -> dict[str, Any]:
+        serialized: dict[str, Any] = {
+            "role": message.role,
+            "content": message.content,
+            "tool_calls": None,
+            "tool_call_id": message.tool_call_id,
+        }
+
+        if message.parts is not None:
+            serialized["parts"] = [
+                WorldSerializer._message_part_to_dict(part) for part in message.parts
+            ]
+
+        if message.tool_calls is not None:
+            serialized["tool_calls"] = [
+                {
+                    "id": tool_call.id,
+                    "name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                }
+                for tool_call in message.tool_calls
+            ]
+
+        return serialized
+
+    @staticmethod
+    def _message_part_to_dict(part: MessagePart) -> dict[str, Any]:
+        if isinstance(part, TextPart):
+            return {"type": "text", "text": part.text}
+        if isinstance(part, ImageUrlPart):
+            return {
+                "type": "image_url",
+                "url": part.url,
+                "detail": part.detail,
+            }
+        if isinstance(part, FileRefPart):
+            return {
+                "type": "file_ref",
+                "file_id": part.file_id,
+                "filename": part.filename,
+            }
+        raise ValueError(f"Unsupported message part type: {type(part).__name__}")
+
+    @staticmethod
+    def _message_part_from_dict(data: dict[str, Any]) -> MessagePart:
+        part_type = data.get("type")
+        if part_type == "text":
+            return TextPart(text=data["text"])
+        if part_type == "image_url":
+            return ImageUrlPart(url=data["url"], detail=data.get("detail"))
+        if part_type == "file_ref":
+            return FileRefPart(file_id=data["file_id"], filename=data.get("filename"))
+        raise ValueError(f"Unsupported message part discriminator: {part_type}")
