@@ -18,9 +18,11 @@ from ecs_agent.accounting.normalization import (
     normalize_anthropic_usage,
     normalize_openai_usage,
 )
+from ecs_agent.accounting.subscriber import AccountingSubscriber
 
 __all__ = [
     "CostRecord",
+    "AccountingSubscriber",
     "DEFAULT_CATALOG_VERSION",
     "DEFAULT_PRICING",
     "LLMInvocationEvent",
