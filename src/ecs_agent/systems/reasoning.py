@@ -162,7 +162,7 @@ class ReasoningSystem:
                         non_stream_result = await active_provider.complete(
                             messages,
                             tools=tools,
-                            previous_response_id=previous_response_id,
+                            thread_response_id=previous_response_id,
                         )
                     else:
                         non_stream_result = await active_provider.complete(
@@ -268,7 +268,7 @@ class ReasoningSystem:
                 messages,
                 tools=tools,
                 stream=True,
-                previous_response_id=previous_response_id,
+                thread_response_id=previous_response_id,
             )
         else:
             stream_result = await active_provider.complete(

@@ -27,3 +27,8 @@
 - Strict mypy in this branch required a defensive dict narrowing in `_parse_file_part` to avoid `union-attr` on optional/Any file payload shapes.
 - Embedding providers can keep the protocol return type unchanged (`list[list[float]]`) while still exposing accounting by storing the last normalized `UsageRecord` from API `usage`, mapping embedding input tokens to `prompt_tokens` and `total_tokens`.
 - File uploads fit the new multimodal contract when the service returns `FileRefPart(file_id, filename)` directly from `/files` response IDs and validates OpenAI purpose values (`assistants`, `fine-tune`, `batch`, `vision`) up front.
+
+## [2026-03-30T20:37:45Z] Task 5: responses threading state → ECS
+- `previous_response_id` threading ownership now lives only in `ResponsesAPIStateComponent`; provider instance state was removed and adapter calls take prior threading ID as request input.
+- `ReasoningSystem` snapshots `ResponsesAPIStateComponent` at call start and writes back only `CompletionResult.response_id` after successful non-stream completion or terminal streaming delta.
+- Streaming interruption/failure paths intentionally skip state writes; preserving old `ResponsesAPIStateComponent` avoids conversation-thread corruption on cancelled/failed runs.
