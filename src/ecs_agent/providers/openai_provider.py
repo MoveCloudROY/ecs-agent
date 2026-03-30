@@ -74,7 +74,7 @@ class OpenAIProvider:
         tools: list[ToolSchema] | None = None,
         stream: bool = False,
         response_format: dict[str, Any] | None = None,
-        previous_response_id: str | None = None,
+        thread_response_id: str | None = None,
     ) -> CompletionResult | AsyncIterator[StreamDelta]:
         api_format = self._provider_config.api_format
 
@@ -91,7 +91,7 @@ class OpenAIProvider:
                     messages,
                     tools,
                     response_format,
-                    previous_response_id,
+                    thread_response_id,
                 )
 
             try:
@@ -99,7 +99,7 @@ class OpenAIProvider:
                     messages,
                     tools,
                     response_format,
-                    previous_response_id,
+                    thread_response_id,
                 )
                 self._responses_api_available = True
                 return result
