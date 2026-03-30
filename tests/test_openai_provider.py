@@ -5,8 +5,15 @@ import pytest
 import httpx
 from unittest.mock import AsyncMock, Mock
 from ecs_agent.providers.openai_provider import OpenAIProvider
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMProvider
-from ecs_agent.types import Message, CompletionResult, ToolSchema, ToolCall, Usage
+from ecs_agent.types import (
+    FileRefPart,
+    ImageUrlPart,
+    Message,
+    ToolCall,
+    ToolSchema,
+)
 
 
 @pytest.mark.asyncio
@@ -366,3 +373,156 @@ async def test_convert_messages_serializes_tool_call_arguments_as_json_string() 
 
     # Verify round-trip: string should deserialize back to original dict
     assert json.loads(args) == {"key": "value", "count": 42}
+
+
+@pytest.mark.asyncio
+async def test_multimodal_chat_request_maps_parts_to_chat_content() -> None:
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    mock_response.raise_for_status = Mock()
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post.return_value = mock_response
+
+    provider = OpenAIProvider(api_key="test-key")
+    provider._client = mock_client
+
+    await provider.complete(
+        [
+            Message(
+                role="user",
+                content="Describe this",
+                parts=[
+                    ImageUrlPart(url="https://example.com/cat.png", detail="high"),
+                    FileRefPart(file_id="file_123", filename="notes.txt"),
+                ],
+            )
+        ]
+    )
+
+    body = mock_client.post.call_args[1]["json"]
+    content = body["messages"][0]["content"]
+    assert isinstance(content, list)
+    assert content[0] == {"type": "text", "text": "Describe this"}
+    assert content[1] == {
+        "type": "image_url",
+        "image_url": {"url": "https://example.com/cat.png", "detail": "high"},
+    }
+    assert content[2] == {
+        "type": "file",
+        "file": {"file_id": "file_123", "filename": "notes.txt"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_multimodal_responses_request_maps_image_and_file_parts() -> None:
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "id": "resp_mm_1",
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok"}],
+            }
+        ],
+    }
+    mock_response.raise_for_status = Mock()
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post.return_value = mock_response
+
+    provider = OpenAIProvider(
+        api_key="test-key",
+        api_format=ApiFormat.OPENAI_RESPONSES,
+    )
+    provider._client = mock_client
+
+    await provider.complete(
+        [
+            Message(
+                role="user",
+                content="Analyze",
+                parts=[
+                    ImageUrlPart(url="https://example.com/a.png", detail="low"),
+                    FileRefPart(file_id="file_456", filename="report.pdf"),
+                ],
+            )
+        ]
+    )
+
+    body = mock_client.post.call_args[1]["json"]
+    content = body["input"][0]["content"]
+    assert content[0] == {"type": "input_text", "text": "Analyze"}
+    assert content[1] == {
+        "type": "input_image",
+        "image_url": "https://example.com/a.png",
+        "detail": "low",
+    }
+    assert content[2] == {
+        "type": "input_file",
+        "file_id": "file_456",
+        "filename": "report.pdf",
+    }
+
+
+@pytest.mark.asyncio
+async def test_vision_responses_output_parses_parts_into_message_parts() -> None:
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "id": "resp_vision_1",
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "Found details."},
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.com/processed.png",
+                        "detail": "auto",
+                    },
+                    {
+                        "type": "input_file",
+                        "file_id": "file_vision",
+                        "filename": "vision.json",
+                    },
+                ],
+            }
+        ],
+    }
+    mock_response.raise_for_status = Mock()
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post.return_value = mock_response
+
+    provider = OpenAIProvider(
+        api_key="test-key",
+        api_format=ApiFormat.OPENAI_RESPONSES,
+    )
+    provider._client = mock_client
+
+    result = await provider.complete([Message(role="user", content="vision")])
+    assert result.message.content == "Found details."
+    assert result.message.parts is not None
+    assert isinstance(result.message.parts[1], ImageUrlPart)
+    assert isinstance(result.message.parts[2], FileRefPart)
+
+
+def test_invalid_api_format_string_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="Invalid api_format"):
+        OpenAIProvider(api_key="test-key", api_format="invalid_api_format")
+
+
+@pytest.mark.asyncio
+async def test_unsupported_api_format_raises_clear_error() -> None:
+    provider = OpenAIProvider(
+        api_key="test-key",
+        api_format=ApiFormat.OPENAI_EMBEDDINGS,
+    )
+
+    with pytest.raises(ValueError, match="Unsupported OpenAI provider api_format"):
+        await provider.complete([Message(role="user", content="hello")])
