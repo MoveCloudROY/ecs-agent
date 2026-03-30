@@ -1,0 +1,29 @@
+- Added canonical provider/model ID tests keyed for  and invalid input rejection via ValueError.
+- ProviderConfig.extra_headers must use field(default_factory=dict) to satisfy strict default semantics and avoid shared mutable state.
+- Full mypy requires optional MCP dependency installed in this environment ().
+- Added canonical provider/model ID tests keyed for -k "canonical_id or api_format" and invalid input rejection via ValueError.
+- ProviderConfig.extra_headers must use field(default_factory=dict) to satisfy strict default semantics and avoid shared mutable state.
+- Full mypy requires optional MCP dependency installed in this environment (uv sync --group dev --extra mcp).
+- For backward compatibility, keep `Message.content` required and treat `parts=None` as the legacy text-only path.
+- `dataclasses.asdict` is insufficient for multimodal unions because it drops explicit variant tags; add a dedicated serializer with stable `type` discriminators.
+- To preserve existing snapshot expectations, only emit `parts` in serialized messages when `parts` is not `None`.
+- Reuse the same message serializer for `ConversationComponent` and `MessageBusConversationComponent` to keep round-trip behavior consistent across component boundaries.
+- Added canonical provider/model ID tests keyed for canonical_id or api_format selector and invalid input rejection via ValueError.
+- ProviderConfig.extra_headers uses field(default_factory=dict) to avoid None defaults and mutable sharing issues.
+- Full mypy success required installing optional MCP extra via uv sync --group dev --extra mcp in this worktree environment.
+- Kept backward compatibility by aliasing `types.Usage` to `accounting.models.UsageRecord`, so existing provider and streaming code paths continue working unchanged.
+- Canonical cache hit-rate computation must treat OpenAI `prompt_tokens_details.cached_tokens` as cache reads and use total prompt formula: `(prompt_tokens - cached_input_tokens) + cache_creation_tokens + cache_read_tokens`.
+- Enforced interrupted-stream policy at `LLMInvocationEvent` construction: non-complete streams reject non-estimated cost records to avoid fabricated totals.
+- Canonical model IDs are represented as provider/model and rejected when missing slash, using colon, or containing empty segments.
+- ProviderConfig.extra_headers should use field(default_factory=dict) so defaults are concrete and instance-isolated.
+- QA selectors are easiest to support by naming tests with canonical_id and api_format tokens for targeted pytest -k evidence commands.
+- Splitting OpenAI behavior into chat/responses adapters is safer when the public provider keeps shared concerns (headers, HTTP error logging, usage normalization) and only delegates wire-format translation.
+- Canonical usage extraction for both chat and responses payloads should always flow through `normalize_openai_usage()` to avoid drift between `prompt_tokens/completion_tokens` and `input_tokens/output_tokens` schemas.
+- Multimodal payload compatibility needs explicit mapping per endpoint: chat messages use content arrays (`text`, `image_url`, `file`), while responses input uses `input_text`, `input_image`, and `input_file` entries.
+- Backward compatibility is preserved by retaining `use_responses_api`, `previous_response_id`, and `_responses_api_available` on `OpenAIProvider` while preferring `ApiFormat` for new dispatch paths.
+- Anthropic-compatible usage normalization should always flow through `normalize_anthropic_usage()` so cache fields (`cache_creation_input_tokens`, `cache_read_input_tokens`) land in canonical `UsageRecord` consistently.
+- Keeping `ClaudeProvider` as the public class while delegating request/response shaping to a dedicated adapter preserves backwards compatibility for existing tests that call helper methods directly.
+- Multimodal parts need deterministic guardrails: reject `ImageUrlPart`/`FileRefPart` with stable `ValueError` messages when vision support is not explicitly enabled for the Anthropic messages endpoint.
+- Strict mypy in this branch required a defensive dict narrowing in `_parse_file_part` to avoid `union-attr` on optional/Any file payload shapes.
+- Embedding providers can keep the protocol return type unchanged (`list[list[float]]`) while still exposing accounting by storing the last normalized `UsageRecord` from API `usage`, mapping embedding input tokens to `prompt_tokens` and `total_tokens`.
+- File uploads fit the new multimodal contract when the service returns `FileRefPart(file_id, filename)` directly from `/files` response IDs and validates OpenAI purpose values (`assistants`, `fine-tune`, `batch`, `vision`) up front.
