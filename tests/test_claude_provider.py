@@ -8,7 +8,15 @@ import pytest
 
 from ecs_agent.providers.claude_provider import ClaudeProvider
 from ecs_agent.providers.protocol import LLMProvider
-from ecs_agent.types import Message, StreamDelta, ToolCall, ToolSchema
+from ecs_agent.types import (
+    FileRefPart,
+    ImageUrlPart,
+    Message,
+    StreamDelta,
+    TextPart,
+    ToolCall,
+    ToolSchema,
+)
 
 
 class _MockStreamResponse:
@@ -142,6 +150,53 @@ def test_parse_response_text_content_blocks() -> None:
     assert result.usage.prompt_tokens == 10
     assert result.usage.completion_tokens == 4
     assert result.usage.total_tokens == 14
+
+
+def test_parse_response_usage_includes_cache_fields_and_metadata() -> None:
+    provider = ClaudeProvider(api_key="test-key", model="claude-3-haiku-20240307")
+    response_data: dict[str, Any] = {
+        "content": [{"type": "text", "text": "Hello from Claude"}],
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 4,
+            "cache_creation_input_tokens": 3,
+            "cache_read_input_tokens": 2,
+        },
+    }
+
+    result = provider._parse_response(response_data)
+
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 10
+    assert result.usage.completion_tokens == 4
+    assert result.usage.total_tokens == 14
+    assert result.usage.cache_creation_tokens == 3
+    assert result.usage.cache_read_tokens == 2
+    assert result.usage.provider_id == "anthropic"
+    assert result.usage.model == "claude-3-haiku-20240307"
+
+
+@pytest.mark.parametrize(
+    ("parts", "expected_part_name"),
+    [
+        ([ImageUrlPart(url="https://example.com/image.png")], "ImageUrlPart"),
+        ([FileRefPart(file_id="file_123", filename="report.pdf")], "FileRefPart"),
+    ],
+)
+def test_build_messages_unsupported_multimodal_without_vision_raises(
+    parts: list[TextPart | ImageUrlPart | FileRefPart],
+    expected_part_name: str,
+) -> None:
+    provider = ClaudeProvider(api_key="test-key", model="claude-3-haiku-20240307")
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Unsupported multimodal part for Anthropic messages endpoint: "
+            f"{expected_part_name}"
+        ),
+    ):
+        provider._build_messages([Message(role="user", content="", parts=parts)])
 
 
 def test_parse_response_tool_use_content_blocks() -> None:
