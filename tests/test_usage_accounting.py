@@ -201,3 +201,11 @@ def test_usage_backward_compatibility_alias_supports_existing_shape() -> None:
 
 def test_types_exports_canonical_llm_invocation_event() -> None:
     assert ExportedLLMInvocationEvent is LLMInvocationEvent
+
+
+def test_embedding_usage_maps_input_tokens_to_prompt_tokens() -> None:
+    usage = normalize_openai_usage({"prompt_tokens": 42, "total_tokens": 42})
+
+    assert usage.prompt_tokens == 42
+    assert usage.completion_tokens is None
+    assert usage.total_tokens == 42
