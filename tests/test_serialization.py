@@ -1162,7 +1162,6 @@ def test_subagent_session_table_component_roundtrip() -> None:
 def test_subagent_session_table_rejects_runtime_handles() -> None:
     """Test that SubagentSessionRecord cannot store asyncio.Task or Future handles."""
     from ecs_agent.types import SubagentSessionRecord, EntityId
-    import asyncio
 
     # SubagentSessionRecord should only have serializable fields
     # This test verifies that the dataclass definition does NOT allow runtime handles
