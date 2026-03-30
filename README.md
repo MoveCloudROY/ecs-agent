@@ -341,6 +341,68 @@ provider = RetryProvider(
 )
 ```
 
+## Provider Architecture
+
+The LLM layer uses canonical `provider/model` identifiers and explicit provider configuration.
+
+### Canonical Model IDs
+
+Models are identified as `provider/model` (slash-separated):
+
+```python
+from ecs_agent.providers.model_id import parse_model_id, format_model_id, ModelId
+
+model_id = parse_model_id("aliyun/qwen3.5-flash")
+# ModelId(provider="aliyun", model="qwen3.5-flash")
+
+# Invalid — colon-delimited IDs are rejected with ValueError:
+# parse_model_id("aliyun:qwen3.5-flash")  # raises ValueError
+```
+
+### Provider Configuration
+
+```python
+from ecs_agent.providers.config import ProviderConfig, ApiFormat
+
+config = ProviderConfig(
+    provider_id="aliyun",
+    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    api_key="your-api-key",
+    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+)
+```
+
+### Usage Accounting
+
+```python
+from ecs_agent.accounting.subscriber import AccountingSubscriber
+
+subscriber = AccountingSubscriber()
+subscriber.subscribe(world.event_bus)
+
+# After agent runs:
+stats = subscriber.get_aggregate_stats("aliyun", "qwen3.5-flash")
+if stats is not None:
+    print(f"Cache hit rate: {stats.hit_rate}")  # float 0.0-1.0, or None
+```
+
+
+## Breaking Changes (LLM Refactor)
+
+### Responses API threading state
+`previous_response_id` is no longer stored on the provider instance.
+Attach `ResponsesAPIStateComponent` to your ECS entity instead — `ReasoningSystem` manages it automatically.
+
+### Model IDs
+Model IDs must use `provider/model` format (slash-separated), e.g. `"aliyun/qwen3.5-flash"`.
+Colon-delimited IDs (`"provider:model"`) are rejected with `ValueError`.
+
+### Usage model
+`Usage` (3-field) is replaced by `UsageRecord` with cache-aware fields:
+`cached_input_tokens`, `cache_creation_tokens`, `cache_read_tokens`, and `StreamCompleteness`.
+Import from `ecs_agent.accounting.models` instead of `ecs_agent.types`.
+
+
 ## Development
 
 ### Tests
@@ -358,9 +420,28 @@ uv run pytest -k "streaming"
 # Verbose output
 uv run pytest -v
 ```
-### Real-LLM Integration Test
+### Real-LLM Integration Tests
 
-To verify the integration with a real LLM (e.g., DashScope), run the following command. It uses environment variables to avoid exposing API keys and skips gracefully if `LLM_API_KEY` is not set:
+Run live adapter tests against a real LLM endpoint (e.g. DashScope). Tests skip gracefully if `LLM_API_KEY` is not set:
+
+```bash
+# Discover available live tests
+uv run pytest tests/live/test_llm_api_live.py -m live --collect-only
+
+# Run all live tests (requires LLM_API_KEY env var)
+LLM_API_KEY="$LLM_API_KEY" \
+  LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
+  LLM_MODEL=qwen3.5-flash \
+  uv run pytest tests/live/test_llm_api_live.py -m live -v
+```
+
+Four live scenarios are provided:
+- **Chat Completions text** — `LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`
+- **Responses text** — `LLM_BASE_URL=https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1`
+- **Responses vision** — add `LLM_MODEL=qwen3-vl-flash` and `IMAGE_URL=<public-image-url>`
+- **Anthropic-compatible text** — `LLM_MODEL=kimi-k2.5`, `LLM_BASE_URL=https://dashscope.aliyuncs.com/apps/anthropic`
+
+For the legacy integration test:
 
 ```bash
 LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
@@ -368,16 +449,6 @@ LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
   LLM_API_KEY="$LLM_API_KEY" \
   uv run pytest tests/test_real_llm_integration.py -k "prompt" -v
 ```
-
-To verify cleanup-enabled interactive continuation in the UI Design Flow example, run:
-
-```bash
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
-  LLM_MODEL=qwen3.5-flash \
-  LLM_API_KEY="$LLM_API_KEY" \
-  uv run pytest tests/integration/test_ui_design_flow.py -k "real_llm" -v
-```
-
 
 ### Type Checking
 
