@@ -128,6 +128,25 @@ async def test_handler_exception_isolated_from_other_handlers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_handler_exception_is_logged_without_raising(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bus = EventBus()
+
+    async def bad_handler(event: SampleEvent) -> None:
+        _ = event
+        raise RuntimeError("boom")
+
+    bus.subscribe(SampleEvent, bad_handler)
+
+    await bus.publish(SampleEvent(value=1))
+    captured = capsys.readouterr()
+
+    assert "event_bus_subscriber_error" in captured.out
+    assert "boom" in captured.out
+
+
+@pytest.mark.asyncio
 async def test_publish_unsubscribed_event_type_is_silent_noop() -> None:
     bus = EventBus()
     await bus.publish(OtherEvent(name="unused"))

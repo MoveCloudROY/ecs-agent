@@ -37,3 +37,8 @@
 - Publish exactly one canonical `LLMInvocationEvent` from `ReasoningSystem` per invocation, immediately after completion result resolution, with a guard flag to prevent duplicate emissions on downstream exceptions.
 - Translate `CompletionResult.usage` into a fresh `UsageRecord` using request-scoped `active_model` and derived `provider_id` so logging/event/accounting all share the same invocation identity.
 - Interrupted streaming paths (`CancelledError` and stream failures before terminal usage) must emit one event with `StreamCompleteness.PARTIAL/UNKNOWN`, `usage` tokens unset, and `cost=None` to avoid fabricated accounting.
+
+## [2026-03-30T20:59:00Z] Task 9: event-driven accounting subscriber + observable subscriber failures
+- `EventBus.publish()` can preserve non-crashing subscriber isolation while still surfacing failures by logging each `gather(..., return_exceptions=True)` exception with `topic`, deterministic `subscriber_id`, and `exception` text.
+- Aggregate cache hit-rate must be token-weighted by provider+model (`sum(cache_read_tokens) / sum(total_prompt_tokens)`) using running token counters, never an average of per-request hit-rate percentages.
+- Avoid importing `EventBus` at runtime inside accounting modules to prevent `types ↔ core` circular imports; use a `TYPE_CHECKING` annotation-only import instead.

@@ -1,5 +1,8 @@
 """Tests for canonical usage accounting models and normalization."""
 
+import pytest
+
+from ecs_agent.accounting import AccountingSubscriber
 from ecs_agent.accounting.catalog import ModelPricing, PricingCatalog
 from ecs_agent.accounting.models import (
     CostRecord,
@@ -12,6 +15,7 @@ from ecs_agent.accounting.normalization import (
     normalize_anthropic_usage,
     normalize_openai_usage,
 )
+from ecs_agent.core import EventBus
 from ecs_agent.types import LLMInvocationEvent as ExportedLLMInvocationEvent
 from ecs_agent.types import Usage
 
@@ -209,3 +213,82 @@ def test_embedding_usage_maps_input_tokens_to_prompt_tokens() -> None:
     assert usage.prompt_tokens == 42
     assert usage.completion_tokens is None
     assert usage.total_tokens == 42
+
+
+@pytest.mark.asyncio
+async def test_accounting_subscriber_single_terminal_event_records_once() -> None:
+    bus = EventBus()
+    subscriber = AccountingSubscriber()
+    subscriber.subscribe(bus)
+
+    await bus.publish(
+        LLMInvocationEvent(
+            entity_id=1,
+            provider_id="openai",
+            model="gpt-4o",
+            usage=UsageRecord(
+                prompt_tokens=100, completion_tokens=50, cached_input_tokens=20
+            ),
+        )
+    )
+
+    assert len(subscriber._records) == 1
+
+
+@pytest.mark.asyncio
+async def test_accounting_subscriber_aggregate_cache_stats_are_token_weighted() -> None:
+    bus = EventBus()
+    subscriber = AccountingSubscriber()
+    subscriber.subscribe(bus)
+
+    await bus.publish(
+        LLMInvocationEvent(
+            entity_id=1,
+            provider_id="openai",
+            model="gpt-4o",
+            usage=UsageRecord(prompt_tokens=100, cached_input_tokens=90),
+        )
+    )
+    await bus.publish(
+        LLMInvocationEvent(
+            entity_id=2,
+            provider_id="openai",
+            model="gpt-4o",
+            usage=UsageRecord(prompt_tokens=900, cached_input_tokens=90),
+        )
+    )
+
+    aggregate = subscriber.get_aggregate_stats("openai", "gpt-4o")
+    assert aggregate is not None
+    assert aggregate.cache_read_tokens == 180
+    assert aggregate.total_prompt_tokens == 1000
+    assert aggregate.hit_rate == 0.18
+
+
+@pytest.mark.asyncio
+async def test_accounting_subscriber_failure_is_logged_and_publish_continues(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bus = EventBus()
+    subscriber = AccountingSubscriber()
+    subscriber.subscribe(bus)
+
+    async def bad_handler(event: LLMInvocationEvent) -> None:
+        _ = event
+        raise RuntimeError("accounting explode")
+
+    bus.subscribe(LLMInvocationEvent, bad_handler)
+
+    await bus.publish(
+        LLMInvocationEvent(
+            entity_id=9,
+            provider_id="openai",
+            model="gpt-4o",
+            usage=UsageRecord(prompt_tokens=10, completion_tokens=5),
+        )
+    )
+    captured = capsys.readouterr()
+
+    assert len(subscriber._records) == 1
+    assert "event_bus_subscriber_error" in captured.out
+    assert "accounting explode" in captured.out
