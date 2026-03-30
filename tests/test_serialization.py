@@ -19,6 +19,7 @@ from ecs_agent.components import (
     PlanComponent,
     PlanSearchComponent,
     RAGTriggerComponent,
+    ResponsesAPIStateComponent,
     RunnerStateComponent,
     SandboxConfigComponent,
     StreamingComponent,
@@ -467,6 +468,22 @@ def test_serialization_roundtrip_with_rag_trigger() -> None:
     assert restored_comp.query == "search query"
     assert restored_comp.top_k == 10
     assert restored_comp.retrieved_docs == ["doc1", "doc2"]
+
+
+def test_serialization_roundtrip_with_responses_api_state_component() -> None:
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        ResponsesAPIStateComponent(previous_response_id="resp_state_001"),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+
+    restored_comp = restored.get_component(entity, ResponsesAPIStateComponent)
+    assert restored_comp is not None
+    assert restored_comp.previous_response_id == "resp_state_001"
 
 
 def test_serialization_embedding_component_uses_placeholder() -> None:

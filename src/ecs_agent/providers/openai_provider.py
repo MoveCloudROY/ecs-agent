@@ -54,7 +54,6 @@ class OpenAIProvider:
         self._model = model
         self.use_responses_api = use_responses_api
         self._responses_api_available: bool | None = None
-        self.previous_response_id: str | None = None
         self._timeout = httpx.Timeout(
             connect=connect_timeout,
             read=read_timeout,
@@ -75,6 +74,7 @@ class OpenAIProvider:
         tools: list[ToolSchema] | None = None,
         stream: bool = False,
         response_format: dict[str, Any] | None = None,
+        previous_response_id: str | None = None,
     ) -> CompletionResult | AsyncIterator[StreamDelta]:
         api_format = self._provider_config.api_format
 
@@ -87,13 +87,19 @@ class OpenAIProvider:
                 )
 
             if stream:
-                return self._responses_adapter.stream(messages, tools, response_format)
+                return self._responses_adapter.stream(
+                    messages,
+                    tools,
+                    response_format,
+                    previous_response_id,
+                )
 
             try:
                 result = await self._responses_adapter.complete(
                     messages,
                     tools,
                     response_format,
+                    previous_response_id,
                 )
                 self._responses_api_available = True
                 return result
