@@ -32,3 +32,8 @@
 - `previous_response_id` threading ownership now lives only in `ResponsesAPIStateComponent`; provider instance state was removed and adapter calls take prior threading ID as request input.
 - `ReasoningSystem` snapshots `ResponsesAPIStateComponent` at call start and writes back only `CompletionResult.response_id` after successful non-stream completion or terminal streaming delta.
 - Streaming interruption/failure paths intentionally skip state writes; preserving old `ResponsesAPIStateComponent` avoids conversation-thread corruption on cancelled/failed runs.
+
+## [2026-03-30T20:47:00Z] Task 8: ReasoningSystem → LLMInvocationEvent
+- Publish exactly one canonical `LLMInvocationEvent` from `ReasoningSystem` per invocation, immediately after completion result resolution, with a guard flag to prevent duplicate emissions on downstream exceptions.
+- Translate `CompletionResult.usage` into a fresh `UsageRecord` using request-scoped `active_model` and derived `provider_id` so logging/event/accounting all share the same invocation identity.
+- Interrupted streaming paths (`CancelledError` and stream failures before terminal usage) must emit one event with `StreamCompleteness.PARTIAL/UNKNOWN`, `usage` tokens unset, and `cost=None` to avoid fabricated accounting.
