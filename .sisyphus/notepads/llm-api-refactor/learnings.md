@@ -42,3 +42,8 @@
 - `EventBus.publish()` can preserve non-crashing subscriber isolation while still surfacing failures by logging each `gather(..., return_exceptions=True)` exception with `topic`, deterministic `subscriber_id`, and `exception` text.
 - Aggregate cache hit-rate must be token-weighted by provider+model (`sum(cache_read_tokens) / sum(total_prompt_tokens)`) using running token counters, never an average of per-request hit-rate percentages.
 - Avoid importing `EventBus` at runtime inside accounting modules to prevent `types ↔ core` circular imports; use a `TYPE_CHECKING` annotation-only import instead.
+
+## [2026-03-31T00:00:00Z] Task 10: live Aliyun matrix + env-gated fixtures
+- Centralizing `live_api_key`/`live_image_url` fixtures in `tests/conftest.py` keeps live test gating consistent and guarantees graceful `pytest.skip(...)` behavior when required env vars are absent.
+- Registering `live` in `pyproject.toml` prevents unknown-marker warnings and makes selective runs (`-m live`) explicit for credentialed verification workflows.
+- The Aliyun live matrix can stay stable with four targeted provider scenarios (chat text, responses text, responses vision, anthropic text) while keeping model selection env-driven via `LLM_MODEL` defaults.
