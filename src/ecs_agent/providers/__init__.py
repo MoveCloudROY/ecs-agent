@@ -1,12 +1,11 @@
 """Providers module for LLM integrations."""
 
-from typing import Any
-
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.model_id import ModelId, format_model_id, parse_model_id
 from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.providers.fake_provider import FakeProvider
 from ecs_agent.providers.openai_provider import OpenAIProvider
+from ecs_agent.providers.openai_files import OpenAIFilesService
 from ecs_agent.providers.claude_provider import ClaudeProvider
 
 try:
@@ -22,6 +21,7 @@ __all__ = [
     "format_model_id",
     "FakeProvider",
     "OpenAIProvider",
+    "OpenAIFilesService",
     "ClaudeProvider",
     "LiteLLMProvider",
 ]
