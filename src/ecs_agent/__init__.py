@@ -109,7 +109,14 @@ from ecs_agent.components.definitions import (
     UserInputComponent,
 )
 
-from ecs_agent.providers import ClaudeProvider
+from ecs_agent.providers import (
+    ApiFormat,
+    ClaudeProvider,
+    ModelId,
+    ProviderConfig,
+    format_model_id,
+    parse_model_id,
+)
 
 try:
     from ecs_agent.providers import LiteLLMProvider
@@ -135,6 +142,7 @@ from ecs_agent.conversation_tree import (
 __all__ = [
     "AgentSpec",
     "ApprovalPolicy",
+    "ApiFormat",
     "BranchCreatedEvent",
     "BuiltinToolsSkill",
     "CheckpointComponent",
@@ -173,8 +181,10 @@ __all__ = [
     "MessageBusResponseEvent",
     "MessageBusSystem",
     "MessageBusTimeoutEvent",
+    "ModelId",
     "PermissionComponent",
     "PermissionSystem",
+    "ProviderConfig",
     "RAGSystem",
     "resolve_agent_specs",
     "ResponsesAPICallEvent",
@@ -234,8 +244,10 @@ __all__ = [
     "log_bus_timeout",
     "sandboxed_execute",
     "scan_module",
+    "parse_model_id",
     "switch_branch",
     "tool",
+    "format_model_id",
     "propagate_trace_context",
     "wrap_sandbox_handler",
 ]
