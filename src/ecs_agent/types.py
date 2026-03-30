@@ -99,6 +99,7 @@ class CompletionResult:
 
     message: Message
     usage: Usage | None = None
+    response_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -146,6 +147,7 @@ class StreamDelta:
     tool_calls: list[ToolCall] | None = None
     finish_reason: str | None = None
     usage: Usage | None = None
+    response_id: str | None = None
 
 
 @dataclass(slots=True)

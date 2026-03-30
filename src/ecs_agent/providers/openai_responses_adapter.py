@@ -28,7 +28,6 @@ class _OpenAIProviderFacade(Protocol):
     _model: str
     _client: httpx.AsyncClient
     _timeout: httpx.Timeout
-    previous_response_id: str | None
     _responses_api_available: bool | None
 
     def _build_headers(self) -> dict[str, str]: ...
@@ -59,8 +58,14 @@ class OpenAIResponsesAdapter:
         messages: list[Message],
         tools: list[ToolSchema] | None = None,
         response_format: dict[str, Any] | None = None,
+        previous_response_id: str | None = None,
     ) -> CompletionResult:
-        request_body = self._build_request_body(messages, tools, response_format)
+        request_body = self._build_request_body(
+            messages,
+            tools,
+            response_format,
+            previous_response_id,
+        )
         url = f"{self._provider._base_url}/responses"
 
         try:
@@ -79,20 +84,29 @@ class OpenAIResponsesAdapter:
 
         response_data = response.json()
         response_id = response_data.get("id")
-        if isinstance(response_id, str) and response_id:
-            self._provider.previous_response_id = response_id
+        resolved_response_id = response_id if isinstance(response_id, str) else None
 
         message = self._parse_responses_output(response_data.get("output", []))
         usage = self._provider._usage_from_raw(response_data.get("usage"))
-        return CompletionResult(message=message, usage=usage)
+        return CompletionResult(
+            message=message,
+            usage=usage,
+            response_id=resolved_response_id,
+        )
 
     async def stream(
         self,
         messages: list[Message],
         tools: list[ToolSchema] | None = None,
         response_format: dict[str, Any] | None = None,
+        previous_response_id: str | None = None,
     ) -> AsyncIterator[StreamDelta]:
-        request_body = self._build_request_body(messages, tools, response_format)
+        request_body = self._build_request_body(
+            messages,
+            tools,
+            response_format,
+            previous_response_id,
+        )
         request_body["stream"] = True
 
         url = f"{self._provider._base_url}/responses"
@@ -210,7 +224,11 @@ class OpenAIResponsesAdapter:
                         if isinstance(response_id, str) and response_id:
                             current_response_id = response_id
 
-                        yield StreamDelta(finish_reason="stop", usage=usage)
+                        yield StreamDelta(
+                            finish_reason="stop",
+                            usage=usage,
+                            response_id=current_response_id,
+                        )
                         break
         except httpx.HTTPStatusError as exc:
             self._provider._handle_http_error(exc)
@@ -219,8 +237,6 @@ class OpenAIResponsesAdapter:
             self._provider._handle_request_error(exc)
             raise
 
-        if current_response_id:
-            self._provider.previous_response_id = current_response_id
         self._provider._responses_api_available = True
 
     def _build_request_body(
@@ -228,6 +244,7 @@ class OpenAIResponsesAdapter:
         messages: list[Message],
         tools: list[ToolSchema] | None,
         response_format: dict[str, Any] | None,
+        previous_response_id: str | None,
     ) -> dict[str, Any]:
         request_body: dict[str, Any] = {
             "model": self._provider._model,
@@ -242,8 +259,8 @@ class OpenAIResponsesAdapter:
             request_body["tools"] = self._provider._convert_tools_to_openai(tools)
         if response_format is not None:
             request_body["response_format"] = response_format
-        if self._provider.previous_response_id is not None:
-            request_body["previous_response_id"] = self._provider.previous_response_id
+        if previous_response_id is not None:
+            request_body["previous_response_id"] = previous_response_id
         return request_body
 
     def _convert_messages_to_responses_input(

@@ -17,6 +17,7 @@ from ecs_agent.components import (
     PromptContextQueueComponent,
     PromptContextReservationComponent,
     RenderedSystemPromptComponent,
+    ResponsesAPIStateComponent,
     RunnerStateComponent,
     StreamingComponent,
     SystemPromptComponent,
@@ -25,6 +26,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core.world import World
 from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.openai_provider import OpenAIProvider
 from ecs_agent.prompts.message_assembly import (
     commit_prompt_context_reservation,
     prepare_outbound_messages,
@@ -67,6 +69,14 @@ class ReasoningSystem:
             # Sample provider and model at request start for in-flight stability
             active_provider = llm_component.pending_provider or llm_component.provider
             active_model = llm_component.pending_model or llm_component.model
+            responses_api_state = world.get_component(
+                entity_id, ResponsesAPIStateComponent
+            )
+            previous_response_id = (
+                responses_api_state.previous_response_id
+                if responses_api_state is not None
+                else None
+            )
 
             # Check for interruption
             if world.has_component(entity_id, InterruptionComponent):
@@ -145,11 +155,20 @@ class ReasoningSystem:
                         messages,
                         tools,
                         non_blocking_delta_publish,
+                        previous_response_id,
                     )
                 else:
-                    non_stream_result = await active_provider.complete(
-                        messages, tools=tools
-                    )
+                    if isinstance(active_provider, OpenAIProvider):
+                        non_stream_result = await active_provider.complete(
+                            messages,
+                            tools=tools,
+                            previous_response_id=previous_response_id,
+                        )
+                    else:
+                        non_stream_result = await active_provider.complete(
+                            messages,
+                            tools=tools,
+                        )
                     if not isinstance(non_stream_result, CompletionResult):
                         raise RuntimeError(
                             "Provider returned stream iterator in non-streaming mode"
@@ -166,6 +185,14 @@ class ReasoningSystem:
                 # Append result to conversation (tree not yet supported for writing)
                 if conversation is not None:
                     conversation.messages.append(result.message)
+
+                if result.response_id is not None:
+                    world.add_component(
+                        entity_id,
+                        ResponsesAPIStateComponent(
+                            previous_response_id=result.response_id,
+                        ),
+                    )
 
                 if result.message.tool_calls:
                     world.add_component(
@@ -234,12 +261,21 @@ class ReasoningSystem:
         messages: list[Message],
         tools: list[ToolSchema] | None,
         non_blocking_delta_publish: bool,
+        previous_response_id: str | None,
     ) -> CompletionResult:
-        stream_result = await active_provider.complete(
-            messages,
-            tools=tools,
-            stream=True,
-        )
+        if isinstance(active_provider, OpenAIProvider):
+            stream_result = await active_provider.complete(
+                messages,
+                tools=tools,
+                stream=True,
+                previous_response_id=previous_response_id,
+            )
+        else:
+            stream_result = await active_provider.complete(
+                messages,
+                tools=tools,
+                stream=True,
+            )
         if isinstance(stream_result, CompletionResult):
             return stream_result
 
@@ -252,6 +288,7 @@ class ReasoningSystem:
         first_content_delta_seen = False
         reasoning_phase_active = False
         reasoning_end_emitted = False
+        response_id: str | None = None
 
         await world.event_bus.publish(
             StreamStartEvent(entity_id=entity_id, timestamp=time.time())
@@ -364,6 +401,9 @@ class ReasoningSystem:
                 if delta.usage is not None:
                     usage = delta.usage
 
+                if delta.response_id is not None:
+                    response_id = delta.response_id
+
                 if world.get_component(entity_id, InterruptionComponent) is not None:
                     raise asyncio.CancelledError()
         except asyncio.CancelledError:
@@ -417,6 +457,7 @@ class ReasoningSystem:
                 tool_calls=self._finalize_tool_calls(tool_call_buffers),
             ),
             usage=usage,
+            response_id=response_id,
         )
 
     def _publish_stream_delta_non_blocking(
