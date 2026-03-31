@@ -114,7 +114,10 @@ from ecs_agent.providers import (
     ClaudeProvider,
     ModelId,
     ProviderConfig,
+    ProviderEntry,
+    ProviderRegistry,
     format_model_id,
+    get_llm_provider,
     parse_model_id,
 )
 
@@ -185,6 +188,8 @@ __all__ = [
     "PermissionComponent",
     "PermissionSystem",
     "ProviderConfig",
+    "ProviderEntry",
+    "ProviderRegistry",
     "RAGSystem",
     "resolve_agent_specs",
     "ResponsesAPICallEvent",
@@ -245,6 +250,7 @@ __all__ = [
     "sandboxed_execute",
     "scan_module",
     "parse_model_id",
+    "get_llm_provider",
     "switch_branch",
     "tool",
     "format_model_id",

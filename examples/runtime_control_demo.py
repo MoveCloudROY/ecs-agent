@@ -23,6 +23,7 @@ from ecs_agent.conversation_tree import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -40,7 +41,7 @@ async def main() -> None:
             "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
         model = os.getenv("LLM_MODEL", "qwen3.5-flash")
-        provider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+        provider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
         print(f"[Provider] OpenAI-compatible: {model}")
     else:
         provider = FakeProvider(

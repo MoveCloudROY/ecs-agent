@@ -19,6 +19,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import World
 from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.fake_provider import FakeProvider
 from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.serialization import WorldSerializer
@@ -132,9 +133,9 @@ def _load_runtime_providers() -> tuple[
 
     if api_key:
         return (
-            OpenAIProvider(api_key=api_key, base_url=base_url, model=model),
-            OpenAIProvider(api_key=api_key, base_url=base_url, model=model),
-            OpenAIProvider(api_key=api_key, base_url=base_url, model=model),
+            OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model),
+            OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model),
+            OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model),
             model,
             True,
         )

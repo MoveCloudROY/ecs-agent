@@ -36,7 +36,8 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeProvider
-from ecs_agent.providers.openai_provider import OpenAIProvider
+from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.systems.checkpoint import CheckpointSystem
 from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
@@ -58,7 +59,7 @@ def create_provider() -> FakeProvider | OpenAIProvider:
     model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
     
     if api_key:
-        return OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+        return OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     return FakeProvider(
         responses=[
             CompletionResult(

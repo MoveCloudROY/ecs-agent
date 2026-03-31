@@ -26,6 +26,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.embedding_provider import OpenAIEmbeddingProvider
 from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider
 from ecs_agent.providers.vector_store import InMemoryVectorStore
@@ -53,7 +54,7 @@ async def main() -> None:
     # --- Create LLM provider (dual-mode) ---
     if api_key:
         print(f"Using OpenAIProvider with model: {model}")
-        provider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+        provider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
         print("No LLM_API_KEY set. Using FakeProvider for demonstration.")
         provider = FakeProvider(

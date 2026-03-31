@@ -35,6 +35,7 @@ import sys
 
 from ecs_agent.logging import configure_logging, get_logger
 from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.retry_provider import RetryProvider
 from ecs_agent.types import CompletionResult, Message, RetryConfig, Usage
 
@@ -57,7 +58,7 @@ async def main() -> None:
     if api_key:
         print(f"Using OpenAIProvider with model: {model}")
         print(f"Base URL: {base_url}")
-        base_provider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+        base_provider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
         print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
         # Create a fake provider with a realistic response

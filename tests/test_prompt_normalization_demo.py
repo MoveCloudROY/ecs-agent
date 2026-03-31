@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ecs_agent.providers.fake_provider import FakeProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.types import CompletionResult, Message
 
 
@@ -101,8 +102,11 @@ async def test_prompt_normalization_demo_real_mode_wiring_uses_env_vars() -> Non
     fake_ctor.assert_not_called()
     openai_ctor.assert_called_once()
     kwargs = openai_ctor.call_args.kwargs
-    assert kwargs["api_key"] == "test-api-key"
-    assert kwargs["base_url"] == "https://example.test/v1"
+    config = kwargs["config"]
+    assert isinstance(config, ProviderConfig)
+    assert config.api_key == "test-api-key"
+    assert config.base_url == "https://example.test/v1"
+    assert config.api_format is ApiFormat.OPENAI_CHAT_COMPLETIONS
     assert kwargs["model"] == "example-model"
 
 
