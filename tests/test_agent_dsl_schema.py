@@ -255,3 +255,21 @@ def test_validate_agent_spec_rejects_skill_empty_path() -> None:
     }
     with pytest.raises(ValueError, match="must not be empty"):
         validate_agent_spec(data, source_name="test")
+
+
+def test_validate_agent_spec_rejects_script_action_in_dsl() -> None:
+    data = {
+        "mode": "primary",
+        "model": "gpt-4",
+        "prompt": "You are an assistant.",
+        "triggers": [
+            {
+                "pattern": "@run",
+                "match_mode": "keyword",
+                "action": "script",
+                "content": "my_handler",
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="action"):
+        validate_agent_spec(data, source_name="test")
