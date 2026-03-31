@@ -1559,12 +1559,17 @@ class TestSensitiveDataPolicy:
     async def test_no_api_keys_in_provider_logs(self, capsys):
         """Verify provider logging does not expose API keys or tokens."""
         from ecs_agent.providers.openai_provider import OpenAIProvider
+        from ecs_agent.providers.config import ApiFormat, ProviderConfig
         from ecs_agent.types import Message
 
         # Create provider with fake API key
         provider = OpenAIProvider(
-            api_key="sk-secret-key-12345",
-            base_url="https://api.openai.com/v1",
+            config=ProviderConfig(
+                provider_id="openai",
+                base_url="https://api.openai.com/v1",
+                api_key="sk-secret-key-12345",
+                api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+            ),
             model="gpt-4",
         )
 

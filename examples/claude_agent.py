@@ -28,6 +28,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.types import CompletionResult, Message, ToolSchema
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
@@ -77,8 +78,12 @@ async def main() -> None:
     if api_key and HAS_CLAUDE:
         print(f"Using ClaudeProvider: {model}")
         provider = ClaudeProvider(
-            api_key=api_key,
-            base_url=base_url,
+            config=ProviderConfig(
+                provider_id="anthropic",
+                base_url=base_url,
+                api_key=api_key,
+                api_format=ApiFormat.ANTHROPIC_MESSAGES,
+            ),
             model=model,
         )
     else:

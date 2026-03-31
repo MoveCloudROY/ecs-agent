@@ -9,6 +9,7 @@ from ecs_agent.providers.openai_provider import (
     OpenAIProvider,
     pydantic_to_response_format,
 )
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.types import Message
 
 
@@ -84,8 +85,12 @@ class TestOpenAIProviderResponseFormat(unittest.TestCase):
     def setUp(self):
         """Set up test provider."""
         self.provider = OpenAIProvider(
-            api_key="test-key",
-            base_url="https://api.example.com/v1",
+            config=ProviderConfig(
+                provider_id="openai",
+                base_url="https://api.example.com/v1",
+                api_key="test-key",
+                api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+            ),
             model="gpt-4o",
         )
 
@@ -291,6 +296,7 @@ class TestFakeProviderResponseFormat(unittest.TestCase):
             )
 
         import asyncio
+
         asyncio.run(run_test())
 
         self.assertEqual(provider.last_response_format, {"type": "json_object"})
@@ -312,6 +318,7 @@ class TestFakeProviderResponseFormat(unittest.TestCase):
             return result
 
         import asyncio
+
         result = asyncio.run(run_test())
 
         # Verify response is returned correctly

@@ -17,6 +17,7 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.systems.permission import PermissionSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import CompletionResult, Message, ToolCall, ToolSchema
@@ -34,7 +35,7 @@ async def main() -> None:
     if api_key:
         print(f"Using OpenAIProvider with model: {model}")
         print(f"Base URL: {base_url}")
-        provider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+        provider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
         print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")

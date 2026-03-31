@@ -18,6 +18,7 @@ from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.components.definitions import TerminalComponent
 from ecs_agent.core import World
 from ecs_agent.providers import FakeProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.openai_provider import OpenAIProvider
 from ecs_agent.skills.discovery import DiscoveryManager
 from ecs_agent.skills.manager import SkillManager
@@ -291,8 +292,12 @@ async def test_ui_design_flow_real_llm(
 
     # Create OpenAI-compatible provider with DashScope
     provider = OpenAIProvider(
-        api_key=API_KEY,
-        base_url=BASE_URL,
+        config=ProviderConfig(
+            provider_id="openai",
+            base_url=BASE_URL,
+            api_key=API_KEY,
+            api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+        ),
         model=MODEL,
     )
 
@@ -378,8 +383,7 @@ async def test_ui_design_flow_real_llm(
     assistant_indices = [
         idx
         for idx, msg in enumerate(conv.messages)
-        if msg.role == "assistant"
-        and (msg.content.strip() or msg.tool_calls)
+        if msg.role == "assistant" and (msg.content.strip() or msg.tool_calls)
     ]
     assert assistant_indices, "Expected at least one assistant completion"
 
