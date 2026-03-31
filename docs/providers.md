@@ -516,6 +516,123 @@ msg = Message(
 
 ---
 
+## Multimodal Messages
+
+The framework supports multimodal content via typed `Message.parts` entries.
+
+### Core Types
+
+Import path:
+
+```python
+from ecs_agent.types import Message, TextPart, ImageUrlPart, FileRefPart
+```
+
+Type definitions (from `ecs_agent.types`):
+
+```python
+@dataclass(slots=True)
+class TextPart:
+    text: str
+
+@dataclass(slots=True)
+class ImageUrlPart:
+    url: str
+    detail: str | None = None
+
+@dataclass(slots=True)
+class FileRefPart:
+    file_id: str
+    filename: str | None = None
+
+MessagePart = TextPart | ImageUrlPart | FileRefPart
+
+@dataclass(slots=True)
+class Message:
+    role: str
+    content: str
+    parts: list[MessagePart] | None = None
+```
+
+`Message.parts=None` means text-only mode (backward compatible).
+
+### Usage Pattern
+
+```python
+from ecs_agent.types import Message, TextPart, ImageUrlPart, FileRefPart
+
+msg = Message(
+    role="user",
+    content="Please review the image and file.",
+    parts=[
+        TextPart(text="Focus on entities and relationships."),
+        ImageUrlPart(url="https://example.com/diagram.png", detail="high"),
+        FileRefPart(file_id="file-abc123", filename="spec.pdf"),
+    ],
+)
+```
+
+If both `content` and `parts` are set, adapters preserve both.
+
+### OpenAI Chat Completions Wire Format
+
+- `TextPart` → `{"type": "text", "text": part.text}`
+- `ImageUrlPart` → `{"type": "image_url", "image_url": {"url": part.url, "detail": part.detail}}` (`detail` omitted when `None`)
+- `FileRefPart` → `{"type": "file", "file": {"file_id": part.file_id, "filename": part.filename}}` (`filename` omitted when `None`)
+- If `message.content` is non-empty and `parts` is set, `content` is prepended as a text block.
+
+```json
+{
+  "role": "user",
+  "content": [
+    {"type": "text", "text": "Please review the image and file."},
+    {"type": "text", "text": "Focus on entities and relationships."},
+    {"type": "image_url", "image_url": {"url": "https://example.com/diagram.png", "detail": "high"}},
+    {"type": "file", "file": {"file_id": "file-abc123", "filename": "spec.pdf"}}
+  ]
+}
+```
+
+### OpenAI Responses API Wire Format
+
+- Text type is role-aware: `"input_text"` (user) or `"output_text"` (assistant)
+- `ImageUrlPart` → `{"type": "input_image", "image_url": part.url, "detail": part.detail}` (`detail` omitted when `None`)
+- `FileRefPart` → `{"type": "input_file", "file_id": part.file_id, "filename": part.filename}` (`filename` omitted when `None`)
+
+```json
+{
+  "type": "message",
+  "role": "user",
+  "content": [
+    {"type": "input_text", "text": "Please review the image and file."},
+    {"type": "input_text", "text": "Focus on entities and relationships."},
+    {"type": "input_image", "image_url": "https://example.com/diagram.png", "detail": "high"},
+    {"type": "input_file", "file_id": "file-abc123", "filename": "spec.pdf"}
+  ]
+}
+```
+
+### Anthropic Messages Wire Format
+
+- `TextPart` → `{"type": "text", "text": part.text}`
+- `ImageUrlPart` → `{"type": "image", "source": {"type": "url", "url": part.url}}`
+- Vision requires adapter config `supports_vision=True`; otherwise image parts raise `ValueError`.
+- `FileRefPart` is not supported by the Anthropic adapter and always raises `ValueError`.
+
+### `ImageUrlPart.detail` (OpenAI Vision)
+
+`detail` accepts `"low"`, `"high"`, or `"auto"`; set `None` to omit it from payloads.
+
+### `FileRefPart` and File Uploads
+
+Use `FileRefPart` with IDs returned by `OpenAIFilesService` (see **File Upload** above).
+
+### Live Vision Test Note
+
+For live vision tests, set env vars such as `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, and `IMAGE_URL` (never hardcode secrets).
+
+---
+
 ## Vector Store
 
 ### VectorStore Protocol
