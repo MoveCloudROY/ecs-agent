@@ -263,7 +263,14 @@ class OpenAIChatAdapter:
             content_parts.append({"type": "text", "text": message.content})
 
         for part in message.parts:
+            # TextPart is a legacy compat path: per the content/parts contract,
+            # text belongs in message.content, not parts. This branch handles
+            # any pre-existing messages that violated the contract.
             if isinstance(part, TextPart):
+                # Legacy compat: TextPart in parts is deprecated.
+                # New code must put text in message.content only.
+                # This branch is kept to avoid silently dropping text
+                # from messages that were built before the contract was enforced.
                 content_parts.append({"type": "text", "text": part.text})
                 continue
 

@@ -1,6 +1,7 @@
 """Core type definitions for ECS-based LLM Agent."""
 
 import asyncio
+import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime, timezone
@@ -49,7 +50,29 @@ MessagePart = TextPart | ImageUrlPart | FileRefPart
 
 @dataclass(slots=True)
 class Message:
-    """Represents a message in the conversation."""
+    """Represents a message in the conversation.
+
+    Content/parts contract
+    ----------------------
+    ``content`` is the canonical text body of the message.  It must always
+    be set for user and assistant messages (empty string is fine for tool
+    messages that carry only ``tool_call_id``).
+
+    ``parts`` carries *non-text* media attachments only: ``ImageUrlPart``
+    and ``FileRefPart``.  ``TextPart`` **must not** appear in ``parts``
+    because it creates a second text channel that duplicates ``content``.
+    Doing so causes text to be sent twice to the LLM and breaks prompt
+    normalisation (``UserPromptNormalizationSystem`` only reads
+    ``content``, not ``parts``).
+
+    Correct usage for a multimodal message::
+
+        Message(
+            role="user",
+            content="Describe this image.",   # text goes here
+            parts=[ImageUrlPart(url="...")],  # media goes here
+        )
+    """
 
     role: str
     content: str
@@ -57,6 +80,13 @@ class Message:
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
 
+    def __post_init__(self) -> None:
+        if self.parts and any(isinstance(p, TextPart) for p in self.parts):
+            warnings.warn(
+                "Message.parts should not contain TextPart; put text in \'content\' instead. ",
+                UserWarning,
+                stacklevel=2,
+            )
 
 @dataclass(slots=True)
 class ConversationMessage:

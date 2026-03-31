@@ -17,6 +17,7 @@ from ecs_agent.prompts.user_prompt_rendering import (
     render_user_prompt_text,
     _apply_trigger_specs,
 )
+from ecs_agent.prompts.message_assembly import message_text
 from ecs_agent.types import EntityId, Message
 
 logger = get_logger(__name__)
@@ -92,7 +93,7 @@ class UserPromptNormalizationSystem:
     def _find_last_user_text(messages: list[Message]) -> str | None:
         for message in reversed(messages):
             if message.role == "user":
-                return message.content
+                return message_text(message)
         return None
 
     @staticmethod

@@ -92,9 +92,8 @@ def test_to_dict_message_with_multimodal_parts_is_deterministic() -> None:
             messages=[
                 Message(
                     role="user",
-                    content="",
+                    content="hello",
                     parts=[
-                        TextPart(text="hello"),
                         ImageUrlPart(url="https://example.com/a.png", detail="low"),
                         FileRefPart(file_id="file_123", filename="doc.txt"),
                     ],
@@ -107,9 +106,8 @@ def test_to_dict_message_with_multimodal_parts_is_deterministic() -> None:
 
     assert data["entities"]["1"]["ConversationComponent"]["messages"][0] == {
         "role": "user",
-        "content": "",
+        "content": "hello",
         "parts": [
-            {"type": "text", "text": "hello"},
             {
                 "type": "image_url",
                 "url": "https://example.com/a.png",
@@ -121,7 +119,6 @@ def test_to_dict_message_with_multimodal_parts_is_deterministic() -> None:
         "tool_call_id": None,
     }
 
-
 def test_serialization_roundtrip_message_with_multimodal_parts() -> None:
     world = World()
     entity = world.create_entity()
@@ -131,9 +128,8 @@ def test_serialization_roundtrip_message_with_multimodal_parts() -> None:
             messages=[
                 Message(
                     role="user",
-                    content="summary",
+                    content="what is in this file?",
                     parts=[
-                        TextPart(text="what is in this file?"),
                         FileRefPart(file_id="file_abc", filename="report.pdf"),
                     ],
                 )
@@ -147,14 +143,12 @@ def test_serialization_roundtrip_message_with_multimodal_parts() -> None:
 
     assert restored_conv is not None
     restored_message = restored_conv.messages[0]
-    assert restored_message.content == "summary"
+    assert restored_message.content == "what is in this file?"
     assert restored_message.parts is not None
-    assert len(restored_message.parts) == 2
-    assert isinstance(restored_message.parts[0], TextPart)
-    assert restored_message.parts[0].text == "what is in this file?"
-    assert isinstance(restored_message.parts[1], FileRefPart)
-    assert restored_message.parts[1].file_id == "file_abc"
-    assert restored_message.parts[1].filename == "report.pdf"
+    assert len(restored_message.parts) == 1
+    assert isinstance(restored_message.parts[0], FileRefPart)
+    assert restored_message.parts[0].file_id == "file_abc"
+    assert restored_message.parts[0].filename == "report.pdf"
 
 
 def test_to_dict_skips_non_serializable_fields() -> None:

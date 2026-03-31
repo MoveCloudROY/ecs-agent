@@ -432,15 +432,13 @@ async def test_multiple_skill_manager_facades_share_world_state() -> None:
     assert manager_a.get_skill_metadata(world, entity, "builtin-tools") == manager_b.get_skill_metadata(world, entity, "builtin-tools")
 
 
-def test_substitute_last_user_message_preserves_parts() -> None:
     from ecs_agent.prompts.message_assembly import _substitute_last_user_message
-    from ecs_agent.types import ImageUrlPart, TextPart
+    from ecs_agent.types import ImageUrlPart
 
     original = Message(
         role="user",
         content="Describe this image in detail.",
         parts=[
-            TextPart(text="Describe this image in detail."),
             ImageUrlPart(url="https://example.com/img.jpg"),
         ],
     )
