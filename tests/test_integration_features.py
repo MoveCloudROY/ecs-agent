@@ -28,6 +28,7 @@ from ecs_agent.conversation_tree import add_message, linearize
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import configure_logging, get_logger
 from ecs_agent.providers import FakeProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.openai_provider import OpenAIProvider
 from ecs_agent.serialization import WorldSerializer
 from ecs_agent.skills.skill import Skill
@@ -62,10 +63,13 @@ async def test_responses_api_with_real_llm() -> None:
 
     # Create provider with Responses API enabled (will fallback to Chat Completions if not supported)
     provider = OpenAIProvider(
-        api_key=api_key,
-        base_url=base_url,
+        config=ProviderConfig(
+            provider_id="openai",
+            base_url=base_url,
+            api_key=api_key,
+            api_format=ApiFormat.OPENAI_RESPONSES,
+        ),
         model=model,
-        use_responses_api=True,
     )
 
     entity = world.create_entity()

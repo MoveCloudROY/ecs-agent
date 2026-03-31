@@ -44,6 +44,7 @@ from ecs_agent.conversation_tree import (
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import FORBIDDEN_FIELDS
 from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -61,6 +62,18 @@ BASE_URL = os.getenv(
     "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
 )
 MODEL = os.getenv("LLM_MODEL", "qwen-plus")
+
+
+def _openai_provider(*, api_key: str, base_url: str, model: str) -> OpenAIProvider:
+    return OpenAIProvider(
+        config=ProviderConfig(
+            provider_id="openai",
+            base_url=base_url,
+            api_key=api_key,
+            api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+        ),
+        model=model,
+    )
 
 
 def _json_events(output: str) -> list[dict[str, object]]:
@@ -85,11 +98,7 @@ def _json_events(output: str) -> list[dict[str, object]]:
 async def test_real_openai_streaming_produces_deltas() -> None:
     """Streaming ReasoningSystem with real OpenAIProvider emits StreamDelta events."""
     world = World()
-    provider = OpenAIProvider(
-        api_key=API_KEY,
-        base_url=BASE_URL,
-        model=MODEL,
-    )
+    provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     entity = world.create_entity()
     world.add_component(entity, LLMComponent(provider=provider, model=MODEL))
@@ -131,11 +140,7 @@ async def test_real_openai_streaming_produces_deltas() -> None:
 @pytest.mark.asyncio
 async def test_real_openai_provider_non_streaming() -> None:
     """OpenAIProvider via DashScope returns valid CompletionResult."""
-    provider = OpenAIProvider(
-        api_key=API_KEY,
-        base_url=BASE_URL,
-        model=MODEL,
-    )
+    provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     messages = [
         Message(role="system", content="You are a helpful assistant."),
@@ -154,11 +159,7 @@ async def test_real_openai_provider_non_streaming() -> None:
 @pytest.mark.asyncio
 async def test_real_openai_provider_streaming() -> None:
     """OpenAIProvider streaming returns valid StreamDelta sequence."""
-    provider = OpenAIProvider(
-        api_key=API_KEY,
-        base_url=BASE_URL,
-        model=MODEL,
-    )
+    provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     messages = [
         Message(role="system", content="You are a helpful assistant."),
@@ -187,11 +188,7 @@ async def test_real_openai_provider_streaming() -> None:
 async def test_real_full_agent_loop_streaming() -> None:
     """Full World + ReasoningSystem + StreamingComponent runs to completion."""
     world = World()
-    provider = OpenAIProvider(
-        api_key=API_KEY,
-        base_url=BASE_URL,
-        model=MODEL,
-    )
+    provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     entity = world.create_entity()
     world.add_component(entity, LLMComponent(provider=provider, model=MODEL))
@@ -233,11 +230,7 @@ async def test_real_full_agent_loop_streaming() -> None:
 async def test_real_multi_turn_conversation() -> None:
     """Test multi-turn conversation with real LLM maintaining context."""
     world = World()
-    provider = OpenAIProvider(
-        api_key=API_KEY,
-        base_url=BASE_URL,
-        model=MODEL,
-    )
+    provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     entity = world.create_entity()
     world.add_component(entity, LLMComponent(provider=provider, model=MODEL))
@@ -277,11 +270,7 @@ async def test_real_multi_turn_conversation() -> None:
 async def test_real_llm_reasoning_logging_contracts(capsys: object) -> None:
     """Verify structured logging contracts when ReasoningSystem uses real LLM provider."""
     world = World()
-    provider = OpenAIProvider(
-        api_key=API_KEY,
-        base_url=BASE_URL,
-        model=MODEL,
-    )
+    provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     entity = world.create_entity()
     world.add_component(entity, LLMComponent(provider=provider, model=MODEL))
@@ -336,11 +325,7 @@ async def test_real_llm_reasoning_logging_contracts(capsys: object) -> None:
 async def test_real_llm_streaming_logging_metadata(capsys: object) -> None:
     """Verify streaming mode logs contain correct metadata fields."""
     world = World()
-    provider = OpenAIProvider(
-        api_key=API_KEY,
-        base_url=BASE_URL,
-        model=MODEL,
-    )
+    provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     entity = world.create_entity()
     world.add_component(entity, LLMComponent(provider=provider, model=MODEL))
@@ -387,11 +372,7 @@ async def test_real_llm_streaming_logging_metadata(capsys: object) -> None:
 async def test_real_llm_error_logging_contracts(capsys: object) -> None:
     """Verify error logging when LLM provider fails (bad API key)."""
     world = World()
-    provider = OpenAIProvider(
-        api_key="sk-invalid-key-for-testing",
-        base_url=BASE_URL,
-        model=MODEL,
-    )
+    provider = _openai_provider(api_key="sk-invalid-key-for-testing", base_url=BASE_URL, model=MODEL)
 
     entity = world.create_entity()
     world.add_component(entity, LLMComponent(provider=provider, model=MODEL))
@@ -441,7 +422,7 @@ def get_real_provider() -> OpenAIProvider:
     )
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
 
-    return OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+    return _openai_provider(api_key=api_key, base_url=base_url, model=model)
 
 
 class RecordingProvider:
@@ -861,11 +842,7 @@ async def test_real_provider_smoke_with_dashscope_defaults() -> None:
     This test validates that the provider can successfully communicate with
     DashScope (or any OpenAI-compatible API) using environment defaults.
     """
-    provider = OpenAIProvider(
-        api_key=API_KEY,
-        base_url=BASE_URL,
-        model=MODEL,
-    )
+    provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     messages = [
         Message(role="user", content="Say hello"),
@@ -1152,7 +1129,7 @@ async def test_real_llm_rendered_system_prompt_reaches_provider() -> None:
     from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
     from ecs_agent.types import ToolSchema as _ToolSchema
 
-    inner = OpenAIProvider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    inner = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
     capturing: _CapturingProvider = _CapturingProvider(inner)
 
     world = World()
@@ -1212,7 +1189,7 @@ async def test_real_llm_rendered_user_prompt_trigger_injection() -> None:
         UserPromptNormalizationSystem,
     )
 
-    inner = OpenAIProvider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    inner = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
     capturing: _CapturingProvider = _CapturingProvider(inner)
 
     world = World()
@@ -1283,7 +1260,7 @@ async def test_slash_skill_context_injection_real_llm() -> None:
         def uninstall(self, world: World, entity_id: Any) -> None:
             return None
 
-    inner = OpenAIProvider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    inner = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
     world = World()
     entity = world.create_entity()
     world.add_component(entity, LLMComponent(provider=inner, model=MODEL))
@@ -1347,7 +1324,7 @@ async def test_slash_skill_context_injection_real_llm() -> None:
     assert (
         "Description: Test slash skill context for prompt assembly" in user_msg.content
     )
-    assert "## Skill Body\n(none)\n\n## Tool Schemas\n- none" in user_msg.content
+    assert "## Skill Body\nUse the slash skill context when helping the user.\n\n## Tool Schemas\n- none" in user_msg.content
     assert original_text in user_msg.content
     assert user_msg.content.endswith(original_text)
 
@@ -1379,7 +1356,7 @@ async def test_real_llm_load_skill_details_returns_context_in_tool_message(
         UserPromptNormalizationSystem,
     )
 
-    inner = OpenAIProvider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    inner = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
     capturing: _CapturingProvider = _CapturingProvider(inner)
 
     world = World()
@@ -1468,7 +1445,7 @@ async def test_real_subagent_child_world_name_in_logs(
 
     configure_logging(json_output=True, level="DEBUG")
 
-    provider = OpenAIProvider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     # Parent world — named
     world = World(name="test-parent")
@@ -1582,7 +1559,7 @@ async def test_real_subagent_rendered_prompt() -> None:
 
     _SYSTEM_PROMPT = "You are a specialized subagent for Task 11 verification."
 
-    inner = OpenAIProvider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    inner = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
     capturing: _CapturingProvider = _CapturingProvider(inner)
 
     # Build a minimal parent world so _assemble_child_world has something to inspect.
@@ -1658,7 +1635,7 @@ async def test_real_subagent_workspace_inherits() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         workspace_root = _Path(tmp_dir)
 
-        inner = OpenAIProvider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+        inner = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
         parent_world = World(name="test-parent-workspace-t11")
         parent_entity = parent_world.create_entity()
@@ -1684,7 +1661,9 @@ async def test_real_subagent_workspace_inherits() -> None:
             parent_world, parent_entity, config
         )
 
-        child_binding = child_world.get_component(child_entity_id, WorkspaceBindingComponent)
+        child_binding = child_world.get_component(
+            child_entity_id, WorkspaceBindingComponent
+        )
         assert child_binding is not None, (
             "Child entity missing WorkspaceBindingComponent — workspace inheritance failed"
         )

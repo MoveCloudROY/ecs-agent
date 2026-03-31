@@ -2363,13 +2363,22 @@ async def test_delegate_timeout_backward_compatible() -> None:
 
 async def test_subagent_retry_default_wrap() -> None:
     """Test that non-wrapped providers are wrapped with RetryProvider by default."""
+    from ecs_agent.providers.config import ApiFormat, ProviderConfig
     from ecs_agent.providers.openai_provider import OpenAIProvider
     from ecs_agent.providers.retry_provider import RetryProvider
 
     world = World()
     parent_entity = world.create_entity()
 
-    base_provider = OpenAIProvider(api_key="test", base_url="http://test", model="test")
+    base_provider = OpenAIProvider(
+        config=ProviderConfig(
+            provider_id="openai",
+            base_url="http://test",
+            api_key="test",
+            api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+        ),
+        model="test",
+    )
     config = SubagentConfig(name="test", provider=base_provider, model="test")
     world.add_component(
         parent_entity, SubagentRegistryComponent(subagents={"test": config})
@@ -2387,13 +2396,22 @@ async def test_subagent_retry_default_wrap() -> None:
 
 async def test_subagent_retry_no_double_wrap() -> None:
     """Test that already-wrapped providers are not double-wrapped."""
+    from ecs_agent.providers.config import ApiFormat, ProviderConfig
     from ecs_agent.providers.openai_provider import OpenAIProvider
     from ecs_agent.providers.retry_provider import RetryProvider
 
     world = World()
     parent_entity = world.create_entity()
 
-    base_provider = OpenAIProvider(api_key="test", base_url="http://test", model="test")
+    base_provider = OpenAIProvider(
+        config=ProviderConfig(
+            provider_id="openai",
+            base_url="http://test",
+            api_key="test",
+            api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+        ),
+        model="test",
+    )
     retry_provider = RetryProvider(provider=base_provider, retry_config=RetryConfig())
 
     config = SubagentConfig(name="test", provider=retry_provider, model="test")

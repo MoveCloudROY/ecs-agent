@@ -32,6 +32,7 @@ from ecs_agent.prompts.contracts import (
     TriggerSpec,
 )
 from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.skills.discovery import discover_skills
 from ecs_agent.skills.manager import SkillManager
@@ -112,7 +113,7 @@ async def main() -> None:
     if api_key:
         logger.info("using_provider", provider="OpenAIProvider", model=model)
         print(f"Using OpenAIProvider with model: {model}")
-        provider = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+        provider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
         logger.info("using_provider", provider="FakeProvider")
         print("No LLM_API_KEY set. Using FakeProvider for demonstration.")

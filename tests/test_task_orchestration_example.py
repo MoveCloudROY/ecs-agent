@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.types import CompletionResult, Message, ToolCall
 
 
@@ -149,8 +150,11 @@ async def test_task_orchestration_example_uses_openai_provider_in_real_mode() ->
 
     assert openai_ctor.call_count == 3
     for call in openai_ctor.call_args_list:
-        assert call.kwargs["api_key"] == "test-api-key"
-        assert call.kwargs["base_url"] == DEFAULT_BASE_URL
+        config = call.kwargs["config"]
+        assert isinstance(config, ProviderConfig)
+        assert config.api_key == "test-api-key"
+        assert config.base_url == DEFAULT_BASE_URL
+        assert config.api_format is ApiFormat.OPENAI_CHAT_COMPLETIONS
         assert call.kwargs["model"] == DEFAULT_MODEL
     assert set(report["completed_tasks"]) == {
         "collect_requirements",

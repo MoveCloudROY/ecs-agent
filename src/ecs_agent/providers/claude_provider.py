@@ -27,8 +27,7 @@ class ClaudeProvider:
 
     def __init__(
         self,
-        api_key: str,
-        base_url: str = "https://api.anthropic.com",
+        config: ProviderConfig,
         model: str = "claude-3-5-haiku-latest",
         max_tokens: int = 4096,
         connect_timeout: float = 10.0,
@@ -37,17 +36,22 @@ class ClaudeProvider:
         pool_timeout: float = 10.0,
         supports_vision: bool = False,
     ) -> None:
-        self._api_key = api_key
-        self._base_url = base_url
+        if config.api_format is not ApiFormat.ANTHROPIC_MESSAGES:
+            raise ValueError("ProviderConfig.api_format must be ANTHROPIC_MESSAGES")
+
+        timeout_override = config.timeout
+        if timeout_override is not None:
+            connect_timeout = timeout_override
+            read_timeout = timeout_override
+            write_timeout = timeout_override
+            pool_timeout = timeout_override
+
+        self._provider_config = config
+        self._api_key = config.api_key
+        self._base_url = config.base_url
         self._model = model
         self._max_tokens = max_tokens
         self._supports_vision = supports_vision
-        self._provider_config = ProviderConfig(
-            provider_id="anthropic",
-            base_url=base_url,
-            api_key=api_key,
-            api_format=ApiFormat.ANTHROPIC_MESSAGES,
-        )
         self._messages_adapter = AnthropicMessagesAdapter(
             AnthropicMessagesAdapterConfig(
                 provider=self._provider_config,
