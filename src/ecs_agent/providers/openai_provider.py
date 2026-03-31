@@ -22,25 +22,13 @@ class OpenAIProvider:
 
     def __init__(
         self,
-        api_key: str,
-        base_url: str = "https://api.openai.com/v1",
+        config: ProviderConfig,
         model: str = "gpt-4o-mini",
-        use_responses_api: bool = False,
         connect_timeout: float = 10.0,
         read_timeout: float = 120.0,
         write_timeout: float = 10.0,
         pool_timeout: float = 10.0,
-        api_format: ApiFormat | str | None = None,
-        provider_config: ProviderConfig | None = None,
     ) -> None:
-        config = self._resolve_provider_config(
-            api_key=api_key,
-            base_url=base_url,
-            use_responses_api=use_responses_api,
-            api_format=api_format,
-            provider_config=provider_config,
-        )
-
         timeout_override = config.timeout
         if timeout_override is not None:
             connect_timeout = timeout_override
@@ -52,7 +40,6 @@ class OpenAIProvider:
         self._api_key = config.api_key
         self._base_url = config.base_url
         self._model = model
-        self.use_responses_api = use_responses_api
         self._responses_api_available: bool | None = None
         self._timeout = httpx.Timeout(
             connect=connect_timeout,
@@ -129,51 +116,6 @@ class OpenAIProvider:
             f"{ApiFormat.OPENAI_CHAT_COMPLETIONS.value}, "
             f"{ApiFormat.OPENAI_RESPONSES.value}."
         )
-
-    def _resolve_provider_config(
-        self,
-        api_key: str,
-        base_url: str,
-        use_responses_api: bool,
-        api_format: ApiFormat | str | None,
-        provider_config: ProviderConfig | None,
-    ) -> ProviderConfig:
-        if provider_config is not None:
-            if not isinstance(provider_config.api_format, ApiFormat):
-                raise ValueError(
-                    "provider_config.api_format must be an ApiFormat instance"
-                )
-            return provider_config
-
-        selected_format = self._resolve_api_format(api_format, use_responses_api)
-        return ProviderConfig(
-            provider_id="openai",
-            base_url=base_url,
-            api_key=api_key,
-            api_format=selected_format,
-        )
-
-    def _resolve_api_format(
-        self,
-        api_format: ApiFormat | str | None,
-        use_responses_api: bool,
-    ) -> ApiFormat:
-        if isinstance(api_format, ApiFormat):
-            return api_format
-
-        if isinstance(api_format, str):
-            try:
-                return ApiFormat(api_format)
-            except ValueError as exc:
-                raise ValueError(
-                    "Invalid api_format "
-                    f"'{api_format}'. Expected one of: "
-                    f"{', '.join(value.value for value in ApiFormat)}"
-                ) from exc
-
-        if use_responses_api:
-            return ApiFormat.OPENAI_RESPONSES
-        return ApiFormat.OPENAI_CHAT_COMPLETIONS
 
     def _build_headers(self) -> dict[str, str]:
         headers = {
