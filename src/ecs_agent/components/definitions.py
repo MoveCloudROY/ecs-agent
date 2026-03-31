@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 import asyncio
 import time
@@ -22,6 +22,11 @@ from ecs_agent.types import (
     TaskStatus,
     ScratchbookRef,
 )
+
+if TYPE_CHECKING:
+    from ecs_agent.core.world import World
+
+ScriptHandler = Callable[["World", EntityId, str], Awaitable[str | None]]
 
 try:
     from ecs_agent.providers.protocol import LLMProvider
@@ -425,6 +430,7 @@ class UserPromptConfigComponent:
     enable_context_pool: bool = False
     # max characters for context pool rendering (overflow = drop lowest priority)
     context_pool_max_chars: int = 8192
+    script_handlers: dict[str, ScriptHandler] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

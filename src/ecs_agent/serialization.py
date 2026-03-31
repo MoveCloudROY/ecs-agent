@@ -226,6 +226,9 @@ class WorldSerializer:
         if isinstance(component, ToolRegistryComponent):
             serialized["handlers"] = NON_SERIALIZABLE_PLACEHOLDER
 
+        if isinstance(component, UserPromptConfigComponent):
+            serialized["script_handlers"] = NON_SERIALIZABLE_PLACEHOLDER
+
         if isinstance(component, EmbeddingComponent):
             serialized["provider"] = NON_SERIALIZABLE_PLACEHOLDER
 
@@ -343,6 +346,7 @@ class WorldSerializer:
         if component_name == UserPromptConfigComponent.__name__:
             allowed_fields = {
                 "triggers",
+                "script_handlers",
                 "enable_context_pool",
                 "context_pool_max_chars",
             }
@@ -360,6 +364,9 @@ class WorldSerializer:
                 else trigger_data
                 for trigger_data in triggers_data
             ]
+            script_handlers_value = normalized_data.get("script_handlers")
+            if script_handlers_value == NON_SERIALIZABLE_PLACEHOLDER:
+                normalized_data["script_handlers"] = {}
 
         if component_name == SystemPromptConfigSpec.__name__:
             template_source_data = normalized_data.get("template_source")
