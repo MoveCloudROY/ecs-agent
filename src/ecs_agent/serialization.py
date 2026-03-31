@@ -59,7 +59,6 @@ from ecs_agent.types import (
     ImageUrlPart,
     Message,
     MessagePart,
-    TextPart,
     ToolCall,
     ToolSchema,
 )
@@ -569,8 +568,7 @@ class WorldSerializer:
 
     @staticmethod
     def _message_part_to_dict(part: MessagePart) -> dict[str, Any]:
-        if isinstance(part, TextPart):
-            return {"type": "text", "text": part.text}
+
         if isinstance(part, ImageUrlPart):
             return {
                 "type": "image_url",
@@ -588,8 +586,7 @@ class WorldSerializer:
     @staticmethod
     def _message_part_from_dict(data: dict[str, Any]) -> MessagePart:
         part_type = data.get("type")
-        if part_type == "text":
-            return TextPart(text=data["text"])
+
         if part_type == "image_url":
             return ImageUrlPart(url=data["url"], detail=data.get("detail"))
         if part_type == "file_ref":
