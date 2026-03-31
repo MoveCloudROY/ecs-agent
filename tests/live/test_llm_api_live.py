@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from ecs_agent.types import CompletionResult, ImageUrlPart, Message, TextPart
+from ecs_agent.types import CompletionResult, ImageUrlPart, Message
 
 _registry_module = pytest.importorskip("ecs_agent.providers.registry")
 ProviderRegistry = _registry_module.ProviderRegistry

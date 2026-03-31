@@ -528,8 +528,8 @@ async def test_vision_responses_output_parses_parts_into_message_parts() -> None
     result = await provider.complete([Message(role="user", content="vision")])
     assert result.message.content == "Found details."
     assert result.message.parts is not None
-    assert isinstance(result.message.parts[1], ImageUrlPart)
-    assert isinstance(result.message.parts[2], FileRefPart)
+    assert isinstance(result.message.parts[0], ImageUrlPart)
+    assert isinstance(result.message.parts[1], FileRefPart)
 
 
 @pytest.mark.asyncio

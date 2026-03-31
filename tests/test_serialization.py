@@ -38,7 +38,6 @@ from ecs_agent.types import (
     FileRefPart,
     ImageUrlPart,
     Message,
-    TextPart,
     ToolCall,
     ToolSchema,
 )
