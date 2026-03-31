@@ -1,16 +1,47 @@
 # Providers
 
-This document provides a reference for the LLM providers available in the ECS Agent framework, including the new canonical model ID and provider configuration architecture introduced in the LLM refactor.
+This document is a reference for all LLM providers in the ECS Agent framework.
 
 ---
 
 ## Provider Architecture Overview
 
-The LLM layer is organized around three concepts:
+The provider stack is organized around three linked concepts: a canonical model ID (`provider/model`) that carries both routing provider and API model name, a `ProviderConfig` that defines endpoint/auth/protocol settings, and event-driven accounting that measures usage and cache behavior. The Quick Start below shows the full end-to-end flow.
 
-1. **Canonical model identifiers** — `provider/model` strings that uniquely name a model (e.g. `aliyun/qwen3.5-flash`).
-2. **Provider configuration** (`ProviderConfig`) — explicit, stateless connection settings separate from the provider instance.
-3. **Event-driven accounting** — a subscriber that listens to `LLMInvocationEvent` and computes cost + cache hit-rate metrics.
+### Quick Start
+
+```python
+import os
+
+from ecs_agent.accounting.subscriber import AccountingSubscriber
+from ecs_agent.core import World
+from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers.model_id import parse_model_id
+
+# 1) Parse canonical provider/model ID
+model_id = parse_model_id("aliyun/qwen3.5-flash")
+
+# 2) Build provider config from the provider part
+config = ProviderConfig(
+    provider_id=model_id.provider,
+    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    api_key=os.environ["LLM_API_KEY"],
+    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+)
+
+# 3) Build provider with ProviderConfig + model part
+provider = OpenAIProvider(
+    api_key="",  # ignored when provider_config is provided
+    provider_config=config,
+    model=model_id.model,
+)
+
+# 4) Attach accounting subscriber to world events
+world = World()
+subscriber = AccountingSubscriber()
+subscriber.subscribe(world.event_bus)
+```
 
 ### Canonical Model IDs
 
