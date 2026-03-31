@@ -16,7 +16,6 @@ from ecs_agent.types import (
     Message,
     MessagePart,
     StreamDelta,
-    TextPart,
     ToolCall,
     ToolSchema,
     Usage,
@@ -318,14 +317,6 @@ class OpenAIResponsesAdapter:
             return parts
 
         for part in message.parts:
-            if isinstance(part, TextPart):
-                # Legacy compat: TextPart in parts is deprecated.
-                # New code must put text in message.content only.
-                # This branch is kept to avoid silently dropping text
-                # from messages that were built before the contract was enforced.
-                parts.append({"type": text_type, "text": part.text})
-                continue
-
             if isinstance(part, ImageUrlPart):
                 payload: dict[str, Any] = {
                     "type": "input_image",
@@ -422,7 +413,7 @@ class OpenAIResponsesAdapter:
             text = content_item.get("text")
             if isinstance(text, str):
                 text_parts.append(text)
-                message_parts.append(TextPart(text=text))
+
             return
 
         if content_type in {"input_image", "image_url", "image"}:

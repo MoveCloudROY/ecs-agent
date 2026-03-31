@@ -10,7 +10,6 @@ from ecs_agent.types import (
     FileRefPart,
     ImageUrlPart,
     Message,
-    TextPart,
     ToolCall,
     ToolSchema,
     Usage,
@@ -175,13 +174,7 @@ class AnthropicMessagesAdapter:
 
         if msg.parts:
             for part in msg.parts:
-                if isinstance(part, TextPart):
-                    # Legacy compat: TextPart in parts is deprecated.
-                    # New code must put text in message.content only.
-                    # This branch is kept to avoid silently dropping text
-                    # from messages that were built before the contract was enforced.
-                    content_blocks.append({"type": "text", "text": part.text})
-                    continue
+
 
                 if isinstance(part, ImageUrlPart):
                     if not self._config.supports_vision:
