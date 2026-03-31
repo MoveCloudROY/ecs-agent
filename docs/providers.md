@@ -15,58 +15,109 @@ import os
 
 from ecs_agent.accounting.subscriber import AccountingSubscriber
 from ecs_agent.core import World
-from ecs_agent.providers import OpenAIProvider
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.model_id import parse_model_id
+from ecs_agent.providers.registry import ProviderRegistry, get_llm_provider
 
-# 1) Parse canonical provider/model ID
-model_id = parse_model_id("aliyun/qwen3.5-flash")
+# 1) Load provider configs from TOML file
+registry = ProviderRegistry.from_toml("providers.toml")
+# or inline:
+# registry = ProviderRegistry.from_dict({
+#     "aliyun": {
+#         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+#         "api_format": "openai_chat_completions",
+#         "api_key_env": "LLM_API_KEY",
+#     }
+# })
 
-# 2) Build provider config from the provider part
-config = ProviderConfig(
-    provider_id=model_id.provider,
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-    api_key=os.environ["LLM_API_KEY"],
-    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-)
+# 2) One call: model ID → correct provider type (determined by api_format)
+provider = get_llm_provider("aliyun/qwen3.5-flash", registry=registry)
 
-# 3) Build provider with ProviderConfig + model part
-provider = OpenAIProvider(
-    api_key="",  # ignored when provider_config is provided
-    provider_config=config,
-    model=model_id.model,
-)
-
-# 4) Attach accounting subscriber to world events
+# 3) Attach accounting to the World's event bus
 world = World()
 subscriber = AccountingSubscriber()
 subscriber.subscribe(world.event_bus)
 ```
 
-### Canonical Model IDs
+---
 
-```python
-from ecs_agent.providers.model_id import parse_model_id, format_model_id, ModelId
+## Provider Registry
 
-# Parse a canonical ID
-model_id = parse_model_id("aliyun/qwen3.5-flash")
-# ModelId(provider="aliyun", model="qwen3.5-flash")
+`ProviderRegistry` maps provider IDs to endpoint/auth/protocol configs. `get_llm_provider` uses it to construct the right provider type automatically.
 
-# Format back to string
-canonical = format_model_id(model_id)
-# "aliyun/qwen3.5-flash"
+### TOML Configuration
 
-# Invalid — colon-delimited IDs are rejected with ValueError:
-# parse_model_id("aliyun:qwen3.5-flash")  # raises ValueError
-# parse_model_id("gpt-4o")               # raises ValueError (missing provider prefix)
-# parse_model_id("/gpt-4o")              # raises ValueError (empty provider)
+```toml
+[providers.aliyun]
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+api_format = "openai_chat_completions"
+api_key_env = "LLM_API_KEY"
+
+[providers.aliyun-responses]
+base_url = "https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1"
+api_format = "openai_responses"
+api_key_env = "LLM_API_KEY"
+
+[providers.moonshot]
+base_url = "https://dashscope.aliyuncs.com/apps/anthropic"
+api_format = "anthropic_messages"
+api_key_env = "LLM_API_KEY"
+default_max_tokens = 8192
 ```
 
-Rules enforced by `parse_model_id`:
-- Exactly one `/` separator — no colons, no bare model names
-- Both provider and model components must be non-empty
+### Loading a Registry
 
-### ProviderConfig and ApiFormat
+```python
+from ecs_agent.providers.registry import ProviderRegistry, get_llm_provider
+
+# From TOML file
+registry = ProviderRegistry.from_toml("providers.toml")
+
+# From dict (useful in tests)
+registry = ProviderRegistry.from_dict({
+    "aliyun": {
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "api_format": "openai_chat_completions",
+        "api_key_env": "LLM_API_KEY",
+    }
+})
+```
+
+### `get_llm_provider`
+
+```python
+# Resolves provider ID → ProviderEntry → ProviderConfig → correct provider type
+provider = get_llm_provider("aliyun/qwen3.5-flash", registry=registry)
+
+# Override API key at call time
+provider = get_llm_provider("aliyun/qwen3.5-flash", registry=registry, api_key="sk-...")
+```
+
+API key resolution order: explicit `api_key` argument → `ProviderEntry.api_key` → env var named by `ProviderEntry.api_key_env`.
+
+Dispatch by `api_format`:
+
+| `api_format` | Provider type returned |
+|---|---|
+| `openai_chat_completions` | `OpenAIProvider` |
+| `openai_responses` | `OpenAIProvider` (Responses API) |
+| `anthropic_messages` | `ClaudeProvider` |
+| `openai_embeddings` | raises `ValueError` — use `get_embedding_provider` |
+| `openai_files` | raises `ValueError` — use `get_file_service` |
+
+### `ProviderEntry` Fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `base_url` | `str` | (required) | Endpoint base URL (trailing slash stripped) |
+| `api_format` | `ApiFormat` | (required) | Wire protocol; parsed eagerly |
+| `api_key` | `str \| None` | `None` | Literal API key (not shown in repr) |
+| `api_key_env` | `str \| None` | `None` | Env var name to read the key from |
+| `extra_headers` | `dict[str, str]` | `{}` | Extra HTTP headers |
+| `timeout` | `float \| None` | `None` | Global timeout override (seconds) |
+| `default_max_tokens` | `int` | `4096` | Used as `max_tokens` for `ClaudeProvider` |
+
+---
+
+## ProviderConfig and ApiFormat
 
 `ProviderConfig` holds all connection parameters for a provider endpoint. `ApiFormat` selects the wire protocol.
 
@@ -119,8 +170,6 @@ Available `ApiFormat` values:
 | `extra_headers` | `dict[str, str]` | `{}` | Additional HTTP headers |
 | `timeout` | `float \| None` | `None` | Global timeout override (seconds) |
 
----
-
 ## LLMProvider Protocol
 
 The `LLMProvider` protocol defines the interface for all language model implementations. It's located in `ecs_agent.providers.protocol`.
@@ -148,17 +197,23 @@ The `complete` method returns a `CompletionResult` when `stream=False` and an `A
 
 ## OpenAIProvider
 
-`OpenAIProvider` is an OpenAI-compatible HTTP provider using `httpx.AsyncClient`. It works with OpenAI's API as well as compatible alternatives like DashScope, vLLM, or Ollama. Internally it dispatches to explicit **chat completions** or **responses** adapters based on the `api_format` / `use_responses_api` setting.
+`OpenAIProvider` is an OpenAI-compatible HTTP provider using `httpx.AsyncClient`. It works with OpenAI's API as well as compatible alternatives like DashScope, vLLM, or Ollama. Internally it dispatches to explicit **chat completions** or **responses** adapters based on the `api_format` in the `ProviderConfig`.
 
 ### Configuration
 
 ```python
 from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 
-# Chat Completions (default)
-provider = OpenAIProvider(
-    api_key="your-api-key",
+# Chat Completions
+config = ProviderConfig(
+    provider_id="openai",
     base_url="https://api.openai.com/v1",
+    api_key="your-api-key",
+    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+)
+provider = OpenAIProvider(
+    config=config,
     model="gpt-4o-mini",
     connect_timeout=10.0,
     read_timeout=120.0,
@@ -167,25 +222,13 @@ provider = OpenAIProvider(
 )
 
 # Responses API
-provider = OpenAIProvider(
-    api_key="your-api-key",
+responses_config = ProviderConfig(
+    provider_id="aliyun",
     base_url="https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
-    model="qwen3.5-flash",
-    use_responses_api=True,
+    api_key="your-api-key",
+    api_format=ApiFormat.OPENAI_RESPONSES,
 )
-
-# Advanced — pass an explicit ProviderConfig
-from ecs_agent.providers.config import ProviderConfig, ApiFormat
-
-provider = OpenAIProvider(
-    api_key="",  # ignored when provider_config is given
-    provider_config=ProviderConfig(
-        provider_id="aliyun",
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        api_key="your-api-key",
-        api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-    ),
-)
+provider = OpenAIProvider(config=responses_config, model="qwen3.5-flash")
 ```
 
 ### Chat Completions Adapter
@@ -198,7 +241,7 @@ The default adapter (`ApiFormat.OPENAI_CHAT_COMPLETIONS`) sends POST requests to
 
 ### Responses Adapter
 
-Set `use_responses_api=True` or `api_format=ApiFormat.OPENAI_RESPONSES` to activate the Responses API adapter. It sends POST requests to `/responses`.
+Set `api_format=ApiFormat.OPENAI_RESPONSES` in the `ProviderConfig` to activate the Responses API adapter. It sends POST requests to `/responses`.
 
 Threading state (`previous_response_id`) is **not** stored on the provider instance — it lives on an ECS component:
 
@@ -234,41 +277,46 @@ response_format = pydantic_to_response_format(User)
 
 ```python
 from ecs_agent.providers import ClaudeProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 
-provider = ClaudeProvider(
-    api_key="your-anthropic-api-key",
+# Direct Anthropic API
+config = ProviderConfig(
+    provider_id="anthropic",
     base_url="https://api.anthropic.com",
-    model="claude-3-5-haiku-latest",
-    max_tokens=4096,
-    connect_timeout=10.0,
-    read_timeout=120.0,
-    write_timeout=10.0,
-    pool_timeout=10.0,
+    api_key="your-anthropic-api-key",
+    api_format=ApiFormat.ANTHROPIC_MESSAGES,
 )
+provider = ClaudeProvider(config=config, model="claude-3-5-haiku-latest", max_tokens=4096)
 ```
 
 For Anthropic-compatible endpoints (e.g. Aliyun Kimi):
 
 ```python
-provider = ClaudeProvider(
-    api_key="your-api-key",
+from ecs_agent.providers import ClaudeProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
+
+# Anthropic-compatible endpoint (e.g. Aliyun Kimi)
+config = ProviderConfig(
+    provider_id="moonshot",
     base_url="https://dashscope.aliyuncs.com/apps/anthropic",
-    model="kimi-k2.5",
+    api_key="your-api-key",
+    api_format=ApiFormat.ANTHROPIC_MESSAGES,
 )
+provider = ClaudeProvider(config=config, model="kimi-k2.5")
 ```
 
 ### Constructor Parameters
 
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `api_key` | `str` | (required) | Anthropic API key |
-| `base_url` | `str` | `"https://api.anthropic.com"` | API base URL |
+| `config` | `ProviderConfig` | (required) | Endpoint/auth/protocol config |
 | `model` | `str` | `"claude-3-5-haiku-latest"` | Model identifier |
 | `max_tokens` | `int` | `4096` | Maximum tokens in response |
 | `connect_timeout` | `float` | `10.0` | Connection timeout in seconds |
 | `read_timeout` | `float` | `120.0` | Read timeout in seconds |
 | `write_timeout` | `float` | `10.0` | Write timeout in seconds |
 | `pool_timeout` | `float` | `10.0` | Connection pool timeout in seconds |
+| `supports_vision` | `bool` | `False` | Enable image input parts |
 
 ### Behavior
 
@@ -284,9 +332,16 @@ provider = ClaudeProvider(
 ```python
 from ecs_agent import RetryProvider, RetryConfig
 from ecs_agent.providers import ClaudeProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 
+config = ProviderConfig(
+    provider_id="anthropic",
+    base_url="https://api.anthropic.com",
+    api_key="your-api-key",
+    api_format=ApiFormat.ANTHROPIC_MESSAGES,
+)
 provider = RetryProvider(
-    provider=ClaudeProvider(api_key="...", model="claude-sonnet-4-20250514"),
+    provider=ClaudeProvider(config=config, model="claude-sonnet-4-20250514"),
     config=RetryConfig(max_retries=3),
 )
 ```
@@ -332,8 +387,15 @@ provider = FakeProvider(responses=responses)
 from ecs_agent.providers import OpenAIProvider
 from ecs_agent import RetryProvider
 from ecs_agent.types import RetryConfig
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 
-base_provider = OpenAIProvider(api_key="...")
+config = ProviderConfig(
+    provider_id="openai",
+    base_url="https://api.openai.com/v1",
+    api_key="your-api-key",
+    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+)
+base_provider = OpenAIProvider(config=config, model="gpt-4o-mini")
 retry_config = RetryConfig(
     max_attempts=3,
     multiplier=1.0,
