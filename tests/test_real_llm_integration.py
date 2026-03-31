@@ -1324,7 +1324,7 @@ async def test_slash_skill_context_injection_real_llm() -> None:
     assert (
         "Description: Test slash skill context for prompt assembly" in user_msg.content
     )
-    assert "## Skill Body\n(none)\n\n## Tool Schemas\n- none" in user_msg.content
+    assert "## Skill Body\nUse the slash skill context when helping the user.\n\n## Tool Schemas\n- none" in user_msg.content
     assert original_text in user_msg.content
     assert user_msg.content.endswith(original_text)
 
