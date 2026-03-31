@@ -265,6 +265,7 @@ The `examples/` directory contains 25 runnable demos:
 | [`react_agent.py`](examples/react_agent.py) | ReAct pattern. Thought → Action → Observation loop |
 | [`plan_and_execute_agent.py`](examples/plan_and_execute_agent.py) | Dynamic replanning with RetryProvider and configurable timeouts |
 | [`streaming_agent.py`](examples/streaming_agent.py) | Real-time token streaming via SSE |
+| [`vision_agent.py`](examples/vision_agent.py) | Multimodal image understanding with vision-capable LLM using `ImageUrlPart` |
 | [`retry_agent.py`](examples/retry_agent.py) | RetryProvider with custom retry configuration |
 | [`multi_agent.py`](examples/multi_agent.py) | Two agents collaborating via `MessageBusSystem` pub/sub (dual-mode) |
 | [`structured_output_agent.py`](examples/structured_output_agent.py) | Pydantic schema → JSON mode for type-safe responses |
