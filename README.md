@@ -343,65 +343,47 @@ provider = RetryProvider(
 
 ## Provider Architecture
 
-The LLM layer uses canonical `provider/model` identifiers and explicit provider configuration.
+The LLM layer is built around three linked concepts: a canonical `provider/model` identifier,
+an explicit `ProviderConfig` that holds endpoint/auth/protocol settings, and event-driven
+accounting that tracks usage and cache behavior.
 
-### Canonical Model IDs
-
-Models are identified as `provider/model` (slash-separated):
+### End-to-End Flow
 
 ```python
-from ecs_agent.providers.model_id import parse_model_id, format_model_id, ModelId
+import os
+from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers.model_id import parse_model_id
+from ecs_agent.accounting.subscriber import AccountingSubscriber
+from ecs_agent.core import World
 
+# 1) Parse the canonical provider/model ID
 model_id = parse_model_id("aliyun/qwen3.5-flash")
 # ModelId(provider="aliyun", model="qwen3.5-flash")
 
-# Invalid — colon-delimited IDs are rejected with ValueError:
-# parse_model_id("aliyun:qwen3.5-flash")  # raises ValueError
-```
-
-### Provider Configuration
-
-```python
-from ecs_agent.providers.config import ProviderConfig, ApiFormat
-
+# 2) Build ProviderConfig from the provider part
 config = ProviderConfig(
-    provider_id="aliyun",
+    provider_id=model_id.provider,
     base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-    api_key="your-api-key",
+    api_key=os.environ["LLM_API_KEY"],
     api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
 )
-```
 
-### Usage Accounting
+# 3) Create OpenAIProvider using the model part
+provider = OpenAIProvider(
+    api_key="",            # ignored when provider_config is given
+    provider_config=config,
+    model=model_id.model,
+)
 
-```python
-from ecs_agent.accounting.subscriber import AccountingSubscriber
-
+# 4) Attach accounting to the World's event bus
+world = World()
 subscriber = AccountingSubscriber()
 subscriber.subscribe(world.event_bus)
-
-# After agent runs:
-stats = subscriber.get_aggregate_stats("aliyun", "qwen3.5-flash")
-if stats is not None:
-    print(f"Cache hit rate: {stats.hit_rate}")  # float 0.0-1.0, or None
 ```
 
-
-## Breaking Changes (LLM Refactor)
-
-### Responses API threading state
-`previous_response_id` is no longer stored on the provider instance.
-Attach `ResponsesAPIStateComponent` to your ECS entity instead — `ReasoningSystem` manages it automatically.
-
-### Model IDs
-Model IDs must use `provider/model` format (slash-separated), e.g. `"aliyun/qwen3.5-flash"`.
-Colon-delimited IDs (`"provider:model"`) are rejected with `ValueError`.
-
-### Usage model
-`Usage` (3-field) is replaced by `UsageRecord` with cache-aware fields:
-`cached_input_tokens`, `cache_creation_tokens`, `cache_read_tokens`, and `StreamCompleteness`.
-Import from `ecs_agent.accounting.models` instead of `ecs_agent.types`.
-
+Model IDs must use `provider/model` (slash-separated). Colon-delimited IDs are rejected with `ValueError`.
+See [`docs/providers.md`](docs/providers.md) for the full reference.
 
 ## Development
 
