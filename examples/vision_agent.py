@@ -6,7 +6,7 @@ SystemPromptRenderSystem and UserPromptNormalizationSystem.
 
 Dual-mode:
 - Without LLM_API_KEY: Uses FakeProvider with a mock image description.
-- With LLM_API_KEY: Uses OpenAIProvider with Responses API (required for Qwen VL).
+- With LLM_API_KEY: Uses OpenAIProvider with Chat Completions API.
 
 Environment variables:
   LLM_API_KEY   — API key (required for real LLM mode)
@@ -57,13 +57,13 @@ async def main() -> None:
 
     provider: LLMProvider
     if api_key:
-        print(f"Using OpenAIProvider (Responses API) with model: {model}")
+        print(f"Using OpenAIProvider (Chat Completions) with model: {model}")
         provider = OpenAIProvider(
             config=ProviderConfig(
                 provider_id="aliyun",
                 base_url=base_url,
                 api_key=api_key,
-                api_format=ApiFormat.OPENAI_RESPONSES,
+                api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
             ),
             model=model,
         )
