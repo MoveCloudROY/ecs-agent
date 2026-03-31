@@ -85,6 +85,13 @@ class OpenAIResponsesAdapter:
         response_id = response_data.get("id")
         resolved_response_id = response_id if isinstance(response_id, str) else None
 
+        status = response_data.get("status")
+        if status == "failed":
+            error = response_data.get("error") or {}
+            code = error.get("code", "unknown")
+            msg = error.get("message", "unknown error")
+            raise ValueError(f"Responses API returned failed status: [{code}] {msg}")
+
         message = self._parse_responses_output(response_data.get("output", []))
         usage = self._provider._usage_from_raw(response_data.get("usage"))
         return CompletionResult(
