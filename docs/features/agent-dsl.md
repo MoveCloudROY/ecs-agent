@@ -381,7 +381,7 @@ Declare trigger rules that inject context into user messages via `UserPromptNorm
 |-------|------|----------|--------|
 | `pattern` | str | yes | any string |
 | `match_mode` | str | yes | `keyword`, `prefix`, `contains` |
-| `action` | str | yes | `replace`, `inject` |
+| `action` | str | yes | `replace`, `inject`, `script` |
 | `content` | str | yes | any string |
 | `priority` | int | no (default 0) | integer |
 
@@ -391,6 +391,20 @@ When `triggers` are present, `compile_agent_specs`:
 1. Attaches `UserPromptConfigComponent` with the declared `TriggerSpec` objects to the primary entity
 
 `UserPromptNormalizationSystem` (priority `-10`) is **always** registered regardless of whether triggers are present, because skill slash-command injection also requires it.
+> **Note:** The `script` action is not available in the Agent DSL (JSON or Markdown format).
+> Script handlers are Python callables and cannot be serialized to text.
+> To use script triggers, construct `UserPromptConfigComponent` directly in Python:
+>
+> ```python
+> async def my_handler(world: World, entity_id: EntityId, user_text: str) -> str | None:
+>     # rewrite prompt or mutate world
+>     return f"[processed] {user_text}"
+>
+> world.add_component(entity, UserPromptConfigComponent(
+>     triggers=[TriggerSpec(pattern="@run", match_mode="keyword", action="script", content="my_handler")],
+>     script_handlers={"my_handler": my_handler},
+> ))
+> ```
 
 
 ## Skills

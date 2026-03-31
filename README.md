@@ -111,7 +111,10 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **`UserPromptNormalizationSystem`** — ECS system (recommended priority -10) that injects trigger templates into outbound user messages and writes a `RenderedUserPromptComponent`. Slash-command skill context and ContextPool entries are injected later at call-time by `prepare_outbound_messages()`.
 - **Built-in Placeholders** — `${_installed_tools}`, `${_installed_skills}`, `${_installed_mcps}`, `${_installed_subagents}` automatically expand to the current inventory.
 - **Callable Placeholders** — Pass a `() -> str` callable as a placeholder resolver for dynamic content; must be side-effect-free and return a string.
-- **Trigger Templates** — `@keyword` or `event:<name>` trigger patterns inject pre-defined prompt blocks into user messages without mutating conversation history.
+- **Trigger Templates** — `@keyword` or `event:<name>` trigger patterns transform outbound user messages without mutating conversation history. Three action kinds are supported:
+  - `replace` — replaces the entire user message with the trigger's `content`
+  - `inject` — prepends the trigger's `content` before the user message
+  - `script` — invokes a registered async Python function (`async (world, entity_id, user_text) -> str | None`). Return a string to replace the prompt; return `None` to keep the original. The handler may also mutate World state as a side effect (e.g., attach components). Register via `UserPromptConfigComponent(script_handlers={"key": fn})`. **Not available in Agent DSL** — Python API only.
 - **Strict Errors** — Missing placeholder keys and resolver failures raise immediately; no silent fallbacks.
 
 ### Two-Tier Skill System
@@ -220,7 +223,7 @@ World
 | `MessageBusConversationComponent` | Tracks active request-response conversations |
 | `SystemPromptComponent` | Legacy system prompt storage (template + sections); prefer `SystemPromptConfigSpec` for new agents |
 | `SystemPromptConfigSpec` | New-style prompt spec with `${name}` placeholder templates; resolved by `SystemPromptRenderSystem` |
-| `UserPromptConfigComponent` | User prompt normalization config (triggers, context pool settings) |
+| `UserPromptConfigComponent` | User prompt normalization config (triggers with `replace`/`inject`/`script` actions, context pool settings, and `script_handlers` registry for Python-callable script triggers) |
 | `PromptContextQueueComponent` | Context entries for injection into outbound user messages |
 | `RenderedSystemPromptComponent` | cached/frozen rendered system prompt produced by `SystemPromptRenderSystem` on first render; reused on subsequent ticks |
 | `RenderedUserPromptComponent` | Normalized user prompt text produced by `UserPromptNormalizationSystem` for the current tick |
