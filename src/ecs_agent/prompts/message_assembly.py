@@ -13,7 +13,7 @@ from ecs_agent.prompts.contracts import (
 from ecs_agent.prompts.keyword_injection import inject_triggers
 from ecs_agent.prompts.registry import PromptRegistry
 from ecs_agent.prompts.user_prompt_rendering import render_user_prompt_text
-from ecs_agent.types import Message, TextPart
+from ecs_agent.types import Message
 from ecs_agent.logging import get_logger
 
 logger = get_logger(__name__)
@@ -397,25 +397,11 @@ def _append_to_last_user_message(
     return messages
 
 
-def message_text(message: Message) -> str:
-    """Canonical text extraction respecting the content/parts contract.
-
-    Returns ``message.content`` if non-empty (the canonical path).
-    Falls back to the first ``TextPart`` in ``parts`` for legacy compat.
-    """
-    if message.content:
-        return message.content
-    if message.parts:
-        for part in message.parts:
-            if isinstance(part, TextPart):
-                return part.text
-    return ""
-
 def _last_user_text(conversation_messages: list[Message]) -> str | None:
     for index in range(len(conversation_messages) - 1, -1, -1):
         message = conversation_messages[index]
         if message.role == "user":
-            return message_text(message)
+            return message.content
     return None
 
 
@@ -498,7 +484,6 @@ __all__ = [
     "build_keyword_registry",
     "build_trigger_specs",
     "commit_prompt_context_reservation",
-    "message_text",
     "prepare_outbound_messages",
     "reserve_prompt_context_reservation",
 ]
