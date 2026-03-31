@@ -6,7 +6,6 @@ from ecs_agent.types import (
     FileRefPart,
     ImageUrlPart,
     Message,
-    TextPart,
     ToolCall,
     ToolSchema,
     CompletionResult,
@@ -72,11 +71,9 @@ class TestMessagePart:
     """Test multimodal message part dataclasses."""
 
     def test_message_parts_can_be_constructed(self) -> None:
-        text = TextPart(text="hello")
         image = ImageUrlPart(url="https://example.com/a.png", detail="high")
         file_ref = FileRefPart(file_id="file_123", filename="a.txt")
 
-        assert text.text == "hello"
         assert image.url == "https://example.com/a.png"
         assert image.detail == "high"
         assert file_ref.file_id == "file_123"
@@ -99,12 +96,9 @@ class TestMessagePart:
         assert isinstance(msg.parts[0], ImageUrlPart)
         assert isinstance(msg.parts[1], FileRefPart)
     def test_message_part_slots_prevent_extra_attributes(self) -> None:
-        text = TextPart(text="t")
         image = ImageUrlPart(url="https://example.com/img.png")
         file_ref = FileRefPart(file_id="file_1")
 
-        with pytest.raises(AttributeError):
-            text.extra = "bad"  # type: ignore
         with pytest.raises(AttributeError):
             image.extra = "bad"  # type: ignore
         with pytest.raises(AttributeError):
