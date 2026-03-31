@@ -16,6 +16,7 @@ from ecs_agent.prompts.contracts import TriggerSpec
 from ecs_agent.prompts.user_prompt_rendering import (
     render_user_prompt_text,
     _apply_trigger_specs,
+    _matches,
 )
 from ecs_agent.types import EntityId, Message
 
@@ -60,9 +61,12 @@ class UserPromptNormalizationSystem:
                 if prompt_config is not None and prompt_config.triggers
                 else None
             )
-            normalized_text = render_user_prompt_text(
-                raw_user_text,
+            normalized_text = await self._apply_triggers(
+                world=world,
+                entity_id=entity_id,
+                raw_user_text=raw_user_text,
                 trigger_specs=trigger_specs,
+                prompt_config=prompt_config,
             )
 
             logger.debug(
@@ -87,6 +91,63 @@ class UserPromptNormalizationSystem:
         shared ``_apply_trigger_specs`` helper in ``user_prompt_rendering``.
         """
         return _apply_trigger_specs(user_text, trigger_specs)
+
+    async def _apply_triggers(
+        self,
+        *,
+        world: World,
+        entity_id: EntityId,
+        raw_user_text: str,
+        trigger_specs: list[TriggerSpec] | None,
+        prompt_config: UserPromptConfigComponent | None,
+    ) -> str:
+        if not trigger_specs:
+            return raw_user_text
+
+        ordered = sorted(trigger_specs, key=lambda spec: -spec.priority)
+        for spec in ordered:
+            if not _matches(spec=spec, text=raw_user_text):
+                continue
+            if spec.action == "script":
+                return await self._run_script_handler(
+                    world=world,
+                    entity_id=entity_id,
+                    spec=spec,
+                    raw_user_text=raw_user_text,
+                    prompt_config=prompt_config,
+                )
+
+            return render_user_prompt_text(
+                raw_user_text,
+                trigger_specs=trigger_specs,
+            )
+
+        return raw_user_text
+
+    async def _run_script_handler(
+        self,
+        *,
+        world: World,
+        entity_id: EntityId,
+        spec: TriggerSpec,
+        raw_user_text: str,
+        prompt_config: UserPromptConfigComponent | None,
+    ) -> str:
+        handlers = prompt_config.script_handlers if prompt_config is not None else {}
+        handler = handlers.get(spec.content)
+        if handler is None:
+            logger.error(
+                "trigger_script_handler_missing",
+                entity_id=entity_id,
+                handler_key=spec.content,
+                pattern=spec.pattern,
+            )
+            return raw_user_text
+
+        result = await handler(world, entity_id, raw_user_text)
+        if result is None:
+            return raw_user_text
+        return result
 
     @staticmethod
     def _find_last_user_text(messages: list[Message]) -> str | None:
