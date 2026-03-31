@@ -85,9 +85,8 @@ async def test_live_openai_responses_vision_response(
         [
             Message(
                 role="user",
-                content="",
+                content="Describe this image briefly.",
                 parts=[
-                    TextPart(text="Describe this image briefly."),
                     ImageUrlPart(url=live_image_url),
                 ],
             )

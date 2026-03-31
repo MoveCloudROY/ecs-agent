@@ -85,22 +85,19 @@ class TestMessagePart:
     def test_message_with_multimodal_parts(self) -> None:
         msg = Message(
             role="user",
-            content="",
+            content="describe this image",
             parts=[
-                TextPart(text="describe this image"),
                 ImageUrlPart(url="https://example.com/a.png", detail="auto"),
                 FileRefPart(file_id="file_abc", filename="notes.pdf"),
             ],
         )
 
         assert msg.role == "user"
-        assert msg.content == ""
+        assert msg.content == "describe this image"
         assert msg.parts is not None
-        assert len(msg.parts) == 3
-        assert isinstance(msg.parts[0], TextPart)
-        assert isinstance(msg.parts[1], ImageUrlPart)
-        assert isinstance(msg.parts[2], FileRefPart)
-
+        assert len(msg.parts) == 2
+        assert isinstance(msg.parts[0], ImageUrlPart)
+        assert isinstance(msg.parts[1], FileRefPart)
     def test_message_part_slots_prevent_extra_attributes(self) -> None:
         text = TextPart(text="t")
         image = ImageUrlPart(url="https://example.com/img.png")

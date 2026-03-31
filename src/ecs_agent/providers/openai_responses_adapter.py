@@ -319,6 +319,10 @@ class OpenAIResponsesAdapter:
 
         for part in message.parts:
             if isinstance(part, TextPart):
+                # Legacy compat: TextPart in parts is deprecated.
+                # New code must put text in message.content only.
+                # This branch is kept to avoid silently dropping text
+                # from messages that were built before the contract was enforced.
                 parts.append({"type": text_type, "text": part.text})
                 continue
 
