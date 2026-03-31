@@ -235,13 +235,15 @@ provider = OpenAIProvider(config=responses_config, model="qwen3.5-flash")
 
 The default adapter (`ApiFormat.OPENAI_CHAT_COMPLETIONS`) sends POST requests to `/chat/completions`. It handles:
 
-- Multimodal messages: `TextPart`, `ImageUrlPart`, and `FileRefPart` are serialized to the OpenAI vision format.
+- Multimodal messages: `ImageUrlPart` and `FileRefPart` are serialized to the OpenAI vision format. Text goes in `message.content`.
 - Streaming: yields `StreamDelta` objects from SSE chunks; emits a single terminal `LLMInvocationEvent` with normalized `UsageRecord`.
 - Usage normalization: reads `cached_tokens` from the OpenAI usage response to populate `UsageRecord.cached_input_tokens`.
 
 ### Responses Adapter
 
 Set `api_format=ApiFormat.OPENAI_RESPONSES` in the `ProviderConfig` to activate the Responses API adapter. It sends POST requests to `/responses`.
+
+For multimodal vision input, build user messages with `content=` for the text prompt and `Message.parts` containing `ImageUrlPart(url=...)` entries. The adapter converts `ImageUrlPart` into Responses API `input_image` items automatically (see `examples/vision_agent.py` for a full runnable example).
 
 Threading state (`previous_response_id`) is **not** stored on the provider instance — it lives on an ECS component:
 
@@ -595,17 +597,15 @@ file_ref = await service.upload(path="/path/to/document.pdf", purpose="assistant
 Uploaded file references can be embedded in multimodal messages via `FileRefPart`:
 
 ```python
-from ecs_agent.types import Message, TextPart, FileRefPart
+from ecs_agent.types import Message, FileRefPart
 
 msg = Message(
     role="user",
-    content="",
+    content="Summarize this document.",
     parts=[
-        TextPart(text="Summarize this document."),
         FileRefPart(file_id=file_ref.file_id),
     ],
 )
-```
 
 ---
 
@@ -618,16 +618,12 @@ The framework supports multimodal content via typed `Message.parts` entries.
 Import path:
 
 ```python
-from ecs_agent.types import Message, TextPart, ImageUrlPart, FileRefPart
+from ecs_agent.types import Message, ImageUrlPart, FileRefPart
 ```
 
 Type definitions (from `ecs_agent.types`):
 
 ```python
-@dataclass(slots=True)
-class TextPart:
-    text: str
-
 @dataclass(slots=True)
 class ImageUrlPart:
     url: str
@@ -638,48 +634,45 @@ class FileRefPart:
     file_id: str
     filename: str | None = None
 
-MessagePart = TextPart | ImageUrlPart | FileRefPart
+MessagePart = ImageUrlPart | FileRefPart
 
 @dataclass(slots=True)
 class Message:
     role: str
-    content: str
-    parts: list[MessagePart] | None = None
+    content: str          # canonical text — always use this for text
+    parts: list[MessagePart] | None = None  # non-text media only
 ```
 
-`Message.parts=None` means text-only mode (backward compatible).
+`Message.content` is the canonical text field. `Message.parts` holds non-text media (`ImageUrlPart`, `FileRefPart`) only. Text always goes in `content`, never in `parts`.
 
 ### Usage Pattern
 
 ```python
-from ecs_agent.types import Message, TextPart, ImageUrlPart, FileRefPart
+from ecs_agent.types import Message, ImageUrlPart, FileRefPart
 
 msg = Message(
     role="user",
-    content="Please review the image and file.",
+    content="Please review the image and file. Focus on entities and relationships.",
     parts=[
-        TextPart(text="Focus on entities and relationships."),
         ImageUrlPart(url="https://example.com/diagram.png", detail="high"),
         FileRefPart(file_id="file-abc123", filename="spec.pdf"),
     ],
 )
 ```
 
-If both `content` and `parts` are set, adapters preserve both.
+Text lives in `content`; media-only parts go in `parts`. Adapters prepend `content` as a text block when `parts` is also set.
 
 ### OpenAI Chat Completions Wire Format
 
-- `TextPart` → `{"type": "text", "text": part.text}`
+- `message.content` → `{"type": "text", "text": message.content}` (prepended when non-empty)
 - `ImageUrlPart` → `{"type": "image_url", "image_url": {"url": part.url, "detail": part.detail}}` (`detail` omitted when `None`)
 - `FileRefPart` → `{"type": "file", "file": {"file_id": part.file_id, "filename": part.filename}}` (`filename` omitted when `None`)
-- If `message.content` is non-empty and `parts` is set, `content` is prepended as a text block.
 
 ```json
 {
   "role": "user",
   "content": [
-    {"type": "text", "text": "Please review the image and file."},
-    {"type": "text", "text": "Focus on entities and relationships."},
+    {"type": "text", "text": "Please review the image and file. Focus on entities and relationships."},
     {"type": "image_url", "image_url": {"url": "https://example.com/diagram.png", "detail": "high"}},
     {"type": "file", "file": {"file_id": "file-abc123", "filename": "spec.pdf"}}
   ]
@@ -697,8 +690,7 @@ If both `content` and `parts` are set, adapters preserve both.
   "type": "message",
   "role": "user",
   "content": [
-    {"type": "input_text", "text": "Please review the image and file."},
-    {"type": "input_text", "text": "Focus on entities and relationships."},
+    {"type": "input_text", "text": "Please review the image and file. Focus on entities and relationships."},
     {"type": "input_image", "image_url": "https://example.com/diagram.png", "detail": "high"},
     {"type": "input_file", "file_id": "file-abc123", "filename": "spec.pdf"}
   ]
@@ -707,7 +699,7 @@ If both `content` and `parts` are set, adapters preserve both.
 
 ### Anthropic Messages Wire Format
 
-- `TextPart` → `{"type": "text", "text": part.text}`
+- `message.content` → `{"type": "text", "text": message.content}` (prepended when non-empty)
 - `ImageUrlPart` → `{"type": "image", "source": {"type": "url", "url": part.url}}`
 - Vision requires adapter config `supports_vision=True`; otherwise image parts raise `ValueError`.
 - `FileRefPart` is not supported by the Anthropic adapter and always raises `ValueError`.
