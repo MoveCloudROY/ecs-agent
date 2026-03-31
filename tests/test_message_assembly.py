@@ -430,3 +430,26 @@ async def test_multiple_skill_manager_facades_share_world_state() -> None:
     assert details_b is not None
     assert details_a == details_b
     assert manager_a.get_skill_metadata(world, entity, "builtin-tools") == manager_b.get_skill_metadata(world, entity, "builtin-tools")
+
+
+def test_substitute_last_user_message_preserves_parts() -> None:
+    from ecs_agent.prompts.message_assembly import _substitute_last_user_message
+    from ecs_agent.types import ImageUrlPart, TextPart
+
+    original = Message(
+        role="user",
+        content="Describe this image in detail.",
+        parts=[
+            TextPart(text="Describe this image in detail."),
+            ImageUrlPart(url="https://example.com/img.jpg"),
+        ],
+    )
+    result = _substitute_last_user_message([original], "Rendered: Describe this image in detail.")
+
+    assert len(result) == 1
+    substituted = result[0]
+    assert substituted.content == "Rendered: Describe this image in detail."
+    assert substituted.parts is not None
+    assert any(isinstance(p, ImageUrlPart) for p in substituted.parts), (
+        "ImageUrlPart must be preserved after substitution"
+    )

@@ -365,6 +365,7 @@ def _substitute_last_user_message(
             messages[index] = Message(
                 role="user",
                 content=replacement_text,
+                parts=message.parts,
                 tool_calls=message.tool_calls,
                 tool_call_id=message.tool_call_id,
             )
