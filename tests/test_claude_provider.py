@@ -14,7 +14,6 @@ from ecs_agent.types import (
     ImageUrlPart,
     Message,
     StreamDelta,
-    TextPart,
     ToolCall,
     ToolSchema,
 )
@@ -212,7 +211,7 @@ def test_parse_response_usage_includes_cache_fields_and_metadata() -> None:
     ],
 )
 def test_build_messages_unsupported_multimodal_without_vision_raises(
-    parts: list[TextPart | ImageUrlPart | FileRefPart],
+    parts: list[ImageUrlPart | FileRefPart],
     expected_part_name: str,
 ) -> None:
     provider = ClaudeProvider(
