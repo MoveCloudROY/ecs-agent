@@ -14,6 +14,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import World
 from ecs_agent.providers import FakeProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.openai_provider import OpenAIProvider
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import (
@@ -25,6 +26,20 @@ from ecs_agent.types import (
     StreamEndEvent,
     StreamStartEvent,
 )
+
+
+def _openai_config(
+    *,
+    api_key: str = "test-key",
+    base_url: str = "https://api.openai.com/v1",
+    api_format: ApiFormat = ApiFormat.OPENAI_CHAT_COMPLETIONS,
+) -> ProviderConfig:
+    return ProviderConfig(
+        provider_id="openai",
+        base_url=base_url,
+        api_key=api_key,
+        api_format=api_format,
+    )
 
 
 class _MockStreamResponse:
@@ -65,7 +80,7 @@ async def test_non_streaming_backward_compatibility() -> None:
     mock_client.post.return_value = mock_response
     mock_client.stream = Mock()
 
-    provider = OpenAIProvider(api_key="test-key")
+    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     result = await provider.complete(
@@ -90,7 +105,7 @@ async def test_streaming_returns_stream_delta_objects() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIProvider(api_key="test-key")
+    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     stream_iter = await provider.complete(
@@ -122,7 +137,7 @@ async def test_streaming_sse_content_chunks() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIProvider(api_key="test-key")
+    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     stream_iter = await provider.complete(
@@ -169,7 +184,7 @@ async def test_streaming_preserves_reasoning_content_separately_from_content() -
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIProvider(api_key="test-key")
+    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     stream_iter = await provider.complete(
@@ -230,7 +245,7 @@ async def test_streaming_accumulates_tool_call_chunks_by_index() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIProvider(api_key="test-key")
+    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     stream_iter = await provider.complete(
@@ -263,7 +278,7 @@ async def test_done_sentinel_stops_iteration() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIProvider(api_key="test-key")
+    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     stream_iter = await provider.complete(
@@ -295,7 +310,9 @@ async def test_streaming_timeout_configuration() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIProvider(api_key="test-key", base_url="https://test.openai.com/v1")
+    provider = OpenAIProvider(
+        config=_openai_config(api_key="test-key", base_url="https://test.openai.com/v1")
+    )
     provider._client = mock_client
 
     stream_iter = await provider.complete(
@@ -328,7 +345,7 @@ async def test_streaming_timeout_uses_provider_custom_timeout() -> None:
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
     provider = OpenAIProvider(
-        api_key="test-key",
+        config=_openai_config(api_key="test-key"),
         connect_timeout=4.0,
         read_timeout=90.0,
         write_timeout=7.0,

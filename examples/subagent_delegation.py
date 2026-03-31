@@ -32,7 +32,8 @@ from ecs_agent.prompts.contracts import (
     SystemPromptConfigSpec,
 )
 from ecs_agent.providers import FakeProvider
-from ecs_agent.providers.openai_provider import OpenAIProvider
+from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -89,12 +90,8 @@ async def main() -> None:
     subagent_provider: LLMProvider
 
     if api_key:
-        manager_provider = OpenAIProvider(
-            api_key=api_key, base_url=base_url, model=model
-        )
-        subagent_provider = OpenAIProvider(
-            api_key=api_key, base_url=base_url, model=model
-        )
+        manager_provider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        subagent_provider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
         # FakeProvider for manager: first response calls the 'subagent' tool,
         # then produces a final summary once results are available.

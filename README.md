@@ -39,17 +39,20 @@ from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.types import Message
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 
 
 async def main() -> None:
     world = World(name="my-agent")  # optional name — appears in all log events
 
     # Create a provider (any OpenAI-compatible API works)
-    provider = OpenAIProvider(
-        api_key=os.environ["LLM_API_KEY"],
+    config = ProviderConfig(
+        provider_id="openai",
         base_url=os.getenv("LLM_BASE_URL", "https://api.openai.com/v1"),
-        model=os.getenv("LLM_MODEL", "gpt-4o"),
+        api_key=os.environ["LLM_API_KEY"],
+        api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
     )
+    provider = OpenAIProvider(config=config, model=os.getenv("LLM_MODEL", "gpt-4o"))
 
     # Create an agent entity and attach components
     agent = world.create_entity()
@@ -318,25 +321,36 @@ LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 LLM_MODEL=qwen3.5-plus
 ```
 
-Then use `OpenAIProvider` (works with any OpenAI-compatible API):
+Then use `OpenAIProvider` with an explicit `ProviderConfig` (works with any OpenAI-compatible API):
 
 ```python
 from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 
-provider = OpenAIProvider(
-    api_key="your-api-key",
+config = ProviderConfig(
+    provider_id="aliyun",
     base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-    model="qwen3.5-plus",
+    api_key="your-api-key",
+    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
 )
+provider = OpenAIProvider(config=config, model="qwen3.5-plus")
 ```
 
 Wrap with `RetryProvider` for automatic retries on transient failures:
 
 ```python
 from ecs_agent import RetryProvider, RetryConfig
+from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 
+config = ProviderConfig(
+    provider_id="aliyun",
+    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    api_key="your-api-key",
+    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+)
 provider = RetryProvider(
-    provider=OpenAIProvider(api_key="...", base_url="...", model="..."),
+    provider=OpenAIProvider(config=config, model="qwen3.5-plus"),
     config=RetryConfig(max_retries=3, initial_wait=1.0, max_wait=30.0),
 )
 ```
@@ -347,39 +361,46 @@ The LLM layer is built around three linked concepts: a canonical `provider/model
 an explicit `ProviderConfig` that holds endpoint/auth/protocol settings, and event-driven
 accounting that tracks usage and cache behavior.
 
-### End-to-End Flow
+### End-to-End Flow — ProviderRegistry (recommended)
+
+```python
+import os
+from ecs_agent.providers.registry import ProviderRegistry, get_llm_provider
+from ecs_agent.accounting.subscriber import AccountingSubscriber
+from ecs_agent.core import World
+
+# 1) Load provider configs from TOML (or from_dict)
+registry = ProviderRegistry.from_dict({
+    "aliyun": {
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "api_format": "openai_chat_completions",
+        "api_key_env": "LLM_API_KEY",
+    }
+})
+
+# 2) One call: parse model ID, resolve config, construct the right provider
+provider = get_llm_provider("aliyun/qwen3.5-flash", registry=registry)
+
+# 3) Attach accounting to the World's event bus
+world = World()
+subscriber = AccountingSubscriber()
+subscriber.subscribe(world.event_bus)
+```
+
+### Manual Construction
 
 ```python
 import os
 from ecs_agent.providers import OpenAIProvider
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.model_id import parse_model_id
-from ecs_agent.accounting.subscriber import AccountingSubscriber
-from ecs_agent.core import World
 
-# 1) Parse the canonical provider/model ID
-model_id = parse_model_id("aliyun/qwen3.5-flash")
-# ModelId(provider="aliyun", model="qwen3.5-flash")
-
-# 2) Build ProviderConfig from the provider part
 config = ProviderConfig(
-    provider_id=model_id.provider,
+    provider_id="aliyun",
     base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
     api_key=os.environ["LLM_API_KEY"],
     api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
 )
-
-# 3) Create OpenAIProvider using the model part
-provider = OpenAIProvider(
-    api_key="",            # ignored when provider_config is given
-    provider_config=config,
-    model=model_id.model,
-)
-
-# 4) Attach accounting to the World's event bus
-world = World()
-subscriber = AccountingSubscriber()
-subscriber.subscribe(world.event_bus)
+provider = OpenAIProvider(config=config, model="qwen3.5-flash")
 ```
 
 Model IDs must use `provider/model` (slash-separated). Colon-delimited IDs are rejected with `ValueError`.

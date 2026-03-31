@@ -8,6 +8,7 @@ import pytest
 from ecs_agent import BuiltinToolsSkill, SkillManager
 from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.core import Runner, World
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers import OpenAIProvider
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -39,7 +40,15 @@ async def test_real_llm_hashline_read_edit_workflow(tmp_path: Path) -> None:
     world.add_component(
         entity,
         LLMComponent(
-            provider=OpenAIProvider(api_key=API_KEY, base_url=BASE_URL, model=MODEL),
+            provider=OpenAIProvider(
+                config=ProviderConfig(
+                    provider_id="openai",
+                    base_url=BASE_URL,
+                    api_key=API_KEY,
+                    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+                ),
+                model=MODEL,
+            ),
             model=MODEL,
         ),
     )

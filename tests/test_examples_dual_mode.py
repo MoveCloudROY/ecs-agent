@@ -9,6 +9,7 @@ import pytest
 
 from ecs_agent.providers.fake_provider import FakeProvider
 from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.types import CompletionResult, Message
 from ecs_agent.types import ToolCall
 
@@ -102,6 +103,7 @@ def _subagent_delegation_subagent_provider() -> FakeProvider:
         ]
     )
 
+
 def _load_example(module_name: str) -> Any:
     return importlib.import_module(f"examples.{module_name}")
 
@@ -109,8 +111,11 @@ def _load_example(module_name: str) -> Any:
 def _assert_openai_defaults(openai_ctor: Any, expected_count: int) -> None:
     assert openai_ctor.call_count == expected_count
     for call in openai_ctor.call_args_list:
-        assert call.kwargs["api_key"] == "test-api-key"
-        assert call.kwargs["base_url"] == DEFAULT_BASE_URL
+        config = call.kwargs["config"]
+        assert isinstance(config, ProviderConfig)
+        assert config.api_key == "test-api-key"
+        assert config.base_url == DEFAULT_BASE_URL
+        assert config.api_format is ApiFormat.OPENAI_CHAT_COMPLETIONS
         assert call.kwargs["model"] == DEFAULT_MODEL
 
 
@@ -208,7 +213,8 @@ class TestScriptSkillDiscoveryAgentDualMode:
 
         with patch.dict(os.environ, {"LLM_API_KEY": "test-api-key"}, clear=True):
             with patch(
-                "examples.script_skill_discovery_agent.FakeProvider", side_effect=FakeProvider
+                "examples.script_skill_discovery_agent.FakeProvider",
+                side_effect=FakeProvider,
             ) as fake_ctor:
                 with patch(
                     "examples.script_skill_discovery_agent.OpenAIProvider",
@@ -277,7 +283,10 @@ class TestSubagentDelegationDualMode:
         with patch.dict(os.environ, {}, clear=True):
             with patch(
                 "examples.subagent_delegation.FakeProvider",
-                side_effect=[_subagent_delegation_manager_provider(), _subagent_delegation_subagent_provider()],
+                side_effect=[
+                    _subagent_delegation_manager_provider(),
+                    _subagent_delegation_subagent_provider(),
+                ],
             ) as fake_ctor:
                 with patch(
                     "examples.subagent_delegation.OpenAIProvider", create=True
@@ -297,7 +306,10 @@ class TestSubagentDelegationDualMode:
         assert captured_world is not None, "World was not captured during execution"
 
         # Find manager entity (has ConversationComponent with user message)
-        from ecs_agent.components import ConversationComponent, SubagentRegistryComponent
+        from ecs_agent.components import (
+            ConversationComponent,
+            SubagentRegistryComponent,
+        )
 
         # Entity 1 is the manager (has both ConversationComponent and SubagentRegistryComponent)
         # Entity 3 is the subagent child (has ConversationComponent but no SubagentRegistryComponent)
@@ -305,12 +317,12 @@ class TestSubagentDelegationDualMode:
 
         assert manager_entity is not None, "Manager entity not found in World"
 
-        manager_conv = captured_world.get_component(manager_entity, ConversationComponent)
+        manager_conv = captured_world.get_component(
+            manager_entity, ConversationComponent
+        )
         assert manager_conv is not None
 
         messages = manager_conv.messages
-
-
 
         # Assert: delegate tool call exists in conversation
         delegate_tool_call_found = False

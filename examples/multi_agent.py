@@ -30,6 +30,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.systems.message_bus import MessageBusSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
@@ -53,8 +54,8 @@ async def main() -> None:
     if api_key:
         print(f"Using OpenAIProvider with model: {model}")
         print(f"Base URL: {base_url}")
-        provider_a = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
-        provider_b = OpenAIProvider(api_key=api_key, base_url=base_url, model=model)
+        provider_a = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        provider_b = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
         print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
