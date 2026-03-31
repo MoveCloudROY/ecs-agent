@@ -1,7 +1,6 @@
 """Core type definitions for ECS-based LLM Agent."""
 
 import asyncio
-import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime, timezone
@@ -22,11 +21,6 @@ class ToolCall:
     arguments: dict[str, Any]
 
 
-@dataclass(slots=True)
-class TextPart:
-    """A plain text message part."""
-
-    text: str
 
 
 @dataclass(slots=True)
@@ -45,7 +39,7 @@ class FileRefPart:
     filename: str | None = None
 
 
-MessagePart = TextPart | ImageUrlPart | FileRefPart
+MessagePart = ImageUrlPart | FileRefPart
 
 
 @dataclass(slots=True)
@@ -59,8 +53,8 @@ class Message:
     messages that carry only ``tool_call_id``).
 
     ``parts`` carries *non-text* media attachments only: ``ImageUrlPart``
-    and ``FileRefPart``.  ``TextPart`` **must not** appear in ``parts``
-    because it creates a second text channel that duplicates ``content``.
+    ``parts`` carries *non-text* media attachments only: ``ImageUrlPart``
+    and ``FileRefPart``.
     Doing so causes text to be sent twice to the LLM and breaks prompt
     normalisation (``UserPromptNormalizationSystem`` only reads
     ``content``, not ``parts``).
@@ -80,13 +74,6 @@ class Message:
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
 
-    def __post_init__(self) -> None:
-        if self.parts and any(isinstance(p, TextPart) for p in self.parts):
-            warnings.warn(
-                "Message.parts should not contain TextPart; put text in \'content\' instead. ",
-                UserWarning,
-                stacklevel=2,
-            )
 
 @dataclass(slots=True)
 class ConversationMessage:
@@ -903,7 +890,7 @@ __all__ = [
     "TaskStateChangedEvent",
     "TaskStatus",
     "TaskUnblockedEvent",
-    "TextPart",
+
     "ToolApprovalRequestedEvent",
     "ToolApprovedEvent",
     "ToolCall",
