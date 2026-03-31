@@ -16,7 +16,6 @@ from ecs_agent.types import (
     Message,
     MessagePart,
     StreamDelta,
-    TextPart,
     ToolCall,
     ToolSchema,
     Usage,
@@ -263,17 +262,6 @@ class OpenAIChatAdapter:
             content_parts.append({"type": "text", "text": message.content})
 
         for part in message.parts:
-            # TextPart is a legacy compat path: per the content/parts contract,
-            # text belongs in message.content, not parts. This branch handles
-            # any pre-existing messages that violated the contract.
-            if isinstance(part, TextPart):
-                # Legacy compat: TextPart in parts is deprecated.
-                # New code must put text in message.content only.
-                # This branch is kept to avoid silently dropping text
-                # from messages that were built before the contract was enforced.
-                content_parts.append({"type": "text", "text": part.text})
-                continue
-
             if isinstance(part, ImageUrlPart):
                 image_url: dict[str, Any] = {"url": part.url}
                 if part.detail is not None:
@@ -313,7 +301,6 @@ class OpenAIChatAdapter:
                     text = item.get("text")
                     if isinstance(text, str):
                         content += text
-                        message_parts.append(TextPart(text=text))
                     continue
 
                 image_part = self._parse_image_part(item)
