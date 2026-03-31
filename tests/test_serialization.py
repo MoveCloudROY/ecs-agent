@@ -19,6 +19,7 @@ from ecs_agent.components import (
     PlanComponent,
     PlanSearchComponent,
     RAGTriggerComponent,
+    ResponsesAPIStateComponent,
     RunnerStateComponent,
     SandboxConfigComponent,
     StreamingComponent,
@@ -31,7 +32,16 @@ from ecs_agent.components import (
 )
 from ecs_agent.core.world import World
 from ecs_agent.serialization import NON_SERIALIZABLE_PLACEHOLDER, WorldSerializer
-from ecs_agent.types import ApprovalPolicy, EntityId, Message, ToolCall, ToolSchema
+from ecs_agent.types import (
+    ApprovalPolicy,
+    EntityId,
+    FileRefPart,
+    ImageUrlPart,
+    Message,
+    TextPart,
+    ToolCall,
+    ToolSchema,
+)
 
 
 class DummyProvider:
@@ -71,6 +81,80 @@ def test_to_dict_with_simple_components() -> None:
         "max_messages": 50,
     }
     assert data["entities"]["1"]["KVStoreComponent"] == {"store": {"k": "v"}}
+
+
+def test_to_dict_message_with_multimodal_parts_is_deterministic() -> None:
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        ConversationComponent(
+            messages=[
+                Message(
+                    role="user",
+                    content="",
+                    parts=[
+                        TextPart(text="hello"),
+                        ImageUrlPart(url="https://example.com/a.png", detail="low"),
+                        FileRefPart(file_id="file_123", filename="doc.txt"),
+                    ],
+                )
+            ]
+        ),
+    )
+
+    data = WorldSerializer.to_dict(world)
+
+    assert data["entities"]["1"]["ConversationComponent"]["messages"][0] == {
+        "role": "user",
+        "content": "",
+        "parts": [
+            {"type": "text", "text": "hello"},
+            {
+                "type": "image_url",
+                "url": "https://example.com/a.png",
+                "detail": "low",
+            },
+            {"type": "file_ref", "file_id": "file_123", "filename": "doc.txt"},
+        ],
+        "tool_calls": None,
+        "tool_call_id": None,
+    }
+
+
+def test_serialization_roundtrip_message_with_multimodal_parts() -> None:
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        ConversationComponent(
+            messages=[
+                Message(
+                    role="user",
+                    content="summary",
+                    parts=[
+                        TextPart(text="what is in this file?"),
+                        FileRefPart(file_id="file_abc", filename="report.pdf"),
+                    ],
+                )
+            ]
+        ),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+    restored_conv = restored.get_component(entity, ConversationComponent)
+
+    assert restored_conv is not None
+    restored_message = restored_conv.messages[0]
+    assert restored_message.content == "summary"
+    assert restored_message.parts is not None
+    assert len(restored_message.parts) == 2
+    assert isinstance(restored_message.parts[0], TextPart)
+    assert restored_message.parts[0].text == "what is in this file?"
+    assert isinstance(restored_message.parts[1], FileRefPart)
+    assert restored_message.parts[1].file_id == "file_abc"
+    assert restored_message.parts[1].filename == "report.pdf"
 
 
 def test_to_dict_skips_non_serializable_fields() -> None:
@@ -384,6 +468,22 @@ def test_serialization_roundtrip_with_rag_trigger() -> None:
     assert restored_comp.query == "search query"
     assert restored_comp.top_k == 10
     assert restored_comp.retrieved_docs == ["doc1", "doc2"]
+
+
+def test_serialization_roundtrip_with_responses_api_state_component() -> None:
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        ResponsesAPIStateComponent(previous_response_id="resp_state_001"),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+
+    restored_comp = restored.get_component(entity, ResponsesAPIStateComponent)
+    assert restored_comp is not None
+    assert restored_comp.previous_response_id == "resp_state_001"
 
 
 def test_serialization_embedding_component_uses_placeholder() -> None:
@@ -894,22 +994,22 @@ def test_serialization_roundtrip_entity_registry() -> None:
     world = World()
     entity1 = world.create_entity()
     entity2 = world.create_entity()
-    
+
     # Register entities with names and tags
     world.register_entity(entity1, "agent-main", {"agent", "primary"})
     world.register_entity(entity2, "agent-helper", {"agent", "secondary"})
-    
+
     # Add some component to make entities visible
     world.add_component(entity1, ConversationComponent(messages=[]))
     world.add_component(entity2, ConversationComponent(messages=[]))
-    
+
     serialized = WorldSerializer.to_dict(world)
     restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
-    
+
     # Verify names are preserved
     assert restored.resolve_entity("agent-main") == entity1
     assert restored.resolve_entity("agent-helper") == entity2
-    
+
     # Verify tags are preserved
     agent_entities = set(restored.list_entities_by_tag("agent"))
     assert agent_entities == {entity1, entity2}
@@ -939,15 +1039,15 @@ def test_serialization_backward_compatibility_no_registry_fields() -> None:
         },
         # Note: _entity_registry and _entity_tags are missing
     }
-    
+
     # Should not raise KeyError or other errors
     restored = WorldSerializer.from_dict(old_data, providers={}, tool_handlers={})
     assert restored is not None
-    
+
     # Verify registry defaults to empty
     assert restored.resolve_entity("any-name") is None
     assert restored.list_entities_by_tag("any-tag") == []
-    
+
     # Verify existing components still work
     conv = restored.get_component(EntityId(1), ConversationComponent)
     assert conv is not None
@@ -960,27 +1060,27 @@ def test_checkpoint_preserves_entity_registry_through_undo() -> None:
     # through WorldSerializer.to_dict/from_dict
     world = World()
     entity = world.create_entity()
-    
+
     # Register with name and tags
     world.register_entity(entity, "agent-1", {"test", "main"})
-    
+
     # Add checkpoint component and create snapshot
     world.add_component(entity, CheckpointComponent())
     world.add_component(entity, ConversationComponent(messages=[]))
-    
+
     # Take snapshot (will use WorldSerializer.to_dict)
     import asyncio
     from ecs_agent.systems.checkpoint import CheckpointSystem
-    
+
     asyncio.run(CheckpointSystem().process(world))
-    
+
     # Modify registry state
     entity2 = world.create_entity()
     world.register_entity(entity2, "agent-2", {"test"})
-    
+
     # Restore (will use WorldSerializer.from_dict)
     asyncio.run(CheckpointSystem.undo(world, providers={}, tool_handlers={}))
-    
+
     # Verify registry state was restored
     assert world.resolve_entity("agent-1") == entity
     assert world.resolve_entity("agent-2") is None  # Should not exist after undo
@@ -992,10 +1092,10 @@ def test_subagent_session_table_component_roundtrip() -> None:
     """Test that SubagentSessionTableComponent with SubagentSessionRecord roundtrips correctly."""
     from ecs_agent.components import SubagentSessionTableComponent
     from ecs_agent.types import SubagentSessionRecord, EntityId
-    
+
     world = World()
     entity = world.create_entity()
-    
+
     # Create session records with all fields
     session1 = SubagentSessionRecord(
         session_id="sess_001",
@@ -1031,7 +1131,7 @@ def test_subagent_session_table_component_roundtrip() -> None:
         result_excerpt=None,
         error="Timeout exceeded",
     )
-    
+
     world.add_component(
         entity,
         SubagentSessionTableComponent(
@@ -1041,14 +1141,14 @@ def test_subagent_session_table_component_roundtrip() -> None:
             }
         ),
     )
-    
+
     serialized = WorldSerializer.to_dict(world)
     restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
-    
+
     restored_comp = restored.get_component(entity, SubagentSessionTableComponent)
     assert restored_comp is not None
     assert len(restored_comp.sessions) == 2
-    
+
     # Verify session1
     restored_session1 = restored_comp.sessions["sess_001"]
     assert restored_session1.session_id == "sess_001"
@@ -1066,7 +1166,7 @@ def test_subagent_session_table_component_roundtrip() -> None:
     assert restored_session1.deadline_at == "2026-03-10T11:00:00Z"
     assert restored_session1.result_excerpt == "Success"
     assert restored_session1.error is None
-    
+
     # Verify session2
     restored_session2 = restored_comp.sessions["sess_002"]
     assert restored_session2.session_id == "sess_002"
@@ -1079,11 +1179,10 @@ def test_subagent_session_table_component_roundtrip() -> None:
 def test_subagent_session_table_rejects_runtime_handles() -> None:
     """Test that SubagentSessionRecord cannot store asyncio.Task or Future handles."""
     from ecs_agent.types import SubagentSessionRecord, EntityId
-    import asyncio
-    
+
     # SubagentSessionRecord should only have serializable fields
     # This test verifies that the dataclass definition does NOT allow runtime handles
-    
+
     # Create a valid session record
     session = SubagentSessionRecord(
         session_id="sess_003",
@@ -1093,29 +1192,29 @@ def test_subagent_session_table_rejects_runtime_handles() -> None:
         created_at="2026-03-10T10:00:00Z",
         updated_at="2026-03-10T10:00:00Z",
     )
-    
+
     # Verify that the session record has no fields for Task or Future
     # (this is a structural test - the field should not exist in the dataclass definition)
     assert not hasattr(session, "task_handle")
     assert not hasattr(session, "future_handle")
     assert not hasattr(session, "_task")
     assert not hasattr(session, "_future")
-    
+
     # Verify serialization does not fail (would fail if non-serializable objects were present)
     from ecs_agent.serialization import WorldSerializer
     from ecs_agent.components import SubagentSessionTableComponent
-    
+
     world = World()
     entity = world.create_entity()
     world.add_component(
         entity,
         SubagentSessionTableComponent(sessions={"sess_003": session}),
     )
-    
+
     # This should succeed without errors
     serialized = WorldSerializer.to_dict(world)
     assert "SubagentSessionTableComponent" in serialized["entities"]["1"]
-    
+
     # Verify roundtrip works
     restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
     restored_comp = restored.get_component(entity, SubagentSessionTableComponent)
@@ -1143,6 +1242,11 @@ def test_serialization_preserves_none_world_name() -> None:
 
 def test_serialization_backward_compat_missing_world_name() -> None:
     """Old serialized data without world_name key deserializes to name=None."""
-    data = {"next_entity_id": 1, "entities": {}, "_entity_registry": {}, "_entity_tags": {}}
+    data = {
+        "next_entity_id": 1,
+        "entities": {},
+        "_entity_registry": {},
+        "_entity_tags": {},
+    }
     restored = WorldSerializer.from_dict(data, providers={}, tool_handlers={})
     assert restored.name is None

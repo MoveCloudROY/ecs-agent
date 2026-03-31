@@ -5,6 +5,11 @@ import json
 import time
 from typing import Any
 
+from ecs_agent.accounting.models import (
+    LLMInvocationEvent,
+    StreamCompleteness,
+    UsageRecord,
+)
 from ecs_agent.logging import get_logger
 from ecs_agent.components import (
     ChildStubComponent,
@@ -17,6 +22,7 @@ from ecs_agent.components import (
     PromptContextQueueComponent,
     PromptContextReservationComponent,
     RenderedSystemPromptComponent,
+    ResponsesAPIStateComponent,
     RunnerStateComponent,
     StreamingComponent,
     SystemPromptComponent,
@@ -25,6 +31,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core.world import World
 from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.openai_provider import OpenAIProvider
 from ecs_agent.prompts.message_assembly import (
     commit_prompt_context_reservation,
     prepare_outbound_messages,
@@ -41,6 +48,7 @@ from ecs_agent.types import (
     EntityId,
     ToolCall,
     ToolSchema,
+    Usage,
     InterruptionReason,
     ReasoningCompleteEvent,
 )
@@ -67,6 +75,15 @@ class ReasoningSystem:
             # Sample provider and model at request start for in-flight stability
             active_provider = llm_component.pending_provider or llm_component.provider
             active_model = llm_component.pending_model or llm_component.model
+            provider_id = self._resolve_provider_id(active_provider)
+            responses_api_state = world.get_component(
+                entity_id, ResponsesAPIStateComponent
+            )
+            previous_response_id = (
+                responses_api_state.previous_response_id
+                if responses_api_state is not None
+                else None
+            )
 
             # Check for interruption
             if world.has_component(entity_id, InterruptionComponent):
@@ -134,6 +151,7 @@ class ReasoningSystem:
                 system="ReasoningSystem",
             )
 
+            invocation_event_published = False
             try:
                 if streaming_enabled:
                     result = await self._process_streaming(
@@ -145,16 +163,36 @@ class ReasoningSystem:
                         messages,
                         tools,
                         non_blocking_delta_publish,
+                        previous_response_id,
                     )
                 else:
-                    non_stream_result = await active_provider.complete(
-                        messages, tools=tools
-                    )
+                    if isinstance(active_provider, OpenAIProvider):
+                        non_stream_result = await active_provider.complete(
+                            messages,
+                            tools=tools,
+                            thread_response_id=previous_response_id,
+                        )
+                    else:
+                        non_stream_result = await active_provider.complete(
+                            messages,
+                            tools=tools,
+                        )
                     if not isinstance(non_stream_result, CompletionResult):
                         raise RuntimeError(
                             "Provider returned stream iterator in non-streaming mode"
                         )
                     result = non_stream_result
+
+                await self._publish_llm_invocation_event(
+                    world=world,
+                    entity_id=entity_id,
+                    provider_id=provider_id,
+                    model=active_model,
+                    usage=result.usage,
+                    stream_completeness=StreamCompleteness.COMPLETE,
+                    request_id=result.response_id,
+                )
+                invocation_event_published = True
 
                 if context_queue is not None and context_reservation is not None:
                     commit_prompt_context_reservation(
@@ -166,6 +204,14 @@ class ReasoningSystem:
                 # Append result to conversation (tree not yet supported for writing)
                 if conversation is not None:
                     conversation.messages.append(result.message)
+
+                if result.response_id is not None:
+                    world.add_component(
+                        entity_id,
+                        ResponsesAPIStateComponent(
+                            previous_response_id=result.response_id,
+                        ),
+                    )
 
                 if result.message.tool_calls:
                     world.add_component(
@@ -198,6 +244,23 @@ class ReasoningSystem:
                     TerminalComponent(reason="provider_exhausted"),
                 )
             except asyncio.CancelledError:
+                if not invocation_event_published:
+                    stream_completeness = StreamCompleteness.UNKNOWN
+                    interruption = world.get_component(entity_id, InterruptionComponent)
+                    if interruption is not None:
+                        partial_chunks = interruption.metadata.get("partial_chunks")
+                        if isinstance(partial_chunks, int) and partial_chunks > 0:
+                            stream_completeness = StreamCompleteness.PARTIAL
+                    await self._publish_llm_invocation_event(
+                        world=world,
+                        entity_id=entity_id,
+                        provider_id=provider_id,
+                        model=active_model,
+                        usage=None,
+                        stream_completeness=stream_completeness,
+                        request_id=None,
+                    )
+                    invocation_event_published = True
                 if world.get_component(entity_id, InterruptionComponent) is None:
                     world.add_component(
                         entity_id,
@@ -209,6 +272,22 @@ class ReasoningSystem:
                     )
                 raise
             except Exception as exc:
+                if not invocation_event_published:
+                    stream_completeness = (
+                        StreamCompleteness.PARTIAL
+                        if streaming_enabled
+                        else StreamCompleteness.UNKNOWN
+                    )
+                    await self._publish_llm_invocation_event(
+                        world=world,
+                        entity_id=entity_id,
+                        provider_id=provider_id,
+                        model=active_model,
+                        usage=None,
+                        stream_completeness=stream_completeness,
+                        request_id=None,
+                    )
+                    invocation_event_published = True
                 logger.error(
                     "reasoning_error",
                     entity_id=int(entity_id),
@@ -224,6 +303,67 @@ class ReasoningSystem:
                     ),
                 )
 
+    def _resolve_provider_id(self, active_provider: LLMProvider) -> str:
+        provider_id = getattr(active_provider, "provider_id", None)
+        if isinstance(provider_id, str) and provider_id:
+            return provider_id
+        return type(active_provider).__name__
+
+    def _usage_to_usage_record(
+        self,
+        usage: Usage | None,
+        provider_id: str,
+        model: str,
+        stream_completeness: StreamCompleteness,
+    ) -> UsageRecord:
+        if usage is None:
+            return UsageRecord(
+                provider_id=provider_id,
+                model=model,
+                stream_completeness=stream_completeness,
+            )
+
+        return UsageRecord(
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
+            cached_input_tokens=usage.cached_input_tokens,
+            cache_creation_tokens=usage.cache_creation_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+            image_count=usage.image_count,
+            audio_seconds=usage.audio_seconds,
+            provider_id=provider_id,
+            model=model,
+            stream_completeness=stream_completeness,
+        )
+
+    async def _publish_llm_invocation_event(
+        self,
+        world: World,
+        entity_id: EntityId,
+        provider_id: str,
+        model: str,
+        usage: Usage | None,
+        stream_completeness: StreamCompleteness,
+        request_id: str | None,
+    ) -> None:
+        usage_record = self._usage_to_usage_record(
+            usage=usage,
+            provider_id=provider_id,
+            model=model,
+            stream_completeness=stream_completeness,
+        )
+        await world.event_bus.publish(
+            LLMInvocationEvent(
+                entity_id=int(entity_id),
+                provider_id=provider_id,
+                model=model,
+                usage=usage_record,
+                cost=None,
+                request_id=request_id,
+            )
+        )
+
     async def _process_streaming(
         self,
         world: World,
@@ -234,12 +374,21 @@ class ReasoningSystem:
         messages: list[Message],
         tools: list[ToolSchema] | None,
         non_blocking_delta_publish: bool,
+        previous_response_id: str | None,
     ) -> CompletionResult:
-        stream_result = await active_provider.complete(
-            messages,
-            tools=tools,
-            stream=True,
-        )
+        if isinstance(active_provider, OpenAIProvider):
+            stream_result = await active_provider.complete(
+                messages,
+                tools=tools,
+                stream=True,
+                thread_response_id=previous_response_id,
+            )
+        else:
+            stream_result = await active_provider.complete(
+                messages,
+                tools=tools,
+                stream=True,
+            )
         if isinstance(stream_result, CompletionResult):
             return stream_result
 
@@ -252,6 +401,7 @@ class ReasoningSystem:
         first_content_delta_seen = False
         reasoning_phase_active = False
         reasoning_end_emitted = False
+        response_id: str | None = None
 
         await world.event_bus.publish(
             StreamStartEvent(entity_id=entity_id, timestamp=time.time())
@@ -364,6 +514,9 @@ class ReasoningSystem:
                 if delta.usage is not None:
                     usage = delta.usage
 
+                if delta.response_id is not None:
+                    response_id = delta.response_id
+
                 if world.get_component(entity_id, InterruptionComponent) is not None:
                     raise asyncio.CancelledError()
         except asyncio.CancelledError:
@@ -417,6 +570,7 @@ class ReasoningSystem:
                 tool_calls=self._finalize_tool_calls(tool_call_buffers),
             ),
             usage=usage,
+            response_id=response_id,
         )
 
     def _publish_stream_delta_non_blocking(
