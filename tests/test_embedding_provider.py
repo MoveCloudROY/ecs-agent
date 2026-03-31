@@ -1,11 +1,11 @@
 """Tests for embedding provider implementations."""
 
-
 from __future__ import annotations
 import pytest
 import httpx
 from unittest.mock import AsyncMock, patch
 
+from ecs_agent.providers import ApiFormat, ProviderConfig
 from ecs_agent.providers.embedding_protocol import EmbeddingProvider
 from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider
 from ecs_agent.providers.embedding_provider import OpenAIEmbeddingProvider
@@ -188,9 +188,7 @@ async def test_openai_embedding_provider_handles_request_error() -> None:
     """OpenAIEmbeddingProvider should log and re-raise RequestError."""
     provider = OpenAIEmbeddingProvider(api_key="test-key")
 
-    with patch.object(
-        provider._client, "post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(provider._client, "post", new_callable=AsyncMock) as mock_post:
         mock_post.side_effect = httpx.ConnectError("Connection refused")
 
         with pytest.raises(httpx.ConnectError):
@@ -247,3 +245,47 @@ async def test_openai_embedding_provider_custom_timeouts() -> None:
 
     assert provider._timeout.connect == 5.0
     assert provider._timeout.read == 60.0
+
+
+@pytest.mark.asyncio
+async def test_openai_embedding_provider_accepts_provider_config() -> None:
+    config = ProviderConfig(
+        provider_id="openai",
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        api_format=ApiFormat.OPENAI_EMBEDDINGS,
+    )
+    provider = OpenAIEmbeddingProvider(config=config, model="text-embedding-3-small")
+
+    assert provider.canonical_model_id == "openai/text-embedding-3-small"
+
+
+@pytest.mark.asyncio
+async def test_openai_embedding_provider_records_usage_for_embedding_accounting() -> (
+    None
+):
+    provider = OpenAIEmbeddingProvider(api_key="test-key")
+
+    request = httpx.Request("POST", "https://api.openai.com/v1/embeddings")
+    mock_response = httpx.Response(
+        status_code=200,
+        request=request,
+        json={
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1], "index": 0}],
+            "model": "text-embedding-3-small",
+            "usage": {"prompt_tokens": 9, "total_tokens": 9},
+        },
+    )
+
+    with patch.object(provider._client, "post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_response
+        await provider.embed(["hello"])
+
+    usage = provider.last_usage
+    assert usage is not None
+    assert usage.prompt_tokens == 9
+    assert usage.completion_tokens is None
+    assert usage.total_tokens == 9
+    assert usage.provider_id == "openai"
+    assert usage.model == "openai/text-embedding-3-small"

@@ -1,14 +1,22 @@
 """Tests for OpenAI Responses API support."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import httpx
 import pytest
 
-from ecs_agent.components.definitions import ResponsesAPIStateComponent
+from ecs_agent.components import (
+    ConversationComponent,
+    InterruptionComponent,
+    LLMComponent,
+    ResponsesAPIStateComponent,
+)
+from ecs_agent.core import World
 from ecs_agent.providers.openai_provider import OpenAIProvider
+from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import ResponsesAPICallEvent, EntityId
-from ecs_agent.types import Message, ToolSchema
+from ecs_agent.types import InterruptionReason, Message, ToolSchema
 
 
 def test_responses_api_state_component_defaults() -> None:
@@ -191,7 +199,7 @@ async def test_responses_api_complete_non_streaming_with_tools() -> None:
 
 
 @pytest.mark.asyncio
-async def test_responses_api_complete_non_streaming_stores_response_id_in_component() -> (
+async def test_responses_api_complete_non_streaming_state_component_updates_on_success() -> (
     None
 ):
     mock_response = Mock(spec=httpx.Response)
@@ -211,16 +219,29 @@ async def test_responses_api_complete_non_streaming_stores_response_id_in_compon
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
+    world = World()
+    entity = world.create_entity()
     provider = OpenAIProvider(api_key="test-key", use_responses_api=True)
     provider._client = mock_client
+    world.add_component(entity, LLMComponent(provider=provider, model="gpt-4o-mini"))
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content="hello")]),
+    )
+    world.add_component(
+        entity,
+        ResponsesAPIStateComponent(previous_response_id="resp_state_old"),
+    )
 
-    await provider.complete([Message(role="user", content="hello")])
+    await ReasoningSystem().process(world)
 
-    assert provider.previous_response_id == "resp_state_123"
+    state = world.get_component(entity, ResponsesAPIStateComponent)
+    assert state is not None
+    assert state.previous_response_id == "resp_state_123"
 
 
 @pytest.mark.asyncio
-async def test_responses_api_complete_non_streaming_sends_previous_response_id() -> (
+async def test_responses_api_complete_non_streaming_previous_response_id_from_state_component() -> (
     None
 ):
     mock_response = Mock(spec=httpx.Response)
@@ -240,11 +261,21 @@ async def test_responses_api_complete_non_streaming_sends_previous_response_id()
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
+    world = World()
+    entity = world.create_entity()
     provider = OpenAIProvider(api_key="test-key", use_responses_api=True)
     provider._client = mock_client
-    provider.previous_response_id = "resp_old_789"
+    world.add_component(entity, LLMComponent(provider=provider, model="gpt-4o-mini"))
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content="continue")]),
+    )
+    world.add_component(
+        entity,
+        ResponsesAPIStateComponent(previous_response_id="resp_old_789"),
+    )
 
-    await provider.complete([Message(role="user", content="continue")])
+    await ReasoningSystem().process(world)
 
     body = mock_client.post.call_args[1]["json"]
     assert body["previous_response_id"] == "resp_old_789"
@@ -330,8 +361,6 @@ async def test_responses_api_complete_non_streaming_falls_back_on_404() -> None:
 @pytest.mark.asyncio
 async def test_responses_api_streaming_yields_stream_deltas() -> None:
     """Test Responses API streaming yields StreamDelta objects."""
-    from ecs_agent.types import StreamDelta
-
     mock_response = AsyncMock()
     mock_response.raise_for_status = Mock()
 
@@ -379,8 +408,6 @@ async def test_responses_api_streaming_yields_stream_deltas() -> None:
 @pytest.mark.asyncio
 async def test_responses_api_streaming_handles_tool_calls() -> None:
     """Test Responses API streaming accumulates tool calls correctly."""
-    from ecs_agent.types import StreamDelta
-
     mock_response = AsyncMock()
     mock_response.raise_for_status = Mock()
 
@@ -428,8 +455,6 @@ async def test_responses_api_streaming_handles_tool_calls() -> None:
 @pytest.mark.asyncio
 async def test_responses_api_streaming_emits_done() -> None:
     """Test Responses API streaming emits final delta with finish_reason and usage."""
-    from ecs_agent.types import StreamDelta
-
     mock_response = AsyncMock()
     mock_response.raise_for_status = Mock()
 
@@ -473,8 +498,9 @@ async def test_responses_api_streaming_emits_done() -> None:
 
 
 @pytest.mark.asyncio
-async def test_responses_api_streaming_updates_response_id() -> None:
-    """Test Responses API streaming updates provider.previous_response_id."""
+async def test_responses_api_streaming_previous_response_id_updates_state_component() -> (
+    None
+):
     mock_response = AsyncMock()
     mock_response.raise_for_status = Mock()
 
@@ -498,13 +524,116 @@ async def test_responses_api_streaming_updates_response_id() -> None:
     mock_client.stream = MagicMock()
     mock_client.stream.return_value.__aenter__.return_value = mock_response
 
+    world = World()
+    entity = world.create_entity()
     provider = OpenAIProvider(api_key="test-key", use_responses_api=True)
     provider._client = mock_client
-
-    stream_result = await provider.complete(
-        [Message(role="user", content="hi")], stream=True
+    world.add_component(entity, LLMComponent(provider=provider, model="gpt-4o-mini"))
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content="hi")]),
     )
-    async for _ in stream_result:
-        pass
+    world.add_component(
+        entity,
+        ResponsesAPIStateComponent(previous_response_id="resp_before_stream"),
+    )
 
-    assert provider.previous_response_id == "resp_streaming_123"
+    from ecs_agent.components import StreamingComponent
+
+    world.add_component(entity, StreamingComponent(enabled=True))
+
+    await ReasoningSystem().process(world)
+
+    state = world.get_component(entity, ResponsesAPIStateComponent)
+    assert state is not None
+    assert state.previous_response_id == "resp_streaming_123"
+
+
+@pytest.mark.asyncio
+async def test_responses_api_non_streaming_previous_response_id_preserved_on_failure() -> (
+    None
+):
+    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    response = httpx.Response(500, request=request, text="server error")
+    error = httpx.HTTPStatusError("boom", request=request, response=response)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post.side_effect = error
+
+    world = World()
+    entity = world.create_entity()
+    provider = OpenAIProvider(api_key="test-key", use_responses_api=True)
+    provider._client = mock_client
+    world.add_component(entity, LLMComponent(provider=provider, model="gpt-4o-mini"))
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content="continue")]),
+    )
+    world.add_component(
+        entity,
+        ResponsesAPIStateComponent(previous_response_id="resp_stable_old"),
+    )
+
+    await ReasoningSystem().process(world)
+
+    state = world.get_component(entity, ResponsesAPIStateComponent)
+    assert state is not None
+    assert state.previous_response_id == "resp_stable_old"
+
+
+@pytest.mark.asyncio
+async def test_responses_api_streaming_previous_response_id_preserved_on_interruption() -> (
+    None
+):
+    world = World()
+    entity = world.create_entity()
+
+    mock_response = AsyncMock()
+    mock_response.raise_for_status = Mock()
+
+    async def mock_aiter_lines():
+        yield "event: response.created"
+        yield 'data: {"type": "response.created", "response": {"id": "resp_streaming_new"}}'
+        yield ""
+        yield "event: response.output_item.delta"
+        yield 'data: {"type": "response.output_item.delta", "output_index": 0, "delta": {"type": "content_delta", "text": "partial"}}'
+        yield ""
+        world.add_component(
+            entity,
+            InterruptionComponent(
+                reason=InterruptionReason.USER_REQUESTED,
+                message="stop",
+                metadata={},
+            ),
+        )
+        yield "event: response.done"
+        yield 'data: {"type": "response.done", "response": {"id": "resp_streaming_new"}}'
+        yield ""
+
+    mock_response.aiter_lines = mock_aiter_lines
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = MagicMock()
+    mock_client.stream.return_value.__aenter__.return_value = mock_response
+
+    provider = OpenAIProvider(api_key="test-key", use_responses_api=True)
+    provider._client = mock_client
+    world.add_component(entity, LLMComponent(provider=provider, model="gpt-4o-mini"))
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content="interrupt")]),
+    )
+    world.add_component(
+        entity, ResponsesAPIStateComponent(previous_response_id="resp_keep_old")
+    )
+
+    from ecs_agent.components import StreamingComponent
+
+    world.add_component(entity, StreamingComponent(enabled=True))
+
+    with pytest.raises(asyncio.CancelledError):
+        await ReasoningSystem().process(world)
+
+    state = world.get_component(entity, ResponsesAPIStateComponent)
+    assert state is not None
+    assert state.previous_response_id == "resp_keep_old"

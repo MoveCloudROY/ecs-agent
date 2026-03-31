@@ -1,0 +1,49 @@
+- Added canonical provider/model ID tests keyed for  and invalid input rejection via ValueError.
+- ProviderConfig.extra_headers must use field(default_factory=dict) to satisfy strict default semantics and avoid shared mutable state.
+- Full mypy requires optional MCP dependency installed in this environment ().
+- Added canonical provider/model ID tests keyed for -k "canonical_id or api_format" and invalid input rejection via ValueError.
+- ProviderConfig.extra_headers must use field(default_factory=dict) to satisfy strict default semantics and avoid shared mutable state.
+- Full mypy requires optional MCP dependency installed in this environment (uv sync --group dev --extra mcp).
+- For backward compatibility, keep `Message.content` required and treat `parts=None` as the legacy text-only path.
+- `dataclasses.asdict` is insufficient for multimodal unions because it drops explicit variant tags; add a dedicated serializer with stable `type` discriminators.
+- To preserve existing snapshot expectations, only emit `parts` in serialized messages when `parts` is not `None`.
+- Reuse the same message serializer for `ConversationComponent` and `MessageBusConversationComponent` to keep round-trip behavior consistent across component boundaries.
+- Added canonical provider/model ID tests keyed for canonical_id or api_format selector and invalid input rejection via ValueError.
+- ProviderConfig.extra_headers uses field(default_factory=dict) to avoid None defaults and mutable sharing issues.
+- Full mypy success required installing optional MCP extra via uv sync --group dev --extra mcp in this worktree environment.
+- Kept backward compatibility by aliasing `types.Usage` to `accounting.models.UsageRecord`, so existing provider and streaming code paths continue working unchanged.
+- Canonical cache hit-rate computation must treat OpenAI `prompt_tokens_details.cached_tokens` as cache reads and use total prompt formula: `(prompt_tokens - cached_input_tokens) + cache_creation_tokens + cache_read_tokens`.
+- Enforced interrupted-stream policy at `LLMInvocationEvent` construction: non-complete streams reject non-estimated cost records to avoid fabricated totals.
+- Canonical model IDs are represented as provider/model and rejected when missing slash, using colon, or containing empty segments.
+- ProviderConfig.extra_headers should use field(default_factory=dict) so defaults are concrete and instance-isolated.
+- QA selectors are easiest to support by naming tests with canonical_id and api_format tokens for targeted pytest -k evidence commands.
+- Splitting OpenAI behavior into chat/responses adapters is safer when the public provider keeps shared concerns (headers, HTTP error logging, usage normalization) and only delegates wire-format translation.
+- Canonical usage extraction for both chat and responses payloads should always flow through `normalize_openai_usage()` to avoid drift between `prompt_tokens/completion_tokens` and `input_tokens/output_tokens` schemas.
+- Multimodal payload compatibility needs explicit mapping per endpoint: chat messages use content arrays (`text`, `image_url`, `file`), while responses input uses `input_text`, `input_image`, and `input_file` entries.
+- Backward compatibility is preserved by retaining `use_responses_api`, `previous_response_id`, and `_responses_api_available` on `OpenAIProvider` while preferring `ApiFormat` for new dispatch paths.
+- Anthropic-compatible usage normalization should always flow through `normalize_anthropic_usage()` so cache fields (`cache_creation_input_tokens`, `cache_read_input_tokens`) land in canonical `UsageRecord` consistently.
+- Keeping `ClaudeProvider` as the public class while delegating request/response shaping to a dedicated adapter preserves backwards compatibility for existing tests that call helper methods directly.
+- Multimodal parts need deterministic guardrails: reject `ImageUrlPart`/`FileRefPart` with stable `ValueError` messages when vision support is not explicitly enabled for the Anthropic messages endpoint.
+- Strict mypy in this branch required a defensive dict narrowing in `_parse_file_part` to avoid `union-attr` on optional/Any file payload shapes.
+- Embedding providers can keep the protocol return type unchanged (`list[list[float]]`) while still exposing accounting by storing the last normalized `UsageRecord` from API `usage`, mapping embedding input tokens to `prompt_tokens` and `total_tokens`.
+- File uploads fit the new multimodal contract when the service returns `FileRefPart(file_id, filename)` directly from `/files` response IDs and validates OpenAI purpose values (`assistants`, `fine-tune`, `batch`, `vision`) up front.
+
+## [2026-03-30T20:37:45Z] Task 5: responses threading state → ECS
+- `previous_response_id` threading ownership now lives only in `ResponsesAPIStateComponent`; provider instance state was removed and adapter calls take prior threading ID as request input.
+- `ReasoningSystem` snapshots `ResponsesAPIStateComponent` at call start and writes back only `CompletionResult.response_id` after successful non-stream completion or terminal streaming delta.
+- Streaming interruption/failure paths intentionally skip state writes; preserving old `ResponsesAPIStateComponent` avoids conversation-thread corruption on cancelled/failed runs.
+
+## [2026-03-30T20:47:00Z] Task 8: ReasoningSystem → LLMInvocationEvent
+- Publish exactly one canonical `LLMInvocationEvent` from `ReasoningSystem` per invocation, immediately after completion result resolution, with a guard flag to prevent duplicate emissions on downstream exceptions.
+- Translate `CompletionResult.usage` into a fresh `UsageRecord` using request-scoped `active_model` and derived `provider_id` so logging/event/accounting all share the same invocation identity.
+- Interrupted streaming paths (`CancelledError` and stream failures before terminal usage) must emit one event with `StreamCompleteness.PARTIAL/UNKNOWN`, `usage` tokens unset, and `cost=None` to avoid fabricated accounting.
+
+## [2026-03-30T20:59:00Z] Task 9: event-driven accounting subscriber + observable subscriber failures
+- `EventBus.publish()` can preserve non-crashing subscriber isolation while still surfacing failures by logging each `gather(..., return_exceptions=True)` exception with `topic`, deterministic `subscriber_id`, and `exception` text.
+- Aggregate cache hit-rate must be token-weighted by provider+model (`sum(cache_read_tokens) / sum(total_prompt_tokens)`) using running token counters, never an average of per-request hit-rate percentages.
+- Avoid importing `EventBus` at runtime inside accounting modules to prevent `types ↔ core` circular imports; use a `TYPE_CHECKING` annotation-only import instead.
+
+## [2026-03-31T00:00:00Z] Task 10: live Aliyun matrix + env-gated fixtures
+- Centralizing `live_api_key`/`live_image_url` fixtures in `tests/conftest.py` keeps live test gating consistent and guarantees graceful `pytest.skip(...)` behavior when required env vars are absent.
+- Registering `live` in `pyproject.toml` prevents unknown-marker warnings and makes selective runs (`-m live`) explicit for credentialed verification workflows.
+- The Aliyun live matrix can stay stable with four targeted provider scenarios (chat text, responses text, responses vision, anthropic text) while keeping model selection env-driven via `LLM_MODEL` defaults.

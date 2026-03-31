@@ -1,0 +1,13 @@
+============================= test session starts ==============================
+platform linux -- Python 3.14.3, pytest-9.0.2, pluggy-1.6.0 -- /home/roy1994/Code/Demo/ecs/.worktrees/feat/llm-api-refactor/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /home/roy1994/Code/Demo/ecs/.worktrees/feat/llm-api-refactor
+configfile: pyproject.toml
+plugins: anyio-4.13.0, asyncio-1.3.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 22 items / 20 deselected / 2 selected
+
+tests/test_claude_provider.py::test_build_messages_unsupported_multimodal_without_vision_raises[parts0-ImageUrlPart] PASSED [ 50%]
+tests/test_claude_provider.py::test_build_messages_unsupported_multimodal_without_vision_raises[parts1-FileRefPart] PASSED [100%]
+
+======================= 2 passed, 20 deselected in 0.37s =======================

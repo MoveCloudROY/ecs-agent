@@ -4,13 +4,14 @@ import asyncio
 import uuid
 from typing import Any, Awaitable, Callable, TypeVar, cast
 
+from ecs_agent.logging import get_logger, log_bus_deliver, log_bus_publish
+
 T = TypeVar("T")
 Handler = Callable[[Any], Awaitable[None]]
 
-
-from ecs_agent.logging import get_logger, log_bus_deliver, log_bus_publish
-
 logger = get_logger(__name__)
+
+
 class EventBus:
     def __init__(self) -> None:
         self._handlers: dict[type, list[Handler]] = {}
@@ -66,9 +67,19 @@ class EventBus:
                 correlation_id=correlation_id,
             )
 
-        await asyncio.gather(
+        results = await asyncio.gather(
             *(handler(event) for handler in handlers), return_exceptions=True
         )
+        for idx, result in enumerate(results):
+            if not isinstance(result, Exception):
+                continue
+            subscriber_id = getattr(handlers[idx], "__name__", f"handler_{idx}")
+            logger.error(
+                "event_bus_subscriber_error",
+                topic=topic,
+                subscriber_id=subscriber_id,
+                exception=str(result),
+            )
 
     def clear(self) -> None:
         self._handlers.clear()
