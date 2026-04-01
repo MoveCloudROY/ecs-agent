@@ -34,6 +34,7 @@ from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
+from ecs_agent.scratchbook.artifact_registry import ArtifactKind, ArtifactRegistry
 from ecs_agent.systems.subagent_runtime import SubagentRuntimeManager
 from ecs_agent.observability import generate_traceparent
 from ecs_agent.types import (
@@ -114,11 +115,32 @@ class SubagentSystem:
     """
 
     def __init__(
-        self, priority: int = -1, default_timeout: float | None = None
+        self,
+        priority: int = -1,
+        default_timeout: float | None = None,
+        registry: ArtifactRegistry | None = None,
     ) -> None:
         self.priority = priority
         self._runtime_manager = SubagentRuntimeManager()
         self._default_timeout = default_timeout
+        self._registry = registry
+
+    def _persist_subagent_result(
+        self,
+        result: str,
+    ) -> tuple[str, str, str | None] | None:
+        if self._registry is None:
+            return None
+
+        persist_result = self._registry.persist(
+            kind=ArtifactKind.SUBAGENT,
+            content=result,
+        )
+        return (
+            persist_result.descriptor.artifact_id,
+            persist_result.record_path,
+            persist_result.inline_content,
+        )
 
     def _resolve_timeout(self, per_call_timeout: float | None) -> float | None:
         """Resolve timeout with precedence: per-call > global > None."""
@@ -488,6 +510,9 @@ class SubagentSystem:
                     "created_at": session.created_at,
                     "updated_at": session.updated_at,
                     "result_excerpt": session.result_excerpt,
+                    "artifact_id": session.artifact_id,
+                    "record_path": session.artifact_record_path,
+                    "inline_content": session.artifact_inline_content,
                     "error": session.error,
                 }
             )
@@ -520,6 +545,9 @@ class SubagentSystem:
                         "session_id": session_id,
                         "lifecycle_status": session.status,
                         "result_excerpt": session.result_excerpt,
+                        "artifact_id": session.artifact_id,
+                        "record_path": session.artifact_record_path,
+                        "inline_content": session.artifact_inline_content,
                         "error": session.error,
                     }
                 )
@@ -537,6 +565,9 @@ class SubagentSystem:
                         "session_id": session_id,
                         "lifecycle_status": session.status,
                         "result_excerpt": session.result_excerpt,
+                        "artifact_id": session.artifact_id,
+                        "record_path": session.artifact_record_path,
+                        "inline_content": session.artifact_inline_content,
                     }
                 )
 
@@ -582,6 +613,9 @@ class SubagentSystem:
                         "session_id": session_id,
                         "lifecycle_status": session.status,
                         "result_excerpt": session.result_excerpt,
+                        "artifact_id": session.artifact_id,
+                        "record_path": session.artifact_record_path,
+                        "inline_content": session.artifact_inline_content,
                         "error": session.error,
                     }
                 )
@@ -762,6 +796,7 @@ class SubagentSystem:
             )  # delegate uses global default only
 
             try:
+                success = False
                 if resolved_timeout is not None:
                     result, success, error = await asyncio.wait_for(
                         self._execute_subagent_core(
@@ -802,6 +837,10 @@ class SubagentSystem:
                     )
                 )
                 result = error_msg
+                success = False
+
+            if success:
+                self._persist_subagent_result(result)
 
             return result
 
@@ -878,17 +917,22 @@ class SubagentSystem:
                 # Sync mode: wrap with timeout
                 try:
                     if resolved_timeout is not None:
-                        result, _, _ = await asyncio.wait_for(
+                        result, success, _ = await asyncio.wait_for(
                             execute_with_effective_skills(), timeout=resolved_timeout
                         )
                     else:
-                        result, _, _ = await execute_with_effective_skills()
+                        result, success, _ = await execute_with_effective_skills()
                 except asyncio.TimeoutError:
                     error_msg = f"Error: Subagent timeout after {resolved_timeout}s"
                     logger.error(
                         "subagent_timeout", timeout=resolved_timeout, category=category
                     )
                     result = error_msg
+                    success = False
+
+                if success:
+                    self._persist_subagent_result(result)
+
                 logger.info(
                     "subagent_sync_completed",
                     parent_entity=parent_entity_id,
@@ -943,6 +987,12 @@ class SubagentSystem:
                 if success:
                     metadata.status = "Idle"
                     metadata.result_excerpt = result[:200]
+                    persisted = self._persist_subagent_result(result)
+                    if persisted is not None:
+                        artifact_id, record_path, inline_content = persisted
+                        metadata.artifact_id = artifact_id
+                        metadata.artifact_record_path = record_path
+                        metadata.artifact_inline_content = inline_content
                 else:
                     metadata.status = "Dead"
                     metadata.error = error
