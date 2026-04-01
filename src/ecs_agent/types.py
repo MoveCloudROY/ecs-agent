@@ -21,8 +21,6 @@ class ToolCall:
     arguments: dict[str, Any]
 
 
-
-
 @dataclass(slots=True)
 class ImageUrlPart:
     """An image URL message part."""
@@ -220,6 +218,7 @@ class ScratchbookRef:
     category: str
     content_hash: str
     timestamp: str
+    record_path: str | None = None
 
 
 @dataclass(slots=True)
@@ -494,6 +493,9 @@ class SubagentSessionRecord:
     timeout_seconds: float | None = None
     deadline_at: str | None = None  # ISO timestamp
     result_excerpt: str | None = None
+    artifact_id: str | None = None
+    artifact_record_path: str | None = None
+    artifact_inline_content: str | None = None
     error: str | None = None
 
 
@@ -890,7 +892,6 @@ __all__ = [
     "TaskStateChangedEvent",
     "TaskStatus",
     "TaskUnblockedEvent",
-
     "ToolApprovalRequestedEvent",
     "ToolApprovedEvent",
     "ToolCall",
