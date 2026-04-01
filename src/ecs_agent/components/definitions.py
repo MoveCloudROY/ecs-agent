@@ -400,6 +400,7 @@ class ScratchbookRefComponent:
     category: str
     content_hash: str
     timestamp: str
+    record_path: str | None = None
 
 
 @dataclass(slots=True)
