@@ -18,6 +18,10 @@ from ecs_agent.components import (
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.prompts.contracts import SystemPromptConfigSpec, PromptTemplateSource
+from ecs_agent.prompts.provider import (
+    BuiltinPlaceholderProvider,
+    InventoryPlaceholderProvider,
+)
 from ecs_agent.prompts.registry import resolve_placeholder_values
 from ecs_agent.types import EntityId
 
@@ -36,6 +40,10 @@ def _load_mcp_client_component() -> type[object] | None:
 
 _MCP_CLIENT_COMPONENT_CLASS = _load_mcp_client_component()
 
+_BUILTIN_PLACEHOLDER_PROVIDERS: list[BuiltinPlaceholderProvider] = [
+    InventoryPlaceholderProvider(),
+]
+
 logger = get_logger(__name__)
 
 
@@ -44,6 +52,9 @@ class SystemPromptRenderSystem:
         self.priority = priority
 
     async def process(self, world: World) -> None:
+        if not _uses_default_builtin_provider_registry():
+            raise ValueError("built-in provider aggregation not wired yet")
+
         for entity_id, (prompt_config,) in world.query(SystemPromptConfigSpec):
             cache_key = _render_cache_key(world, entity_id)
             rendered_component = world.get_component(
@@ -93,6 +104,12 @@ class SystemPromptRenderSystem:
                     exception=str(exc),
                 )
                 raise
+
+
+def _uses_default_builtin_provider_registry() -> bool:
+    if len(_BUILTIN_PLACEHOLDER_PROVIDERS) != 1:
+        return False
+    return isinstance(_BUILTIN_PLACEHOLDER_PROVIDERS[0], InventoryPlaceholderProvider)
 
 
 def _render_system_prompt(
