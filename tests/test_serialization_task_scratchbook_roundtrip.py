@@ -133,10 +133,11 @@ def test_scratchbook_ref_component_roundtrip() -> None:
     entity = world.create_entity()
 
     ref = ScratchbookRefComponent(
-        artifact_id="artifact-001",
-        category="reasoning",
+        artifact_id="tool_0123456789abcdef012345",
+        category="records/tool",
         content_hash="abc123def456",
         timestamp="2026-03-07T10:30:00Z",
+        record_path="scratchbook/records/tool/tool_0123456789abcdef012345",
     )
     world.add_component(entity, ref)
 
@@ -151,10 +152,11 @@ def test_scratchbook_ref_component_roundtrip() -> None:
     # Verify roundtrip
     ref2 = world2.get_component(entity, ScratchbookRefComponent)
     assert ref2 is not None
-    assert ref2.artifact_id == "artifact-001"
-    assert ref2.category == "reasoning"
+    assert ref2.artifact_id == "tool_0123456789abcdef012345"
+    assert ref2.category == "records/tool"
     assert ref2.content_hash == "abc123def456"
     assert ref2.timestamp == "2026-03-07T10:30:00Z"
+    assert ref2.record_path == "scratchbook/records/tool/tool_0123456789abcdef012345"
 
 
 def test_scratchbook_index_component_roundtrip() -> None:
@@ -164,16 +166,18 @@ def test_scratchbook_index_component_roundtrip() -> None:
 
     artifacts = {
         "art-1": ScratchbookRef(
-            artifact_id="art-1",
-            category="planning",
+            artifact_id="tool_0123456789abcdef012345",
+            category="records/tool",
             content_hash="hash1",
             timestamp="2026-03-07T10:00:00Z",
+            record_path="scratchbook/records/tool/tool_0123456789abcdef012345",
         ),
         "art-2": ScratchbookRef(
-            artifact_id="art-2",
-            category="reasoning",
+            artifact_id="subagent_0123456789abcdef012345",
+            category="records/subagent",
             content_hash="hash2",
             timestamp="2026-03-07T10:10:00Z",
+            record_path="scratchbook/records/subagent/subagent_0123456789abcdef012345",
         ),
     }
     index = ScratchbookIndexComponent(artifacts=artifacts)
@@ -193,8 +197,12 @@ def test_scratchbook_index_component_roundtrip() -> None:
     assert len(index2.artifacts) == 2
     assert "art-1" in index2.artifacts
     assert "art-2" in index2.artifacts
-    assert index2.artifacts["art-1"].artifact_id == "art-1"
-    assert index2.artifacts["art-1"].category == "planning"
+    assert index2.artifacts["art-1"].artifact_id == "tool_0123456789abcdef012345"
+    assert index2.artifacts["art-1"].category == "records/tool"
+    assert (
+        index2.artifacts["art-2"].record_path
+        == "scratchbook/records/subagent/subagent_0123456789abcdef012345"
+    )
     assert index2.artifacts["art-2"].content_hash == "hash2"
 
 
@@ -219,10 +227,11 @@ def test_multiple_task_and_scratchbook_components() -> None:
     world.add_component(
         entity1,
         ScratchbookRefComponent(
-            artifact_id="art-1",
-            category="result",
+            artifact_id="tool_aaaaaaaaaaaaaaaaaaaaaaaa",
+            category="records/tool",
             content_hash="hash1",
             timestamp="2026-03-07T10:00:00Z",
+            record_path="scratchbook/records/tool/tool_aaaaaaaaaaaaaaaaaaaaaaaa",
         ),
     )
 
@@ -245,10 +254,11 @@ def test_multiple_task_and_scratchbook_components() -> None:
         ScratchbookIndexComponent(
             artifacts={
                 "art-2": ScratchbookRef(
-                    artifact_id="art-2",
-                    category="work",
+                    artifact_id="subagent_bbbbbbbbbbbbbbbbbbbbbbbb",
+                    category="records/subagent",
                     content_hash="hash2",
                     timestamp="2026-03-07T10:10:00Z",
+                    record_path="scratchbook/records/subagent/subagent_bbbbbbbbbbbbbbbbbbbbbbbb",
                 ),
             }
         ),
@@ -269,7 +279,7 @@ def test_multiple_task_and_scratchbook_components() -> None:
 
     ref1 = world2.get_component(entity1, ScratchbookRefComponent)
     assert ref1 is not None
-    assert ref1.artifact_id == "art-1"
+    assert ref1.artifact_id == "tool_aaaaaaaaaaaaaaaaaaaaaaaa"
 
     task2 = world2.get_component(entity2, TaskComponent)
     assert task2 is not None

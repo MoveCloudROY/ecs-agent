@@ -497,25 +497,29 @@ class TestTaskLifecycleEventsStructured:
 
         configure_logging(json_output=True, level="INFO")
         logger = get_logger("test_task_lifecycle")
-        
+
         # Simulate TaskReadyEvent emission
         event = TaskReadyEvent(
             entity_id=EntityId(1),
             task_id="task-001",
             dependencies_resolved=["task-dep-1", "task-dep-2"],
-            correlation_id="corr-123"
+            correlation_id="corr-123",
         )
         logger.info(
             "task_ready",
             entity_id=event.entity_id,
             task_id=event.task_id,
             dependencies_resolved=event.dependencies_resolved,
-            correlation_id=event.correlation_id
+            correlation_id=event.correlation_id,
         )
-        
+
         captured = capsys.readouterr()
-        events = [json.loads(line) for line in captured.out.strip().split("\n") if line.strip()]
-        
+        events = [
+            json.loads(line)
+            for line in captured.out.strip().split("\n")
+            if line.strip()
+        ]
+
         ready_events = [e for e in events if e.get("event") == "task_ready"]
         assert len(ready_events) >= 1
         event_data = ready_events[0]
@@ -532,13 +536,13 @@ class TestTaskLifecycleEventsStructured:
 
         configure_logging(json_output=True, level="INFO")
         logger = get_logger("test_task_lifecycle")
-        
+
         event = TaskRunningEvent(
             entity_id=EntityId(1),
             task_id="task-001",
             backend="fetch",
             assigned_agent="agent-wave-1",
-            correlation_id="corr-123"
+            correlation_id="corr-123",
         )
         logger.info(
             "task_running",
@@ -546,12 +550,16 @@ class TestTaskLifecycleEventsStructured:
             task_id=event.task_id,
             backend=event.backend,
             assigned_agent=event.assigned_agent,
-            correlation_id=event.correlation_id
+            correlation_id=event.correlation_id,
         )
-        
+
         captured = capsys.readouterr()
-        events = [json.loads(line) for line in captured.out.strip().split("\n") if line.strip()]
-        
+        events = [
+            json.loads(line)
+            for line in captured.out.strip().split("\n")
+            if line.strip()
+        ]
+
         running_events = [e for e in events if e.get("event") == "task_running"]
         assert len(running_events) >= 1
         event_data = running_events[0]
@@ -567,13 +575,13 @@ class TestTaskLifecycleEventsStructured:
 
         configure_logging(json_output=True, level="INFO")
         logger = get_logger("test_task_lifecycle")
-        
+
         event = TaskCompletedWithMetadataEvent(
             entity_id=EntityId(1),
             task_id="task-001",
             result_refs=["artifact-result-1", "artifact-result-2"],
             duration_ms=123.45,
-            correlation_id="corr-123"
+            correlation_id="corr-123",
         )
         logger.info(
             "task_completed",
@@ -581,12 +589,16 @@ class TestTaskLifecycleEventsStructured:
             task_id=event.task_id,
             result_refs=event.result_refs,
             duration_ms=event.duration_ms,
-            correlation_id=event.correlation_id
+            correlation_id=event.correlation_id,
         )
-        
+
         captured = capsys.readouterr()
-        events = [json.loads(line) for line in captured.out.strip().split("\n") if line.strip()]
-        
+        events = [
+            json.loads(line)
+            for line in captured.out.strip().split("\n")
+            if line.strip()
+        ]
+
         completed_events = [e for e in events if e.get("event") == "task_completed"]
         assert len(completed_events) >= 1
         event_data = completed_events[0]
@@ -603,13 +615,13 @@ class TestTaskLifecycleEventsStructured:
 
         configure_logging(json_output=True, level="ERROR")
         logger = get_logger("test_task_lifecycle")
-        
+
         event = TaskFailedWithReasonEvent(
             entity_id=EntityId(1),
             task_id="task-fail-1",
             error_reason="Dependency task-dep-1 failed: upstream error",
             exception_details="RuntimeError: Provider unavailable",
-            correlation_id="corr-fail-1"
+            correlation_id="corr-fail-1",
         )
         logger.error(
             "task_failed",
@@ -617,12 +629,16 @@ class TestTaskLifecycleEventsStructured:
             task_id=event.task_id,
             reason=event.error_reason,
             exception=event.exception_details,
-            correlation_id=event.correlation_id
+            correlation_id=event.correlation_id,
         )
-        
+
         captured = capsys.readouterr()
-        events = [json.loads(line) for line in captured.out.strip().split("\n") if line.strip()]
-        
+        events = [
+            json.loads(line)
+            for line in captured.out.strip().split("\n")
+            if line.strip()
+        ]
+
         failed_events = [e for e in events if e.get("event") == "task_failed"]
         assert len(failed_events) >= 1
         event_data = failed_events[0]
@@ -638,19 +654,39 @@ class TestTaskLifecycleEventsStructured:
 
         configure_logging(json_output=True, level="INFO")
         logger = get_logger("test_task_lifecycle")
-        
+
         corr_id = "corr-consistent-123"
-        
+
         logger.info("task_ready", entity_id=1, task_id="t-corr", correlation_id=corr_id)
-        logger.info("task_running", entity_id=1, task_id="t-corr", backend="fetch", correlation_id=corr_id)
-        logger.info("task_completed", entity_id=1, task_id="t-corr", duration_ms=50, correlation_id=corr_id)
-        
+        logger.info(
+            "task_running",
+            entity_id=1,
+            task_id="t-corr",
+            backend="fetch",
+            correlation_id=corr_id,
+        )
+        logger.info(
+            "task_completed",
+            entity_id=1,
+            task_id="t-corr",
+            duration_ms=50,
+            correlation_id=corr_id,
+        )
+
         captured = capsys.readouterr()
-        events = [json.loads(line) for line in captured.out.strip().split("\n") if line.strip()]
-        
-        lifecycle_events = [e for e in events if e.get("event") in ["task_ready", "task_running", "task_completed"]]
+        events = [
+            json.loads(line)
+            for line in captured.out.strip().split("\n")
+            if line.strip()
+        ]
+
+        lifecycle_events = [
+            e
+            for e in events
+            if e.get("event") in ["task_ready", "task_running", "task_completed"]
+        ]
         assert len(lifecycle_events) >= 3
-        
+
         # All should have same correlation_id
         for event in lifecycle_events:
             assert event.get("correlation_id") == corr_id
@@ -663,13 +699,13 @@ class TestTaskLifecycleEventsStructured:
 
         configure_logging(json_output=True, level="INFO")
         logger = get_logger("test_task_lifecycle")
-        
+
         event = TaskBlockedUpdatedEvent(
             entity_id=EntityId(1),
             task_id="task-blocked-1",
             blocking_reasons=["Waiting for task-dep-1 to complete"],
             upstream_failures=["task-dep-upstream-failed"],
-            correlation_id="corr-blocked-1"
+            correlation_id="corr-blocked-1",
         )
         logger.info(
             "task_blocked",
@@ -677,12 +713,16 @@ class TestTaskLifecycleEventsStructured:
             task_id=event.task_id,
             blocking_reasons=event.blocking_reasons,
             upstream_failures=event.upstream_failures,
-            correlation_id=event.correlation_id
+            correlation_id=event.correlation_id,
         )
-        
+
         captured = capsys.readouterr()
-        events = [json.loads(line) for line in captured.out.strip().split("\n") if line.strip()]
-        
+        events = [
+            json.loads(line)
+            for line in captured.out.strip().split("\n")
+            if line.strip()
+        ]
+
         blocked_events = [e for e in events if e.get("event") == "task_blocked"]
         assert len(blocked_events) >= 1
         event_data = blocked_events[0]
@@ -698,13 +738,13 @@ class TestTaskLifecycleEventsStructured:
 
         configure_logging(json_output=True, level="INFO")
         logger = get_logger("test_task_lifecycle")
-        
+
         event = TaskUnblockedEvent(
             entity_id=EntityId(1),
             task_id="task-unblocked-1",
             unblock_reason="dependency_resolved",
             manual_override=False,
-            correlation_id="corr-unblocked-1"
+            correlation_id="corr-unblocked-1",
         )
         logger.info(
             "task_unblocked",
@@ -712,19 +752,22 @@ class TestTaskLifecycleEventsStructured:
             task_id=event.task_id,
             unblock_reason=event.unblock_reason,
             manual_override=event.manual_override,
-            correlation_id=event.correlation_id
+            correlation_id=event.correlation_id,
         )
-        
+
         captured = capsys.readouterr()
-        events = [json.loads(line) for line in captured.out.strip().split("\n") if line.strip()]
-        
+        events = [
+            json.loads(line)
+            for line in captured.out.strip().split("\n")
+            if line.strip()
+        ]
+
         unblocked_events = [e for e in events if e.get("event") == "task_unblocked"]
         assert len(unblocked_events) >= 1
         event_data = unblocked_events[0]
         assert event_data.get("task_id") == "task-unblocked-1"
         assert event_data.get("unblock_reason") == "dependency_resolved"
         assert event_data.get("manual_override") is False
-
 
 
 # ==============================================================================
@@ -735,7 +778,7 @@ class TestTaskLifecycleEventsStructured:
 class TestContextInjectionHappyPath:
     """Tests for successful context resolution from scratchbook refs."""
 
-    def test_context_injection_resolves_tool_results(
+    def test_context_injection_resolves_registry_tool_records(
         self, tmp_scratchbook: Path
     ) -> None:
         """Task receives tool result data through refs."""
@@ -744,7 +787,6 @@ class TestContextInjectionHappyPath:
         service = ScratchbookService(tmp_scratchbook)
         resolver = ContextResolver(service=service)
 
-        # Write tool result artifact
         tool_result_data = {
             "stable_id": "tool-result-call-001",
             "tool_call_id": "call-001",
@@ -752,11 +794,10 @@ class TestContextInjectionHappyPath:
             "result": "Command executed successfully",
             "timestamp": "2026-03-07T12:00:00Z",
         }
-        service.write_artifact(
-            artifact_id="tool-result-call-001",
-            category="tool_results",
-            data=tool_result_data,
-        )
+        tool_record_path = "scratchbook/records/tool/tool-result-call-001"
+        tool_artifact_path = tmp_scratchbook / tool_record_path
+        tool_artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        tool_artifact_path.write_text(json.dumps(tool_result_data), encoding="utf-8")
 
         # Create task with context dependency
         task = TaskComponent(
@@ -765,7 +806,7 @@ class TestContextInjectionHappyPath:
             expected_output="Analysis complete",
             assigned_agent=None,
             tools=["analyze"],
-            context_dependencies=["tool_results/tool-result-call-001"],
+            context_dependencies=[tool_record_path],
             status=TaskStatus.READY,
         )
 
@@ -776,11 +817,8 @@ class TestContextInjectionHappyPath:
         assert isinstance(result, ResolvedContext)
         assert result.task_id == "task-ctx-002"
         assert len(result.missing_refs) == 0
-        assert "tool_results/tool-result-call-001" in result.resolved_data
-        assert (
-            result.resolved_data["tool_results/tool-result-call-001"]
-            == tool_result_data
-        )
+        assert tool_record_path in result.resolved_data
+        assert result.resolved_data[tool_record_path] == tool_result_data
 
     def test_context_injection_resolves_plan_snapshots(
         self, tmp_scratchbook: Path
@@ -791,7 +829,6 @@ class TestContextInjectionHappyPath:
         service = ScratchbookService(tmp_scratchbook)
         resolver = ContextResolver(service=service)
 
-        # Write plan snapshot artifact
         plan_snapshot_data = {
             "entity_id": 1,
             "step_index": 2,
@@ -799,11 +836,10 @@ class TestContextInjectionHappyPath:
             "current_step": 3,
             "completed": False,
         }
-        service.write_artifact(
-            artifact_id="plan-snapshot-1-step-2",
-            category="planning",
-            data=plan_snapshot_data,
-        )
+        plan_record_path = "scratchbook/records/tool/tool-plan-snapshot-1-step-2"
+        plan_artifact_path = tmp_scratchbook / plan_record_path
+        plan_artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        plan_artifact_path.write_text(json.dumps(plan_snapshot_data), encoding="utf-8")
 
         # Create task with context dependency
         task = TaskComponent(
@@ -812,7 +848,7 @@ class TestContextInjectionHappyPath:
             expected_output="Review complete",
             assigned_agent=None,
             tools=["review"],
-            context_dependencies=["planning/plan-snapshot-1-step-2"],
+            context_dependencies=[plan_record_path],
             status=TaskStatus.READY,
         )
 
@@ -823,11 +859,8 @@ class TestContextInjectionHappyPath:
         assert isinstance(result, ResolvedContext)
         assert result.task_id == "task-ctx-003"
         assert len(result.missing_refs) == 0
-        assert "planning/plan-snapshot-1-step-2" in result.resolved_data
-        assert (
-            result.resolved_data["planning/plan-snapshot-1-step-2"]
-            == plan_snapshot_data
-        )
+        assert plan_record_path in result.resolved_data
+        assert result.resolved_data[plan_record_path] == plan_snapshot_data
 
     def test_context_injection_resolves_multiple_refs(
         self, tmp_scratchbook: Path
@@ -843,21 +876,20 @@ class TestContextInjectionHappyPath:
         plan_snapshot = {"entity_id": 1, "step_index": 1}
         replan_delta = {"entity_id": 1, "replanned_at_step": 2}
 
-        service.write_artifact(
-            artifact_id="tool-result-call-001",
-            category="tool_results",
-            data=tool_result,
+        tool_record_path = "scratchbook/records/tool/tool-result-call-001"
+        plan_record_path = "scratchbook/records/tool/tool-plan-snapshot-1-step-1"
+        replan_record_path = (
+            "scratchbook/records/subagent/subagent-replan-delta-1-step-2"
         )
-        service.write_artifact(
-            artifact_id="plan-snapshot-1-step-1",
-            category="planning",
-            data=plan_snapshot,
-        )
-        service.write_artifact(
-            artifact_id="replan-delta-1-step-2",
-            category="replanning",
-            data=replan_delta,
-        )
+        tool_artifact_path = tmp_scratchbook / tool_record_path
+        tool_artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        tool_artifact_path.write_text(json.dumps(tool_result), encoding="utf-8")
+        plan_artifact_path = tmp_scratchbook / plan_record_path
+        plan_artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        plan_artifact_path.write_text(json.dumps(plan_snapshot), encoding="utf-8")
+        replan_artifact_path = tmp_scratchbook / replan_record_path
+        replan_artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        replan_artifact_path.write_text(json.dumps(replan_delta), encoding="utf-8")
 
         # Create task with multiple dependencies
         task = TaskComponent(
@@ -867,9 +899,9 @@ class TestContextInjectionHappyPath:
             assigned_agent=None,
             tools=["aggregate"],
             context_dependencies=[
-                "tool_results/tool-result-call-001",
-                "planning/plan-snapshot-1-step-1",
-                "replanning/replan-delta-1-step-2",
+                tool_record_path,
+                plan_record_path,
+                replan_record_path,
             ],
             status=TaskStatus.READY,
         )
@@ -881,18 +913,9 @@ class TestContextInjectionHappyPath:
         assert isinstance(result, ResolvedContext)
         assert len(result.missing_refs) == 0
         assert len(result.resolved_data) == 3
-        assert (
-            result.resolved_data["tool_results/tool-result-call-001"]
-            == tool_result
-        )
-        assert (
-            result.resolved_data["planning/plan-snapshot-1-step-1"]
-            == plan_snapshot
-        )
-        assert (
-            result.resolved_data["replanning/replan-delta-1-step-2"]
-            == replan_delta
-        )
+        assert result.resolved_data[tool_record_path] == tool_result
+        assert result.resolved_data[plan_record_path] == plan_snapshot
+        assert result.resolved_data[replan_record_path] == replan_delta
 
     def test_context_injected_into_snapshot(self, tmp_scratchbook: Path) -> None:
         """Resolved context is injected into execution snapshot."""
@@ -905,10 +928,10 @@ class TestContextInjectionHappyPath:
         resolved = ResolvedContext(
             task_id="task-ctx-006",
             resolved_data={
-                "tool_results/tool-result-call-001": {
-                    "result": "Output"
+                "scratchbook/records/tool/tool-result-call-001": {"result": "Output"},
+                "scratchbook/records/tool/tool-plan-snapshot-1-step-1": {
+                    "step_index": 1
                 },
-                "planning/plan-snapshot-1-step-1": {"step_index": 1},
             },
             missing_refs=(),
         )
@@ -943,7 +966,7 @@ class TestContextInjectionFailurePath:
             expected_output="Done",
             assigned_agent=None,
             tools=["process"],
-            context_dependencies=["tool_results/missing-artifact"],
+            context_dependencies=["scratchbook/records/tool/missing-artifact"],
             status=TaskStatus.READY,
         )
 
@@ -954,12 +977,10 @@ class TestContextInjectionFailurePath:
         assert isinstance(result, ContextResolutionError)
         assert result.task_id == "task-ctx-007"
         assert len(result.missing_refs) == 1
-        assert "tool_results/missing-artifact" in result.missing_refs
+        assert "scratchbook/records/tool/missing-artifact" in result.missing_refs
         assert "missing dependencies" in result.reason
 
-    def test_multiple_missing_refs_returns_error(
-        self, tmp_scratchbook: Path
-    ) -> None:
+    def test_multiple_missing_refs_returns_error(self, tmp_scratchbook: Path) -> None:
         """Multiple missing refs all included in error."""
         from ecs_agent.task import ContextResolver, ContextResolutionError
 
@@ -974,9 +995,9 @@ class TestContextInjectionFailurePath:
             assigned_agent=None,
             tools=["process"],
             context_dependencies=[
-                "tool_results/missing-1",
-                "planning/missing-2",
-                "replanning/missing-3",
+                "scratchbook/records/tool/missing-1",
+                "scratchbook/records/tool/missing-2",
+                "scratchbook/records/subagent/missing-3",
             ],
             status=TaskStatus.READY,
         )
@@ -987,9 +1008,9 @@ class TestContextInjectionFailurePath:
         # Assert all missing refs in error
         assert isinstance(result, ContextResolutionError)
         assert len(result.missing_refs) == 3
-        assert "tool_results/missing-1" in result.missing_refs
-        assert "planning/missing-2" in result.missing_refs
-        assert "replanning/missing-3" in result.missing_refs
+        assert "scratchbook/records/tool/missing-1" in result.missing_refs
+        assert "scratchbook/records/tool/missing-2" in result.missing_refs
+        assert "scratchbook/records/subagent/missing-3" in result.missing_refs
 
     def test_partial_missing_refs_returns_error(self, tmp_scratchbook: Path) -> None:
         """Some refs resolved, some missing = error."""
@@ -999,10 +1020,12 @@ class TestContextInjectionFailurePath:
         resolver = ContextResolver(service=service)
 
         # Write one artifact
-        service.write_artifact(
-            artifact_id="tool-result-call-001",
-            category="tool_results",
-            data={"result": "Output"},
+        existing_record_path = "scratchbook/records/tool/tool-result-call-001"
+        existing_artifact_path = tmp_scratchbook / existing_record_path
+        existing_artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        existing_artifact_path.write_text(
+            json.dumps({"result": "Output"}),
+            encoding="utf-8",
         )
 
         # Create task with one valid, one missing dependency
@@ -1013,8 +1036,8 @@ class TestContextInjectionFailurePath:
             assigned_agent=None,
             tools=["process"],
             context_dependencies=[
-                "tool_results/tool-result-call-001",  # Exists
-                "planning/missing-artifact",  # Missing
+                existing_record_path,  # Exists
+                "scratchbook/records/tool/missing-artifact",  # Missing
             ],
             status=TaskStatus.READY,
         )
@@ -1025,7 +1048,7 @@ class TestContextInjectionFailurePath:
         # Assert error returned (even though one ref resolved)
         assert isinstance(result, ContextResolutionError)
         assert len(result.missing_refs) == 1
-        assert "planning/missing-artifact" in result.missing_refs
+        assert "scratchbook/records/tool/missing-artifact" in result.missing_refs
 
 
 class TestReplanGrandfathering:
@@ -1045,14 +1068,12 @@ class TestReplanGrandfathering:
             expected_output="Done",
             assigned_agent=None,
             tools=["process"],
-            context_dependencies=["tool_results/some-artifact"],
+            context_dependencies=["scratchbook/records/tool/some-artifact"],
             status=TaskStatus.RUNNING,
         )
 
         # Resolve context with running_task_ids
-        result = resolver.resolve_context(
-            task, running_task_ids={"task-ctx-010"}
-        )
+        result = resolver.resolve_context(task, running_task_ids={"task-ctx-010"})
 
         # Assert grandfathered (no resolution attempted)
         assert isinstance(result, ResolvedContext)
@@ -1060,27 +1081,25 @@ class TestReplanGrandfathering:
         assert len(result.resolved_data) == 0  # Grandfathered, no fetch
         assert len(result.missing_refs) == 0
 
-    def test_pending_task_applies_replan_updates(
-        self, tmp_scratchbook: Path
-    ) -> None:
+    def test_pending_task_applies_replan_updates(self, tmp_scratchbook: Path) -> None:
         """Pending tasks apply replan updates (not grandfathered)."""
         from ecs_agent.task import ContextResolver, ResolvedContext
 
         service = ScratchbookService(tmp_scratchbook)
         resolver = ContextResolver(service=service)
 
-        # Write replan delta artifact
         replan_delta = {
             "entity_id": 1,
             "replanned_at_step": 2,
             "old_steps": ["Step 1", "Step 2"],
             "new_steps": ["Step 1", "Step 2 revised"],
         }
-        service.write_artifact(
-            artifact_id="replan-delta-1-step-2",
-            category="replanning",
-            data=replan_delta,
+        replan_record_path = (
+            "scratchbook/records/subagent/subagent-replan-delta-1-step-2"
         )
+        replan_artifact_path = tmp_scratchbook / replan_record_path
+        replan_artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        replan_artifact_path.write_text(json.dumps(replan_delta), encoding="utf-8")
 
         # Create pending task with replan dependency
         task = TaskComponent(
@@ -1089,7 +1108,7 @@ class TestReplanGrandfathering:
             expected_output="Done",
             assigned_agent=None,
             tools=["process"],
-            context_dependencies=["replanning/replan-delta-1-step-2"],
+            context_dependencies=[replan_record_path],
             status=TaskStatus.PENDING,
         )
 
@@ -1099,10 +1118,7 @@ class TestReplanGrandfathering:
         # Assert replan delta resolved
         assert isinstance(result, ResolvedContext)
         assert len(result.resolved_data) == 1
-        assert (
-            result.resolved_data["replanning/replan-delta-1-step-2"]
-            == replan_delta
-        )
+        assert result.resolved_data[replan_record_path] == replan_delta
 
 
 # ==============================================================================
@@ -1113,9 +1129,7 @@ class TestReplanGrandfathering:
 class TestEndToEndOrchestration:
     """Tests for complete fetch->dispatch->persist orchestration loop."""
 
-    async def test_complete_workflow_happy_path(
-        self, tmp_scratchbook: Path
-    ) -> None:
+    async def test_complete_workflow_happy_path(self, tmp_scratchbook: Path) -> None:
         """Task flows through entire lifecycle: ready -> running -> completed."""
         from ecs_agent.task import (
             TaskExecutor,
@@ -1161,9 +1175,7 @@ class TestEndToEndOrchestration:
         # Add ToolRegistryComponent for local execution
         from ecs_agent.components import ToolRegistryComponent
 
-        world.add_component(
-            entity_id, ToolRegistryComponent(tools={}, handlers={})
-        )
+        world.add_component(entity_id, ToolRegistryComponent(tools={}, handlers={}))
 
         # Create simple task
         task = TaskComponent(
@@ -1225,9 +1237,7 @@ class TestEndToEndOrchestration:
         assert len(events) == 1
         assert events[0]["_event_type"] == "TaskCompletedEvent"
 
-    async def test_mixed_backend_execution(
-        self, tmp_scratchbook: Path
-    ) -> None:
+    async def test_mixed_backend_execution(self, tmp_scratchbook: Path) -> None:
         """Tasks execute via both local tools and subagent delegation."""
         from ecs_agent.task import TaskExecutor, ExecutionResult
         from ecs_agent.core import World
