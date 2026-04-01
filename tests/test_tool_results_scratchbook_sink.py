@@ -14,7 +14,7 @@ from ecs_agent.components import (
     ToolResultsComponent,
 )
 from ecs_agent.core import World
-from ecs_agent.scratchbook import ScratchbookService
+from ecs_agent.scratchbook import ArtifactRegistry, ToolResultsSink
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import Message, ToolCall, ToolSchema
 
@@ -34,7 +34,7 @@ async def test_tool_execution_appends_result_to_scratchbook(
     """Tool execution appends result artifact to scratchbook with immutable ID."""
     world = World()
     entity_id = world.create_entity()
-    service = ScratchbookService(root=tmp_scratchbook)
+    registry = ArtifactRegistry(root=tmp_scratchbook)
 
     async def get_weather(city: str) -> str:
         return f"sunny in {city}"
@@ -66,15 +66,15 @@ async def test_tool_execution_appends_result_to_scratchbook(
     )
 
     # Execute tools
-    system = ToolExecutionSystem(scratchbook_service=service)
+    system = ToolExecutionSystem(registry=registry)
     await system.process(world)
 
     # Verify result in scratchbook
-    results_dir = tmp_scratchbook / "tool_results"
+    results_dir = tmp_scratchbook / "scratchbook" / "records" / "tool"
     assert results_dir.exists()
 
     # Collect all artifact files
-    artifact_files = list(results_dir.glob("*.json"))
+    artifact_files = list(results_dir.glob("tool_*"))
     assert len(artifact_files) > 0
 
     # Verify artifact contains expected result
@@ -92,7 +92,7 @@ async def test_tool_results_component_stores_artifact_refs(
     """ToolResultsComponent stores artifact refs, not full payload."""
     world = World()
     entity_id = world.create_entity()
-    service = ScratchbookService(root=tmp_scratchbook)
+    registry = ArtifactRegistry(root=tmp_scratchbook)
 
     async def get_status() -> str:
         return "running"
@@ -122,17 +122,17 @@ async def test_tool_results_component_stores_artifact_refs(
     )
 
     # Execute tools
-    system = ToolExecutionSystem(scratchbook_service=service)
+    system = ToolExecutionSystem(registry=registry)
     await system.process(world)
 
     # Verify ToolResultsComponent stores refs
     results = world.get_component(entity_id, ToolResultsComponent)
     assert results is not None
     assert "call-42" in results.results
-    # Result should be artifact ref (stable_id), not raw content
+    # Result should be canonical artifact path, not raw content
     result_ref = results.results["call-42"]
     assert isinstance(result_ref, str)
-    assert result_ref.startswith("tool-result-")
+    assert result_ref.startswith("scratchbook/records/tool/tool_")
 
 
 @pytest.mark.asyncio
@@ -142,7 +142,7 @@ async def test_artifact_overwrite_rejected_for_same_tool_call_id(
     """Attempting to overwrite existing artifact is rejected (immutable)."""
     world = World()
     entity_id = world.create_entity()
-    service = ScratchbookService(root=tmp_scratchbook)
+    registry = ArtifactRegistry(root=tmp_scratchbook)
 
     call_count = 0
 
@@ -176,7 +176,7 @@ async def test_artifact_overwrite_rejected_for_same_tool_call_id(
     )
 
     # Execute first time
-    system = ToolExecutionSystem(scratchbook_service=service)
+    system = ToolExecutionSystem(registry=registry)
     await system.process(world)
 
     # Re-add pending calls with same call ID
@@ -199,7 +199,7 @@ async def test_multiple_tool_results_each_get_unique_artifact(
     """Multiple tool executions each get unique immutable artifacts."""
     world = World()
     entity_id = world.create_entity()
-    service = ScratchbookService(root=tmp_scratchbook)
+    registry = ArtifactRegistry(root=tmp_scratchbook)
 
     async def get_value(name: str) -> str:
         return f"value-{name}"
@@ -233,12 +233,12 @@ async def test_multiple_tool_results_each_get_unique_artifact(
     )
 
     # Execute all tools
-    system = ToolExecutionSystem(scratchbook_service=service)
+    system = ToolExecutionSystem(registry=registry)
     await system.process(world)
 
     # Verify all artifacts are unique and present
-    results_dir = tmp_scratchbook / "tool_results"
-    artifacts = list(results_dir.glob("*.json"))
+    results_dir = tmp_scratchbook / "scratchbook" / "records" / "tool"
+    artifacts = list(results_dir.glob("tool_*"))
     assert len(artifacts) == 3
 
     # Each artifact should have unique tool_call_id
@@ -257,7 +257,7 @@ async def test_tool_execution_still_adds_messages_to_conversation(
     """Tool results are still appended to conversation despite scratchbook persistence."""
     world = World()
     entity_id = world.create_entity()
-    service = ScratchbookService(root=tmp_scratchbook)
+    registry = ArtifactRegistry(root=tmp_scratchbook)
 
     async def echo_tool(msg: str) -> str:
         return f"echo: {msg}"
@@ -289,7 +289,7 @@ async def test_tool_execution_still_adds_messages_to_conversation(
     )
 
     # Execute
-    system = ToolExecutionSystem(scratchbook_service=service)
+    system = ToolExecutionSystem(registry=registry)
     await system.process(world)
 
     # Verify conversation still has tool message
@@ -300,4 +300,50 @@ async def test_tool_execution_still_adds_messages_to_conversation(
     assert last_msg.role == "tool"
     assert last_msg.tool_call_id == "echo-1"
     # Message content should be artifact ref, not full result
-    assert last_msg.content.startswith("tool-result-")
+    assert last_msg.content.startswith("scratchbook/records/tool/tool_")
+
+
+def test_small_tool_result_is_persisted_and_inlined(tmp_path: Path) -> None:
+    """Small tool result persists to canonical path and remains inline."""
+    registry = ArtifactRegistry(root=tmp_path / ".scratchbook")
+    sink = ToolResultsSink(registry)
+    result = "ok" * 10
+
+    persist_result = sink.persist_tool_result(
+        tool_call_id="small-1",
+        tool_name="small_tool",
+        result=result,
+        arguments={"k": "v"},
+    )
+
+    assert persist_result.record_path.startswith("scratchbook/records/tool/tool_")
+    assert persist_result.inline_content is not None
+    assert len(persist_result.inline_content.encode("utf-8")) <= 8192
+
+
+def test_large_tool_result_spills_to_file_without_inline_and_retry_is_immutable(
+    tmp_path: Path,
+) -> None:
+    """Large tool result persists file-only and rejects duplicate call IDs."""
+    registry = ArtifactRegistry(root=tmp_path / ".scratchbook")
+    sink = ToolResultsSink(registry)
+    large_result = "a" * 8193
+
+    first = sink.persist_tool_result(
+        tool_call_id="large-1",
+        tool_name="large_tool",
+        result=large_result,
+        arguments={"size": 8193},
+    )
+    assert first.record_path.startswith("scratchbook/records/tool/tool_")
+    assert first.inline_content is None
+    stored = (registry.root / first.record_path).read_text(encoding="utf-8")
+    assert len(stored.encode("utf-8")) > 8192
+
+    with pytest.raises(ValueError, match="immutable|already persisted|overwrite"):
+        sink.persist_tool_result(
+            tool_call_id="large-1",
+            tool_name="large_tool",
+            result="new-result",
+            arguments={"size": 10},
+        )

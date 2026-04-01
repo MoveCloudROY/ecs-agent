@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from ecs_agent.logging import get_logger
-from ecs_agent.scratchbook.service import ScratchbookService
+from ecs_agent.scratchbook.artifact_registry import (
+    ArtifactKind,
+    ArtifactPersistResult,
+    ArtifactRegistry,
+)
 
 logger = get_logger(__name__)
 
@@ -16,17 +19,18 @@ logger = get_logger(__name__)
 class ToolResultsSink:
     """Append-only persistence sink for tool execution results."""
 
-    CATEGORY = "tool_results"
-    STABLE_ID_PREFIX = "tool-result-"
-
-    def __init__(self, service: ScratchbookService) -> None:
-        """Initialize sink with scratchbook service.
+    def __init__(self, registry: ArtifactRegistry) -> None:
+        """Initialize sink with artifact registry.
 
         Args:
-            service: ScratchbookService instance for persisting artifacts
+            registry: ArtifactRegistry instance for persisting artifacts
         """
-        self.service = service
+        self.registry = registry
         self._persisted_call_ids: set[str] = set()
+        # NOTE: _persisted_call_ids is a session-scoped in-memory guard only.
+        # It prevents duplicate persistence within a single process lifetime,
+        # but does NOT provide durable cross-restart idempotency.
+        # If the process restarts, the same tool_call_id can be persisted again.
 
     def persist_tool_result(
         self,
@@ -34,7 +38,7 @@ class ToolResultsSink:
         tool_name: str,
         result: str,
         arguments: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> ArtifactPersistResult:
         """Persist tool execution result as immutable artifact.
 
         Args:
@@ -44,7 +48,7 @@ class ToolResultsSink:
             arguments: Optional tool arguments dict
 
         Returns:
-            Stable artifact ID (refs only, not full payload)
+            Artifact persistence envelope with canonical record path
 
         Raises:
             ValueError: If attempting to persist result for already-persisted call_id
@@ -56,21 +60,17 @@ class ToolResultsSink:
             logger.error("tool_result_overwrite_attempted", tool_call_id=tool_call_id)
             raise ValueError(msg)
 
-        # Create immutable artifact
-        stable_id = f"{self.STABLE_ID_PREFIX}{tool_call_id}"
         artifact_data: dict[str, Any] = {
-            "stable_id": stable_id,
             "tool_call_id": tool_call_id,
             "tool_name": tool_name,
             "result": result,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "arguments": arguments,
         }
-        if arguments:
-            artifact_data["arguments"] = arguments
 
-        # Write to scratchbook (permanent)
-        self.service.write_artifact(
-            artifact_id=stable_id, category=self.CATEGORY, data=artifact_data
+        persist_result = self.registry.persist(
+            kind=ArtifactKind.TOOL,
+            content=json.dumps(artifact_data),
         )
 
         # Track persisted call
@@ -80,18 +80,24 @@ class ToolResultsSink:
             "tool_result_persisted",
             tool_call_id=tool_call_id,
             tool_name=tool_name,
-            stable_id=stable_id,
+            record_path=persist_result.record_path,
         )
 
-        return stable_id
+        return persist_result
 
     def read_tool_result(self, stable_id: str) -> dict[str, Any] | None:
         """Read persisted tool result artifact.
 
         Args:
-            stable_id: Stable artifact ID (from persist_tool_result)
+            stable_id: Relative record path from persist_tool_result
 
         Returns:
             Artifact data dict or None if not found
         """
-        return self.service.read_artifact(artifact_id=stable_id, category=self.CATEGORY)
+        artifact_path = self.registry.root / stable_id
+        if not artifact_path.exists():
+            return None
+        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        return payload
