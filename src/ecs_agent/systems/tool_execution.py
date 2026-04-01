@@ -6,13 +6,14 @@ from typing import Awaitable, Callable
 from ecs_agent.components import (
     ConversationComponent,
     PendingToolCallsComponent,
+    PlanComponent,
     SandboxConfigComponent,
     ToolRegistryComponent,
     ToolResultsComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
-from ecs_agent.scratchbook import ScratchbookService, ToolResultsSink
+from ecs_agent.scratchbook import ArtifactRegistry, ScratchbookService, ToolResultsSink
 from ecs_agent.tools.sandbox import sandboxed_execute
 from ecs_agent.types import (
     EntityId,
@@ -26,10 +27,21 @@ logger = get_logger(__name__)
 
 
 class ToolExecutionSystem:
-    def __init__(self, priority: int = 0, scratchbook_service: ScratchbookService | None = None) -> None:
+    def __init__(
+        self,
+        priority: int = 0,
+        scratchbook_service: ScratchbookService | None = None,
+        registry: ArtifactRegistry | None = None,
+    ) -> None:
         self.priority = priority
         self.scratchbook_service = scratchbook_service
-        self.tool_sink = ToolResultsSink(scratchbook_service) if scratchbook_service else None
+        effective_registry = registry
+        if effective_registry is None and scratchbook_service is not None:
+            effective_registry = ArtifactRegistry(root=scratchbook_service.root)
+        self._registry = effective_registry
+        self.tool_sink = (
+            ToolResultsSink(effective_registry) if effective_registry else None
+        )
 
     async def process(self, world: World) -> None:
         for entity_id, components in world.query(
@@ -43,6 +55,15 @@ class ToolExecutionSystem:
             assert isinstance(conversation, ConversationComponent)
 
             results: dict[str, str] = {}
+            plan = world.get_component(entity_id, PlanComponent)
+            plan_name: str | None = None
+            if self._registry is not None and plan is not None:
+                plan_name = _derive_plan_name(
+                    plan=plan,
+                    conversation=conversation,
+                    entity_id=entity_id,
+                )
+
             for tool_call in pending.tool_calls:
                 # Publish ToolExecutionStartedEvent
                 await world.event_bus.publish(
@@ -72,17 +93,23 @@ class ToolExecutionSystem:
                 )
 
                 # Persist to scratchbook and store ref
+                persisted_record_path: str | None = None
                 if self.tool_sink is not None:
-                    artifact_ref = self.tool_sink.persist_tool_result(
+                    persist_result = self.tool_sink.persist_tool_result(
                         tool_call_id=tool_call.id,
                         tool_name=tool_call.name,
                         result=result,
                         arguments=tool_call.arguments,
                     )
-                    results[tool_call.id] = artifact_ref
+                    persisted_record_path = persist_result.record_path
+                    results[tool_call.id] = persist_result.record_path
                     # Add artifact ref to conversation, not full result
                     conversation.messages.append(
-                        Message(role="tool", content=artifact_ref, tool_call_id=tool_call.id)
+                        Message(
+                            role="tool",
+                            content=persist_result.record_path,
+                            tool_call_id=tool_call.id,
+                        )
                     )
                 else:
                     # Fallback: store full result if no scratchbook service
@@ -90,6 +117,26 @@ class ToolExecutionSystem:
                     conversation.messages.append(
                         Message(role="tool", content=result, tool_call_id=tool_call.id)
                     )
+
+                if self._registry is not None and plan_name is not None:
+                    if success:
+                        updates: dict[str, str] = {
+                            "status": "running",
+                            "last_tool_call_id": tool_call.id,
+                        }
+                        if persisted_record_path is not None:
+                            updates["last_tool_record_path"] = persisted_record_path
+                        await self._registry.update_boulder(
+                            plan_name=plan_name, updates=updates
+                        )
+                    else:
+                        await self._registry.update_boulder(
+                            plan_name=plan_name,
+                            updates={
+                                "status": "tool_failed",
+                                "last_error": result,
+                            },
+                        )
 
             world.remove_component(entity_id, PendingToolCallsComponent)
             if results:
@@ -103,7 +150,9 @@ class ToolExecutionSystem:
         handlers: dict[str, Callable[..., Awaitable[str]]],
     ) -> str:
         # Log tool invocation
-        logger.info("tool_called", tool_name=tool_call.name, arguments=tool_call.arguments)
+        logger.info(
+            "tool_called", tool_name=tool_call.name, arguments=tool_call.arguments
+        )
 
         handler = handlers.get(tool_call.name)
         if handler is None:
@@ -124,7 +173,7 @@ class ToolExecutionSystem:
                     timeout=sandbox_config.timeout,
                     max_output_size=sandbox_config.max_output_size,
                 )
-            
+
             duration_ms = (time.monotonic() - start_time) * 1000
             result_str = str(result)
             result_tail = "\n".join(result_str.splitlines()[-10:])
@@ -146,3 +195,16 @@ class ToolExecutionSystem:
                 duration_ms=duration_ms,
             )
             return reason
+
+
+def _derive_plan_name(
+    *, plan: PlanComponent, conversation: ConversationComponent, entity_id: EntityId
+) -> str:
+    for message in conversation.messages:
+        if message.role == "user" and message.content.strip():
+            return message.content.strip()
+    if plan.steps:
+        first_step = plan.steps[0].strip()
+        if first_step:
+            return first_step
+    return f"plan-{entity_id}"
