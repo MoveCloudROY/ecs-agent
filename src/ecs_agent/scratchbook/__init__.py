@@ -12,6 +12,11 @@ from ecs_agent.scratchbook.index import (
     ScratchbookIndexer,
     compute_content_hash,
 )
+from ecs_agent.scratchbook.prompt_definition import (
+    ScratchbookArtifactPromptDef,
+    ScratchbookPromptConfig,
+    normalize_artifact_type_id,
+)
 from ecs_agent.scratchbook.service import ScratchbookService
 from ecs_agent.scratchbook.tool_sink import ToolResultsSink
 
@@ -22,6 +27,9 @@ __all__ = [
     "ArtifactRegistry",
     "CorruptedIndexEntryError",
     "IndexEntry",
+    "normalize_artifact_type_id",
+    "ScratchbookArtifactPromptDef",
+    "ScratchbookPromptConfig",
     "ScratchbookIndexer",
     "ScratchbookService",
     "compute_content_hash",
