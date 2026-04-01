@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 
 from ecs_agent.components import (
     ConversationComponent,
@@ -18,9 +19,12 @@ from ecs_agent.prompts.user_prompt_rendering import (
     _apply_trigger_specs,
     _matches,
 )
+from ecs_agent.scratchbook import ArtifactRegistry, ScratchbookService
 from ecs_agent.types import EntityId, Message
 
 logger = get_logger(__name__)
+
+_PLAN_TRIGGER_PATTERN = re.compile(r"(^|[^a-z0-9])(plan|replan|planning)([^a-z0-9]|$)")
 
 
 class UserPromptNormalizationSystem:
@@ -29,8 +33,17 @@ class UserPromptNormalizationSystem:
     def __init__(
         self,
         priority: int = 0,
+        service: ScratchbookService | None = None,
+        registry: ArtifactRegistry | None = None,
     ) -> None:
         self.priority = priority
+        self._registry: ArtifactRegistry | None
+        if registry is not None:
+            self._registry = registry
+        elif service is not None:
+            self._registry = ArtifactRegistry(root=service.root)
+        else:
+            self._registry = None
 
     async def process(self, world: World) -> None:
         entity_ids: set[EntityId] = set()
@@ -144,10 +157,63 @@ class UserPromptNormalizationSystem:
             )
             return raw_user_text
 
+        if self._should_create_boulder(spec=spec):
+            self._create_initial_boulder(
+                world=world,
+                entity_id=entity_id,
+                spec=spec,
+                raw_user_text=raw_user_text,
+            )
+
         result = await handler(world, entity_id, raw_user_text)
         if result is None:
             return raw_user_text
         return result
+
+    def _create_initial_boulder(
+        self,
+        *,
+        world: World,
+        entity_id: EntityId,
+        spec: TriggerSpec,
+        raw_user_text: str,
+    ) -> None:
+        if self._registry is None:
+            return
+
+        _ = entity_id
+
+        world_names = [world.name] if world.name is not None else []
+        worktree_path: str | None = None
+
+        active_plan = self._resolve_active_plan_name(
+            spec=spec,
+            raw_user_text=raw_user_text,
+        )
+        self._registry.create_boulder(
+            plan_name=active_plan,
+            initial_data={
+                "trigger_pattern": spec.pattern,
+                "status": "created",
+                "world_names": world_names,
+                "worktree_path": worktree_path,
+            },
+        )
+
+    @staticmethod
+    def _should_create_boulder(*, spec: TriggerSpec) -> bool:
+        trigger_signature = f"{spec.pattern} {spec.content}".lower()
+        return _PLAN_TRIGGER_PATTERN.search(trigger_signature) is not None
+
+    @staticmethod
+    def _resolve_active_plan_name(*, spec: TriggerSpec, raw_user_text: str) -> str:
+        trimmed = raw_user_text.strip()
+        if trimmed:
+            return trimmed
+        pattern = spec.pattern.strip()
+        if pattern:
+            return pattern
+        return spec.content
 
     @staticmethod
     def _find_last_user_text(messages: list[Message]) -> str | None:
