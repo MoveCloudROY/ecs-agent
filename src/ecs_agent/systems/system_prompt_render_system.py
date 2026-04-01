@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-from typing import cast
 from pathlib import Path
 from string import Template
-import importlib
 
 from ecs_agent.components import (
     LLMComponent,
     RenderedSystemPromptComponent,
-    SkillComponent,
-    SubagentRegistryComponent,
     SystemPromptComponent,
-    ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
@@ -24,21 +19,6 @@ from ecs_agent.prompts.provider import (
 )
 from ecs_agent.prompts.registry import resolve_placeholder_values
 from ecs_agent.types import EntityId
-
-
-def _load_mcp_client_component() -> type[object] | None:
-    try:
-        module = importlib.import_module("ecs_agent.mcp.components")
-    except ImportError:
-        return None
-
-    component = getattr(module, "MCPClientComponent", None)
-    if component is None or not isinstance(component, type):
-        return None
-    return cast(type[object], component)
-
-
-_MCP_CLIENT_COMPONENT_CLASS = _load_mcp_client_component()
 
 _BUILTIN_PLACEHOLDER_PROVIDERS: list[BuiltinPlaceholderProvider] = [
     InventoryPlaceholderProvider(),
@@ -52,9 +32,6 @@ class SystemPromptRenderSystem:
         self.priority = priority
 
     async def process(self, world: World) -> None:
-        if not _uses_default_builtin_provider_registry():
-            raise ValueError("built-in provider aggregation not wired yet")
-
         for entity_id, (prompt_config,) in world.query(SystemPromptConfigSpec):
             cache_key = _render_cache_key(world, entity_id)
             rendered_component = world.get_component(
@@ -106,12 +83,6 @@ class SystemPromptRenderSystem:
                 raise
 
 
-def _uses_default_builtin_provider_registry() -> bool:
-    if len(_BUILTIN_PLACEHOLDER_PROVIDERS) != 1:
-        return False
-    return isinstance(_BUILTIN_PLACEHOLDER_PROVIDERS[0], InventoryPlaceholderProvider)
-
-
 def _render_system_prompt(
     world: World,
     entity_id: EntityId,
@@ -121,7 +92,7 @@ def _render_system_prompt(
     template = Template(template_text)
 
     user_values = _resolve_user_placeholders(prompt_config)
-    builtins = _resolve_builtin_placeholders(world, entity_id)
+    builtins = _aggregate_provider_placeholders(world, entity_id, user_values)
     snapshot = {**user_values, **builtins}
 
     try:
@@ -152,24 +123,50 @@ def _resolve_user_placeholders(prompt_config: SystemPromptConfigSpec) -> dict[st
     return resolve_placeholder_values(prompt_config.placeholders)
 
 
-def _resolve_builtin_placeholders(world: World, entity_id: EntityId) -> dict[str, str]:
-    return {
-        "_installed_tools": _format_bullets(_tool_entries(world, entity_id)),
-        "_installed_skills": _format_bullets(_skill_entries(world, entity_id)),
-        "_installed_mcps": _format_bullets(_mcp_tool_entries(world, entity_id)),
-        "_installed_subagents": _format_bullets(_subagent_entries(world, entity_id)),
-    }
+def _provider_id(provider: BuiltinPlaceholderProvider) -> str:
+    provider_id = getattr(provider, "provider_id", None)
+    if not isinstance(provider_id, str):
+        raise ValueError("provider missing provider_id")
+    return provider_id
+
+
+def _aggregate_provider_placeholders(
+    world: World,
+    entity_id: EntityId,
+    user_values: dict[str, str],
+) -> dict[str, str]:
+    aggregated: dict[str, str] = {}
+    key_to_provider_id: dict[str, str] = {}
+
+    for provider in _BUILTIN_PLACEHOLDER_PROVIDERS:
+        provider_id = _provider_id(provider)
+        values = provider.resolve_placeholders(world, entity_id)
+        for key, value in values.items():
+            first_provider_id = key_to_provider_id.get(key)
+            if first_provider_id is not None:
+                raise ValueError(
+                    f"duplicate built-in key '{key}': emitted by both "
+                    f"'{first_provider_id}' and '{provider_id}'"
+                )
+            key_to_provider_id[key] = provider_id
+            aggregated[key] = value
+
+    for key in aggregated:
+        if key in user_values:
+            raise ValueError(
+                f"built-in placeholder key '{key}' collides with user placeholder"
+            )
+
+    return aggregated
 
 
 def _render_cache_key(world: World, entity_id: EntityId) -> str:
-    tool_names = tuple(name for name, _ in _tool_entries(world, entity_id))
-    skill_names = tuple(name for name, _ in _skill_entries(world, entity_id))
-    subagent_names = tuple(name for name, _ in _subagent_entries(world, entity_id))
-    return (
-        f"tools:{','.join(tool_names)}|"
-        f"skills:{','.join(skill_names)}|"
-        f"subagents:{','.join(subagent_names)}"
-    )
+    fingerprints: list[str] = []
+    for provider in _BUILTIN_PLACEHOLDER_PROVIDERS:
+        provider_id = _provider_id(provider)
+        fingerprint = provider.provider_fingerprint(world, entity_id)
+        fingerprints.append(f"{provider_id}:{fingerprint}")
+    return "|".join(fingerprints)
 
 
 def _bridge_rendered_prompt(world: World, entity_id: EntityId, rendered: str) -> None:
@@ -180,83 +177,6 @@ def _bridge_rendered_prompt(world: World, entity_id: EntityId, rendered: str) ->
     legacy_system_prompt = world.get_component(entity_id, SystemPromptComponent)
     if legacy_system_prompt is not None:
         legacy_system_prompt.content = rendered
-
-
-def _tool_entries(world: World, entity_id: EntityId) -> list[tuple[str, str]]:
-    registry = world.get_component(entity_id, ToolRegistryComponent)
-    if registry is None:
-        return []
-    return sorted(
-        ((name, schema.description) for name, schema in registry.tools.items()),
-        key=lambda e: e[0],
-    )
-
-
-def _skill_entries(world: World, entity_id: EntityId) -> list[tuple[str, str]]:
-    skill_component = world.get_component(entity_id, SkillComponent)
-    if skill_component is None:
-        return []
-    return sorted(
-        ((name, meta.description) for name, meta in skill_component.skills.items()),
-        key=lambda e: e[0],
-    )
-
-
-def _subagent_entries(world: World, entity_id: EntityId) -> list[tuple[str, str]]:
-    registry = world.get_component(entity_id, SubagentRegistryComponent)
-    if registry is None:
-        return []
-    return sorted(
-        ((name, cfg.description) for name, cfg in registry.subagents.items()),
-        key=lambda e: e[0],
-    )
-
-
-def _mcp_tool_entries(world: World, entity_id: EntityId) -> list[tuple[str, str]]:
-    if _MCP_CLIENT_COMPONENT_CLASS is None:
-        return []
-
-    mcp_component = world.get_component(entity_id, _MCP_CLIENT_COMPONENT_CLASS)
-    if mcp_component is None:
-        return []
-
-    cached_tools = getattr(mcp_component, "cached_tools", [])
-    if not isinstance(cached_tools, list):
-        return []
-
-    entries: list[tuple[str, str]] = []
-    for tool in cached_tools:
-        entry = _extract_entry(tool)
-        if entry is not None:
-            entries.append(entry)
-    return sorted(set(entries), key=lambda e: e[0])
-
-
-def _extract_entry(tool: object) -> tuple[str, str] | None:
-    if isinstance(tool, dict):
-        name = tool.get("name")
-        if isinstance(name, str):
-            desc = tool.get("description", "")
-            return (name, desc if isinstance(desc, str) else "")
-        return None
-
-    name = getattr(tool, "name", None)
-    if isinstance(name, str):
-        desc = getattr(tool, "description", "")
-        return (name, desc if isinstance(desc, str) else "")
-    return None
-
-
-def _format_bullets(entries: list[tuple[str, str]]) -> str:
-    if not entries:
-        return "- none"
-    lines: list[str] = []
-    for name, description in entries:
-        if description:
-            lines.append(f"- {name}: {description}")
-        else:
-            lines.append(f"- {name}")
-    return "\n".join(lines)
 
 
 __all__ = ["SystemPromptRenderSystem"]

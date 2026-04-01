@@ -21,6 +21,7 @@ from ecs_agent.prompts.contracts import (
     PromptTemplateSource,
     TriggerSpec,
 )
+import ecs_agent.prompts.provider as prompt_provider_module
 from ecs_agent.providers import FakeProvider
 from ecs_agent.prompts.registry import resolve_placeholder_values
 import ecs_agent.systems.system_prompt_render_system as render_module
@@ -170,7 +171,7 @@ async def test_render_system_renders_inline_template_and_bridges_to_llm() -> Non
         "_installed_skills": "- none",
         "_installed_mcps": "- none",
         "_installed_subagents": "- none",
-        "_cache_key": "tools:write_file|skills:|subagents:",
+        "_cache_key": "inventory:tools:write_file|skills:|subagents:",
     }
     assert llm.system_prompt == rendered.text
 
@@ -752,7 +753,7 @@ async def test_render_system_all_builtins_together(
             self.cached_tools = cached_tools
 
     monkeypatch.setattr(
-        render_module,
+        prompt_provider_module,
         "_MCP_CLIENT_COMPONENT_CLASS",
         FakeMCPClientComponent,
     )
@@ -967,9 +968,6 @@ async def test_system_prompt_render_system_bridges_legacy_system_prompt_componen
     assert legacy_prompt.content == rendered.text == "Hello Bridge"
 
 
-_PROVIDER_SEAM_XFAIL_REASON = "provider seam not yet implemented — Task 2/3 will fix"
-
-
 class _ContractProvider:
     def __init__(
         self,
@@ -985,7 +983,7 @@ class _ContractProvider:
         return dict(self._values)
 
     def resolve_placeholders(self, _world: World, _entity_id: object) -> dict[str, str]:
-        return dict(self._values)
+        return self.resolve(_world, _entity_id)
 
     def provider_fingerprint(self, _world: World, _entity_id: object) -> str:
         return self.fingerprint
@@ -998,7 +996,6 @@ def _require_provider_seam_contract_surface() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
 async def test_builtin_provider_registration_requires_provider_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1029,7 +1026,6 @@ async def test_builtin_provider_registration_requires_provider_id(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
 async def test_duplicate_provider_keys_raise_with_provider_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1057,7 +1053,6 @@ async def test_duplicate_provider_keys_raise_with_provider_id(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
 async def test_user_placeholder_collision_with_builtin_provider_key_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1091,7 +1086,6 @@ async def test_user_placeholder_collision_with_builtin_provider_key_raises(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
 async def test_builtin_provider_merge_order_is_deterministic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1124,7 +1118,6 @@ async def test_builtin_provider_merge_order_is_deterministic(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
 async def test_provider_fingerprint_changes_force_rerender(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1175,7 +1168,6 @@ def test_user_placeholder_name_with_underscore_prefix_still_raises() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
 async def test_scratchbook_placeholder_names_are_approved_builtin_surface(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1234,7 +1226,6 @@ async def test_scratchbook_placeholder_names_are_approved_builtin_surface(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
 async def test_inventory_builtins_render_through_provider_aggregation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1283,7 +1274,6 @@ async def test_inventory_builtins_render_through_provider_aggregation(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
 async def test_missing_builtin_placeholder_still_raises_after_provider_refactor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1309,7 +1299,6 @@ async def test_missing_builtin_placeholder_still_raises_after_provider_refactor(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
 async def test_rendered_system_prompt_bridges_to_llm_and_legacy_components_after_provider_refactor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1346,7 +1335,6 @@ async def test_rendered_system_prompt_bridges_to_llm_and_legacy_components_after
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
 async def test_absent_scratchbook_provider_does_not_change_existing_render_behavior(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1381,7 +1369,6 @@ async def test_absent_scratchbook_provider_does_not_change_existing_render_behav
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
 async def test_scratchbook_provider_fingerprint_changes_cache_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1432,7 +1419,6 @@ async def test_scratchbook_provider_fingerprint_changes_cache_key(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
 async def test_scratchbook_provider_placeholders_render_into_system_prompt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1466,7 +1452,6 @@ async def test_scratchbook_provider_placeholders_render_into_system_prompt(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
 async def test_provider_resolution_preserves_existing_installed_placeholder_outputs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
