@@ -965,3 +965,545 @@ async def test_system_prompt_render_system_bridges_legacy_system_prompt_componen
     assert rendered is not None
     assert legacy_prompt is not None
     assert legacy_prompt.content == rendered.text == "Hello Bridge"
+
+
+_PROVIDER_SEAM_XFAIL_REASON = "provider seam not yet implemented — Task 2/3 will fix"
+
+
+class _ContractProvider:
+    def __init__(
+        self,
+        provider_id: str,
+        values: dict[str, str],
+        fingerprint: str = "v1",
+    ) -> None:
+        self.provider_id = provider_id
+        self._values = values
+        self.fingerprint = fingerprint
+
+    def resolve(self, _world: World, _entity_id: object) -> dict[str, str]:
+        return dict(self._values)
+
+    def resolve_placeholders(self, _world: World, _entity_id: object) -> dict[str, str]:
+        return dict(self._values)
+
+    def provider_fingerprint(self, _world: World, _entity_id: object) -> str:
+        return self.fingerprint
+
+
+def _require_provider_seam_contract_surface() -> None:
+    assert hasattr(render_module, "_BUILTIN_PLACEHOLDER_PROVIDERS"), (
+        "expected provider seam registry: _BUILTIN_PLACEHOLDER_PROVIDERS"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
+async def test_builtin_provider_registration_requires_provider_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_provider_seam_contract_surface()
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_installed_tools}"),
+        ),
+    )
+
+    class _ProviderWithoutId:
+        def resolve(self, _world: World, _entity_id: object) -> dict[str, str]:
+            return {"_installed_tools": "- from-provider"}
+
+    monkeypatch.setattr(
+        render_module,
+        "_BUILTIN_PLACEHOLDER_PROVIDERS",
+        [_ProviderWithoutId()],
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="provider_id"):
+        await SystemPromptRenderSystem().process(world)
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
+async def test_duplicate_provider_keys_raise_with_provider_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_provider_seam_contract_surface()
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(template_source=PromptTemplateSource(inline="${_foo}")),
+    )
+
+    monkeypatch.setattr(
+        render_module,
+        "_BUILTIN_PLACEHOLDER_PROVIDERS",
+        [
+            _ContractProvider("alpha_provider", {"_foo": "a"}),
+            _ContractProvider("beta_provider", {"_foo": "b"}),
+        ],
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="alpha_provider"):
+        await SystemPromptRenderSystem().process(world)
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
+async def test_user_placeholder_collision_with_builtin_provider_key_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_provider_seam_contract_surface()
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${installed_tools}"),
+            placeholders=[
+                PlaceholderSpec(name="installed_tools", value="- user-installed")
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        render_module,
+        "_BUILTIN_PLACEHOLDER_PROVIDERS",
+        [
+            _ContractProvider(
+                "collision_provider",
+                {"installed_tools": "- provider-installed"},
+            )
+        ],
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="installed_tools"):
+        await SystemPromptRenderSystem().process(world)
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
+async def test_builtin_provider_merge_order_is_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_provider_seam_contract_surface()
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_first}|${_second}")
+        ),
+    )
+
+    monkeypatch.setattr(
+        render_module,
+        "_BUILTIN_PLACEHOLDER_PROVIDERS",
+        [
+            _ContractProvider("provider_a", {"_first": "first"}),
+            _ContractProvider("provider_b", {"_second": "second"}),
+        ],
+        raising=False,
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text == "first|second"
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
+async def test_provider_fingerprint_changes_force_rerender(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_provider_seam_contract_surface()
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_installed_tools}"),
+        ),
+    )
+
+    provider = _ContractProvider("inventory_provider", {"_installed_tools": "- none"})
+    monkeypatch.setattr(
+        render_module,
+        "_BUILTIN_PLACEHOLDER_PROVIDERS",
+        [provider],
+        raising=False,
+    )
+
+    call_count = 0
+    original_render = render_module._render_system_prompt
+
+    def _counting_render(
+        target_world: World,
+        target_entity_id: object,
+        prompt_config: SystemPromptConfigSpec,
+    ) -> tuple[str, dict[str, str]]:
+        nonlocal call_count
+        call_count += 1
+        return original_render(target_world, target_entity_id, prompt_config)
+
+    monkeypatch.setattr(render_module, "_render_system_prompt", _counting_render)
+
+    system = SystemPromptRenderSystem()
+    await system.process(world)
+    provider.fingerprint = "v2"
+    await system.process(world)
+
+    assert call_count == 2
+
+
+def test_user_placeholder_name_with_underscore_prefix_still_raises() -> None:
+    with pytest.raises(ValueError, match="reserved"):
+        PlaceholderSpec(name="_provider_owned", value="x")
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
+async def test_scratchbook_placeholder_names_are_approved_builtin_surface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_provider_seam_contract_surface()
+
+    class _ScratchbookConfig:
+        path: str = ".sisyphus/notepads/scratchbook-prompt-provider"
+        artifact_types: tuple[str, ...] = ("plan", "report")
+
+    class _ScratchbookProvider(_ContractProvider):
+        def resolve(self, world: World, entity_id: object) -> dict[str, str]:
+            config = world.get_component(entity_id, _ScratchbookConfig)
+            if config is None:
+                return {}
+            return {
+                "_scratchbook_overview": "overview",
+                "_scratchbook_path": config.path,
+                "_scratchbook_artifact_types": "plan,report",
+                "_scratchbook_artifacts": "- plan\n- report",
+                "_scratchbook_artifact_plan": "plan summary",
+                "_scratchbook_artifact_report": "report summary",
+                "_scratchbook_artifact_path_plan": "scratchbook/plan.md",
+                "_scratchbook_artifact_path_report": "scratchbook/report.md",
+            }
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(entity_id, _ScratchbookConfig())
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_scratchbook_path}"),
+        ),
+    )
+    monkeypatch.setattr(
+        render_module,
+        "_BUILTIN_PLACEHOLDER_PROVIDERS",
+        [_ScratchbookProvider("scratchbook", {})],
+        raising=False,
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert {
+        "_scratchbook_overview",
+        "_scratchbook_path",
+        "_scratchbook_artifact_types",
+        "_scratchbook_artifacts",
+        "_scratchbook_artifact_plan",
+        "_scratchbook_artifact_report",
+        "_scratchbook_artifact_path_plan",
+        "_scratchbook_artifact_path_report",
+    }.issubset(set(rendered.placeholder_snapshot))
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
+async def test_inventory_builtins_render_through_provider_aggregation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_provider_seam_contract_surface()
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(
+                inline=(
+                    "${_installed_tools}\n${_installed_skills}\n"
+                    "${_installed_mcps}\n${_installed_subagents}"
+                )
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        render_module,
+        "_BUILTIN_PLACEHOLDER_PROVIDERS",
+        [
+            _ContractProvider(
+                "inventory_provider",
+                {
+                    "_installed_tools": "- from-provider-tools",
+                    "_installed_skills": "- from-provider-skills",
+                    "_installed_mcps": "- from-provider-mcps",
+                    "_installed_subagents": "- from-provider-subagents",
+                },
+            )
+        ],
+        raising=False,
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text == (
+        "- from-provider-tools\n"
+        "- from-provider-skills\n"
+        "- from-provider-mcps\n"
+        "- from-provider-subagents"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
+async def test_missing_builtin_placeholder_still_raises_after_provider_refactor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_provider_seam_contract_surface()
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_installed_tools}"),
+        ),
+    )
+    monkeypatch.setattr(
+        render_module,
+        "_BUILTIN_PLACEHOLDER_PROVIDERS",
+        [],
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="unknown placeholders"):
+        await SystemPromptRenderSystem().process(world)
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
+async def test_rendered_system_prompt_bridges_to_llm_and_legacy_components_after_provider_refactor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_provider_seam_contract_surface()
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_provider_text}"),
+        ),
+    )
+    world.add_component(entity_id, LLMComponent(provider=object(), model="demo"))
+    world.add_component(entity_id, SystemPromptComponent())
+    monkeypatch.setattr(
+        render_module,
+        "_BUILTIN_PLACEHOLDER_PROVIDERS",
+        [_ContractProvider("provider_bridge", {"_provider_text": "bridge me"})],
+        raising=False,
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    llm = world.get_component(entity_id, LLMComponent)
+    legacy = world.get_component(entity_id, SystemPromptComponent)
+    assert rendered is not None
+    assert llm is not None
+    assert legacy is not None
+    assert rendered.text == "bridge me"
+    assert llm.system_prompt == "bridge me"
+    assert legacy.content == "bridge me"
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
+async def test_absent_scratchbook_provider_does_not_change_existing_render_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_provider_seam_contract_surface()
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_installed_tools}"),
+        ),
+    )
+    monkeypatch.setattr(
+        render_module,
+        "_BUILTIN_PLACEHOLDER_PROVIDERS",
+        [
+            _ContractProvider(
+                "inventory_provider",
+                {"_installed_tools": "- inventory-provider-output"},
+            )
+        ],
+        raising=False,
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text == "- inventory-provider-output"
+    assert "_scratchbook_path" not in rendered.placeholder_snapshot
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
+async def test_scratchbook_provider_fingerprint_changes_cache_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_provider_seam_contract_surface()
+
+    provider = _ContractProvider(
+        "scratchbook_provider",
+        {"_installed_tools": "- none", "_scratchbook_path": "scratchbook/a"},
+        fingerprint="types:plan",
+    )
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_installed_tools}"),
+        ),
+    )
+    monkeypatch.setattr(
+        render_module,
+        "_BUILTIN_PLACEHOLDER_PROVIDERS",
+        [provider],
+        raising=False,
+    )
+
+    call_count = 0
+    original_render = render_module._render_system_prompt
+
+    def _counting_render(
+        target_world: World,
+        target_entity_id: object,
+        prompt_config: SystemPromptConfigSpec,
+    ) -> tuple[str, dict[str, str]]:
+        nonlocal call_count
+        call_count += 1
+        return original_render(target_world, target_entity_id, prompt_config)
+
+    monkeypatch.setattr(render_module, "_render_system_prompt", _counting_render)
+
+    system = SystemPromptRenderSystem()
+    await system.process(world)
+
+    provider.fingerprint = "types:plan,report"
+    await system.process(world)
+
+    assert call_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
+async def test_scratchbook_provider_placeholders_render_into_system_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_provider_seam_contract_surface()
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="Path=${_scratchbook_path}"),
+        ),
+    )
+    monkeypatch.setattr(
+        render_module,
+        "_BUILTIN_PLACEHOLDER_PROVIDERS",
+        [
+            _ContractProvider(
+                "scratchbook_provider",
+                {"_scratchbook_path": ".sisyphus/notepads/demo"},
+            )
+        ],
+        raising=False,
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text == "Path=.sisyphus/notepads/demo"
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason=_PROVIDER_SEAM_XFAIL_REASON)
+async def test_provider_resolution_preserves_existing_installed_placeholder_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_provider_seam_contract_surface()
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(
+                inline=(
+                    "${_installed_tools}\n${_installed_skills}\n"
+                    "${_installed_mcps}\n${_installed_subagents}"
+                )
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        render_module,
+        "_BUILTIN_PLACEHOLDER_PROVIDERS",
+        [
+            _ContractProvider(
+                "inventory_provider",
+                {
+                    "_installed_tools": "- none",
+                    "_installed_skills": "- none",
+                    "_installed_mcps": "- none",
+                    "_installed_subagents": "- none",
+                },
+            )
+        ],
+        raising=False,
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text == "- none\n- none\n- none\n- none"
