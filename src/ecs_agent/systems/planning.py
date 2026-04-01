@@ -12,7 +12,6 @@ from ecs_agent.components import (
     PromptContextReservationComponent,
     RenderedSystemPromptComponent,
     RunnerStateComponent,
-    ScratchbookIndexComponent,
     SystemPromptComponent,
     TerminalComponent,
     ToolRegistryComponent,
@@ -23,7 +22,7 @@ from ecs_agent.prompts.message_assembly import (
     commit_prompt_context_reservation,
     prepare_outbound_messages,
 )
-from ecs_agent.scratchbook import ScratchbookService
+from ecs_agent.scratchbook import ArtifactRegistry, ScratchbookService
 from ecs_agent.types import CompletionResult, Message, PlanStepCompletedEvent
 
 logger = get_logger(__name__)
@@ -31,10 +30,19 @@ logger = get_logger(__name__)
 
 class PlanningSystem:
     def __init__(
-        self, priority: int = 0, service: ScratchbookService | None = None
+        self,
+        priority: int = 0,
+        service: ScratchbookService | None = None,
+        registry: ArtifactRegistry | None = None,
     ) -> None:
         self.priority = priority
-        self.service = service
+        self._registry: ArtifactRegistry | None
+        if registry is not None:
+            self._registry = registry
+        elif service is not None:
+            self._registry = ArtifactRegistry(root=service.root)
+        else:
+            self._registry = None
 
     async def process(self, world: World) -> None:
         for entity_id, components in world.query(
@@ -112,25 +120,6 @@ class PlanningSystem:
                 plan.current_step += 1
                 completed_step_index = plan.current_step - 1
 
-                if self.service is not None:
-                    scratchbook_index = world.get_component(
-                        entity_id, ScratchbookIndexComponent
-                    )
-                    if scratchbook_index is not None:
-                        artifact_id = (
-                            f"plan-snapshot-{entity_id}-step-{completed_step_index}"
-                        )
-                        snapshot_data = {
-                            "entity_id": entity_id,
-                            "step_index": completed_step_index,
-                            "step_description": plan.steps[completed_step_index],
-                            "current_step": plan.current_step,
-                            "completed": plan.completed,
-                        }
-                        self.service.write_artifact(
-                            artifact_id, category="planning", data=snapshot_data
-                        )
-
                 duration_ms = (time.monotonic() - start_time) * 1000
                 logger.info(
                     "planning_step_completed",
@@ -149,6 +138,25 @@ class PlanningSystem:
 
                 if plan.current_step >= len(plan.steps):
                     plan.completed = True
+
+                if self._registry is not None:
+                    plan_name = _derive_plan_name(
+                        plan=plan,
+                        conversation=conversation,
+                        entity_id=entity_id,
+                    )
+                    self._registry.write_plan(
+                        plan_name=plan_name,
+                        content=_render_plan_markdown(plan_name=plan_name, plan=plan),
+                    )
+                    await self._registry.update_boulder(
+                        plan_name=plan_name,
+                        updates={
+                            "status": "running",
+                            "current_step": plan.current_step,
+                            "last_step_description": plan.steps[completed_step_index],
+                        },
+                    )
             except (IndexError, StopIteration):
                 world.add_component(
                     entity_id,
@@ -172,6 +180,47 @@ class PlanningSystem:
                     entity_id,
                     TerminalComponent(reason="planning_error"),
                 )
+
+
+def _derive_plan_name(
+    *, plan: PlanComponent, conversation: ConversationComponent, entity_id: int
+) -> str:
+    for message in conversation.messages:
+        if message.role == "user" and message.content.strip():
+            return message.content.strip()
+    if plan.steps:
+        first_step = plan.steps[0].strip()
+        if first_step:
+            return first_step
+    return f"plan-{entity_id}"
+
+
+def _render_plan_markdown(*, plan_name: str, plan: PlanComponent) -> str:
+    lines = [f"# Plan: {plan_name}", "", "## Steps"]
+
+    if not plan.steps:
+        lines.append("1. [ ] (no steps)")
+    else:
+        all_done = plan.completed and plan.current_step >= len(plan.steps)
+        for index, step in enumerate(plan.steps):
+            if index < plan.current_step or all_done:
+                marker = "DONE"
+            elif index == plan.current_step and not plan.completed:
+                marker = "CURRENT"
+            else:
+                marker = " "
+            lines.append(f"{index + 1}. [{marker}] {step}")
+
+    lines.extend(
+        [
+            "",
+            "## Status",
+            f"Current step: {plan.current_step + 1 if not plan.completed else len(plan.steps)}",
+            f"Total steps: {len(plan.steps)}",
+            f"Completed: {'yes' if plan.completed else 'no'}",
+        ]
+    )
+    return "\n".join(lines) + "\n"
 
 
 __all__ = ["PlanningSystem"]
