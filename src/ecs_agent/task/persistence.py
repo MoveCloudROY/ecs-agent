@@ -88,6 +88,7 @@ class TaskPersistenceService:
             category=category,
             content_hash=content_hash,
             timestamp=str(time.time()),
+            record_path=f"{category}/{artifact_id}.json",
         )
 
         logger.info(

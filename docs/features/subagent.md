@@ -100,9 +100,19 @@ record = SubagentSessionRecord(
     prompt="...",
     status="Working",
     timeout_seconds=30.0,
+    artifact_id="subagent_1234567890abcdef12345678",
+    artifact_record_path="scratchbook/records/subagent/subagent_1234567890abcdef12345678",
+    artifact_inline_content=None,
     # ... other fields
 )
 ```
+
+Subagent result persistence is registry-backed:
+
+- Durable outputs are persisted to `scratchbook/records/subagent/subagent_<uuid24>`.
+- `session_id` is runtime/session-local and ephemeral.
+- `artifact_id` is the durable artifact identifier for long-term references.
+- `artifact_record_path` and `artifact_inline_content` expose canonical record location and inline-threshold behavior on `SubagentSessionRecord`.
 
 ### SubagentLifecycleStatus
 

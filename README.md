@@ -105,6 +105,13 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **Priority & Retries** — Priority-based ordering and configurable retry limits for robust execution.
 - **Output Schema** — Optional JSON schema validation for task outputs.
 
+### Scratchbook Artifact Registry
+- **`ArtifactRegistry`** — Canonical persistence layer for durable scratchbook records and mutable plan execution state.
+- **Canonical immutable records** — Tool and subagent outputs persist to `scratchbook/records/tool/tool_<uuid24>` and `scratchbook/records/subagent/subagent_<uuid24>`.
+- **Canonical mutable plan state** — Plan markdown and Boulder machine state live at `scratchbook/<plan_slug>/plan.md` and `scratchbook/<plan_slug>/executes/boulder.json`.
+- **Trigger-to-Boulder lifecycle** — Plan-type script triggers create Boulder; planning/replanning/tool systems update it throughout execution.
+- **Inline payload policy** — Artifact inline content is populated only when UTF-8 payload size is `<= 8192` bytes.
+
 ### Prompt Normalization & Injection
 - **`SystemPromptConfigSpec`** — Declare system prompts as `${name}` placeholder templates with static strings, callable resolvers, or file paths as sources.
 - **`SystemPromptRenderSystem`** — ECS system (recommended priority -20) that resolves all `${name}` placeholders and writes a `RenderedSystemPromptComponent` for LLM callers.
@@ -499,7 +506,7 @@ See [`docs/`](docs/) for detailed guides:
 - [Context Management](docs/features/context-management.md), Checkpoint, undo, and compaction
 - [Runtime Control](docs/features/runtime-control.md), Entity registry, system lifecycle, model switching, interruption, revert
 - [Agent DSL](docs/features/agent-dsl.md), Declarative agent definition and loading
-- [Agent Scratchbook](docs/features/scratchbook.md), Persistent filesystem-backed artifact storage and indexing
+- [Agent Scratchbook](docs/features/scratchbook.md), `ArtifactRegistry` canonical paths, Boulder lifecycle, and persistence APIs
 - [Task Orchestration](docs/features/task-system.md), Multi-step task management and dependency resolution
 
 ### Tools & Integration

@@ -47,7 +47,7 @@ The primary component for task definition and tracking.
 
 ### Task Definition
 
-Create a task that depends on a previous tool result.
+Create a task that depends on a previous canonical tool artifact.
 
 ```python
 from ecs_agent.components import TaskComponent
@@ -55,11 +55,11 @@ from ecs_agent.types import TaskStatus
 
 task = TaskComponent(
     task_id="analyze_report",
-    description="Analyze the report at {{tool_results/report_id}}",
+    description="Analyze the report artifact at {{scratchbook/records/tool/tool_1234567890abcdef12345678}}",
     expected_output="Summary of the report",
     assigned_agent="analyst_agent",
     tools=["read_file", "write_file"],
-    context_dependencies=["tool_results/report_id"],
+    context_dependencies=["scratchbook/records/tool/tool_1234567890abcdef12345678"],
     status=TaskStatus.PENDING,
     priority=10
 )
@@ -68,7 +68,7 @@ world.add_component(entity_id, task)
 
 ### Context Resolution
 
-The `ContextResolver` automatically resolves `context_dependencies` from the scratchbook.
+The `ContextResolver` resolves `context_dependencies` from canonical scratchbook references. For registry-backed artifacts, `ScratchbookRef.record_path` carries the canonical location (for example `scratchbook/records/tool/tool_<uuid24>`), and resolver loading is driven by that path.
 
 ```python
 from ecs_agent.task.context_resolver import ContextResolver
@@ -82,6 +82,8 @@ resolved = resolver.resolve_context(task)
 if not isinstance(resolved, ContextResolutionError):
     print(resolved.resolved_data)
 ```
+
+When a dependency points to a canonical `record_path`, the resolver reads the artifact content directly from that path under scratchbook root and injects the loaded content into task execution context.
 
 ## Advanced Features
 

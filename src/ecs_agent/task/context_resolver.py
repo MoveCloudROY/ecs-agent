@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -69,45 +70,67 @@ class ContextResolver:
         missing_refs: list[str] = []
 
         for ref in task.context_dependencies:
-            # Parse ref format: "category/artifact_id" or just "artifact_id"
-            if "/" in ref:
-                parts = ref.split("/", 1)
-                category = parts[0]
-                artifact_id = parts[1]
-            else:
-                # Default to common categories if no category specified
-                # Try tool_results first, then planning, then replanning
-                artifact_id = ref
-                artifact = self._try_categories(artifact_id)
-                if artifact is not None:
-                    resolved_data[ref] = artifact
-                    continue
-                else:
+            if ref.startswith("scratchbook/"):
+                artifact = self._read_artifact_by_record_path(record_path=ref)
+                if artifact is None:
                     missing_refs.append(ref)
-                    continue
+                    logger.warning(
+                        "context_missing_artifact",
+                        task_id=task.task_id,
+                        ref=ref,
+                        record_path=ref,
+                    )
+                else:
+                    resolved_data[ref] = artifact
+                    logger.debug(
+                        "context_resolved_artifact",
+                        task_id=task.task_id,
+                        ref=ref,
+                        record_path=ref,
+                    )
+                continue
 
-            # Fetch artifact from scratchbook
-            artifact = self.service.read_artifact(
-                artifact_id=artifact_id, category=category
-            )
-
-            if artifact is None:
+            elif "/" not in ref:
                 missing_refs.append(ref)
                 logger.warning(
                     "context_missing_artifact",
                     task_id=task.task_id,
                     ref=ref,
-                    artifact_id=artifact_id,
-                    category=category,
+                    reason="unsupported_ref_format",
                 )
+
+            elif ref.startswith("tasks/"):
+                category, artifact_id = ref.split("/", 1)
+                artifact = self.service.read_artifact(
+                    artifact_id=artifact_id, category=category
+                )
+
+                if artifact is None:
+                    missing_refs.append(ref)
+                    logger.warning(
+                        "context_missing_artifact",
+                        task_id=task.task_id,
+                        ref=ref,
+                        artifact_id=artifact_id,
+                        category=category,
+                    )
+                else:
+                    resolved_data[ref] = artifact
+                    logger.debug(
+                        "context_resolved_artifact",
+                        task_id=task.task_id,
+                        ref=ref,
+                        artifact_id=artifact_id,
+                        category=category,
+                    )
+
             else:
-                resolved_data[ref] = artifact
-                logger.debug(
-                    "context_resolved_artifact",
+                missing_refs.append(ref)
+                logger.warning(
+                    "context_missing_artifact",
                     task_id=task.task_id,
                     ref=ref,
-                    artifact_id=artifact_id,
-                    category=category,
+                    reason="unknown_ref_format",
                 )
 
         if missing_refs:
@@ -128,23 +151,16 @@ class ContextResolver:
             task_id=task.task_id, resolved_data=resolved_data, missing_refs=()
         )
 
-    def _try_categories(self, artifact_id: str) -> dict[str, Any] | None:
-        """Try multiple default categories for artifact_id.
+    def _read_artifact_by_record_path(self, record_path: str) -> Any | None:
+        artifact_path = self.service.root / record_path
+        if not artifact_path.exists():
+            return None
 
-        Args:
-            artifact_id: Artifact ID to search for
-
-        Returns:
-            Artifact data or None if not found in any category
-        """
-        categories = ["tool_results", "planning", "replanning"]
-        for category in categories:
-            artifact = self.service.read_artifact(
-                artifact_id=artifact_id, category=category
-            )
-            if artifact is not None:
-                return artifact
-        return None
+        text = artifact_path.read_text(encoding="utf-8")
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return text
 
     def inject_context_into_snapshot(
         self, snapshot: dict[str, Any], resolved: ResolvedContext
