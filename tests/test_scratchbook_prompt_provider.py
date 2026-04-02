@@ -196,6 +196,48 @@ def test_empty_state_outputs_use_none_contract() -> None:
     assert placeholders["_scratchbook_artifact_types"] == "- none"
 
 
+def test_registered_type_with_zero_instances_uses_explicit_none_contract() -> None:
+    config = ScratchbookPromptConfig(
+        overview_default_template=None,
+        scratchbook_root_path="scratchbook",
+        artifacts=[],
+    )
+
+    provider = ScratchbookPromptPlaceholderProvider(config)
+    world = World()
+    entity_id = world.create_entity()
+
+    placeholders = provider.resolve_placeholders(world, entity_id)
+
+    assert placeholders["_scratchbook_artifact_types"] == "- none"
+    assert placeholders["_scratchbook_artifacts"] == "- none"
+    assert placeholders["_scratchbook_overview"] == "- none"
+
+
+def test_zero_artifact_definitions_emit_no_dynamic_artifact_keys() -> None:
+    config = ScratchbookPromptConfig(
+        overview_default_template="Overview",
+        scratchbook_root_path="scratchbook",
+        artifacts=[],
+    )
+
+    provider = ScratchbookPromptPlaceholderProvider(config)
+    world = World()
+    entity_id = world.create_entity()
+
+    placeholders = provider.resolve_placeholders(world, entity_id)
+
+    assert not any(
+        key.startswith("_scratchbook_artifact_")
+        and key
+        not in {
+            "_scratchbook_artifacts",
+            "_scratchbook_artifact_types",
+        }
+        for key in placeholders
+    )
+
+
 def test_custom_overview_and_artifact_templates_override_defaults() -> None:
     config = ScratchbookPromptConfig(
         overview_default_template="Custom overview ${scratchbook_path}",
@@ -300,6 +342,78 @@ def test_artifact_blocks_are_sorted_deterministically() -> None:
     assert placeholders["_scratchbook_artifacts"].index(
         "Artifact: a_type"
     ) < placeholders["_scratchbook_artifacts"].index("Artifact: z_type")
+
+
+def test_deterministic_ordering_of_artifact_placeholders() -> None:
+    config = ScratchbookPromptConfig(
+        overview_default_template="Overview",
+        scratchbook_root_path="scratchbook",
+        artifacts=[
+            ScratchbookArtifactPromptDef(
+                artifact_type_id="z_type",
+                path="scratchbook/z.md",
+                purpose="Z",
+                readonly=True,
+                read_when="Z only.",
+            ),
+            ScratchbookArtifactPromptDef(
+                artifact_type_id="a_type",
+                path="scratchbook/a.md",
+                purpose="A",
+                readonly=True,
+                read_when="A only.",
+            ),
+        ],
+    )
+
+    provider = ScratchbookPromptPlaceholderProvider(config)
+    world = World()
+    entity_id = world.create_entity()
+
+    placeholders = provider.resolve_placeholders(world, entity_id)
+    dynamic_keys = [
+        key
+        for key in placeholders
+        if key.startswith("_scratchbook_artifact_")
+        and key
+        not in {
+            "_scratchbook_artifacts",
+            "_scratchbook_artifact_types",
+        }
+    ]
+
+    assert dynamic_keys == [
+        "_scratchbook_artifact_a_type",
+        "_scratchbook_artifact_path_a_type",
+        "_scratchbook_artifact_z_type",
+        "_scratchbook_artifact_path_z_type",
+    ]
+
+
+def test_unreadable_config_invalid_scratchbook_definition_fails_at_definition_time() -> (
+    None
+):
+    with pytest.raises(ValueError, match="scratchbook_root_path"):
+        ScratchbookPromptConfig(
+            overview_default_template="Overview",
+            scratchbook_root_path="/absolute/path/is/invalid",
+            artifacts=[],
+        )
+
+    with pytest.raises(ValueError, match="path"):
+        ScratchbookPromptConfig(
+            overview_default_template="Overview",
+            scratchbook_root_path="scratchbook",
+            artifacts=[
+                ScratchbookArtifactPromptDef(
+                    artifact_type_id="tool_output",
+                    path="scratchbook\\windows\\style.md",
+                    purpose="invalid path format",
+                    readonly=True,
+                    read_when="never",
+                )
+            ],
+        )
 
 
 def test_provider_fingerprint_is_stable_for_same_config() -> None:

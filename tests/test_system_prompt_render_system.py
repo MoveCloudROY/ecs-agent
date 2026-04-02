@@ -1052,8 +1052,12 @@ async def test_duplicate_provider_keys_raise_with_provider_id(
         raising=False,
     )
 
-    with pytest.raises(ValueError, match="alpha_provider"):
+    with pytest.raises(ValueError, match="duplicate built-in key") as exc_info:
         await SystemPromptRenderSystem().process(world)
+
+    message = str(exc_info.value)
+    assert "alpha_provider" in message
+    assert "beta_provider" in message
 
 
 @pytest.mark.asyncio
@@ -1086,6 +1090,43 @@ async def test_user_placeholder_collision_with_builtin_provider_key_raises(
     )
 
     with pytest.raises(ValueError, match="installed_tools"):
+        await SystemPromptRenderSystem().process(world)
+
+
+@pytest.mark.asyncio
+async def test_provider_exception_propagates_from_aggregate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _require_provider_seam_contract_surface()
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(template_source=PromptTemplateSource(inline="${_foo}")),
+    )
+
+    class _ExplodingProvider:
+        provider_id = "exploding_provider"
+
+        def resolve_placeholders(
+            self,
+            _world: World,
+            _entity_id: object,
+        ) -> dict[str, str]:
+            raise RuntimeError("provider_exception")
+
+        def provider_fingerprint(self, _world: World, _entity_id: object) -> str:
+            return "v1"
+
+    monkeypatch.setattr(
+        render_module,
+        "_BUILTIN_PLACEHOLDER_PROVIDERS",
+        [_ExplodingProvider()],
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError, match="provider_exception"):
         await SystemPromptRenderSystem().process(world)
 
 
