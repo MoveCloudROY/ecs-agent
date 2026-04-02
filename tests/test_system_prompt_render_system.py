@@ -24,6 +24,10 @@ from ecs_agent.prompts.contracts import (
 import ecs_agent.prompts.provider as prompt_provider_module
 from ecs_agent.providers import FakeProvider
 from ecs_agent.prompts.registry import resolve_placeholder_values
+from ecs_agent.scratchbook import (
+    ScratchbookArtifactPromptDef,
+    ScratchbookPromptConfig,
+)
 import ecs_agent.systems.system_prompt_render_system as render_module
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.types import SubagentConfig, ToolSchema
@@ -1335,9 +1339,9 @@ async def test_rendered_system_prompt_bridges_to_llm_and_legacy_components_after
 
 
 @pytest.mark.asyncio
-async def test_absent_scratchbook_provider_does_not_change_existing_render_behavior(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_absent_scratchbook_provider_does_not_change_existing_render_behavior() -> (
+    None
+):
     _require_provider_seam_contract_surface()
 
     world = World()
@@ -1348,23 +1352,12 @@ async def test_absent_scratchbook_provider_does_not_change_existing_render_behav
             template_source=PromptTemplateSource(inline="${_installed_tools}"),
         ),
     )
-    monkeypatch.setattr(
-        render_module,
-        "_BUILTIN_PLACEHOLDER_PROVIDERS",
-        [
-            _ContractProvider(
-                "inventory_provider",
-                {"_installed_tools": "- inventory-provider-output"},
-            )
-        ],
-        raising=False,
-    )
 
     await SystemPromptRenderSystem().process(world)
 
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
-    assert rendered.text == "- inventory-provider-output"
+    assert rendered.text == "- none"
     assert "_scratchbook_path" not in rendered.placeholder_snapshot
 
 
@@ -1374,12 +1367,6 @@ async def test_scratchbook_provider_fingerprint_changes_cache_key(
 ) -> None:
     _require_provider_seam_contract_surface()
 
-    provider = _ContractProvider(
-        "scratchbook_provider",
-        {"_installed_tools": "- none", "_scratchbook_path": "scratchbook/a"},
-        fingerprint="types:plan",
-    )
-
     world = World()
     entity_id = world.create_entity()
     world.add_component(
@@ -1388,12 +1375,20 @@ async def test_scratchbook_provider_fingerprint_changes_cache_key(
             template_source=PromptTemplateSource(inline="${_installed_tools}"),
         ),
     )
-    monkeypatch.setattr(
-        render_module,
-        "_BUILTIN_PLACEHOLDER_PROVIDERS",
-        [provider],
-        raising=False,
+    scratchbook_config = ScratchbookPromptConfig(
+        overview_default_template="Overview ${scratchbook_path}\n${artifact_types}",
+        scratchbook_root_path="scratchbook/a",
+        artifacts=[
+            ScratchbookArtifactPromptDef(
+                artifact_type_id="plan",
+                path="scratchbook/a/plan.md",
+                purpose="Execution plan",
+                readonly=False,
+                read_when="When updating plan status.",
+            )
+        ],
     )
+    world.add_component(entity_id, scratchbook_config)
 
     call_count = 0
     original_render = render_module._render_system_prompt
@@ -1412,16 +1407,22 @@ async def test_scratchbook_provider_fingerprint_changes_cache_key(
     system = SystemPromptRenderSystem()
     await system.process(world)
 
-    provider.fingerprint = "types:plan,report"
+    scratchbook_config.artifacts.append(
+        ScratchbookArtifactPromptDef(
+            artifact_type_id="report",
+            path="scratchbook/a/report.md",
+            purpose="Execution report",
+            readonly=True,
+            read_when="When summarizing outcomes.",
+        )
+    )
     await system.process(world)
 
     assert call_count == 2
 
 
 @pytest.mark.asyncio
-async def test_scratchbook_provider_placeholders_render_into_system_prompt(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_scratchbook_provider_placeholders_render_into_system_prompt() -> None:
     _require_provider_seam_contract_surface()
 
     world = World()
@@ -1432,16 +1433,21 @@ async def test_scratchbook_provider_placeholders_render_into_system_prompt(
             template_source=PromptTemplateSource(inline="Path=${_scratchbook_path}"),
         ),
     )
-    monkeypatch.setattr(
-        render_module,
-        "_BUILTIN_PLACEHOLDER_PROVIDERS",
-        [
-            _ContractProvider(
-                "scratchbook_provider",
-                {"_scratchbook_path": ".sisyphus/notepads/demo"},
-            )
-        ],
-        raising=False,
+    world.add_component(
+        entity_id,
+        ScratchbookPromptConfig(
+            overview_default_template="Overview ${scratchbook_path}\n${artifact_types}",
+            scratchbook_root_path=".sisyphus/notepads/demo",
+            artifacts=[
+                ScratchbookArtifactPromptDef(
+                    artifact_type_id="plan",
+                    path=".sisyphus/notepads/demo/plan.md",
+                    purpose="Track plan state",
+                    readonly=False,
+                    read_when="While executing plan tasks.",
+                )
+            ],
+        ),
     )
 
     await SystemPromptRenderSystem().process(world)
@@ -1449,6 +1455,12 @@ async def test_scratchbook_provider_placeholders_render_into_system_prompt(
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
     assert rendered.text == "Path=.sisyphus/notepads/demo"
+    assert "_scratchbook_overview" in rendered.placeholder_snapshot
+    assert "_scratchbook_path" in rendered.placeholder_snapshot
+    assert "_scratchbook_artifact_types" in rendered.placeholder_snapshot
+    assert "_scratchbook_artifacts" in rendered.placeholder_snapshot
+    assert "_scratchbook_artifact_plan" in rendered.placeholder_snapshot
+    assert "_scratchbook_artifact_path_plan" in rendered.placeholder_snapshot
 
 
 @pytest.mark.asyncio

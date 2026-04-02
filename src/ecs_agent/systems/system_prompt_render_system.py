@@ -18,6 +18,8 @@ from ecs_agent.prompts.provider import (
     InventoryPlaceholderProvider,
 )
 from ecs_agent.prompts.registry import resolve_placeholder_values
+from ecs_agent.scratchbook.prompt_definition import ScratchbookPromptConfig
+from ecs_agent.scratchbook.prompt_provider import ScratchbookPromptPlaceholderProvider
 from ecs_agent.types import EntityId
 
 _BUILTIN_PLACEHOLDER_PROVIDERS: list[BuiltinPlaceholderProvider] = [
@@ -138,7 +140,7 @@ def _aggregate_provider_placeholders(
     aggregated: dict[str, str] = {}
     key_to_provider_id: dict[str, str] = {}
 
-    for provider in _BUILTIN_PLACEHOLDER_PROVIDERS:
+    for provider in _iter_placeholder_providers(world, entity_id):
         provider_id = _provider_id(provider)
         values = provider.resolve_placeholders(world, entity_id)
         for key, value in values.items():
@@ -162,11 +164,32 @@ def _aggregate_provider_placeholders(
 
 def _render_cache_key(world: World, entity_id: EntityId) -> str:
     fingerprints: list[str] = []
-    for provider in _BUILTIN_PLACEHOLDER_PROVIDERS:
+    for provider in _iter_placeholder_providers(world, entity_id):
         provider_id = _provider_id(provider)
         fingerprint = provider.provider_fingerprint(world, entity_id)
         fingerprints.append(f"{provider_id}:{fingerprint}")
     return "|".join(fingerprints)
+
+
+def _iter_placeholder_providers(
+    world: World,
+    entity_id: EntityId,
+) -> list[BuiltinPlaceholderProvider]:
+    providers = list(_BUILTIN_PLACEHOLDER_PROVIDERS)
+    scratchbook_provider = _resolve_entity_scratchbook_provider(world, entity_id)
+    if scratchbook_provider is not None:
+        providers.append(scratchbook_provider)
+    return providers
+
+
+def _resolve_entity_scratchbook_provider(
+    world: World,
+    entity_id: EntityId,
+) -> BuiltinPlaceholderProvider | None:
+    config = world.get_component(entity_id, ScratchbookPromptConfig)
+    if config is None:
+        return None
+    return ScratchbookPromptPlaceholderProvider(config)
 
 
 def _bridge_rendered_prompt(world: World, entity_id: EntityId, rendered: str) -> None:
