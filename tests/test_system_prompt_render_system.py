@@ -175,7 +175,7 @@ async def test_render_system_renders_inline_template_and_bridges_to_llm() -> Non
         "_installed_skills": "- none",
         "_installed_mcps": "- none",
         "_installed_subagents": "- none",
-        "_cache_key": "inventory:tools:write_file|skills:|subagents:",
+        "_cache_key": "inventory:tools:write_file|skills:|subagents:|mcps:",
     }
     assert llm.system_prompt == rendered.text
 

@@ -17,6 +17,7 @@ from ecs_agent.scratchbook.prompt_definition import (
     ScratchbookPromptConfig,
     normalize_artifact_type_id,
 )
+from ecs_agent.scratchbook.prompt_provider import ScratchbookPromptPlaceholderProvider
 from ecs_agent.scratchbook.service import ScratchbookService
 from ecs_agent.scratchbook.tool_sink import ToolResultsSink
 
@@ -31,6 +32,7 @@ __all__ = [
     "ScratchbookArtifactPromptDef",
     "ScratchbookPromptConfig",
     "ScratchbookIndexer",
+    "ScratchbookPromptPlaceholderProvider",
     "ScratchbookService",
     "compute_content_hash",
     "ToolResultsSink",
