@@ -352,6 +352,65 @@ from ecs_agent.systems.user_prompt_normalization_system import UserPromptNormali
 world.register_system(UserPromptNormalizationSystem(priority=-10), priority=-10)
 ```
 
+## Built-in Placeholder Provider Seam
+
+The `SystemPromptRenderSystem` supports a synchronous, narrow provider protocol for injecting domain-specific context into system prompts. This mechanism allows the core render system to aggregate placeholders from multiple sources while remaining decoupled from the specific formatting logic of those sources.
+
+### Provider Protocol
+
+Providers must implement the `BuiltinPlaceholderProvider` protocol defined in `ecs_agent.prompts.provider`:
+
+```python
+from typing import Protocol, runtime_checkable
+from ecs_agent.core.world import World
+from ecs_agent.types import EntityId
+
+@runtime_checkable
+class BuiltinPlaceholderProvider(Protocol):
+    provider_id: str
+
+    def resolve_placeholders(self, world: World, entity_id: EntityId) -> dict[str, str]:
+        """Return built-in placeholder key→value pairs for this entity.
+        Keys MUST start with an underscore (e.g., '_my_context').
+        """
+
+    def provider_fingerprint(self, world: World, entity_id: EntityId) -> str:
+        """Return a fingerprint that changes when the provider's output changes."""
+```
+
+### Registration and Aggregation
+
+Providers are registered in two ways:
+1.  **Global Providers**: Registered in the `_BUILTIN_PLACEHOLDER_PROVIDERS` list within `SystemPromptRenderSystem`. The `InventoryPlaceholderProvider` is a default global provider.
+2.  **Entity-Local Providers**: Resolved dynamically per entity. For example, if an entity has a `ScratchbookPromptConfig` component, a `ScratchbookPromptPlaceholderProvider` is automatically attached for that entity.
+
+### Collision and Reserved Names
+
+To ensure predictability, the system enforces strict naming and collision rules:
+- **Reserved Prefix**: All provider-owned keys must start with an underscore (`_`). User-defined placeholders in `SystemPromptConfigSpec` are forbidden from using this prefix.
+- **Duplicate Rejection**: If two providers emit the same key, or if a provider key collides with a user-defined key, the system raises a `ValueError` immediately. The error message includes the `provider_id` to help with debugging.
+
+### Cache Invalidation
+
+Rendered system prompts are cached for performance. The cache key is composed of all active providers and their respective fingerprints: `{provider_id}:{fingerprint}`. When any provider's fingerprint changes (e.g., a new tool is registered or a scratchbook artifact is added), the system invalidates the cache and re-renders the prompt on the next tick.
+
+### Implementation Example
+
+```python
+from ecs_agent.prompts.provider import BuiltinPlaceholderProvider
+
+class CustomStatusProvider:
+    provider_id = "status_monitor"
+
+    def resolve_placeholders(self, world: World, entity_id: EntityId) -> dict[str, str]:
+        # Fetch some state from the world or components
+        return {"_system_status": "All systems operational"}
+
+    def provider_fingerprint(self, world: World, entity_id: EntityId) -> str:
+        # Return a value that changes when status changes
+        return "operational"
+```
+
 ## Built-in Placeholders
 
 These placeholders are automatically resolved by `SystemPromptRenderSystem` from entity components. They do not need to be declared in `SystemPromptConfigSpec.placeholders`.

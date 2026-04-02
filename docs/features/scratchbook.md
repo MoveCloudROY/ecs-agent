@@ -48,6 +48,108 @@ Required Boulder identity/session fields are preserved through updates:
 - `active_plan`
 - `started_at`
 
+## Prompt Provider
+
+The `ScratchbookPromptPlaceholderProvider` injects scratchbook context into system prompts via the `ScratchbookPromptConfig` component. This allows the agent to be aware of its persistent scratchbook, available artifact types, and specific artifact paths.
+
+### Configuration
+
+To enable scratchbook placeholders, attach a `ScratchbookPromptConfig` component to the agent entity:
+
+```python
+from ecs_agent.scratchbook.prompt_definition import (
+    ScratchbookArtifactPromptDef,
+    ScratchbookPromptConfig,
+)
+
+world.add_component(entity_id, ScratchbookPromptConfig(
+    scratchbook_root_path="scratchbook",
+    overview_default_template=(
+        "You have access to a scratchbook at ${_scratchbook_path}.\n"
+        "Artifact types available:\n${_scratchbook_artifact_types}\n"
+        "Use builtin tools to read/write artifacts."
+    ),
+    artifacts=[
+        ScratchbookArtifactPromptDef(
+            artifact_type_id="tool_output",
+            path="scratchbook/records/tool",
+            purpose="Immutable records of tool call outputs.",
+            readonly=True,
+            read_when="When you need to reference a past tool result.",
+        ),
+        ScratchbookArtifactPromptDef(
+            artifact_type_id="plan",
+            path="scratchbook/plan.md",
+            purpose="Active plan and execution state.",
+            readonly=False,
+            read_when="Before each reasoning step.",
+        ),
+    ],
+))
+```
+
+### Placeholder Surface
+
+The scratchbook provider exposes several built-in placeholders:
+
+| Placeholder | Description |
+| :--- | :--- |
+| `${_scratchbook_path}` | The root-relative path to the scratchbook directory. |
+| `${_scratchbook_artifact_types}` | A sorted bullet list of registered artifact type IDs. |
+| `${_scratchbook_artifacts}` | A sorted join of all per-type artifact blocks. |
+| `${_scratchbook_overview}` | The full overview block rendered from `overview_default_template`. |
+| `${_scratchbook_artifact_<type>}` | The rendered block for a specific artifact type (e.g., `_scratchbook_artifact_plan`). |
+| `${_scratchbook_artifact_path_<type>}` | The path for a specific artifact type (e.g., `_scratchbook_artifact_path_plan`). |
+
+### Empty-State Behavior
+
+If a placeholder is not applicable (e.g., no artifacts are registered), its value defaults to `"- none"`. This ensures that the system prompt remains valid even when the scratchbook is empty.
+
+### Artifact Type Normalization
+
+Artifact type IDs are normalized to ensure they are safe for use as placeholder names:
+- Converted to lowercase.
+- Non-alphanumeric characters are replaced with underscores (`_`).
+- Leading and trailing underscores are trimmed.
+- Multiple consecutive underscores are collapsed into one.
+
+For example, `"Plan Notes"` becomes `plan_notes`, and the corresponding placeholder is `${_scratchbook_artifact_plan_notes}`.
+
+### Template Overrides
+
+You can override the default template for a specific artifact type using `user_override_template`:
+
+```python
+ScratchbookArtifactPromptDef(
+    artifact_type_id="plan",
+    path="scratchbook/plan.md",
+    purpose="Active plan.",
+    readonly=False,
+    read_when="Before each step.",
+    user_override_template=(
+        "## Active Plan\n"
+        "File: ${_scratchbook_artifact_path_plan}\n"
+        "This file is WRITABLE. Update it as you complete steps.\n"
+    ),
+)
+```
+
+### System Prompt Example
+
+A system prompt template can consume these placeholders to provide the agent with scratchbook context:
+
+```
+You are an expert AI assistant with access to a persistent scratchbook.
+
+${_scratchbook_overview}
+
+## Plan
+${_scratchbook_artifact_plan}
+
+## Tool Outputs
+${_scratchbook_artifact_tool_output}
+```
+
 ## API Reference (ArtifactRegistry)
 
 ```python
