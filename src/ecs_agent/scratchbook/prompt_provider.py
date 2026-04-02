@@ -93,15 +93,18 @@ class ScratchbookPromptPlaceholderProvider:
         normalized_root_path = self._normalize_root_path(
             self._config.scratchbook_root_path
         )
-        sorted_pairs = sorted(
-            (artifact.artifact_type_id, artifact.path)
-            for artifact in self._config.artifacts
+        overview_part = self._config.overview_default_template or ""
+        sorted_artifact_parts = sorted(
+            (
+                f"{a.artifact_type_id}:{a.path}:{a.purpose}:"
+                f"{a.readonly}:{a.read_when}:"
+                f"{a.user_override_template or ''}:"
+                f"{a.default_template_override or ''}"
+            )
+            for a in self._config.artifacts
         )
-        serialized_pairs = ",".join(
-            f"{artifact_type_id}={artifact_path}"
-            for artifact_type_id, artifact_path in sorted_pairs
-        )
-        return f"path:{normalized_root_path}|artifacts:{serialized_pairs}"
+        artifacts_str = "|".join(sorted_artifact_parts)
+        return f"path:{normalized_root_path}|overview:{overview_part}|artifacts:{artifacts_str}"
 
     @staticmethod
     def _normalize_root_path(root_path: str) -> str:

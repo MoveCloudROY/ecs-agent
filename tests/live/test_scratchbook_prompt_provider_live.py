@@ -164,7 +164,7 @@ async def test_live_scratchbook_rendered_prompt_reaches_aliyun_outbound_channel(
 ) -> None:
     provider = _make_provider(live_api_key, base_url, api_format)
     capturing_client = _CapturingAsyncClient(provider._client)
-    provider._client = capturing_client  # type: ignore[assignment]
+    provider._client = capturing_client  # type: ignore[assignment]  # test-only: monkeypatching private attr for HTTP capture
 
     world = World()
     entity_id = world.create_entity()

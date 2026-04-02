@@ -68,10 +68,12 @@ class InventoryPlaceholderProvider:
         subagent_names = tuple(
             name for name, _ in self._subagent_entries(world, entity_id)
         )
+        mcp_names = tuple(name for name, _ in self._mcp_tool_entries(world, entity_id))
         return (
             f"tools:{','.join(tool_names)}|"
             f"skills:{','.join(skill_names)}|"
-            f"subagents:{','.join(subagent_names)}"
+            f"subagents:{','.join(subagent_names)}|"
+            f"mcps:{','.join(mcp_names)}"
         )
 
     @staticmethod

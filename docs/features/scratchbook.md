@@ -65,8 +65,8 @@ from ecs_agent.scratchbook.prompt_definition import (
 world.add_component(entity_id, ScratchbookPromptConfig(
     scratchbook_root_path="scratchbook",
     overview_default_template=(
-        "You have access to a scratchbook at ${_scratchbook_path}.\n"
-        "Artifact types available:\n${_scratchbook_artifact_types}\n"
+        "You have access to a scratchbook at ${scratchbook_path}.\n"
+        "Artifact types available:\n${artifact_types}\n"
         "Use builtin tools to read/write artifacts."
     ),
     artifacts=[
@@ -87,6 +87,12 @@ world.add_component(entity_id, ScratchbookPromptConfig(
     ],
 ))
 ```
+
+> **Note:** Inside `overview_default_template`, use the internal template variables
+> `${scratchbook_path}` and `${artifact_types}` — these are NOT the same as the
+> public system prompt placeholders `${_scratchbook_path}` and `${_scratchbook_artifact_types}`.
+> The public placeholders are for use in the outer `SystemPromptConfigSpec.template_source`,
+> not inside nested template strings.
 
 ### Placeholder Surface
 
@@ -128,11 +134,16 @@ ScratchbookArtifactPromptDef(
     read_when="Before each step.",
     user_override_template=(
         "## Active Plan\n"
-        "File: ${_scratchbook_artifact_path_plan}\n"
+        "File: ${artifact_path}\n"
         "This file is WRITABLE. Update it as you complete steps.\n"
     ),
 )
 ```
+
+> **Note:** Inside `user_override_template` (and `default_template_override`), use the
+> internal artifact block variables: `${artifact_type_id}`, `${artifact_path}`,
+> `${purpose}`, `${readonly_notice}`, `${read_when}`. Do NOT use public system prompt
+> placeholder keys here.
 
 ### System Prompt Example
 
