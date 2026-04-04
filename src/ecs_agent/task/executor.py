@@ -116,15 +116,45 @@ class TaskExecutor:
                 f"Expected EntityId, str, or None."
             )
 
+    def _build_subagent_call_args(self, request: DispatchRequest) -> dict[str, object]:
+        """Build canonical subagent handler call arguments.
+
+        Returns a dictionary with all 5 required kwargs for the subagent
+        handler, following the contract defined in SubagentSystem.subagent_handler.
+
+        Args:
+            request: Dispatch request with assigned_agent (str subagent name)
+                     and description (task prompt).
+
+        Returns:
+            dict[str, object] with keys: category, prompt, load_skills,
+            background, timeout.
+        """
+        # category comes from assigned_agent (already type-guarded as str)
+        if not isinstance(request.assigned_agent, str):
+            raise ValueError(
+                f"Internal error: _build_subagent_call_args called with non-str assigned_agent "
+                f"type {type(request.assigned_agent).__name__}"
+            )
+
+        return {
+            "category": request.assigned_agent,
+            "prompt": request.description,
+            "load_skills": [],  # DispatchRequest has no skills field; use empty list
+            "background": False,  # TaskExecutor always synchronous
+            "timeout": None,  # DispatchRequest has no timeout field
+        }
+
     async def _execute_via_subagent(
         self,
         world: World,
         entity_id: EntityId,
         request: DispatchRequest,
     ) -> ExecutionResult:
-        """Execute task via subagent delegation.
+        """Execute task via subagent backend.
 
-        Reuses SubagentSystem contract via delegate tool handler.
+        Adapter seam: calls subagent_handler from ToolRegistryComponent with
+        canonical args dict built by _build_subagent_call_args().
         """
         if not isinstance(request.assigned_agent, str):
             raise ValueError(
@@ -139,7 +169,7 @@ class TaskExecutor:
             return ExecutionResult(
                 task_id=request.task_id,
                 success=False,
-                result_content=f"Error: Entity {entity_id} missing SubagentRegistryComponent for subagent delegation",
+                result_content=f"Error: Entity {entity_id} missing SubagentRegistryComponent for subagent execution",
                 backend_type="subagent",
             )
 
@@ -152,22 +182,20 @@ class TaskExecutor:
                 backend_type="subagent",
             )
 
-        # Validate ToolRegistryComponent has delegate handler
+        # Validate ToolRegistryComponent has subagent handler
         tool_registry = world.get_component(entity_id, ToolRegistryComponent)
-        if tool_registry is None or "delegate" not in tool_registry.handlers:
+        if tool_registry is None or "subagent" not in tool_registry.handlers:
             return ExecutionResult(
                 task_id=request.task_id,
                 success=False,
-                result_content=f"Error: Entity {entity_id} missing delegate tool handler",
+                result_content=f"Error: Entity {entity_id} missing subagent tool handler",
                 backend_type="subagent",
             )
 
-        # Execute via delegate handler
-        delegate_handler = tool_registry.handlers["delegate"]
+        # Execute via subagent handler with canonical args
+        subagent_handler = tool_registry.handlers["subagent"]
         try:
-            result = await delegate_handler(
-                subagent_name=subagent_name, task=request.description
-            )
+            result = await subagent_handler(**self._build_subagent_call_args(request))
             success = not result.startswith("Error")
             return ExecutionResult(
                 task_id=request.task_id,
