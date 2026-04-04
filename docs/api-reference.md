@@ -95,18 +95,18 @@ class MessageBusEnvelope:
 ```python
 @dataclass(slots=True)
 class InheritancePolicy:
-    enabled: bool = True
-    inherit_system_prompt: bool = True
-    inherit_tools: list[str] = field(default_factory=list)
-    inherit_permissions: bool = False
-    allow_delegate_tool: bool = True
-    tool_conflict_policy: str = "skip"
-    missing_skill_policy: str = "warn"
+     enabled: bool = True
+     inherit_system_prompt: bool = True
+     inherit_tools: list[str] = field(default_factory=list)
+     inherit_permissions: bool = False
+     tool_conflict_policy: str = "skip"
+     missing_skill_policy: str = "warn"
 
 @dataclass(slots=True)
 class SubagentConfig:
-    name: str
-    provider: Any
+     name: str
+     provider: Any
+
     model: str
     system_prompt: str = ""
     skills: list[str] = field(default_factory=list)
@@ -563,11 +563,11 @@ opt-in helper for interactive runtimes. It clears selected `TerminalComponent` r
 
 ```python
 class SubagentSystem(priority: int = -1, default_timeout: float | None = None):
-    async def process(self, world: World) -> None: ...
-    def install_subagent_tool(self, world: World, entity_id: EntityId, tool_name: str = "subagent", override: bool = False) -> None: ...
-    def install_delegate_tool(self, world: World, entity_id: EntityId, tool_name: str = "delegate", override: bool = False) -> None: ...
-    def install_subagent_control_tools(self, world: World, entity_id: EntityId) -> None: ...
+     async def process(self, world: World) -> None: ...
+     def install_subagent_tool(self, world: World, entity_id: EntityId, tool_name: str = "subagent", override: bool = False) -> None: ...
+     def install_subagent_control_tools(self, world: World, entity_id: EntityId) -> None: ...
 ```
+
 ---
 
 ## ecs_agent.providers

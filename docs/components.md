@@ -614,7 +614,7 @@ Registry of named subagent configurations for delegation.
 | :--- | :--- | :--- | :--- |
 | `subagents` | `dict[str, SubagentConfig]` | `{}` | Subagent configurations by name |
 
-**Used by:** `SubagentSystem`, `delegate` tool
+**Used by:** `SubagentSystem`, `subagent` tool
 
 **Usage:**
 ```python

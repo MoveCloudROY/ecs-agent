@@ -97,7 +97,7 @@ When an upstream dependency fails, downstream tasks are moved to `BLOCKED`. Thes
 Every task has a snapshot (its current state) and an event log (its full history). The `TaskPersistenceService` manages this to ensure high reliability and auditability.
 ### Subagent Compatibility
 
-The task system is compatible with both the legacy `delegate` tool and the new `subagent` tool. For new tasks, the `subagent` tool is preferred as it provides enhanced control over skills and background execution. When a task is assigned to a subagent backend, the `TaskExecutor` maps the assignment to the appropriate tool call.
+When a task is assigned to a subagent backend, the `TaskExecutor` invokes the `subagent` tool with the task description, which executes the task in an isolated child world.
 
 ## See Also
 
