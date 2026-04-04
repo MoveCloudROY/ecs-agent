@@ -106,8 +106,8 @@ class _InheritedSkill:
 class SubagentSystem:
     """System that manages subagent delegation lifecycle.
 
-    This system automatically registers a 'delegate' tool for entities that have
-    a SubagentRegistryComponent. When the delegate tool is called, it:
+    This system automatically registers a 'subagent' tool for entities that have
+    a SubagentRegistryComponent. When the subagent tool is called, it:
     1. Creates a child entity with the specified subagent configuration
     2. Runs the child entity to completion
     3. Returns the child's final assistant message
@@ -255,59 +255,11 @@ class SubagentSystem:
             available_subagents=list(registry.subagents.keys()),
         )
 
-    def install_delegate_tool(
-        self,
-        world: World,
-        entity_id: EntityId,
-        tool_name: str = "delegate",
-        override: bool = False,
-    ) -> None:
-        """Install delegate tool with explicit control over name and overwrite behavior.
-
-        Args:
-            world: World instance containing the entity
-            entity_id: Entity with SubagentRegistryComponent and ToolRegistryComponent
-            tool_name: Name for the delegate tool (default: "delegate")
-            override: If True, replaces existing handler; if False, skips if exists
-
-        Raises:
-            ValueError: If entity missing required components
-        """
-        # Validate entity has SubagentRegistryComponent and ToolRegistryComponent
-        registry = world.get_component(entity_id, SubagentRegistryComponent)
-        if registry is None:
-            raise ValueError(f"Entity {entity_id} missing SubagentRegistryComponent")
-
-        tool_registry = world.get_component(entity_id, ToolRegistryComponent)
-        if tool_registry is None:
-            raise ValueError(f"Entity {entity_id} missing ToolRegistryComponent")
-
-        # Build schema
-        subagent_names = list(registry.subagents.keys())
-        schema_dict = self._build_delegate_tool_schema(subagent_names)
-        function_schema = schema_dict["function"]
-
-        # Install tool schema (always update schema to match tool_name)
-        tool_registry.tools[tool_name] = ToolSchema(
-            name=tool_name,
-            description=function_schema["description"],
-            parameters=function_schema["parameters"],
-        )
-
-        # Install handler (helper respects override parameter)
-        self._install_delegate_handler(world, entity_id, tool_name, override)
-
-        logger.info(
-            "delegate_tool_installed",
-            entity_id=entity_id,
-            tool_name=tool_name,
-            available_subagents=list(registry.subagents.keys()),
-        )
-
     async def process(self, world: World) -> None:
-        """Register delegate tool for entities with SubagentRegistryComponent.
+        """Register subagent tool for entities with SubagentRegistryComponent.
 
-        Backward compatible: uses public installer API with default parameters.
+        System registers the unified subagent tool on entities with both
+        SubagentRegistryComponent and ToolRegistryComponent.
         """
         for entity_id, components in world.query(
             SubagentRegistryComponent, ToolRegistryComponent
@@ -316,17 +268,17 @@ class SubagentSystem:
             assert isinstance(registry_comp, SubagentRegistryComponent)
             assert isinstance(tool_registry, ToolRegistryComponent)
 
-            # Skip if delegate tool already registered
-            if "delegate" in tool_registry.tools:
+            # Skip if subagent tool already registered
+            if "subagent" in tool_registry.tools:
                 continue
 
-            # Use public installer API
-            self.install_delegate_tool(
-                world, entity_id, tool_name="delegate", override=False
+            # Use public installer API for unified subagent tool
+            self.install_subagent_tool(
+                world, entity_id, tool_name="subagent", override=False
             )
 
             logger.info(
-                "delegate_tool_registered",
+                "subagent_tool_registered",
                 entity_id=entity_id,
                 available_subagents=list(registry_comp.subagents.keys()),
             )
@@ -697,155 +649,6 @@ class SubagentSystem:
 
         return cancel_handler
 
-    def _build_delegate_tool_schema(self, subagent_names: list[str]) -> dict[str, Any]:
-        """Build OpenAI-style function schema for the delegate tool."""
-        del subagent_names
-        return {
-            "type": "function",
-            "function": {
-                "name": "delegate",
-                "description": (
-                    "Delegate a self-contained task to a named subagent and return its result synchronously.\n\n"
-                    "WHEN TO CALL:\n"
-                    "  - Use when a subtask can be fully handled by a specific registered subagent.\n"
-                    "  - This is a synchronous, fire-and-forget call: it blocks until the subagent completes.\n"
-                    "  - For parallel execution or finer control, prefer the 'subagent' tool with background=True.\n\n"
-                    "INTERFACE:\n"
-                    "  subagent_name (required) — name of the registered subagent to invoke.\n"
-                    "  task          (required) — full task description; include goal, context, and expected output.\n\n"
-                    "RETURNS: final answer string from the subagent.\n\n"
-                    "EXAMPLES:\n"
-                    "  // Delegate a research task synchronously\n"
-                    '  delegate(subagent_name="researcher", task="Summarize the latest papers on RAG.")\n\n'
-                    "  // Delegate a coding task with explicit output format\n"
-                    '  delegate(subagent_name="coder", task="Write a Python function to parse ISO 8601 dates. Return only the function code.")'
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "subagent_name": {
-                            "type": "string",
-                            "description": "Name of the registered subagent to invoke. Must match a key in SubagentRegistryComponent.",
-                        },
-                        "task": {
-                            "type": "string",
-                            "description": "Full task description for the subagent. Be explicit: include goal, context, expected output format, and any constraints.",
-                        },
-                    },
-                    "required": ["subagent_name", "task"],
-                },
-            },
-        }
-
-    def _install_delegate_handler(
-        self,
-        world: World,
-        entity_id: EntityId,
-        tool_name: str,
-        override: bool,
-    ) -> None:
-        """Install delegate tool handler on ToolRegistryComponent."""
-        tool_registry = world.get_component(entity_id, ToolRegistryComponent)
-        if tool_registry is None:
-            raise ValueError(
-                f"Error: ToolRegistryComponent not found on entity {entity_id}"
-            )
-
-        if tool_name in tool_registry.handlers and not override:
-            return
-
-        tool_registry.handlers[tool_name] = self._make_delegate_handler(
-            world, entity_id
-        )
-
-    def _make_delegate_handler(self, world: World, parent_entity_id: EntityId) -> Any:
-        """Create a delegate handler closure that captures world and parent entity."""
-
-        async def delegate_handler(subagent_name: str, task: str) -> str:
-            """Execute a subagent delegation.
-
-            Args:
-                subagent_name: Name of the subagent to delegate to
-                task: Task description for the subagent
-
-            Returns:
-                Result string from the subagent's final assistant message
-            """
-            correlation_id = str(uuid.uuid4())
-            traceparent = generate_traceparent()
-
-            await self._publish_delegation_events(
-                world,
-                parent_entity_id,
-                subagent_name,
-                correlation_id=correlation_id,
-                traceparent=traceparent,
-                task=task,
-            )
-
-            logger.info(
-                "delegation_started",
-                parent_entity=parent_entity_id,
-                subagent_name=subagent_name,
-                task=task,
-            )
-
-            # Resolve timeout and call shared execution core with timeout wrapping
-            resolved_timeout = self._resolve_timeout(
-                None
-            )  # delegate uses global default only
-
-            try:
-                success = False
-                if resolved_timeout is not None:
-                    result, success, error = await asyncio.wait_for(
-                        self._execute_subagent_core(
-                            world,
-                            parent_entity_id,
-                            subagent_name,
-                            task,
-                            correlation_id,
-                            traceparent,
-                        ),
-                        timeout=resolved_timeout,
-                    )
-                else:
-                    result, success, error = await self._execute_subagent_core(
-                        world,
-                        parent_entity_id,
-                        subagent_name,
-                        task,
-                        correlation_id,
-                        traceparent,
-                    )
-            except asyncio.TimeoutError:
-                error_msg = f"Error: Subagent timeout after {resolved_timeout}s"
-                logger.error(
-                    "delegation_timeout",
-                    timeout=resolved_timeout,
-                    subagent=subagent_name,
-                )
-                # Emit completion event with error
-                await world.event_bus.publish(
-                    DelegationCompletedEvent(
-                        entity_id=parent_entity_id,
-                        subagent_name=subagent_name,
-                        success=False,
-                        result=error_msg,
-                        correlation_id=correlation_id,
-                        traceparent=traceparent,
-                    )
-                )
-                result = error_msg
-                success = False
-
-            if success:
-                self._persist_subagent_result(result)
-
-            return result
-
-        return delegate_handler
-
     def _make_subagent_handler(self, world: World, parent_entity_id: EntityId) -> Any:
         async def subagent_handler(
             category: str,
@@ -1042,7 +845,7 @@ class SubagentSystem:
         correlation_id: str,
         traceparent: str,
     ) -> tuple[str, bool, str | None]:
-        """Shared subagent execution core for both delegate and subagent APIs.
+        """Shared subagent execution core for the subagent API.
 
         Args:
             world: Parent world instance
@@ -1168,6 +971,7 @@ class SubagentSystem:
                 subagent_name,
                 correlation_id=correlation_id,
                 traceparent=traceparent,
+                task=task,
                 result=result,
                 success=True,
                 error=None,
@@ -1453,12 +1257,7 @@ class SubagentSystem:
         if not policy.enabled:
             return []
 
-        if policy.allow_delegate_tool:
-            return list(policy.inherit_tools)
-
-        return [
-            tool_name for tool_name in policy.inherit_tools if tool_name != "delegate"
-        ]
+        return list(policy.inherit_tools)
 
     def _skills_for_inherited_tools(
         self,

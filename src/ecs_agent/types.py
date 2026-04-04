@@ -447,7 +447,6 @@ class InheritancePolicy:
     inherit_system_prompt: bool = True
     inherit_tools: list[str] = field(default_factory=list)  # whitelist of tool names
     inherit_permissions: bool = False
-    allow_delegate_tool: bool = False
     tool_conflict_policy: str = "skip"  # skip|error|override
     missing_skill_policy: str = "warn"  # warn|error
 
