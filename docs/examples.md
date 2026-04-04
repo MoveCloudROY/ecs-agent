@@ -455,9 +455,8 @@ Landmarks:
 ---
 
 ### Sub-Agent Delegation
-### Sub-Agent Delegation
 - **File:** `examples/subagent_delegation.py`
-- **What it demonstrates:** Parent agent delegating tasks via `delegate` tool with SubagentSystem managing child execution, state inheritance policy, and explicit tool installation.
+- **What it demonstrates:** Parent agent delegating tasks via `subagent` tool with SubagentSystem managing child execution, state inheritance policy, and skill inheritance.
 - **Run:** `uv run python examples/subagent_delegation.py`
 - **Pattern:** `SubagentRegistryComponent` + `SubagentSystem` + `InheritancePolicy`.
 
@@ -470,29 +469,8 @@ researcher = SubagentConfig(
     inheritance_policy=InheritancePolicy(inherit_system_prompt=True)
 )
 
-# Optional: Explicitly install delegate tool with custom name
-subagent_system = SubagentSystem()
-subagent_system.install_delegate_tool(world, parent_id, tool_name="delegate")
-```
-- **File:** `examples/subagent_delegation.py`
-- **What it demonstrates:** Parent agent delegating tasks via `delegate` tool with SubagentSystem managing child execution and skill inheritance.
-- **Run:** `uv run python examples/subagent_delegation.py`
-- **Pattern:** `SubagentRegistryComponent` + `SubagentSystem` (auto-registers `delegate` tool) + skill inheritance configuration.
-
-#### Key Code
-```python
-# SubagentSystem auto-registers the delegate tool for entities with registry.
-# If a subagent has 'skills' defined, they are inherited from the parent.
+# SubagentSystem auto-registers the subagent tool for entities with registry
 world.register_system(SubagentSystem(priority=-1), priority=-1)
-```
-- **What it demonstrates:** Parent agent delegating tasks via `delegate` tool. SubagentSystem manages child execution.
-- **Run:** `uv run python examples/subagent_delegation.py`
-- **Pattern:** `SubagentRegistryComponent` + `SubagentSystem` (auto-registers `delegate` tool).
-
-#### Key Code
-```python
-# SubagentSystem auto-registers the delegate tool
-# Parent LLM calls delegate → SubagentSystem executes child → result returned
 ```
 
 > **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.

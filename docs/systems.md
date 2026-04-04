@@ -451,13 +451,13 @@ The SubagentSystem manages subagent delegation, allowing parent agents to spawn 
 
 - **Constructor**: `__init__(self, priority: int = -1)`
 - **Queries**: `SubagentRegistryComponent`, `ToolRegistryComponent`
-- **Modifies**: `ToolRegistryComponent.tools` (registers `delegate` tool), `ToolRegistryComponent.handlers` (registers delegate handler).
+- **Modifies**: `ToolRegistryComponent.tools` (registers `subagent` tool), `ToolRegistryComponent.handlers` (registers subagent handler).
 - **Events Published**: `DelegationStartedEvent(parent_entity, child_entity, subagent_name, task)`, `DelegationCompletedEvent(parent_entity, child_entity, subagent_name, result)`
 - **Recommended Priority**: 5 (runs alongside `MessageBusSystem` and `ToolExecutionSystem`)
 
 ### Behavior
-The system automatically registers a `delegate` tool for entities that have both `SubagentRegistryComponent` and `ToolRegistryComponent`. When the delegate tool is called by an LLM, the system:
-1. Looks up the subagent configuration by name in the registry
+The system automatically registers a `subagent` tool for entities that have both `SubagentRegistryComponent` and `ToolRegistryComponent`. When the subagent tool is called by an LLM, the system:
+1. Looks up the subagent configuration by category name in the registry
 2. Creates a new child entity with the subagent's provider, model, and system prompt
 3. Runs the child entity to completion (or until `max_ticks` is reached)
 4. Returns the child's final assistant message as the tool result
@@ -466,9 +466,12 @@ The system automatically registers a `delegate` tool for entities that have both
 Each subagent runs in complete isolation with its own conversation history and state. The parent agent receives only the final result.
 
 ### Tool Schema
-The `delegate` tool accepts two parameters:
-- `subagent_name` (required): Name of the subagent to invoke (must exist in registry)
-- `task` (required): Task description for the subagent
+The `subagent` tool accepts parameters:
+- `category` (required): Name of the subagent to invoke (must exist in registry)
+- `prompt` (required): Task description for the subagent
+- `load_skills` (optional): Additional skill names to load on the subagent
+- `background` (optional): If true, executes asynchronously and returns session ID
+- `timeout` (optional): Maximum seconds to wait for completion
 
 ### Error Handling
 If the specified subagent name is not found in the registry, the tool returns an error message. If the subagent execution fails or times out, the error details are returned as the tool result.

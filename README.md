@@ -285,7 +285,7 @@ The `examples/` directory contains 25 runnable demos:
 | [`tool_approval_agent.py`](examples/tool_approval_agent.py) | Manual approval flow for sensitive tools |
 | [`tree_search_agent.py`](examples/tree_search_agent.py) | MCTS-based planning for complex goals (dual-mode) |
 | [`rag_agent.py`](examples/rag_agent.py) | Retrieval-Augmented Generation demo (dual-mode with real embeddings) |
-| [`subagent_delegation.py`](examples/subagent_delegation.py) | Parent agent delegates subtasks via legacy `delegate` and new unified `subagent` tools (dual-mode) |
+| [`subagent_delegation.py`](examples/subagent_delegation.py) | Parent agent delegates subtasks via unified `subagent` tool (dual-mode) |
 | [`task_orchestration_system.py`](examples/task_orchestration_system.py) | Dependency-aware task orchestration with wave planning, mixed local/subagent backends, scratchbook persistence, and serialization |
 | [`claude_agent.py`](examples/claude_agent.py) | Native Anthropic Claude provider usage |
 | [`litellm_agent.py`](examples/litellm_agent.py) | LiteLLM unified provider for 100+ models |
@@ -456,6 +456,7 @@ Four live scenarios are provided:
 - **Responses text** — `LLM_BASE_URL=https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1`
 - **Responses vision** — add `LLM_MODEL=qwen3-vl-flash` and `IMAGE_URL=<public-image-url>`
 - **Anthropic-compatible text** — `LLM_MODEL=kimi-k2.5`, `LLM_BASE_URL=https://dashscope.aliyuncs.com/apps/anthropic`
+- **Task Executor** — `tests/live/test_task_executor_live.py` exercises the `TaskExecutor` dispatch path end-to-end.
 
 For the legacy integration test:
 

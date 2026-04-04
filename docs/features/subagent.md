@@ -1,6 +1,6 @@
 # Subagent Delegation
 
-The `SubagentSystem` enables parent agents to spawn child agents for subtask execution via the `subagent` and `delegate` tools. The system supports synchronous and background execution modes, with isolated environments and policy-based capability inheritance.
+The `SubagentSystem` enables parent agents to spawn child agents for subtask execution via the `subagent` tool. The system supports synchronous and background execution modes, with isolated environments and policy-based capability inheritance.
 
 
 ## Overview
@@ -16,7 +16,6 @@ Subagent delegation provides:
 - **Control Tools**: Tools to query status, retrieve results, and cancel background sessions.
 - **Timeout Policy**: Per-call timeout overrides with global fallback and automated handling.
 - **Retry Reliability**: Transparent `RetryProvider` wrapping for transient LLM failures.
-- **Explicit Control**: Install the delegation tool manually with custom names using the `install_delegate_tool` API.
 
 
 ## Core Components
@@ -126,21 +125,6 @@ Background sessions transition through a strict state machine:
 | `Timeout` | Terminated after exceeding timeout limit. |
 | `Cancelled` | Terminated by explicit cancel request. |
 
-The system handles delegation and auto-registers the `delegate` tool. It supports both manual registration and backward-compatible auto-discovery for entities with the required components.
-
-### Explicit Installer API
-
-For fine-grained control, use the `install_delegate_tool` method. This allows you to customize the tool name or override existing registrations.
-
-```python
-subagent_system = SubagentSystem()
-world.register_system(subagent_system)
-
-# Install tool with custom name and override policy
-subagent_system.install_delegate_tool(
-    world, 1, tool_name="ask_subagent", override=True
-)
-```
 ### Subagent Control Installer
 
 Entities using background subagents must have the `SubagentSessionTableComponent` and call `install_subagent_control_tools` to enable control tools.
@@ -150,16 +134,6 @@ subagent_system = SubagentSystem()
 world.register_system(subagent_system)
 subagent_system.install_subagent_control_tools(world, entity_id)
 ```
-
-### Auto-Registration Semantics (Backward Compatibility)
-
-The `SubagentSystem` automatically registers the `delegate` tool for any entity that has both:
-1. `SubagentRegistryComponent`
-2. `ToolRegistryComponent`
-
-If the `delegate` tool is already registered in the `ToolRegistryComponent`, the system skips registration for that entity to avoid overwriting custom implementations unless the installer API is used with `override=True`.
-
-Note: `ToolRegistryComponent` is required because the delegate tool handler is registered into its `handlers` dict.
 
 ### Registration
 
@@ -180,7 +154,7 @@ world.register_system(SubagentSystem(priority=-1), priority=-1)
 1. **Register subagents** with `SubagentRegistryComponent`
 2. **Register SubagentSystem** (priority -1, before ReasoningSystem)
 3. **SubagentSystem creates a new child entity** with the subagent's provider, model, and a `SystemPromptConfigSpec` whose inline template is built by `_build_child_prompt_template` (auto-appending `${_installed_tools}` and `${_installed_skills}` sections if not already present), plus a `ChildStubComponent` to mark the parent-world stub entity
-4. **LLM calls delegate tool** to invoke subagent
+4. **LLM calls subagent tool** to invoke subagent
 5. **SubagentSystem executes** child and returns result
 ```python
 from ecs_agent.core import World
@@ -215,7 +189,7 @@ world.add_component(
     SubagentRegistryComponent(subagents={"researcher": researcher}),
 )
 
-# Add empty ToolRegistryComponent (SubagentSystem will auto-register delegate tool)
+# Add empty ToolRegistryComponent (SubagentSystem will auto-register subagent tool)
 world.add_component(
     parent,
     ToolRegistryComponent(tools={}, handlers={}),
@@ -229,10 +203,10 @@ world.add_component(
 world.add_component(
     parent,
     ConversationComponent(
-        messages=[
+         messages=[
             Message(role="user", content="Research quantum computing and summarize.")
-        ]
-    ),
+         ]
+     ),
 )
 
 # Register systems (SubagentSystem BEFORE ReasoningSystem)
@@ -246,9 +220,9 @@ runner = Runner()
 await runner.run(world, max_ticks=20)
 ```
 
-### Unified `subagent` Tool Usage
+### `subagent` Tool Usage
 
-The `subagent` tool replaces the legacy `delegate` tool for most use cases, adding support for background execution and skill overrides:
+The `subagent` tool enables parent agents to delegate subtasks with support for background execution and skill overrides:
 
 ```json
 {
@@ -326,9 +300,9 @@ The parent LLM can orchestrate:
 User: "Write a blog post about AI safety."
 
 Parent LLM:
-1. Call delegate(subagent_name="researcher", task="Research AI safety concerns")
-2. Call delegate(subagent_name="writer", task="Write blog post: [research results]")
-3. Call delegate(subagent_name="critic", task="Review this draft: [blog post]")
+1. Call subagent(category="researcher", prompt="Research AI safety concerns")
+2. Call subagent(category="writer", prompt="Write blog post: [research results]")
+3. Call subagent(category="critic", prompt="Review this draft: [blog post]")
 4. Revise based on feedback
 ```
 
@@ -386,21 +360,20 @@ The `InheritancePolicy` controls which capabilities are inherited from parent to
 from ecs_agent.types import InheritancePolicy, SubagentConfig
 
 policy = InheritancePolicy(
-    enabled=True,                      # Master toggle for inheritance
-    inherit_system_prompt=True,        # Append parent system prompt to child
-    inherit_tools=["search", "read"],  # Whitelist of tool names to inherit
-    inherit_permissions=False,         # Inherit parent permission restrictions
-    allow_delegate_tool=True,          # Enable delegate tool on child
-    tool_conflict_policy="skip",       # How to handle tool name conflicts: skip|error|override
-    missing_skill_policy="warn",       # How to handle missing inherited skills: warn|error
+     enabled=True,                      # Master toggle for inheritance
+     inherit_system_prompt=True,        # Append parent system prompt to child
+     inherit_tools=["search", "read"],  # Whitelist of tool names to inherit
+     inherit_permissions=False,         # Inherit parent permission restrictions
+     tool_conflict_policy="skip",       # How to handle tool name conflicts: skip|error|override
+     missing_skill_policy="warn",       # How to handle missing inherited skills: warn|error
 )
 
 config = SubagentConfig(
-    name="researcher",
-    provider=provider,
-    model="gpt-4o",
-    system_prompt="You are a research assistant.",
-    inheritance_policy=policy,  # Attach policy to config
+     name="researcher",
+     provider=provider,
+     model="gpt-4o",
+     system_prompt="You are a research assistant.",
+     inheritance_policy=policy,  # Attach policy to config
 )
 ```
 
@@ -412,9 +385,9 @@ config = SubagentConfig(
 | `inherit_system_prompt` | `bool` | `True` | Append parent's system prompt to child's. Merged with `\n\n` separator. |
 | `inherit_tools` | `list[str]` | `[]` | Whitelist of tool names to inherit from parent. Empty list = no tools inherited. |
 | `inherit_permissions` | `bool` | `False` | Copy parent's `PermissionComponent` to child (tool whitelist/blacklist). |
-| `allow_delegate_tool` | `bool` | `True` | Enable `delegate` tool on child (allows recursive delegation). |
 | `tool_conflict_policy` | `str` | `"skip"` | How to resolve tool name conflicts: `"skip"` (ignore duplicate), `"error"` (raise), `"override"` (replace). |
 | `missing_skill_policy` | `str` | `"warn"` | How to handle missing parent skills: `"warn"` (log warning), `"error"` (raise). |
+
 
 ### Inheritance Behavior
 
@@ -589,36 +562,35 @@ delegation_count = 0
 
 async def track_delegations(event: DelegationStartedEvent) -> None:
     global delegation_count
-    delegation_count += 1
-    if delegation_count > 10:
-        print("Warning: Excessive delegations detected")
+     delegation_count += 1
+     if delegation_count > 10:
+         print("Warning: Excessive delegations detected")
 
-world.event_bus.subscribe(DelegationStartedEvent, track_delegations)
-```
+ world.event_bus.subscribe(DelegationStartedEvent, track_delegations)
+ ```
 
-### 4. Provide Clear Tasks
+ ### 4. Provide Clear Tasks
 
-Delegate specific, well-defined tasks:
+ Delegate specific, well-defined tasks:
 
-```python
-# Good
-task="Extract all dates mentioned in this text: [text]"
+ ```python
+ # Good
+ task="Extract all dates mentioned in this text: [text]"
 
-# Bad
-task="Help me with this"
-```
-### 5. Inheritance Policy Best Practices
+ # Bad
+ task="Help me with this"
+ ```
+ ### 5. Inheritance Policy Best Practices
 
-1. **Whitelist Tools Explicitly**: Only inherit tools the child actually needs. Avoid inheriting all parent tools.
-2. **Use `skip` for Conflict Policy**: Prevents accidental tool overwrites. Use `override` only when intentional.
-3. **Test Missing Skills**: Ensure parent has required skills installed before delegation if using `inherit_tools`.
-4. **Disable Recursive Delegation**: Set `allow_delegate_tool=False` to prevent children from spawning sub-children.
+ 1. **Whitelist Tools Explicitly**: Only inherit tools the child actually needs. Avoid inheriting all parent tools.
+ 2. **Use `skip` for Conflict Policy**: Prevents accidental tool overwrites. Use `override` only when intentional.
+ 3. **Test Missing Skills**: Ensure parent has required skills installed before delegation if using `inherit_tools`.
 
-## Limitations
+ ## Limitations
 
-- Subagents can delegate to other subagents if `allow_delegate_tool=True` in `InheritancePolicy` (recursive delegation supported)
-- Subagent state is not persisted after execution completes
-- Tool calls from subagents are isolated (cannot access parent tools)
+ - Subagent state is not persisted after execution completes
+ - Tool calls from subagents are isolated (cannot access parent tools)
+
 - `TerminalComponent` from child world is NOT copied to parent (prevents premature runner termination). Additionally, the parent-world stub entity for each delegation carries a `ChildStubComponent`, which causes `ReasoningSystem` to skip it — preventing unintended LLM inference on completed delegation stubs
 - After child world completes, the stub entity's `LLMComponent.system_prompt` reflects the effective rendered prompt (including expanded `${_installed_tools}` and `${_installed_skills}` sections) produced by `SystemPromptRenderSystem` in the child world during execution.
 ## See Also

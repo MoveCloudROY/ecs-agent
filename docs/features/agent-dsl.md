@@ -587,14 +587,14 @@ await runner.run(world, max_ticks=3)
 mode: primary
 model: gpt-4
 tools:
-  delegate: true
+  subagent: true
   read_file: true
 ---
 
 # Orchestrator Agent
 
 You coordinate work between specialized subagents.
-Use the delegate tool to assign tasks to researchers and writers.
+Use the subagent tool to assign tasks to researchers and writers.
 ```
 
 ```markdown
