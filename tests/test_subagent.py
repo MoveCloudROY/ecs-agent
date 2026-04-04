@@ -71,7 +71,6 @@ def test_subagent_config_defaults() -> None:
     assert config.inheritance_policy.inherit_system_prompt is True
     assert config.inheritance_policy.inherit_tools == []
     assert config.inheritance_policy.inherit_permissions is False
-    assert config.inheritance_policy.allow_delegate_tool is False
     assert config.inheritance_policy.tool_conflict_policy == "skip"
     assert config.inheritance_policy.missing_skill_policy == "warn"
 
@@ -264,7 +263,7 @@ def test_subagent_contract_and_lifecycle_session_record_fields() -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Task 12: SubagentSystem + Delegate Tool Tests
+# Task 12: SubagentSystem + Subagent Tool Tests
 # ──────────────────────────────────────────────────────────────────────────────
 
 from ecs_agent.components import (
@@ -289,585 +288,6 @@ def _register_message_bus(
     message_bus = MessageBusSystem(priority=5, request_timeout=request_timeout)
     world.register_system(message_bus, priority=5)
     return message_bus
-
-
-def test_delegate_tool_schema() -> None:
-    """Verify delegate tool has correct parameters."""
-    from ecs_agent.systems.subagent import SubagentSystem
-
-    world = World()
-    entity = world.create_entity()
-    world.add_component(entity, SubagentRegistryComponent())
-    world.add_component(entity, ToolRegistryComponent(tools={}, handlers={}))
-
-    system = SubagentSystem()
-    # Process should register the delegate tool
-    import asyncio
-
-    asyncio.run(system.process(world))
-
-    registry = world.get_component(entity, ToolRegistryComponent)
-    assert registry is not None
-    assert "delegate" in registry.tools
-    delegate_schema = registry.tools["delegate"]
-    assert delegate_schema.name == "delegate"
-    assert "subagent_name" in delegate_schema.parameters["properties"]
-    assert "task" in delegate_schema.parameters["properties"]
-    assert delegate_schema.parameters["required"] == ["subagent_name", "task"]
-
-
-async def test_delegate_creates_child_entity() -> None:
-    """Verify delegate creates new entity with correct components."""
-    from ecs_agent.systems.subagent import SubagentSystem
-
-    world = World()
-    parent_entity = world.create_entity()
-
-    # Set up parent with registry
-    provider = FakeProvider(
-        responses=[
-            CompletionResult(message=Message(role="assistant", content="Result"))
-        ]
-    )
-    config = SubagentConfig(
-        name="test-agent", provider=provider, model="fake", system_prompt="Test prompt"
-    )
-    registry = SubagentRegistryComponent(subagents={"test-agent": config})
-    world.add_component(parent_entity, registry)
-    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
-    _register_message_bus(world, parent_entity)
-
-    system = SubagentSystem()
-    await system.process(world)
-
-    # Get the delegate handler
-    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
-    assert tool_registry is not None
-    delegate_handler = tool_registry.handlers["delegate"]
-
-    # Count entities before delegation
-    entities_before = len([e for e in world.query(LLMComponent)])
-
-    # Call delegate
-    result = await delegate_handler(subagent_name="test-agent", task="Do something")
-
-    # Verify child entity was created
-    entities_after = len([e for e in world.query(LLMComponent)])
-    assert entities_after > entities_before, "Child entity should be created"
-
-    # Find the child entity (has OwnerComponent pointing to parent)
-    child_entity = None
-    for entity_id, components in world.query(OwnerComponent):
-        owner_comp = components[0]
-        assert isinstance(owner_comp, OwnerComponent)
-        if owner_comp.owner_id == parent_entity:
-            child_entity = entity_id
-            break
-
-    assert child_entity is not None, "Child entity with OwnerComponent should exist"
-
-    # Verify child has correct components
-    child_llm = world.get_component(child_entity, LLMComponent)
-    assert child_llm is not None
-    assert child_llm.model == "fake"
-    assert child_llm.system_prompt.startswith("Test prompt")
-
-    child_conv = world.get_component(child_entity, ConversationComponent)
-    assert child_conv is not None
-    assert len(child_conv.messages) >= 1
-    assert child_conv.messages[0].role == "user"
-    assert child_conv.messages[0].content == "Do something"
-
-
-async def test_delegate_runs_child_to_completion() -> None:
-    """Verify delegate runs child entity until TerminalComponent."""
-    from ecs_agent.systems.subagent import SubagentSystem
-
-    world = World()
-    parent_entity = world.create_entity()
-
-    # Set up parent with registry
-    provider = FakeProvider(
-        responses=[
-            CompletionResult(message=Message(role="assistant", content="Completed"))
-        ]
-    )
-    config = SubagentConfig(
-        name="test-agent", provider=provider, model="fake", max_ticks=2
-    )
-    registry = SubagentRegistryComponent(subagents={"test-agent": config})
-    world.add_component(parent_entity, registry)
-    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
-    _register_message_bus(world, parent_entity)
-
-    system = SubagentSystem()
-    await system.process(world)
-
-    # Get delegate handler
-    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
-    assert tool_registry is not None
-    delegate_handler = tool_registry.handlers["delegate"]
-
-    # Call delegate
-    result = await delegate_handler(subagent_name="test-agent", task="Do task")
-
-    # Find child entity
-    child_entity = None
-    for entity_id, components in world.query(OwnerComponent):
-        owner_comp = components[0]
-        assert isinstance(owner_comp, OwnerComponent)
-        if owner_comp.owner_id == parent_entity:
-            child_entity = entity_id
-            break
-
-    assert child_entity is not None
-
-    # Verify child has ConversationComponent (delegation completed)
-    child_conv = world.get_component(child_entity, ConversationComponent)
-    assert child_conv is not None, "Child should have ConversationComponent"
-    assert len(child_conv.messages) > 0, "Child conversation should have messages"
-
-
-async def test_delegate_returns_last_assistant_message() -> None:
-    """Verify delegate returns the last assistant message content."""
-    from ecs_agent.systems.subagent import SubagentSystem
-
-    world = World()
-    parent_entity = world.create_entity()
-
-    # Set up parent with registry
-    provider = FakeProvider(
-        responses=[
-            CompletionResult(
-                message=Message(role="assistant", content="This is the final answer")
-            )
-        ]
-    )
-    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
-    registry = SubagentRegistryComponent(subagents={"test-agent": config})
-    world.add_component(parent_entity, registry)
-    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
-    _register_message_bus(world, parent_entity)
-
-    system = SubagentSystem()
-    await system.process(world)
-
-    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
-    assert tool_registry is not None
-    delegate_handler = tool_registry.handlers["delegate"]
-
-    result = await delegate_handler(subagent_name="test-agent", task="Answer this")
-
-    assert isinstance(result, str)
-    assert result == "This is the final answer"
-
-
-async def test_delegate_publishes_events() -> None:
-    """Verify DelegationStartedEvent and DelegationCompletedEvent are published."""
-    from ecs_agent.systems.subagent import SubagentSystem
-
-    world = World()
-    parent_entity = world.create_entity()
-
-    # Set up parent with registry
-    provider = FakeProvider(
-        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
-    )
-    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
-    registry = SubagentRegistryComponent(subagents={"test-agent": config})
-    world.add_component(parent_entity, registry)
-    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
-    _register_message_bus(world, parent_entity)
-
-    # Subscribe to events
-    started_events: list[DelegationStartedEvent] = []
-    completed_events: list[DelegationCompletedEvent] = []
-
-    async def on_started(event: DelegationStartedEvent) -> None:
-        started_events.append(event)
-
-    async def on_completed(event: DelegationCompletedEvent) -> None:
-        completed_events.append(event)
-
-    world.event_bus.subscribe(DelegationStartedEvent, on_started)
-    world.event_bus.subscribe(DelegationCompletedEvent, on_completed)
-
-    system = SubagentSystem()
-    await system.process(world)
-
-    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
-    assert tool_registry is not None
-    delegate_handler = tool_registry.handlers["delegate"]
-
-    await delegate_handler(subagent_name="test-agent", task="Do work")
-
-    assert len(started_events) == 1
-    assert started_events[0].entity_id == parent_entity
-    assert started_events[0].subagent_name == "test-agent"
-    assert started_events[0].task == "Do work"
-    assert started_events[0].correlation_id
-    assert started_events[0].traceparent
-
-    assert len(completed_events) == 1
-    assert completed_events[0].entity_id == parent_entity
-    assert completed_events[0].subagent_name == "test-agent"
-    assert isinstance(completed_events[0].result, str)
-    assert completed_events[0].success is True
-    assert completed_events[0].error is None
-    assert completed_events[0].correlation_id == started_events[0].correlation_id
-    assert completed_events[0].traceparent == started_events[0].traceparent
-
-
-async def test_delegate_unknown_subagent_returns_error() -> None:
-    """Verify delegate with unknown name returns error string, does not raise."""
-    from ecs_agent.systems.subagent import SubagentSystem
-
-    world = World()
-    parent_entity = world.create_entity()
-
-    registry = SubagentRegistryComponent()  # Empty registry
-    world.add_component(parent_entity, registry)
-    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
-    _register_message_bus(world, parent_entity)
-
-    system = SubagentSystem()
-    await system.process(world)
-
-    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
-    assert tool_registry is not None
-    delegate_handler = tool_registry.handlers["delegate"]
-
-    # Should not raise, should return error string
-    result = await delegate_handler(subagent_name="unknown-agent", task="Do task")
-
-    assert isinstance(result, str)
-    assert "error" in result.lower() or "unknown" in result.lower()
-
-
-async def test_subagent_system_registers_delegate_tool() -> None:
-    """SubagentSystem.process() ensures delegate tool is registered."""
-    from ecs_agent.systems.subagent import SubagentSystem
-
-    world = World()
-    entity = world.create_entity()
-    world.add_component(entity, SubagentRegistryComponent())
-    world.add_component(entity, ToolRegistryComponent(tools={}, handlers={}))
-
-    # Before processing, no delegate tool
-    registry = world.get_component(entity, ToolRegistryComponent)
-    assert registry is not None
-    assert "delegate" not in registry.tools
-
-    # After processing, delegate tool is registered
-    system = SubagentSystem()
-    await system.process(world)
-
-    registry = world.get_component(entity, ToolRegistryComponent)
-    assert registry is not None
-    assert "delegate" in registry.tools
-    assert "delegate" in registry.handlers
-
-
-async def test_delegate_with_skills_installs_skills() -> None:
-    """SubagentConfig with skills list, verify skills installed on child entity."""
-    from ecs_agent.systems.subagent import SubagentSystem
-    from ecs_agent.components.definitions import SkillComponent
-    from ecs_agent.skills.script_skill import ScriptSkill
-    from ecs_agent.skills.manager import SkillManager
-
-    # Create a test skill to verify installation
-    class TestSkill(ScriptSkill):
-        name: str = "test-skill"
-        description: str = "A test skill"
-
-        def tools(self) -> dict[str, tuple[ToolSchema, Any]]:
-            async def test_tool() -> str:
-                return "test result"
-
-            return {
-                "test_tool": (
-                    ToolSchema(
-                        name="test_tool",
-                        description="A test tool",
-                        parameters={"type": "object", "properties": {}},
-                    ),
-                    test_tool,
-                )
-            }
-
-        def system_prompt(self) -> str:
-            return "Test skill prompt"
-
-        def install(self, world: World, entity_id: EntityId) -> None:
-            pass
-
-        def uninstall(self, world: World, entity_id: EntityId) -> None:
-            pass
-
-    world = World()
-    parent_entity = world.create_entity()
-
-    # Create a subagent config WITH skills list
-    provider = FakeProvider(
-        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
-    )
-    config = SubagentConfig(
-        name="test-agent",
-        provider=provider,
-        model="fake",
-        skills=["test-skill"],  # Request skill installation
-    )
-
-    # Register TestSkill on parent entity so it's available for delegation
-    test_skill = TestSkill()
-    skill_manager = SkillManager()
-    skill_manager.install(world, parent_entity, test_skill)
-
-    # Register subagent config
-    registry = SubagentRegistryComponent(subagents={"test-agent": config})
-    world.add_component(parent_entity, registry)
-    _register_message_bus(world, parent_entity)
-
-    # Register SubagentSystem to auto-register delegate tool
-    system = SubagentSystem()
-    await system.process(world)
-
-    # Get the delegate handler
-    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
-    assert tool_registry is not None
-    assert "delegate" in tool_registry.handlers
-
-    delegate_handler = tool_registry.handlers["delegate"]
-
-    # Track entities before delegation
-    entities_before = len([e for e in world.query(OwnerComponent)])
-
-    # Call delegate handler (this should create child and install skills)
-    result = await delegate_handler(subagent_name="test-agent", task="test task")
-
-    # Find child entity (has OwnerComponent pointing to parent)
-    child_entity_id = None
-    for entity_id, components in world.query(OwnerComponent):
-        owner_comp = components[0]
-        assert isinstance(owner_comp, OwnerComponent)
-        if owner_comp.owner_id == parent_entity:
-            child_entity_id = entity_id
-            break
-
-    assert child_entity_id is not None, "Child entity should be created"
-
-    # RED TEST: Verify skill installation happened on child entity
-
-    # ASSERTION 1: Child entity has SkillComponent with the requested skill
-    skill_component = world.get_component(child_entity_id, SkillComponent)
-    assert skill_component is not None, "Child entity should have SkillComponent"
-    assert "test-skill" in skill_component.skills, (
-        "test-skill should be installed on child"
-    )
-
-    # ASSERTION 2: Child's ToolRegistryComponent has the skill's tools
-    child_tool_registry = world.get_component(child_entity_id, ToolRegistryComponent)
-    assert child_tool_registry is not None, "Child should have ToolRegistryComponent"
-    assert "test_tool" in child_tool_registry.tools, "test_tool should be registered"
-    assert "test_tool" in child_tool_registry.handlers, (
-        "test_tool handler should be registered"
-    )
-
-    # ASSERTION 3: Skill metadata is correctly populated
-    metadata = skill_component.skills["test-skill"]
-    assert metadata.name == "test-skill"
-    assert metadata.description == "A test skill"
-    assert "test_tool" in metadata.tool_names
-    assert metadata.has_system_prompt is True
-
-
-@pytest.mark.skip(
-    reason="Timeout functionality removed in favor of synchronous delegation (commit 3bad29b)"
-)
-async def test_delegate_timeout_returns_deterministic_error_and_cleans_pending_requests() -> (
-    None
-):
-    from ecs_agent.systems.subagent import SubagentSystem
-
-    world = World()
-    parent_entity = world.create_entity()
-
-    provider = FakeProvider(
-        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
-    )
-    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
-    registry = SubagentRegistryComponent(subagents={"test-agent": config})
-    world.add_component(parent_entity, registry)
-    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
-    message_bus = _register_message_bus(world, parent_entity, request_timeout=0.01)
-
-    completed_events: list[DelegationCompletedEvent] = []
-
-    async def on_completed(event: DelegationCompletedEvent) -> None:
-        completed_events.append(event)
-
-    world.event_bus.subscribe(DelegationCompletedEvent, on_completed)
-
-    async def never_respond(correlation_id: str, message: dict[str, object]) -> bool:
-        _ = correlation_id
-        _ = message
-        return False
-
-    setattr(message_bus, "respond", never_respond)
-
-    system = SubagentSystem()
-    await system.process(world)
-
-    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
-    assert tool_registry is not None
-    delegate_handler = tool_registry.handlers["delegate"]
-
-    result = await delegate_handler(subagent_name="test-agent", task="Do work")
-
-    assert result == "Error: Subagent timeout"
-    assert len(completed_events) == 1
-    assert completed_events[0].success is False
-    assert completed_events[0].error == "Error: Subagent timeout"
-
-    pending_requests = getattr(message_bus, "_pending_requests", None)
-    assert isinstance(pending_requests, dict)
-    assert pending_requests == {}
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Wave 1: System-Level Delegation Contract Tests (RED)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-async def test_delegate_tool_available_before_first_reasoning_tick() -> None:
-    """Delegate tool MUST be registered before ReasoningSystem processes."""
-    from ecs_agent.systems.subagent import SubagentSystem
-    from ecs_agent.systems.reasoning import ReasoningSystem
-
-    class ToolCheckingProvider:
-        def __init__(self) -> None:
-            self.saw_delegate = False
-
-        async def complete(
-            self,
-            messages: list[Message],
-            tools: list[ToolSchema] | None = None,
-            stream: bool = False,
-            response_format: dict[str, Any] | None = None,
-        ) -> CompletionResult:
-            _ = messages
-            _ = stream
-            _ = response_format
-            assert tools is not None
-            self.saw_delegate = any(tool.name == "delegate" for tool in tools)
-            assert self.saw_delegate
-            return CompletionResult(message=Message(role="assistant", content="Done"))
-
-    world = World()
-    parent_entity = world.create_entity()
-
-    # Register subagent config
-    provider = ToolCheckingProvider()
-    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
-    registry = SubagentRegistryComponent(subagents={"test-agent": config})
-    world.add_component(parent_entity, registry)
-    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
-    world.add_component(parent_entity, LLMComponent(provider=provider, model="fake"))
-    world.add_component(
-        parent_entity,
-        ConversationComponent(messages=[Message(role="user", content="Use delegate")]),
-    )
-    _register_message_bus(world, parent_entity)
-
-    # Register systems (SubagentSystem BEFORE ReasoningSystem)
-    world.register_system(SubagentSystem(priority=0), priority=0)
-    world.register_system(ReasoningSystem(priority=1), priority=1)
-
-    await world.process()
-
-    # Assert delegate tool is registered BEFORE reasoning system processes
-    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
-    assert tool_registry is not None
-    assert "delegate" in tool_registry.tools, (
-        "Delegate tool MUST be registered before first reasoning tick"
-    )
-    assert "delegate" in tool_registry.handlers, (
-        "Delegate handler MUST be registered before first reasoning tick"
-    )
-
-    conv = world.get_component(parent_entity, ConversationComponent)
-    assert conv is not None
-    assert len(conv.messages) == 2
-    assert conv.messages[1].role == "assistant"
-    assert provider.saw_delegate
-
-
-async def test_delegate_roundtrip_parent_delegate_tool_result_parent_summary() -> None:
-    """Test parent→delegate call→child execution→result→parent receives summary."""
-    from ecs_agent.systems.subagent import SubagentSystem
-
-    world = World()
-    parent_entity = world.create_entity()
-
-    # Set up child provider to return a specific result
-    child_provider = FakeProvider(
-        responses=[
-            CompletionResult(
-                message=Message(role="assistant", content="Child completed task")
-            )
-        ]
-    )
-    config = SubagentConfig(
-        name="child-agent", provider=child_provider, model="fake", max_ticks=2
-    )
-    registry = SubagentRegistryComponent(subagents={"child-agent": config})
-    world.add_component(parent_entity, registry)
-    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
-    _register_message_bus(world, parent_entity)
-
-    # Register and process SubagentSystem
-    system = SubagentSystem()
-    await system.process(world)
-
-    # Get delegate handler
-    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
-    assert tool_registry is not None
-    delegate_handler = tool_registry.handlers["delegate"]
-
-    # PARENT → DELEGATE CALL
-    result = await delegate_handler(
-        subagent_name="child-agent", task="Execute this task"
-    )
-
-    # Assert result is string summary from child
-    assert isinstance(result, str), "Delegate must return string summary"
-    assert result == "Child completed task", (
-        "Result must match child's last assistant message"
-    )
-
-    # Find child entity
-    child_entity = None
-    for entity_id, components in world.query(OwnerComponent):
-        owner_comp = components[0]
-        assert isinstance(owner_comp, OwnerComponent)
-        if owner_comp.owner_id == parent_entity:
-            child_entity = entity_id
-            break
-
-    assert child_entity is not None, "Child entity must be created"
-
-    # Assert child has conversation (execution completed)
-    child_conv = world.get_component(child_entity, ConversationComponent)
-    assert child_conv is not None, "Child must have ConversationComponent"
-    assert len(child_conv.messages) > 0, "Child conversation must have messages"
-
-    # Assert child conversation contains the delegated task
-    child_conv = world.get_component(child_entity, ConversationComponent)
-    assert child_conv is not None
-    assert len(child_conv.messages) >= 1
-    assert child_conv.messages[0].content == "Execute this task", (
-        "Child's first message must be delegated task"
-    )
 
 
 async def test_delegation_event_correlation_integrity() -> None:
@@ -899,16 +319,16 @@ async def test_delegation_event_correlation_integrity() -> None:
     world.event_bus.subscribe(DelegationStartedEvent, on_started)
     world.event_bus.subscribe(DelegationCompletedEvent, on_completed)
 
-    # Process to register delegate tool
+    # Process to register subagent tool
     system = SubagentSystem()
     await system.process(world)
 
     tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
     assert tool_registry is not None
-    delegate_handler = tool_registry.handlers["delegate"]
+    subagent_handler = tool_registry.handlers["subagent"]
 
-    # Invoke delegation
-    await delegate_handler(subagent_name="test-agent", task="test task")
+    # Invoke subagent
+    await subagent_handler(category="test-agent", prompt="test task")
 
     # Verify events published
     assert len(started_events) == 1, "DelegationStartedEvent MUST be published"
@@ -939,188 +359,8 @@ async def test_delegation_event_correlation_integrity() -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Task 2: Explicit Delegate Installer API Tests (RED)
+# Task 2: Subagent Tool Auto-Registration Tests
 # ──────────────────────────────────────────────────────────────────────────────
-
-
-async def test_install_delegate_tool_with_default_name() -> None:
-    """Test explicit installer with default tool name 'delegate'."""
-    from ecs_agent.systems.subagent import SubagentSystem
-
-    world = World()
-    entity = world.create_entity()
-
-    provider = FakeProvider(
-        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
-    )
-    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
-    registry = SubagentRegistryComponent(subagents={"test-agent": config})
-    world.add_component(entity, registry)
-    world.add_component(entity, ToolRegistryComponent(tools={}, handlers={}))
-
-    system = SubagentSystem()
-    # This method doesn't exist yet - RED!
-    system.install_delegate_tool(world, entity)
-
-    tool_registry = world.get_component(entity, ToolRegistryComponent)
-    assert tool_registry is not None
-    assert "delegate" in tool_registry.handlers, (
-        "Expected 'delegate' handler registered with default tool name"
-    )
-    assert "delegate" in tool_registry.tools, (
-        "Expected 'delegate' tool schema registered with default tool name"
-    )
-
-
-async def test_install_delegate_tool_with_custom_name() -> None:
-    """Test explicit installer with custom tool name."""
-    from ecs_agent.systems.subagent import SubagentSystem
-
-    world = World()
-    entity = world.create_entity()
-
-    provider = FakeProvider(
-        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
-    )
-    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
-    registry = SubagentRegistryComponent(subagents={"test-agent": config})
-    world.add_component(entity, registry)
-    world.add_component(entity, ToolRegistryComponent(tools={}, handlers={}))
-
-    system = SubagentSystem()
-    # This method doesn't exist yet - RED!
-    system.install_delegate_tool(world, entity, tool_name="custom_delegate")
-
-    tool_registry = world.get_component(entity, ToolRegistryComponent)
-    assert tool_registry is not None
-    assert "custom_delegate" in tool_registry.handlers, (
-        "Expected 'custom_delegate' handler registered with custom tool name"
-    )
-    assert "custom_delegate" in tool_registry.tools, (
-        "Expected 'custom_delegate' tool schema registered with custom tool name"
-    )
-    # Ensure default name was NOT used
-    assert "delegate" not in tool_registry.handlers, (
-        "Expected 'delegate' NOT registered when custom tool name provided"
-    )
-
-
-async def test_install_delegate_tool_idempotency() -> None:
-    """Test calling install_delegate_tool twice with same params succeeds (idempotent)."""
-    from ecs_agent.systems.subagent import SubagentSystem
-
-    world = World()
-    entity = world.create_entity()
-
-    provider = FakeProvider(
-        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
-    )
-    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
-    registry = SubagentRegistryComponent(subagents={"test-agent": config})
-    world.add_component(entity, registry)
-    world.add_component(entity, ToolRegistryComponent(tools={}, handlers={}))
-
-    system = SubagentSystem()
-    # This method doesn't exist yet - RED!
-    system.install_delegate_tool(world, entity)
-    # Call again - should not raise, should be idempotent
-    system.install_delegate_tool(world, entity)
-
-    tool_registry = world.get_component(entity, ToolRegistryComponent)
-    assert tool_registry is not None
-    assert "delegate" in tool_registry.handlers, (
-        "Expected 'delegate' handler after idempotent install"
-    )
-
-
-async def test_install_delegate_tool_no_overwrite_by_default() -> None:
-    """Test that existing handler is NOT replaced when override=False (default)."""
-    from ecs_agent.systems.subagent import SubagentSystem
-
-    world = World()
-    entity = world.create_entity()
-
-    provider = FakeProvider(
-        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
-    )
-    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
-    registry = SubagentRegistryComponent(subagents={"test-agent": config})
-    world.add_component(entity, registry)
-
-    # Pre-register a custom 'delegate' handler
-    async def custom_handler(subagent_name: str, task: str) -> str:
-        return "custom_result"
-
-    delegate_schema = ToolSchema(
-        name="delegate",
-        description="Custom delegate",
-        parameters={"type": "object", "properties": {}, "required": []},
-    )
-    tool_registry = ToolRegistryComponent(
-        tools={"delegate": delegate_schema}, handlers={"delegate": custom_handler}
-    )
-    world.add_component(entity, tool_registry)
-
-    system = SubagentSystem()
-    # This method doesn't exist yet - RED!
-    # Default override=False, should NOT replace existing handler
-    system.install_delegate_tool(world, entity)
-
-    tool_registry = world.get_component(entity, ToolRegistryComponent)
-    assert tool_registry is not None
-    # Handler should still be the custom one (not replaced)
-    result = await tool_registry.handlers["delegate"](subagent_name="test", task="test")
-    assert result == "custom_result", (
-        "Expected custom handler preserved (not overwritten) when override=False"
-    )
-
-
-async def test_install_delegate_tool_overwrite_when_override_true() -> None:
-    """Test that existing handler IS replaced when override=True."""
-    from ecs_agent.systems.subagent import SubagentSystem
-
-    world = World()
-    entity = world.create_entity()
-
-    provider = FakeProvider(
-        responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
-    )
-    config = SubagentConfig(name="test-agent", provider=provider, model="fake")
-    registry = SubagentRegistryComponent(subagents={"test-agent": config})
-    world.add_component(entity, registry)
-
-    # Pre-register a custom 'delegate' handler
-    async def custom_handler(subagent_name: str, task: str) -> str:
-        return "custom_result"
-
-    delegate_schema = ToolSchema(
-        name="delegate",
-        description="Custom delegate",
-        parameters={"type": "object", "properties": {}, "required": []},
-    )
-    tool_registry = ToolRegistryComponent(
-        tools={"delegate": delegate_schema}, handlers={"delegate": custom_handler}
-    )
-    world.add_component(entity, tool_registry)
-    _register_message_bus(world, entity)
-
-    system = SubagentSystem()
-    # This method doesn't exist yet - RED!
-    # override=True, should REPLACE existing handler
-    system.install_delegate_tool(world, entity, override=True)
-
-    tool_registry = world.get_component(entity, ToolRegistryComponent)
-    assert tool_registry is not None
-    # Handler should be replaced with system's handler (different behavior)
-    result = await tool_registry.handlers["delegate"](
-        subagent_name="test-agent", task="test"
-    )
-    # System handler should execute delegation, not return "custom_result"
-    assert result != "custom_result", (
-        "Expected system handler replaced custom handler when override=True"
-    )
-    # Verify it's the real delegate handler by checking result format
-    assert isinstance(result, str), "Delegate handler must return string"
 
 
 async def test_backward_compatible_auto_registration_still_works() -> None:
@@ -1144,12 +384,10 @@ async def test_backward_compatible_auto_registration_still_works() -> None:
 
     tool_registry = world.get_component(entity, ToolRegistryComponent)
     assert tool_registry is not None
-    assert "delegate" in tool_registry.handlers, (
-        "Backward compatibility: process() must still auto-register delegate tool"
+    assert "subagent" in tool_registry.handlers, (
+        "Process must auto-register subagent tool"
     )
-    assert "delegate" in tool_registry.tools, (
-        "Backward compatibility: process() must still register delegate schema"
-    )
+    assert "subagent" in tool_registry.tools, "Process must register subagent schema"
 
 
 def _shared_tool_schema() -> ToolSchema:
@@ -1231,8 +469,8 @@ async def _delegate_with_policy(
 
     parent_tools = world.get_component(parent_entity, ToolRegistryComponent)
     assert parent_tools is not None
-    delegate_handler = parent_tools.handlers["delegate"]
-    result = await delegate_handler(subagent_name="child", task="Run delegated task")
+    subagent_handler = parent_tools.handlers["subagent"]
+    result = await subagent_handler(category="child", prompt="Run delegated task")
 
     child_entity = _find_child_entity(world, parent_entity)
     return world, parent_entity, child_entity, result
@@ -1283,40 +521,6 @@ async def test_inheritance_policy_conflict_override_replaces_child_tool() -> Non
     )
 
 
-async def test_inheritance_policy_allow_delegate_tool_false_blocks_delegate() -> None:
-    policy = InheritancePolicy(
-        enabled=True,
-        inherit_tools=["delegate"],
-        allow_delegate_tool=False,
-    )
-    world, _, child_entity, _ = await _delegate_with_policy(policy=policy)
-
-    child_tools = world.get_component(child_entity, ToolRegistryComponent)
-    assert child_tools is not None, (
-        "Recursion guard test requires child ToolRegistryComponent to be present"
-    )
-    assert "delegate" not in child_tools.tools, (
-        "allow_delegate_tool=False must block delegate tool inheritance"
-    )
-
-
-async def test_inheritance_policy_allow_delegate_tool_true_inherits_delegate() -> None:
-    policy = InheritancePolicy(
-        enabled=True,
-        inherit_tools=["delegate"],
-        allow_delegate_tool=True,
-    )
-    world, _, child_entity, _ = await _delegate_with_policy(policy=policy)
-
-    child_tools = world.get_component(child_entity, ToolRegistryComponent)
-    assert child_tools is not None, (
-        "allow_delegate_tool=True test requires child ToolRegistryComponent"
-    )
-    assert "delegate" in child_tools.tools, (
-        "allow_delegate_tool=True should allow delegate inheritance for controlled recursion"
-    )
-
-
 async def test_inheritance_policy_explicit_child_system_prompt_authoritative() -> None:
     policy = InheritancePolicy(enabled=True, inherit_system_prompt=True)
     world, _, child_entity, _ = await _delegate_with_policy(
@@ -1348,7 +552,7 @@ async def test_inheritance_policy_whitelist_only_inherits_named_tools() -> None:
     assert "shared_tool" in child_tools.tools, (
         "Whitelist inheritance should copy only named tools to child"
     )
-    assert "delegate" not in child_tools.tools, (
+    assert "subagent" not in child_tools.tools, (
         "Whitelist inheritance must not copy tools omitted from inherit_tools"
     )
 
@@ -1357,7 +561,7 @@ async def test_inheritance_policy_enabled_false_skips_all_inheritance() -> None:
     policy = InheritancePolicy(
         enabled=False,
         inherit_system_prompt=True,
-        inherit_tools=["shared_tool", "delegate"],
+        inherit_tools=["shared_tool", "subagent"],
         inherit_permissions=True,
     )
     world, _, child_entity, _ = await _delegate_with_policy(
@@ -1488,10 +692,10 @@ async def test_subagent_skills_skill_manager_inherited_tools_available() -> None
 
     tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
     assert tool_registry is not None
-    delegate_handler = tool_registry.handlers["delegate"]
+    subagent_handler = tool_registry.handlers["subagent"]
 
     # Delegate task
-    result = await delegate_handler(subagent_name="child", task="test task")
+    result = await subagent_handler(category="child", prompt="test task")
 
     # Find child entity
     child_entity = _find_child_entity(world, parent_entity)
@@ -1586,10 +790,10 @@ async def test_subagent_skills_skill_manager_requested_tools_available() -> None
 
     tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
     assert tool_registry is not None
-    delegate_handler = tool_registry.handlers["delegate"]
+    subagent_handler = tool_registry.handlers["subagent"]
 
     # Delegate task
-    result = await delegate_handler(subagent_name="child", task="test task")
+    result = await subagent_handler(category="child", prompt="test task")
 
     # Find child entity
     child_entity = _find_child_entity(world, parent_entity)
@@ -1657,10 +861,10 @@ async def test_subagent_skills_missing_skill_warn_policy() -> None:
 
         tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
         assert tool_registry is not None
-        delegate_handler = tool_registry.handlers["delegate"]
+        subagent_handler = tool_registry.handlers["subagent"]
 
         # RED TEST: Delegation should complete despite missing skill
-        result = await delegate_handler(subagent_name="child", task="test task")
+        result = await subagent_handler(category="child", prompt="test task")
 
         # RED TEST: Verify delegation completed (no exception raised)
         assert isinstance(result, str), (
@@ -1709,12 +913,12 @@ async def test_subagent_skills_missing_skill_error_policy() -> None:
 
     tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
     assert tool_registry is not None
-    delegate_handler = tool_registry.handlers["delegate"]
+    subagent_handler = tool_registry.handlers["subagent"]
 
     # RED TEST: Delegation should raise error for missing skill
     # This will fail because error-raising logic doesn't exist yet - RED!
     with pytest.raises((ValueError, KeyError), match="nonexistent_skill"):
-        await delegate_handler(subagent_name="child", task="test task")
+        await subagent_handler(category="child", prompt="test task")
 
 
 async def test_subagent_skills_skill_manager_install_uninstall_lifecycle() -> None:
@@ -1787,9 +991,9 @@ async def test_subagent_skills_skill_manager_install_uninstall_lifecycle() -> No
 
         tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
         assert tool_registry is not None
-        delegate_handler = tool_registry.handlers["delegate"]
+        subagent_handler = tool_registry.handlers["subagent"]
 
-        await delegate_handler(subagent_name="child", task="test task")
+        await subagent_handler(category="child", prompt="test task")
 
         # Verify SkillManager.install() was called for child entity
         child_entity = _find_child_entity(world, parent_entity)
@@ -2321,44 +1525,6 @@ async def test_subagent_timeout_sets_state() -> None:
     assert metadata.status == "Timeout"
     assert metadata.error is not None
     assert "timeout" in metadata.error.lower()
-
-
-async def test_delegate_timeout_backward_compatible() -> None:
-    """Test that delegate tool respects global timeout for backward compatibility."""
-    world = World()
-    parent_entity = world.create_entity()
-
-    # Provider that simulates a long-running task
-    provider = SlowFakeProvider(
-        delay=5.0,
-        response=CompletionResult(message=Message(role="assistant", content="done")),
-    )
-
-    config = SubagentConfig(name="slow_delegate", provider=provider, model="fake")
-    world.add_component(
-        parent_entity,
-        SubagentRegistryComponent(subagents={"slow_delegate": config}),
-    )
-    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
-
-    # Create system with 0.3s global timeout
-    system = SubagentSystem(default_timeout=0.3)
-    system.install_delegate_tool(world, parent_entity)
-
-    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
-    assert tool_registry is not None
-    handler = tool_registry.handlers["delegate"]
-
-    # Execute delegate (should timeout using global default)
-    result = await handler(
-        subagent_name="slow_delegate",
-        task="run slow delegated task",
-    )
-
-    assert "Error: Subagent timeout after 0.3s" in result
-
-
-# Task 9: RetryProvider wrapping tests
 
 
 async def test_subagent_retry_default_wrap() -> None:
@@ -3144,9 +2310,9 @@ async def test_subagent_resolves_skill_from_catalog_when_not_in_parent() -> None
 
     tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
     assert tool_registry is not None
-    delegate_handler = tool_registry.handlers["delegate"]
+    subagent_handler = tool_registry.handlers["subagent"]
 
-    result = await delegate_handler(subagent_name="child", task="test task")
+    result = await subagent_handler(category="child", prompt="test task")
     assert isinstance(result, str)
 
     child_entity = _find_child_entity(world, parent_entity)
@@ -3204,9 +2370,9 @@ async def test_subagent_inherits_parent_workspace_binding() -> None:
 
     tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
     assert tool_registry is not None
-    delegate_handler = tool_registry.handlers["delegate"]
+    subagent_handler = tool_registry.handlers["subagent"]
 
-    result = await delegate_handler(subagent_name="child", task="test task")
+    result = await subagent_handler(category="child", prompt="test task")
     assert isinstance(result, str)
 
     child_entity = _find_child_entity(world, parent_entity)

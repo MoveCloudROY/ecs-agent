@@ -275,7 +275,7 @@ async def test_subagent_delegation_end_to_end() -> None:
         ConversationComponent(messages=[]),
     )
 
-    # Add tool registry (SubagentSystem will populate delegate tool)
+    # Add tool registry (SubagentSystem will populate subagent tool)
     world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
     world.add_component(parent_entity, MessageBusConfigComponent(request_timeout=1.0))
 
@@ -284,18 +284,18 @@ async def test_subagent_delegation_end_to_end() -> None:
     world.register_system(MessageBusSystem(priority=5), priority=5)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
-    # Process to register delegate tool
+    # Process to register subagent tool
     await world.process()
 
-    # Get delegate handler
+    # Get subagent handler
     tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
     assert tool_registry is not None
-    assert "delegate" in tool_registry.handlers
+    assert "subagent" in tool_registry.handlers
 
-    delegate_handler = tool_registry.handlers["delegate"]
+    subagent_handler = tool_registry.handlers["subagent"]
 
-    # Call delegate
-    result = await delegate_handler(subagent_name="test-subagent", task="Do something")
+    # Call subagent
+    result = await subagent_handler(category="test-subagent", prompt="Do something")
 
     # Verify result
     assert isinstance(result, str)
@@ -417,7 +417,6 @@ async def test_all_new_components_serializable() -> None:
     assert restored_config.inheritance_policy.inherit_system_prompt is True
     assert restored_config.inheritance_policy.inherit_tools == []
     assert restored_config.inheritance_policy.inherit_permissions is False
-    assert restored_config.inheritance_policy.allow_delegate_tool is False
     assert restored_config.inheritance_policy.tool_conflict_policy == "skip"
     assert restored_config.inheritance_policy.missing_skill_policy == "warn"
 
@@ -428,7 +427,7 @@ def test_subagent_doc_consistency_stale_symbols() -> None:
     This test detects stale documentation that refers to symbols that were
     removed or renamed in the codebase. It scans docs/features/subagent.md
     for references to DELEGATE_TOOL_SCHEMA and delegate_tool_handler, which
-    do not exist in the public API (SubagentSystem auto-registers delegate tool).
+    do not exist in the public API (SubagentSystem auto-registers subagent tool).
     """
     doc_path = Path("docs/features/subagent.md")
     assert doc_path.exists(), f"Doc file not found: {doc_path}"
@@ -438,14 +437,14 @@ def test_subagent_doc_consistency_stale_symbols() -> None:
     # Check for stale symbol: DELEGATE_TOOL_SCHEMA
     assert "DELEGATE_TOOL_SCHEMA" not in doc_content, (
         "Docs reference DELEGATE_TOOL_SCHEMA which does not exist. "
-        "SubagentSystem auto-registers delegate tool inline. "
+        "SubagentSystem auto-registers subagent tool inline. "
         "See docs/features/subagent.md line ~78."
     )
 
     # Check for stale symbol: delegate_tool_handler
     assert "delegate_tool_handler" not in doc_content, (
         "Docs reference delegate_tool_handler which does not exist. "
-        "The delegate tool is auto-registered by SubagentSystem without manual handler setup. "
+        "The subagent tool is auto-registered by SubagentSystem without manual handler setup. "
         "See docs/features/subagent.md lines ~102, ~107."
     )
 
@@ -485,11 +484,10 @@ def test_subagent_doc_consistency_event_subscriptions() -> None:
 
 
 def test_subagent_doc_consistency_installer_api() -> None:
-    """Fail if docs do not mention explicit delegate tool installer API.
+    """Fail if docs do not mention subagent tool auto-registration.
 
-    This test verifies that documentation explains the automatic delegate tool
-    registration by SubagentSystem, and ideally mentions backward-compatible
-    behavior where tools are auto-registered without manual setup.
+    This test verifies that documentation explains the automatic subagent tool
+    registration by SubagentSystem.
     """
     doc_path = Path("docs/features/subagent.md")
     if not doc_path.exists():
@@ -498,15 +496,15 @@ def test_subagent_doc_consistency_installer_api() -> None:
     doc_content = doc_path.read_text()
     doc_content_lower = doc_content.lower()
 
-    # Check for delegate tool auto-registration mention (flexible substring check)
-    has_delegate_mention = "delegate" in doc_content
+    # Check for subagent tool auto-registration mention (flexible substring check)
+    has_subagent_mention = "subagent" in doc_content
     has_auto_mention = "auto" in doc_content_lower or "automatic" in doc_content_lower
     has_register_mention = "register" in doc_content_lower
 
-    assert has_delegate_mention and (has_auto_mention or has_register_mention), (
-        "Docs should clearly mention the delegate tool and its automatic registration. "
-        "Expected to find 'delegate' (tool name) and either 'auto' or 'register' (mechanism). "
-        "SubagentSystem auto-registers the delegate tool for entities with both "
+    assert has_subagent_mention and (has_auto_mention or has_register_mention), (
+        "Docs should clearly mention the subagent tool and its automatic registration. "
+        "Expected to find 'subagent' (tool name) and either 'auto' or 'register' (mechanism). "
+        "SubagentSystem auto-registers the subagent tool for entities with both "
         "SubagentRegistryComponent and ToolRegistryComponent."
     )
 
@@ -517,8 +515,8 @@ def test_subagent_doc_consistency_installer_api() -> None:
     ) or "without manual" in doc_content_lower
 
     assert has_backward_compat, (
-        "Docs should mention backward-compatible automatic delegate tool registration. "
-        "Users should not need to manually register the delegate tool via ToolRegistryComponent. "
+        "Docs should mention automatic subagent tool registration. "
+        "Users should not need to manually register the subagent tool via ToolRegistryComponent. "
         "SubagentSystem handles this automatically."
     )
 

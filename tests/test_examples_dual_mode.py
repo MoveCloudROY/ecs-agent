@@ -71,10 +71,11 @@ def _subagent_delegation_manager_provider() -> FakeProvider:
                     tool_calls=[
                         ToolCall(
                             id="call_001",
-                            name="delegate",
+                            name="subagent",
                             arguments={
-                                "subagent_name": "researcher",
-                                "task": "Research the most promising near-term applications of quantum computing.",
+                                "category": "researcher",
+                                "prompt": "Research the most promising near-term applications of quantum computing.",
+                                "background": False,
                             },
                         )
                     ],
@@ -297,9 +298,9 @@ class TestSubagentDelegationDualMode:
         assert fake_ctor.call_count == 2
         openai_ctor.assert_not_called()
 
-        # ===== SEMANTIC ASSERTIONS (delegate-tool roundtrip workflow) =====
-        # When delegate tool is used, we expect:
-        # 1. Tool call with name="delegate" in manager's conversation
+        # ===== SEMANTIC ASSERTIONS (subagent-tool roundtrip workflow) =====
+        # When subagent tool is used, we expect:
+        # 1. Tool call with name="subagent" in manager's conversation
         # 2. Tool result following the tool call
         # 3. Final assistant summary after tool execution
 
@@ -324,18 +325,18 @@ class TestSubagentDelegationDualMode:
 
         messages = manager_conv.messages
 
-        # Assert: delegate tool call exists in conversation
-        delegate_tool_call_found = False
+        # Assert: subagent tool call exists in conversation
+        subagent_tool_call_found = False
         for msg in messages:
             if msg.role == "assistant" and msg.tool_calls:
                 for tool_call in msg.tool_calls:
-                    if tool_call.name == "delegate":
-                        delegate_tool_call_found = True
+                    if tool_call.name == "subagent":
+                        subagent_tool_call_found = True
                         break
 
-        assert delegate_tool_call_found, (
-            "Expected delegate tool call in manager conversation, but none found. "
-            "This indicates the example is not using the delegate-tool roundtrip pattern."
+        assert subagent_tool_call_found, (
+            "Expected subagent tool call in manager conversation, but none found. "
+            "This indicates the example is not using the subagent-tool roundtrip pattern."
         )
 
         # Assert: tool result message exists after tool call
@@ -346,7 +347,7 @@ class TestSubagentDelegationDualMode:
                 break
 
         assert tool_result_found, (
-            "Expected tool result message in manager conversation after delegate call, but none found."
+            "Expected tool result message in manager conversation after subagent call, but none found."
         )
 
         # Assert: final assistant summary exists after tool execution cycle
@@ -359,7 +360,7 @@ class TestSubagentDelegationDualMode:
 
         assert final_assistant_message_found, (
             "Expected final assistant summary message after tool result, but none found. "
-            "The delegate-tool roundtrip should conclude with an assistant message."
+            "The subagent-tool roundtrip should conclude with an assistant message."
         )
 
     async def test_real_mode(self) -> None:
