@@ -108,7 +108,11 @@ async def test_route_backend_local_with_entity_id() -> None:
 
 @pytest.mark.asyncio
 async def test_route_backend_subagent_with_string_name() -> None:
-    """Verify subagent backend selected when assigned_agent is string."""
+    """Verify subagent backend selected when assigned_agent is string.
+
+    Asserts that the executor passes ALL 5 kwargs to the subagent handler:
+    category, prompt, load_skills, background, timeout.
+    """
     world = World()
     executor = TaskExecutor()
 
@@ -131,19 +135,33 @@ async def test_route_backend_subagent_with_string_name() -> None:
     registry = SubagentRegistryComponent(subagents={"researcher": config})
     world.add_component(agent, registry)
 
-    # Install delegate tool (minimal mock)
-    async def mock_delegate_handler(subagent_name: str, task: str) -> str:
-        return f"Subagent {subagent_name} completed: {task}"
+    # Install subagent tool with kwargs capture
+    captured_kwargs: dict[str, object] = {}
+
+    async def mock_subagent_handler(
+        category: str,
+        prompt: str,
+        load_skills: list[str] | None = None,
+        background: bool = False,
+        timeout: float | None = None,
+    ) -> str:
+        # Capture all kwargs for assertion
+        captured_kwargs["category"] = category
+        captured_kwargs["prompt"] = prompt
+        captured_kwargs["load_skills"] = load_skills
+        captured_kwargs["background"] = background
+        captured_kwargs["timeout"] = timeout
+        return f"Subagent {category} completed: {prompt}"
 
     tool_registry = ToolRegistryComponent(
         tools={
-            "delegate": ToolSchema(
-                name="delegate",
-                description="Delegate task",
+            "subagent": ToolSchema(
+                name="subagent",
+                description="Delegate task to subagent",
                 parameters={},
             )
         },
-        handlers={"delegate": mock_delegate_handler},
+        handlers={"subagent": mock_subagent_handler},
     )
     world.add_component(agent, tool_registry)
 
@@ -165,6 +183,13 @@ async def test_route_backend_subagent_with_string_name() -> None:
     assert result.backend_type == "subagent"
     assert result.success is True
     assert "researcher" in result.result_content
+
+    # Assert ALL 5 kwargs match expected subagent handler contract
+    assert captured_kwargs["category"] == "researcher"
+    assert captured_kwargs["prompt"] == "Research quantum physics"
+    assert captured_kwargs["load_skills"] == []
+    assert captured_kwargs["background"] is False
+    assert captured_kwargs["timeout"] is None
 
 
 @pytest.mark.asyncio
@@ -298,6 +323,47 @@ async def test_subagent_backend_unknown_subagent_name() -> None:
     assert result.backend_type == "subagent"
     assert result.success is False
     assert "Unknown subagent 'unknown'" in result.result_content
+
+
+@pytest.mark.asyncio
+async def test_subagent_backend_missing_handler() -> None:
+    """Verify error when subagent backend selected but handler not registered.
+
+    Error message must reference 'subagent' by name.
+    """
+    world = World()
+    executor = TaskExecutor()
+
+    agent = world.create_entity()
+
+    provider = FakeProvider(responses=[])
+    config = SubagentConfig(
+        name="researcher",
+        provider=provider,
+        model="fake",
+    )
+    registry = SubagentRegistryComponent(subagents={"researcher": config})
+    world.add_component(agent, registry)
+    world.add_component(agent, ToolRegistryComponent(tools={}, handlers={}))
+
+    request = DispatchRequest(
+        task_id="task-missing-handler",
+        wave_number=0,
+        sequence_number=0,
+        description="Task",
+        expected_output="Output",
+        assigned_agent="researcher",
+        tools=tuple(),
+        context_dependencies=tuple(),
+        priority=0,
+    )
+
+    result = await executor.execute_dispatch_request(world, agent, request)
+
+    assert result.task_id == "task-missing-handler"
+    assert result.backend_type == "subagent"
+    assert result.success is False
+    assert "subagent" in result.result_content.lower()
 
 
 @pytest.mark.asyncio
@@ -439,8 +505,14 @@ async def test_normalized_results_both_backends() -> None:
     subagent_agent = world.create_entity()
     provider_subagent = FakeProvider(responses=[])
 
-    async def mock_delegate(subagent_name: str, task: str) -> str:
-        return f"Subagent {subagent_name} OK"
+    async def mock_subagent(
+        category: str,
+        prompt: str,
+        load_skills: bool = False,
+        background: bool = False,
+        timeout: float | None = None,
+    ) -> str:
+        return f"Subagent {category} OK"
 
     config = SubagentConfig(
         name="test-sub",
@@ -454,11 +526,11 @@ async def test_normalized_results_both_backends() -> None:
         subagent_agent,
         ToolRegistryComponent(
             tools={
-                "delegate": ToolSchema(
-                    name="delegate", description="Delegate", parameters={}
+                "subagent": ToolSchema(
+                    name="subagent", description="Delegate to subagent", parameters={}
                 )
             },
-            handlers={"delegate": mock_delegate},
+            handlers={"subagent": mock_subagent},
         ),
     )
 
@@ -647,7 +719,15 @@ async def test_local_backend_event_trigger_injection_is_transient() -> None:
     world.add_component(
         agent,
         UserPromptConfigComponent(
-            triggers=[TriggerSpec(pattern="work", match_mode="keyword", action="inject", content="Prefer successful tool outputs", priority=0)],
+            triggers=[
+                TriggerSpec(
+                    pattern="work",
+                    match_mode="keyword",
+                    action="inject",
+                    content="Prefer successful tool outputs",
+                    priority=0,
+                )
+            ],
             enable_context_pool=True,
         ),
     )
