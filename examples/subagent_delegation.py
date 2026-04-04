@@ -90,8 +90,24 @@ async def main() -> None:
     subagent_provider: LLMProvider
 
     if api_key:
-        manager_provider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
-        subagent_provider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        manager_provider = OpenAIProvider(
+            config=ProviderConfig(
+                provider_id="openai",
+                base_url=base_url,
+                api_key=api_key,
+                api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+            ),
+            model=model,
+        )
+        subagent_provider = OpenAIProvider(
+            config=ProviderConfig(
+                provider_id="openai",
+                base_url=base_url,
+                api_key=api_key,
+                api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+            ),
+            model=model,
+        )
     else:
         # FakeProvider for manager: first response calls the 'subagent' tool,
         # then produces a final summary once results are available.
@@ -225,7 +241,6 @@ async def main() -> None:
                     inheritance_policy=InheritancePolicy(
                         inherit_system_prompt=True,
                         inherit_tools=[],
-                        allow_delegate_tool=False,
                     ),
                 )
             }

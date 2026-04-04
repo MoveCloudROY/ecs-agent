@@ -24,6 +24,7 @@ from ecs_agent.providers.fake_provider import FakeProvider
 from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.serialization import WorldSerializer
 from ecs_agent.scratchbook.service import ScratchbookService
+from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.task import (
     TaskExecutor,
     TaskFetchingUnit,
@@ -133,9 +134,33 @@ def _load_runtime_providers() -> tuple[
 
     if api_key:
         return (
-            OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model),
-            OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model),
-            OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model),
+            OpenAIProvider(
+                config=ProviderConfig(
+                    provider_id="openai",
+                    base_url=base_url,
+                    api_key=api_key,
+                    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+                ),
+                model=model,
+            ),
+            OpenAIProvider(
+                config=ProviderConfig(
+                    provider_id="openai",
+                    base_url=base_url,
+                    api_key=api_key,
+                    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+                ),
+                model=model,
+            ),
+            OpenAIProvider(
+                config=ProviderConfig(
+                    provider_id="openai",
+                    base_url=base_url,
+                    api_key=api_key,
+                    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+                ),
+                model=model,
+            ),
             model,
             True,
         )
@@ -168,13 +193,6 @@ def _build_tool_registry(subagents: SubagentRegistryComponent) -> ToolRegistryCo
 
     async def write_brief(plan: str, risks: str) -> str:
         return f"write_brief: packaged final brief with {plan}; risk summary={risks}"
-
-    async def delegate(subagent_name: str, task: str) -> str:
-        config = subagents.subagents[subagent_name]
-        result = await config.provider.complete([Message(role="user", content=task)])
-        if not isinstance(result, CompletionResult):
-            return f"Error: unexpected streaming result for subagent {subagent_name}"
-        return result.message.content
 
     tools = {
         "collect_constraints": ToolSchema(
@@ -211,27 +229,11 @@ def _build_tool_registry(subagents: SubagentRegistryComponent) -> ToolRegistryCo
                 "required": ["plan", "risks"],
             },
         ),
-        "delegate": ToolSchema(
-            name="delegate",
-            description="Delegate a task to a named subagent.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "subagent_name": {
-                        "type": "string",
-                        "description": "Registered subagent name.",
-                    },
-                    "task": {"type": "string", "description": "Delegated task text."},
-                },
-                "required": ["subagent_name", "task"],
-            },
-        ),
     }
     handlers: dict[str, Callable[..., Awaitable[str]]] = {
         "collect_constraints": collect_constraints,
         "synthesize_plan": synthesize_plan,
         "write_brief": write_brief,
-        "delegate": delegate,
     }
     return ToolRegistryComponent(tools=tools, handlers=handlers)
 
@@ -252,7 +254,7 @@ def _build_tasks() -> list[TaskComponent]:
             description="Run background research for $initiative",
             expected_output="Research notes with rollout signals",
             assigned_agent="researcher",
-            tools=["delegate"],
+            tools=[],
             context_dependencies=[],
             task_id="background_research",
             status=TaskStatus.PENDING,
@@ -272,7 +274,7 @@ def _build_tasks() -> list[TaskComponent]:
             description="Review risks for $initiative",
             expected_output="A focused risk assessment",
             assigned_agent="reviewer",
-            tools=["delegate"],
+            tools=[],
             context_dependencies=["draft_execution_plan"],
             task_id="risk_review",
             status=TaskStatus.PENDING,
@@ -476,6 +478,9 @@ async def run_demo() -> dict[str, Any]:
         )
         world.add_component(manager_id, subagents)
         world.add_component(manager_id, _build_tool_registry(subagents))
+        SubagentSystem().install_subagent_tool(
+            world, manager_id, tool_name="subagent", override=False
+        )
 
         completed_from_bus: list[str] = []
 
