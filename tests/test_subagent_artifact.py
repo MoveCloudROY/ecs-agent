@@ -182,7 +182,8 @@ async def test_background_subagent_completion_persists_full_output_to_records_su
     record_path = result_payload["record_path"]
 
     assert record_path.startswith("scratchbook/records/subagent/subagent_")
-    assert result_payload["inline_content"] is None
+    assert result_payload["inline_content"] is not None
+    assert record_path in result_payload["inline_content"]
 
     persisted_file = tmp_path / record_path
     assert persisted_file.exists()

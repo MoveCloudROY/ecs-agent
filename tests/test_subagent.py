@@ -3,14 +3,19 @@
 from __future__ import annotations
 import json
 import asyncio
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 
-from ecs_agent.components import MessageBusConfigComponent
-from ecs_agent.components.definitions import SubagentRegistryComponent
+from ecs_agent.components import MessageBusConfigComponent, StreamingComponent
+from ecs_agent.components.definitions import (
+    SubagentRegistryComponent,
+    SubagentSessionTableComponent,
+)
 from ecs_agent.core.world import World
 from ecs_agent.providers.fake_provider import FakeProvider
+from ecs_agent.scratchbook.artifact_registry import ArtifactRegistry
 from ecs_agent.types import (
     CompletionResult,
     DelegationCompletedEvent,
@@ -19,6 +24,13 @@ from ecs_agent.types import (
     InheritancePolicy,
     Message,
     RetryConfig,
+    StreamDelta,
+    StreamEndEvent,
+    StreamReasoningDeltaEvent,
+    StreamStartEvent,
+    SubagentStreamDeltaEvent,
+    SubagentStreamEndEvent,
+    SubagentStreamStartEvent,
     SubagentLifecycleStatus,
     SubagentSessionRecord,
     SubagentConfig,
@@ -27,6 +39,25 @@ from ecs_agent.types import (
 )
 from ecs_agent.systems.message_bus import MessageBusSystem
 from ecs_agent.systems.subagent import SubagentSystem
+
+
+class ReasoningAndContentStreamingFakeProvider(FakeProvider):
+    async def _stream_complete(
+        self, result: CompletionResult
+    ) -> AsyncIterator[StreamDelta]:
+        _ = result
+        yield StreamDelta(reasoning_content="thinking")
+        yield StreamDelta(content="done")
+        yield StreamDelta(finish_reason="stop")
+
+
+class BrokenStreamingFakeProvider(FakeProvider):
+    async def _stream_complete(
+        self, result: CompletionResult
+    ) -> AsyncIterator[StreamDelta]:
+        _ = result
+        yield StreamDelta(reasoning_content="thinking")
+        raise RuntimeError("stream exploded")
 
 
 def test_subagent_config_dataclass() -> None:
@@ -184,11 +215,12 @@ def test_delegation_completed_event_has_child_world_name_field() -> None:
 @pytest.mark.parametrize(
     ("from_status", "to_status"),
     [
-        ("Idle", "Working"),
-        ("Working", "Idle"),
-        ("Working", "Dead"),
-        ("Working", "Timeout"),
-        ("Working", "Cancelled"),
+        ("queued", "running"),
+        ("queued", "cancelled"),
+        ("running", "succeeded"),
+        ("running", "failed"),
+        ("running", "timed_out"),
+        ("running", "cancelled"),
     ],
 )
 def test_subagent_contract_and_lifecycle_valid_transition_matrix(
@@ -201,23 +233,32 @@ def test_subagent_contract_and_lifecycle_valid_transition_matrix(
 @pytest.mark.parametrize(
     ("from_status", "to_status"),
     [
-        ("Idle", "Idle"),
-        ("Idle", "Dead"),
-        ("Idle", "Timeout"),
-        ("Idle", "Cancelled"),
-        ("Working", "Working"),
-        ("Dead", "Idle"),
-        ("Dead", "Working"),
-        ("Dead", "Timeout"),
-        ("Dead", "Cancelled"),
-        ("Timeout", "Idle"),
-        ("Timeout", "Working"),
-        ("Timeout", "Dead"),
-        ("Timeout", "Cancelled"),
-        ("Cancelled", "Idle"),
-        ("Cancelled", "Working"),
-        ("Cancelled", "Dead"),
-        ("Cancelled", "Timeout"),
+        ("queued", "queued"),
+        ("queued", "succeeded"),
+        ("queued", "failed"),
+        ("queued", "timed_out"),
+        ("running", "queued"),
+        ("running", "running"),
+        ("succeeded", "queued"),
+        ("succeeded", "running"),
+        ("succeeded", "failed"),
+        ("succeeded", "timed_out"),
+        ("succeeded", "cancelled"),
+        ("failed", "queued"),
+        ("failed", "running"),
+        ("failed", "succeeded"),
+        ("failed", "timed_out"),
+        ("failed", "cancelled"),
+        ("timed_out", "queued"),
+        ("timed_out", "running"),
+        ("timed_out", "succeeded"),
+        ("timed_out", "failed"),
+        ("timed_out", "cancelled"),
+        ("cancelled", "queued"),
+        ("cancelled", "running"),
+        ("cancelled", "succeeded"),
+        ("cancelled", "failed"),
+        ("cancelled", "timed_out"),
     ],
 )
 def test_invalid_lifecycle_transition_raises_value_error(
@@ -245,7 +286,7 @@ def test_subagent_contract_and_lifecycle_session_record_fields() -> None:
         load_skills=["search", "summarize"],
         background=False,
         timeout_seconds=120,
-        status="Idle",
+        status="queued",
         correlation_id="corr-123",
         traceparent="00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
     )
@@ -255,11 +296,394 @@ def test_subagent_contract_and_lifecycle_session_record_fields() -> None:
     assert record.load_skills == ["search", "summarize"]
     assert record.background is False
     assert record.timeout_seconds == 120
-    assert record.status == "Idle"
+    assert record.status == "queued"
     assert record.correlation_id == "corr-123"
     assert (
         record.traceparent == "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
     )
+
+
+def test_subagent_stream_start_event_dataclass_fields() -> None:
+    parent_entity_id = EntityId(7)
+
+    event = SubagentStreamStartEvent(
+        session_id="session-1",
+        parent_entity_id=parent_entity_id,
+        category="research",
+        child_world_name="researcher-abc12345",
+        seq=1,
+        timestamp="2026-04-05T10:00:00Z",
+    )
+
+    assert event.session_id == "session-1"
+    assert event.parent_entity_id == parent_entity_id
+    assert event.category == "research"
+    assert event.child_world_name == "researcher-abc12345"
+    assert event.seq == 1
+    assert event.timestamp == "2026-04-05T10:00:00Z"
+    assert not hasattr(event, "__dict__")
+
+
+def test_subagent_stream_delta_event_dataclass_fields() -> None:
+    parent_entity_id = EntityId(8)
+
+    event = SubagentStreamDeltaEvent(
+        session_id="session-2",
+        parent_entity_id=parent_entity_id,
+        category="analysis",
+        child_world_name="analyst-def67890",
+        seq=2,
+        timestamp="2026-04-05T10:00:01Z",
+        delta="partial answer",
+        reasoning_delta="thinking out loud",
+    )
+
+    assert event.session_id == "session-2"
+    assert event.parent_entity_id == parent_entity_id
+    assert event.category == "analysis"
+    assert event.child_world_name == "analyst-def67890"
+    assert event.seq == 2
+    assert event.timestamp == "2026-04-05T10:00:01Z"
+    assert event.delta == "partial answer"
+    assert event.reasoning_delta == "thinking out loud"
+    assert not hasattr(event, "__dict__")
+
+
+def test_subagent_stream_delta_event_defaults_reasoning_delta_to_none() -> None:
+    event = SubagentStreamDeltaEvent(
+        session_id="session-3",
+        parent_entity_id=EntityId(9),
+        category="analysis",
+        child_world_name="analyst-fedcba98",
+        seq=3,
+        timestamp="2026-04-05T10:00:02Z",
+        delta="content only",
+    )
+
+    assert event.reasoning_delta is None
+
+
+def test_subagent_stream_end_event_dataclass_fields() -> None:
+    parent_entity_id = EntityId(10)
+
+    event = SubagentStreamEndEvent(
+        session_id="session-4",
+        parent_entity_id=parent_entity_id,
+        category="research",
+        child_world_name="researcher-1234abcd",
+        seq=4,
+        timestamp="2026-04-05T10:00:03Z",
+        total_tokens=42,
+    )
+
+    assert event.session_id == "session-4"
+    assert event.parent_entity_id == parent_entity_id
+    assert event.category == "research"
+    assert event.child_world_name == "researcher-1234abcd"
+    assert event.seq == 4
+    assert event.timestamp == "2026-04-05T10:00:03Z"
+    assert event.total_tokens == 42
+    assert not hasattr(event, "__dict__")
+
+
+def test_subagent_stream_end_event_defaults_total_tokens_to_none() -> None:
+    event = SubagentStreamEndEvent(
+        session_id="session-5",
+        parent_entity_id=EntityId(11),
+        category="research",
+        child_world_name="researcher-ff00aa11",
+        seq=5,
+        timestamp="2026-04-05T10:00:04Z",
+    )
+
+    assert event.total_tokens is None
+
+
+def test_subagent_stream_event_session_record_stream_flag_defaults_false() -> None:
+    record = SubagentSessionRecord(
+        session_id="session-6",
+        category="research",
+        prompt="Gather context",
+        parent_entity_id=EntityId(12),
+        created_at="2026-04-05T10:00:05Z",
+        updated_at="2026-04-05T10:00:05Z",
+    )
+
+    assert record.stream is False
+
+
+async def test_subagent_background_stream_true_bridges_child_stream_events_to_parent_event_bus() -> (
+    None
+):
+    world = World()
+    parent_entity = world.create_entity()
+    provider = ReasoningAndContentStreamingFakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
+    config = SubagentConfig(name="research", provider=provider, model="fake")
+
+    system = SubagentSystem()
+    captured: dict[str, Any] = {}
+    original_assemble_child_world = system._assemble_child_world
+
+    def capture_child_world(
+        parent_world: World,
+        parent_entity_id: EntityId,
+        config_snapshot: SubagentConfig,
+        parent_child_entity: EntityId | None = None,
+    ) -> tuple[World, EntityId]:
+        child_world, child_entity_id = original_assemble_child_world(
+            parent_world,
+            parent_entity_id,
+            config_snapshot,
+            parent_child_entity,
+        )
+        captured["child_world"] = child_world
+        captured["child_entity_id"] = child_entity_id
+        return child_world, child_entity_id
+
+    system._assemble_child_world = capture_child_world  # type: ignore[method-assign]
+
+    received: list[
+        SubagentStreamStartEvent | SubagentStreamDeltaEvent | SubagentStreamEndEvent
+    ] = []
+
+    async def on_start(event: SubagentStreamStartEvent) -> None:
+        received.append(event)
+
+    async def on_delta(event: SubagentStreamDeltaEvent) -> None:
+        received.append(event)
+
+    async def on_end(event: SubagentStreamEndEvent) -> None:
+        received.append(event)
+
+    world.event_bus.subscribe(SubagentStreamStartEvent, on_start)
+    world.event_bus.subscribe(SubagentStreamDeltaEvent, on_delta)
+    world.event_bus.subscribe(SubagentStreamEndEvent, on_end)
+
+    result, success, error = await system._execute_subagent_core(
+        world,
+        parent_entity,
+        "research",
+        "Investigate",
+        "corr-1",
+        "trace-1",
+        config,
+        session_id="session-1",
+        stream=True,
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert success is True
+    assert error is None
+    assert result == "done"
+
+    assert [type(event) for event in received] == [
+        SubagentStreamStartEvent,
+        SubagentStreamDeltaEvent,
+        SubagentStreamDeltaEvent,
+        SubagentStreamEndEvent,
+    ]
+    assert [event.seq for event in received] == [0, 1, 2, 3]
+
+    start_event = received[0]
+    assert isinstance(start_event, SubagentStreamStartEvent)
+    assert start_event.session_id == "session-1"
+    assert start_event.parent_entity_id == parent_entity
+    assert start_event.category == "research"
+    assert start_event.child_world_name.startswith("research-")
+    assert start_event.timestamp
+
+    reasoning_delta = received[1]
+    assert isinstance(reasoning_delta, SubagentStreamDeltaEvent)
+    assert reasoning_delta.delta == ""
+    assert reasoning_delta.reasoning_delta == "thinking"
+
+    content_delta = received[2]
+    assert isinstance(content_delta, SubagentStreamDeltaEvent)
+    assert content_delta.delta == "done"
+    assert content_delta.reasoning_delta is None
+
+    end_event = received[3]
+    assert isinstance(end_event, SubagentStreamEndEvent)
+    assert end_event.total_tokens is None
+
+    child_world = captured["child_world"]
+    child_entity_id = captured["child_entity_id"]
+    assert child_world.get_component(child_entity_id, StreamingComponent) is not None
+    assert child_world.event_bus._handlers == {}
+
+
+async def test_subagent_background_stream_false_keeps_bridge_dormant() -> None:
+    world = World()
+    parent_entity = world.create_entity()
+    provider = ReasoningAndContentStreamingFakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
+    config = SubagentConfig(name="research", provider=provider, model="fake")
+
+    system = SubagentSystem()
+    captured: dict[str, Any] = {}
+    original_assemble_child_world = system._assemble_child_world
+
+    def capture_child_world(
+        parent_world: World,
+        parent_entity_id: EntityId,
+        config_snapshot: SubagentConfig,
+        parent_child_entity: EntityId | None = None,
+    ) -> tuple[World, EntityId]:
+        child_world, child_entity_id = original_assemble_child_world(
+            parent_world,
+            parent_entity_id,
+            config_snapshot,
+            parent_child_entity,
+        )
+        captured["child_world"] = child_world
+        captured["child_entity_id"] = child_entity_id
+        return child_world, child_entity_id
+
+    system._assemble_child_world = capture_child_world  # type: ignore[method-assign]
+
+    received: list[
+        SubagentStreamStartEvent | SubagentStreamDeltaEvent | SubagentStreamEndEvent
+    ] = []
+
+    async def on_start(event: SubagentStreamStartEvent) -> None:
+        received.append(event)
+
+    async def on_delta(event: SubagentStreamDeltaEvent) -> None:
+        received.append(event)
+
+    async def on_end(event: SubagentStreamEndEvent) -> None:
+        received.append(event)
+
+    world.event_bus.subscribe(SubagentStreamStartEvent, on_start)
+    world.event_bus.subscribe(SubagentStreamDeltaEvent, on_delta)
+    world.event_bus.subscribe(SubagentStreamEndEvent, on_end)
+
+    result, success, error = await system._execute_subagent_core(
+        world,
+        parent_entity,
+        "research",
+        "Investigate",
+        "corr-2",
+        "trace-2",
+        config,
+        session_id="session-2",
+        stream=False,
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert success is True
+    assert error is None
+    assert result == "done"
+    assert received == []
+
+    child_world = captured["child_world"]
+    child_entity_id = captured["child_entity_id"]
+    assert child_world.get_component(child_entity_id, StreamingComponent) is None
+    assert child_world.event_bus._handlers == {}
+
+
+async def test_subagent_background_parent_event_bus_bridge_cleans_up_after_failure() -> (
+    None
+):
+    world = World()
+    parent_entity = world.create_entity()
+    provider = FakeProvider(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="ignored"))
+        ]
+    )
+    config = SubagentConfig(name="research", provider=provider, model="fake")
+
+    system = SubagentSystem()
+    captured: dict[str, Any] = {}
+    original_assemble_child_world = system._assemble_child_world
+
+    def capture_child_world(
+        parent_world: World,
+        parent_entity_id: EntityId,
+        config_snapshot: SubagentConfig,
+        parent_child_entity: EntityId | None = None,
+    ) -> tuple[World, EntityId]:
+        child_world, child_entity_id = original_assemble_child_world(
+            parent_world,
+            parent_entity_id,
+            config_snapshot,
+            parent_child_entity,
+        )
+        captured["child_world"] = child_world
+        return child_world, child_entity_id
+
+    system._assemble_child_world = capture_child_world  # type: ignore[method-assign]
+
+    async def fake_execute_delegation(
+        child_world: World,
+        child_entity: EntityId,
+        task: str,
+        config_snapshot: SubagentConfig,
+    ) -> str:
+        del child_entity, task, config_snapshot
+        await child_world.event_bus.publish(
+            StreamStartEvent(entity_id=EntityId(1), timestamp=1.0)
+        )
+        await child_world.event_bus.publish(
+            StreamReasoningDeltaEvent(
+                entity_id=EntityId(1),
+                reasoning_delta="thinking",
+            )
+        )
+        await child_world.event_bus.publish(
+            StreamEndEvent(entity_id=EntityId(1), timestamp=2.0)
+        )
+        raise RuntimeError("stream exploded")
+
+    system._execute_delegation = fake_execute_delegation  # type: ignore[method-assign]
+
+    received: list[
+        SubagentStreamStartEvent | SubagentStreamDeltaEvent | SubagentStreamEndEvent
+    ] = []
+
+    async def on_start(event: SubagentStreamStartEvent) -> None:
+        received.append(event)
+
+    async def on_delta(event: SubagentStreamDeltaEvent) -> None:
+        received.append(event)
+
+    async def on_end(event: SubagentStreamEndEvent) -> None:
+        received.append(event)
+
+    world.event_bus.subscribe(SubagentStreamStartEvent, on_start)
+    world.event_bus.subscribe(SubagentStreamDeltaEvent, on_delta)
+    world.event_bus.subscribe(SubagentStreamEndEvent, on_end)
+
+    result, success, error = await system._execute_subagent_core(
+        world,
+        parent_entity,
+        "research",
+        "Investigate",
+        "corr-3",
+        "trace-3",
+        config,
+        session_id="session-3",
+        stream=True,
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert success is False
+    assert result == "Error during delegation: stream exploded"
+    assert error == "Error during delegation: stream exploded"
+    assert [type(event) for event in received] == [
+        SubagentStreamStartEvent,
+        SubagentStreamDeltaEvent,
+        SubagentStreamEndEvent,
+    ]
+    assert [event.seq for event in received] == [0, 1, 2]
+    assert captured["child_world"].event_bus._handlers == {}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1014,6 +1438,12 @@ async def test_subagent_skills_skill_manager_install_uninstall_lifecycle() -> No
 # Runtime session manager tests
 
 
+def _reset_global_scheduler(monkeypatch: pytest.MonkeyPatch) -> None:
+    import ecs_agent.systems.subagent_runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "_GLOBAL_SCHEDULER", None)
+
+
 async def test_runtime_manager_create_session_returns_unique_ids() -> None:
     """Session IDs should be unique across multiple creations."""
     from ecs_agent.systems.subagent_runtime import SubagentRuntimeManager
@@ -1042,7 +1472,7 @@ async def test_runtime_manager_register_and_retrieve_task() -> None:
         parent_entity_id=EntityId(1),
         created_at="2026-03-10T14:00:00Z",
         updated_at="2026-03-10T14:00:00Z",
-        status="Working",
+        status="running",
     )
 
     await manager.register_task(session_id, task, metadata)
@@ -1051,7 +1481,7 @@ async def test_runtime_manager_register_and_retrieve_task() -> None:
     assert retrieved is not None
     assert retrieved.session_id == session_id
     assert retrieved.category == "test"
-    assert retrieved.status == "Working"
+    assert retrieved.status == "running"
 
     # Cleanup
     task.cancel()
@@ -1080,7 +1510,7 @@ async def test_runtime_manager_cancel_cleans_handles() -> None:
         parent_entity_id=EntityId(1),
         created_at="2026-03-10T14:00:00Z",
         updated_at="2026-03-10T14:00:00Z",
-        status="Working",
+        status="running",
     )
 
     await manager.register_task(session_id, task, metadata)
@@ -1092,7 +1522,7 @@ async def test_runtime_manager_cancel_cleans_handles() -> None:
     # Verify status updated
     retrieved = await manager.get_session(session_id)
     assert retrieved is not None
-    assert retrieved.status == "Cancelled"
+    assert retrieved.status == "cancelled"
 
     # Verify task was cancelled
     assert task.cancelled()
@@ -1102,6 +1532,133 @@ async def test_runtime_manager_cancel_cleans_handles() -> None:
         await task
     except asyncio.CancelledError:
         pass
+
+
+async def test_runtime_manager_scheduler_enforces_cap_and_fifo_queue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ecs_agent.systems.subagent_runtime as runtime_module
+
+    _reset_global_scheduler(monkeypatch)
+
+    manager = runtime_module.SubagentRuntimeManager(max_background_concurrency=2)
+    started: list[str] = []
+    release_events = {name: asyncio.Event() for name in ("s1", "s2", "s3", "s4")}
+
+    def make_metadata(session_id: str) -> SubagentSessionRecord:
+        return SubagentSessionRecord(
+            session_id=session_id,
+            category="test",
+            prompt=f"prompt-{session_id}",
+            parent_entity_id=EntityId(1),
+            created_at="2026-03-10T14:00:00Z",
+            updated_at="2026-03-10T14:00:00Z",
+        )
+
+    def make_factory(session_id: str) -> Any:
+        async def run() -> None:
+            started.append(session_id)
+            await release_events[session_id].wait()
+
+        return run
+
+    for session_id in ("s1", "s2", "s3", "s4"):
+        await manager.enqueue_session(
+            session_id,
+            make_metadata(session_id),
+            make_factory(session_id),
+        )
+
+    await asyncio.sleep(0)
+
+    scheduler = runtime_module._GLOBAL_SCHEDULER
+    assert scheduler is not None
+    assert scheduler.max_concurrency == 2
+    assert scheduler.active_count == 2
+    assert started == ["s1", "s2"]
+    assert [item.session_id for item in scheduler.pending_queue] == ["s3", "s4"]
+
+    release_events["s1"].set()
+    task = await manager.get_task("s1")
+    assert task is not None
+    await task
+    await asyncio.sleep(0)
+
+    assert started == ["s1", "s2", "s3"]
+    assert scheduler.active_count == 2
+    assert [item.session_id for item in scheduler.pending_queue] == ["s4"]
+
+    for session_id in ("s2", "s3", "s4"):
+        release_events[session_id].set()
+        running_task = await manager.get_task(session_id)
+        if running_task is not None:
+            await running_task
+
+
+async def test_runtime_manager_scheduler_rejects_conflicting_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ecs_agent.systems.subagent_runtime as runtime_module
+
+    _reset_global_scheduler(monkeypatch)
+
+    runtime_module.SubagentRuntimeManager(max_background_concurrency=2)
+
+    with pytest.raises(ValueError, match="max_background_concurrency"):
+        runtime_module.SubagentRuntimeManager(max_background_concurrency=3)
+
+
+async def test_runtime_manager_cancel_removes_queued_session_without_slot_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ecs_agent.systems.subagent_runtime as runtime_module
+
+    _reset_global_scheduler(monkeypatch)
+
+    manager = runtime_module.SubagentRuntimeManager(max_background_concurrency=1)
+    started: list[str] = []
+    running_release = asyncio.Event()
+
+    def make_metadata(session_id: str) -> SubagentSessionRecord:
+        return SubagentSessionRecord(
+            session_id=session_id,
+            category="test",
+            prompt=f"prompt-{session_id}",
+            parent_entity_id=EntityId(1),
+            created_at="2026-03-10T14:00:00Z",
+            updated_at="2026-03-10T14:00:00Z",
+        )
+
+    async def first_run() -> None:
+        started.append("s1")
+        await running_release.wait()
+
+    async def queued_run() -> None:
+        started.append("s2")
+
+    await manager.enqueue_session("s1", make_metadata("s1"), lambda: first_run())
+    await manager.enqueue_session("s2", make_metadata("s2"), lambda: queued_run())
+    await asyncio.sleep(0)
+
+    scheduler = runtime_module._GLOBAL_SCHEDULER
+    assert scheduler is not None
+    assert scheduler.active_count == 1
+    assert [item.session_id for item in scheduler.pending_queue] == ["s2"]
+
+    await manager.cancel_session("s2")
+
+    queued_session = await manager.get_session("s2")
+    assert queued_session is not None
+    assert queued_session.status == "cancelled"
+    assert scheduler.active_count == 1
+    assert [item.session_id for item in scheduler.pending_queue] == []
+    assert await manager.get_task("s2") is None
+    assert started == ["s1"]
+
+    running_release.set()
+    running_task = await manager.get_task("s1")
+    assert running_task is not None
+    await running_task
 
 
 @pytest.mark.parametrize(
@@ -1230,6 +1787,7 @@ async def test_subagent_tool_sync_happy_path() -> None:
         task: str,
         correlation_id: str,
         traceparent: str,
+        config_snapshot: SubagentConfig,
     ) -> tuple[str, bool, str | None]:
         assert world_arg is world
         assert parent_entity_id == parent_entity
@@ -1237,6 +1795,9 @@ async def test_subagent_tool_sync_happy_path() -> None:
         assert task == "investigate this"
         assert correlation_id
         assert traceparent
+        assert config_snapshot.name == config.name
+        assert config_snapshot.model == config.model
+        assert config_snapshot.skills == config.skills
         return ("sync-result", True, None)
 
     system._execute_subagent_core = fake_execute_core  # type: ignore[method-assign]
@@ -1280,6 +1841,8 @@ async def test_subagent_tool_background_returns_session_id() -> None:
         task: str,
         correlation_id: str,
         traceparent: str,
+        config_snapshot: SubagentConfig,
+        **kwargs: Any,
     ) -> tuple[str, bool, str | None]:
         _ = (
             world_arg,
@@ -1288,6 +1851,8 @@ async def test_subagent_tool_background_returns_session_id() -> None:
             task,
             correlation_id,
             traceparent,
+            config_snapshot,
+            kwargs,
         )
         return ("async-result", True, None)
 
@@ -1308,9 +1873,235 @@ async def test_subagent_tool_background_returns_session_id() -> None:
     payload = json.loads(result)
     assert isinstance(payload["session_id"], str)
     assert payload["session_id"]
-    assert payload["status"] == "Working"
+    assert payload["status"] == "queued"
     assert payload["category"] == "deep"
     assert payload["timeout"] == 300.0
+
+
+async def test_subagent_handler_uses_immutable_effective_config_snapshot() -> None:
+    world = World()
+    parent_entity = world.create_entity()
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
+    config = SubagentConfig(
+        name="deep",
+        provider=provider,
+        model="fake",
+        skills=["base-skill"],
+    )
+
+    registry = SubagentRegistryComponent(subagents={"deep": config})
+    world.add_component(parent_entity, registry)
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem()
+    system.install_subagent_tool(world, parent_entity)
+
+    def fake_assemble_child_world(
+        parent_world: World,
+        parent_entity_id: EntityId,
+        config_snapshot: SubagentConfig,
+        parent_child_entity: EntityId | None = None,
+    ) -> tuple[World, EntityId]:
+        assert parent_world is world
+        assert parent_entity_id == parent_entity
+        assert parent_child_entity is not None
+        assert config_snapshot.skills == ["base-skill", "extra-skill"]
+        assert registry.subagents["deep"].skills == ["base-skill"]
+
+        child_world = World(name="deep-child")
+        child_entity = child_world.create_entity()
+        child_world.add_component(
+            child_entity,
+            LLMComponent(provider=provider, model="fake", system_prompt=""),
+        )
+        child_world.add_component(child_entity, ConversationComponent(messages=[]))
+        return child_world, child_entity
+
+    async def fake_execute_delegation(
+        child_world: World,
+        child_entity: EntityId,
+        task: str,
+        config_snapshot: SubagentConfig,
+    ) -> str:
+        assert child_world.name == "deep-child"
+        assert child_entity == EntityId(1)
+        assert task == "run with extra skill"
+        assert config_snapshot.skills == ["base-skill", "extra-skill"]
+        return "snapshot-result"
+
+    async def fake_publish_delegation_events(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+
+    system._assemble_child_world = fake_assemble_child_world  # type: ignore[method-assign]
+    system._execute_delegation = fake_execute_delegation  # type: ignore[method-assign]
+    system._publish_delegation_events = fake_publish_delegation_events  # type: ignore[method-assign]
+
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    handler = tool_registry.handlers["subagent"]
+
+    result = await handler(
+        category="deep",
+        prompt="run with extra skill",
+        load_skills=["extra-skill"],
+        background=False,
+        timeout=None,
+    )
+
+    assert result == "snapshot-result"
+    assert registry.subagents["deep"].skills == ["base-skill"]
+
+
+async def test_subagent_tool_background_enqueue_session_records_stream() -> None:
+    from ecs_agent.components.definitions import SubagentSessionTableComponent
+
+    world = World()
+    parent_entity = world.create_entity()
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
+    config = SubagentConfig(
+        name="deep",
+        provider=provider,
+        model="fake",
+        skills=["base-skill"],
+    )
+
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"deep": config}),
+    )
+    world.add_component(parent_entity, SubagentSessionTableComponent())
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem()
+    system.install_subagent_tool(world, parent_entity)
+
+    captured: dict[str, Any] = {}
+
+    async def fake_enqueue_session(
+        session_id: str,
+        metadata: SubagentSessionRecord,
+        coroutine_factory: Any,
+    ) -> None:
+        captured["session_id"] = session_id
+        captured["metadata"] = metadata
+        captured["coroutine_factory"] = coroutine_factory
+
+    system._runtime_manager.enqueue_session = fake_enqueue_session  # type: ignore[method-assign]
+
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    subagent_tool = tool_registry.tools["subagent"]
+    assert "stream" in subagent_tool.parameters["properties"]
+    assert subagent_tool.parameters["properties"]["stream"]["type"] == "boolean"
+
+    handler = tool_registry.handlers["subagent"]
+    result = await handler(
+        category="deep",
+        prompt="run in background",
+        load_skills=["extra-skill"],
+        background=True,
+        timeout=300.0,
+        stream=True,
+    )
+
+    payload = json.loads(result)
+    assert payload["session_id"] == captured["session_id"]
+    assert payload["status"] == "queued"
+    assert payload["lifecycle_status"] == "queued"
+
+    metadata = captured["metadata"]
+    assert metadata.load_skills == ["base-skill", "extra-skill"]
+    assert metadata.background is True
+    assert metadata.stream is True
+
+
+async def test_subagent_tool_background_returns_queued_lifecycle_status_when_scheduler_is_full(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ecs_agent.systems.subagent_runtime as runtime_module
+    from ecs_agent.components.definitions import SubagentSessionTableComponent
+
+    _reset_global_scheduler(monkeypatch)
+
+    world = World()
+    parent_entity = world.create_entity()
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
+    config = SubagentConfig(name="deep", provider=provider, model="fake")
+
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"deep": config}),
+    )
+    world.add_component(parent_entity, SubagentSessionTableComponent())
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem(max_background_concurrency=1)
+    system.install_subagent_tool(world, parent_entity)
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_execute_core(
+        *args: Any, **kwargs: Any
+    ) -> tuple[str, bool, str | None]:
+        del args, kwargs
+        started.set()
+        await release.wait()
+        return ("async-result", True, None)
+
+    system._execute_subagent_core = fake_execute_core  # type: ignore[method-assign]
+
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    handler = tool_registry.handlers["subagent"]
+
+    first_result = await handler(
+        category="deep",
+        prompt="first background task",
+        load_skills=[],
+        background=True,
+        timeout=None,
+    )
+    first_payload = json.loads(first_result)
+    await started.wait()
+    await asyncio.sleep(0)
+
+    second_result = await handler(
+        category="deep",
+        prompt="second background task",
+        load_skills=[],
+        background=True,
+        timeout=None,
+    )
+    second_payload = json.loads(second_result)
+
+    scheduler = runtime_module._GLOBAL_SCHEDULER
+    assert scheduler is not None
+    assert scheduler.active_count == 1
+    assert second_payload["status"] == "queued"
+    assert second_payload["lifecycle_status"] == "queued"
+
+    second_session = await system._runtime_manager.get_session(
+        second_payload["session_id"]
+    )
+    assert second_session is not None
+    assert second_session.status == "queued"
+
+    release.set()
+    first_task = await system._runtime_manager.get_task(first_payload["session_id"])
+    assert first_task is not None
+    await first_task
+    await asyncio.sleep(0)
+
+    second_task = await system._runtime_manager.get_task(second_payload["session_id"])
+    assert second_task is not None
+    await second_task
 
 
 async def test_subagent_tool_validates_parameters() -> None:
@@ -1480,7 +2271,6 @@ async def test_subagent_timeout_none_disables() -> None:
 
 
 async def test_subagent_timeout_sets_state() -> None:
-    """Test that async mode transitions session to Timeout status on timeout."""
     world = World()
     parent_entity = world.create_entity()
 
@@ -1522,7 +2312,7 @@ async def test_subagent_timeout_sets_state() -> None:
     # Check session status
     metadata = await system._runtime_manager.get_session(session_id)
     assert metadata is not None
-    assert metadata.status == "Timeout"
+    assert metadata.status == "timed_out"
     assert metadata.error is not None
     assert "timeout" in metadata.error.lower()
 
@@ -1620,9 +2410,7 @@ async def test_subagent_retry_fake_provider_stable() -> None:
 async def test_reminder_table_updates_on_transitions() -> None:
     """Verify session table updates on each lifecycle transition."""
     from ecs_agent.components.definitions import SubagentSessionTableComponent
-    from ecs_agent.systems.subagent_runtime import (
-        render_subagent_session_reminder_table,
-    )
+    from ecs_agent.types import render_subagent_session_reminder_table
 
     world = World()
     system = SubagentSystem()
@@ -1680,7 +2468,7 @@ async def test_reminder_table_updates_on_transitions() -> None:
 
     # Verify session fields
     assert session.category == "test-agent"
-    assert session.status in ["Idle", "Dead", "Working"]  # Could be any terminal state
+    assert session.status in ["queued", "running", "succeeded", "failed"]
     assert session.updated_at != ""
 
     # Render reminder table
@@ -1692,9 +2480,7 @@ async def test_reminder_table_updates_on_transitions() -> None:
 async def test_reminder_table_deterministic_sort() -> None:
     """Verify deterministic sorting: updated_at desc, session_id asc."""
     from ecs_agent.components.definitions import SubagentSessionTableComponent
-    from ecs_agent.systems.subagent_runtime import (
-        render_subagent_session_reminder_table,
-    )
+    from ecs_agent.types import render_subagent_session_reminder_table
     from ecs_agent.types import SubagentSessionRecord
     from datetime import datetime, timezone, timedelta
 
@@ -1886,8 +2672,389 @@ async def test_subagent_status_single_session() -> None:
     assert status_result["session_id"] == session_id
     assert status_result["category"] == "test-agent"
     assert "lifecycle_status" in status_result
-    assert "created_at" in status_result
-    assert "updated_at" in status_result
+
+
+def test_session_payload_does_not_contain_timestamp_fields() -> None:
+    system = SubagentSystem()
+    session = SubagentSessionRecord(
+        session_id="session-1",
+        category="research",
+        prompt="Gather context",
+        parent_entity_id=EntityId(1),
+        created_at="2026-04-06T10:00:00Z",
+        updated_at="2026-04-06T10:00:00Z",
+        started_at="2026-04-06T10:00:01Z",
+        finished_at="2026-04-06T10:00:02Z",
+        status="succeeded",
+        result_excerpt="x",
+        error=None,
+    )
+
+    payload = system._session_payload(session, status="subagent_complete")
+
+    assert {
+        "status",
+        "session_id",
+        "category",
+        "lifecycle_status",
+        "artifact_id",
+        "record_path",
+        "inline_content",
+        "error",
+    } <= payload.keys()
+    assert {
+        "created_at",
+        "updated_at",
+        "started_at",
+        "finished_at",
+        "result_excerpt",
+    }.isdisjoint(payload.keys())
+
+
+def test_no_nested_artifact_object_in_payload() -> None:
+    system = SubagentSystem()
+    session = SubagentSessionRecord(
+        session_id="session-1",
+        category="research",
+        prompt="Gather context",
+        parent_entity_id=EntityId(1),
+        created_at="2026-04-06T10:00:00Z",
+        updated_at="2026-04-06T10:00:00Z",
+        status="succeeded",
+        artifact_id="artifact-1",
+        artifact_record_path="scratchbook/records/subagent/subagent_123",
+        artifact_inline_content="short result",
+    )
+
+    payload = system._session_payload(session, status="subagent_complete")
+
+    assert "artifact" not in payload
+
+
+async def test_inline_content_populated_without_registry_for_small_result() -> None:
+    world = World()
+    system = SubagentSystem()
+    parent = world.create_entity()
+
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(
+        parent,
+        SubagentRegistryComponent(
+            subagents={
+                "test-agent": SubagentConfig(
+                    name="test-agent",
+                    provider=FakeProvider(
+                        responses=[
+                            CompletionResult(
+                                message=Message(
+                                    role="assistant",
+                                    content="small background result",
+                                )
+                            )
+                        ]
+                    ),
+                    model="fake",
+                )
+            }
+        ),
+    )
+
+    system.install_subagent_tool(world, parent)
+    system.install_subagent_control_tools(world, parent)
+
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+
+    launch_raw = await tools.handlers["subagent"](
+        category="test-agent",
+        prompt="run in background",
+        load_skills=[],
+        background=True,
+        timeout=None,
+    )
+    session_id = json.loads(launch_raw)["session_id"]
+
+    await asyncio.sleep(0.1)
+
+    result_raw = await tools.handlers["subagent_result"](
+        session_id=session_id,
+        timeout=None,
+    )
+    result_payload = json.loads(result_raw)
+
+    assert result_payload["inline_content"] == "small background result"
+
+
+async def test_inline_content_null_without_registry_for_large_result() -> None:
+    full_result = "x" * 9000
+
+    world = World()
+    system = SubagentSystem()
+    parent = world.create_entity()
+
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(
+        parent,
+        SubagentRegistryComponent(
+            subagents={
+                "test-agent": SubagentConfig(
+                    name="test-agent",
+                    provider=FakeProvider(
+                        responses=[
+                            CompletionResult(
+                                message=Message(role="assistant", content=full_result)
+                            )
+                        ]
+                    ),
+                    model="fake",
+                )
+            }
+        ),
+    )
+
+    system.install_subagent_tool(world, parent)
+    system.install_subagent_control_tools(world, parent)
+
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+
+    launch_raw = await tools.handlers["subagent"](
+        category="test-agent",
+        prompt="run in background",
+        load_skills=[],
+        background=True,
+        timeout=None,
+    )
+    session_id = json.loads(launch_raw)["session_id"]
+
+    await asyncio.sleep(0.1)
+
+    result_raw = await tools.handlers["subagent_result"](
+        session_id=session_id,
+        timeout=None,
+    )
+    result_payload = json.loads(result_raw)
+
+    assert result_payload["inline_content"] is None
+
+
+async def test_inline_content_still_works_with_registry(tmp_path: Any) -> None:
+    world = World()
+    system = SubagentSystem(registry=ArtifactRegistry(tmp_path))
+    parent = world.create_entity()
+
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(
+        parent,
+        SubagentRegistryComponent(
+            subagents={
+                "test-agent": SubagentConfig(
+                    name="test-agent",
+                    provider=FakeProvider(
+                        responses=[
+                            CompletionResult(
+                                message=Message(
+                                    role="assistant",
+                                    content="persisted short result",
+                                )
+                            )
+                        ]
+                    ),
+                    model="fake",
+                )
+            }
+        ),
+    )
+
+    system.install_subagent_tool(world, parent)
+    system.install_subagent_control_tools(world, parent)
+
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+
+    launch_raw = await tools.handlers["subagent"](
+        category="test-agent",
+        prompt="run in background",
+        load_skills=[],
+        background=True,
+        timeout=None,
+    )
+    session_id = json.loads(launch_raw)["session_id"]
+
+    await asyncio.sleep(0.1)
+
+    result_raw = await tools.handlers["subagent_result"](
+        session_id=session_id,
+        timeout=None,
+    )
+    result_payload = json.loads(result_raw)
+
+    assert result_payload["inline_content"] == "persisted short result"
+    assert result_payload["record_path"] is not None
+
+
+async def test_inline_content_is_hint_when_large_result_with_registry(
+    tmp_path: Any,
+) -> None:
+    full_result = "x" * 9000
+
+    world = World()
+    system = SubagentSystem(registry=ArtifactRegistry(tmp_path))
+    parent = world.create_entity()
+
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(
+        parent,
+        SubagentRegistryComponent(
+            subagents={
+                "test-agent": SubagentConfig(
+                    name="test-agent",
+                    provider=FakeProvider(
+                        responses=[
+                            CompletionResult(
+                                message=Message(role="assistant", content=full_result)
+                            )
+                        ]
+                    ),
+                    model="fake",
+                )
+            }
+        ),
+    )
+
+    system.install_subagent_tool(world, parent)
+    system.install_subagent_control_tools(world, parent)
+
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+
+    launch_raw = await tools.handlers["subagent"](
+        category="test-agent",
+        prompt="run in background",
+        load_skills=[],
+        background=True,
+        timeout=None,
+    )
+    session_id = json.loads(launch_raw)["session_id"]
+
+    await asyncio.sleep(0.1)
+
+    result_raw = await tools.handlers["subagent_result"](
+        session_id=session_id,
+        timeout=None,
+    )
+    result_payload = json.loads(result_raw)
+
+    record_path = result_payload["record_path"]
+    assert record_path is not None
+    assert result_payload["inline_content"] is not None
+    assert record_path in result_payload["inline_content"]
+    assert "Result persisted to" in result_payload["inline_content"]
+
+
+async def test_subagent_status_queued_session_reports_queue_position(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from ecs_agent.components import ToolRegistryComponent
+    from ecs_agent.components.definitions import SubagentSessionTableComponent
+
+    _reset_global_scheduler(monkeypatch)
+
+    world = World()
+    system = SubagentSystem(max_background_concurrency=1)
+    parent = world.create_entity()
+
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+
+    running_release = asyncio.Event()
+
+    async def blocking_completion(*args: Any, **kwargs: Any) -> CompletionResult:
+        await running_release.wait()
+        return CompletionResult(message=Message(role="assistant", content="first done"))
+
+    blocking_provider = FakeProvider(responses=[])
+    blocking_provider.complete = AsyncMock(side_effect=blocking_completion)  # type: ignore[method-assign]
+
+    registry = SubagentRegistryComponent()
+    registry.subagents["blocking-agent"] = SubagentConfig(
+        name="blocking-agent",
+        provider=blocking_provider,
+        model="fake",
+        system_prompt="Test",
+        skills=[],
+    )
+    registry.subagents["queued-agent"] = SubagentConfig(
+        name="queued-agent",
+        provider=FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(role="assistant", content="queued done")
+                )
+            ]
+        ),
+        model="fake",
+        system_prompt="Test",
+        skills=[],
+    )
+    world.add_component(parent, registry)
+
+    system.install_subagent_control_tools(world, parent)
+    system.install_subagent_tool(world, parent)
+
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+
+    launch_handler = tools.handlers["subagent"]
+    first_payload = json.loads(
+        await launch_handler(
+            category="blocking-agent",
+            prompt="Block the only slot",
+            load_skills=[],
+            background=True,
+            timeout=None,
+        )
+    )
+    second_payload = json.loads(
+        await launch_handler(
+            category="queued-agent",
+            prompt="Wait in queue",
+            load_skills=[],
+            background=True,
+            timeout=None,
+        )
+    )
+
+    assert first_payload["lifecycle_status"] in {"queued", "running"}
+    assert second_payload["lifecycle_status"] == "queued"
+
+    status_handler = tools.handlers["subagent_status"]
+    status_result = json.loads(
+        await status_handler(session_id=second_payload["session_id"])
+    )
+
+    assert status_result["session_id"] == second_payload["session_id"]
+    assert status_result["lifecycle_status"] == "queued"
+    assert status_result["queue_position"] == 0
+    assert "artifact" not in status_result
+    assert "error" in status_result
+    assert status_result["error"] is None
+
+    running_release.set()
+    first_task = await system._runtime_manager.get_task(first_payload["session_id"])
+    assert first_task is not None
+    await first_task
+
+    await asyncio.sleep(0)
+    second_task = await system._runtime_manager.get_task(second_payload["session_id"])
+    if second_task is not None:
+        await second_task
 
 
 async def test_subagent_status_missing_session() -> None:
@@ -1919,7 +3086,6 @@ async def test_subagent_status_missing_session() -> None:
 
 
 async def test_subagent_result_completed_session() -> None:
-    """Test subagent_result returns immediately for completed (Idle) session."""
     from ecs_agent.components.definitions import SubagentSessionTableComponent
     from ecs_agent.components import ToolRegistryComponent
 
@@ -1972,8 +3138,112 @@ async def test_subagent_result_completed_session() -> None:
 
     # Verify successful result
     assert result_data["status"] == "success"
-    assert "result_excerpt" in result_data
+    assert result_data["lifecycle_status"] == "succeeded"
     assert "session_id" in result_data
+
+
+async def test_subagent_result_waits_for_queued_session_without_task_handle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from ecs_agent.components import ToolRegistryComponent
+    from ecs_agent.components.definitions import SubagentSessionTableComponent
+
+    _reset_global_scheduler(monkeypatch)
+
+    world = World()
+    system = SubagentSystem(max_background_concurrency=1)
+    parent = world.create_entity()
+
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+
+    running_release = asyncio.Event()
+
+    async def blocking_completion(*args: Any, **kwargs: Any) -> CompletionResult:
+        await running_release.wait()
+        return CompletionResult(message=Message(role="assistant", content="first done"))
+
+    blocking_provider = FakeProvider(responses=[])
+    blocking_provider.complete = AsyncMock(side_effect=blocking_completion)  # type: ignore[method-assign]
+
+    registry = SubagentRegistryComponent()
+    registry.subagents["blocking-agent"] = SubagentConfig(
+        name="blocking-agent",
+        provider=blocking_provider,
+        model="fake",
+        system_prompt="Test",
+        skills=[],
+    )
+    registry.subagents["queued-agent"] = SubagentConfig(
+        name="queued-agent",
+        provider=FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(role="assistant", content="queued result")
+                )
+            ]
+        ),
+        model="fake",
+        system_prompt="Test",
+        skills=[],
+    )
+    world.add_component(parent, registry)
+
+    system.install_subagent_control_tools(world, parent)
+    system.install_subagent_tool(world, parent)
+
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+
+    launch_handler = tools.handlers["subagent"]
+    first_payload = json.loads(
+        await launch_handler(
+            category="blocking-agent",
+            prompt="Block the only slot",
+            load_skills=[],
+            background=True,
+            timeout=None,
+        )
+    )
+    second_payload = json.loads(
+        await launch_handler(
+            category="queued-agent",
+            prompt="Return after queue admission",
+            load_skills=[],
+            background=True,
+            timeout=None,
+        )
+    )
+
+    assert second_payload["lifecycle_status"] == "queued"
+
+    result_handler = tools.handlers["subagent_result"]
+    wait_task = asyncio.create_task(
+        result_handler(session_id=second_payload["session_id"], timeout=None)
+    )
+
+    await asyncio.sleep(0.05)
+    assert not wait_task.done()
+
+    running_release.set()
+    first_task = await system._runtime_manager.get_task(first_payload["session_id"])
+    assert first_task is not None
+    await first_task
+
+    result_data = json.loads(await asyncio.wait_for(wait_task, timeout=1.0))
+    assert result_data["status"] in {"success", "completed"}
+    assert result_data["lifecycle_status"] == "succeeded"
+    assert result_data["session_id"] == second_payload["session_id"]
+    error_message = result_data.get("error")
+    assert error_message in (None, "")
+
+    second_result_data = json.loads(
+        await result_handler(session_id=second_payload["session_id"], timeout=None)
+    )
+    assert second_result_data["status"] == "success"
+    assert second_result_data["lifecycle_status"] == "succeeded"
 
 
 async def test_subagent_result_timeout() -> None:
@@ -2041,7 +3311,6 @@ async def test_subagent_result_timeout() -> None:
 
 
 async def test_subagent_cancel_active_session() -> None:
-    """Test subagent_cancel successfully cancels a Working session."""
     from ecs_agent.components.definitions import SubagentSessionTableComponent
     from ecs_agent.components import ToolRegistryComponent
 
@@ -2106,11 +3375,151 @@ async def test_subagent_cancel_active_session() -> None:
     table = world.get_component(parent, SubagentSessionTableComponent)
     assert table is not None
     assert session_id in table.sessions
-    assert table.sessions[session_id].status == "Cancelled"
+    assert table.sessions[session_id].status == "cancelled"
+
+
+async def test_subagent_cancel_queued_session_skips_next_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from ecs_agent.components import ToolRegistryComponent
+    from ecs_agent.components.definitions import SubagentSessionTableComponent
+    import ecs_agent.systems.subagent_runtime as runtime_module
+
+    _reset_global_scheduler(monkeypatch)
+
+    world = World()
+    system = SubagentSystem(max_background_concurrency=1)
+    parent = world.create_entity()
+
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+
+    running_release = asyncio.Event()
+    started: list[str] = []
+
+    async def blocking_completion(*args: Any, **kwargs: Any) -> CompletionResult:
+        started.append("first")
+        await running_release.wait()
+        return CompletionResult(message=Message(role="assistant", content="first done"))
+
+    async def cancelled_completion(*args: Any, **kwargs: Any) -> CompletionResult:
+        started.append("cancelled")
+        return CompletionResult(
+            message=Message(role="assistant", content="should never run")
+        )
+
+    async def third_completion(*args: Any, **kwargs: Any) -> CompletionResult:
+        started.append("third")
+        return CompletionResult(message=Message(role="assistant", content="third done"))
+
+    blocking_provider = FakeProvider(responses=[])
+    blocking_provider.complete = AsyncMock(side_effect=blocking_completion)  # type: ignore[method-assign]
+    cancelled_provider = FakeProvider(responses=[])
+    cancelled_provider.complete = AsyncMock(side_effect=cancelled_completion)  # type: ignore[method-assign]
+    third_provider = FakeProvider(responses=[])
+    third_provider.complete = AsyncMock(side_effect=third_completion)  # type: ignore[method-assign]
+
+    registry = SubagentRegistryComponent()
+    registry.subagents["blocking-agent"] = SubagentConfig(
+        name="blocking-agent",
+        provider=blocking_provider,
+        model="fake",
+        system_prompt="Test",
+        skills=[],
+    )
+    registry.subagents["cancelled-agent"] = SubagentConfig(
+        name="cancelled-agent",
+        provider=cancelled_provider,
+        model="fake",
+        system_prompt="Test",
+        skills=[],
+    )
+    registry.subagents["third-agent"] = SubagentConfig(
+        name="third-agent",
+        provider=third_provider,
+        model="fake",
+        system_prompt="Test",
+        skills=[],
+    )
+    world.add_component(parent, registry)
+
+    system.install_subagent_control_tools(world, parent)
+    system.install_subagent_tool(world, parent)
+
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+
+    launch_handler = tools.handlers["subagent"]
+    first_payload = json.loads(
+        await launch_handler(
+            category="blocking-agent",
+            prompt="Occupy the only slot",
+            load_skills=[],
+            background=True,
+            timeout=None,
+        )
+    )
+    cancelled_payload = json.loads(
+        await launch_handler(
+            category="cancelled-agent",
+            prompt="Queue and then cancel",
+            load_skills=[],
+            background=True,
+            timeout=None,
+        )
+    )
+    third_payload = json.loads(
+        await launch_handler(
+            category="third-agent",
+            prompt="Run after queued cancel",
+            load_skills=[],
+            background=True,
+            timeout=None,
+        )
+    )
+
+    scheduler = runtime_module._GLOBAL_SCHEDULER
+    assert scheduler is not None
+    assert [item.session_id for item in scheduler.pending_queue] == [
+        cancelled_payload["session_id"],
+        third_payload["session_id"],
+    ]
+
+    cancel_handler = tools.handlers["subagent_cancel"]
+    cancel_result = json.loads(
+        await cancel_handler(session_id=cancelled_payload["session_id"])
+    )
+
+    assert cancel_result["status"] == "cancelled"
+    assert cancel_result["lifecycle_status"] == "cancelled"
+    assert cancel_result["session_id"] == cancelled_payload["session_id"]
+    assert [item.session_id for item in scheduler.pending_queue] == [
+        third_payload["session_id"]
+    ]
+    assert (
+        await system._runtime_manager.get_task(cancelled_payload["session_id"]) is None
+    )
+
+    running_release.set()
+    first_task = await system._runtime_manager.get_task(first_payload["session_id"])
+    assert first_task is not None
+    await first_task
+
+    result_handler = tools.handlers["subagent_result"]
+    third_result = json.loads(
+        await asyncio.wait_for(
+            result_handler(session_id=third_payload["session_id"], timeout=None),
+            timeout=1.0,
+        )
+    )
+
+    assert third_result["lifecycle_status"] == "succeeded"
+    assert started == ["first", "third"]
 
 
 async def test_subagent_cancel_terminal_session() -> None:
-    """Test subagent_cancel allows cancelling already-completed sessions (Idle -> Cancelled)."""
     from ecs_agent.components.definitions import SubagentSessionTableComponent
     from ecs_agent.components import ToolRegistryComponent
 
@@ -2159,9 +3568,8 @@ async def test_subagent_cancel_terminal_session() -> None:
     cancel_result_json = await cancel_handler(session_id=session_id)
     cancel_result = json.loads(cancel_result_json)
 
-    # Verify Idle -> Cancelled transition is allowed
-    assert cancel_result["status"] == "cancelled"
-    assert cancel_result["lifecycle_status"] == "Cancelled"
+    assert "error" in cancel_result
+    assert cancel_result["lifecycle_status"] == "succeeded"
     assert cancel_result["session_id"] == session_id
 
 

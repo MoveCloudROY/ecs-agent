@@ -456,7 +456,7 @@ Landmarks:
 
 ### Sub-Agent Delegation
 - **File:** `examples/subagent_delegation.py`
-- **What it demonstrates:** Parent agent delegating tasks via `subagent` tool with SubagentSystem managing child execution, state inheritance policy, and skill inheritance.
+- **What it demonstrates:** Parent agent delegating tasks via `subagent` tool with SubagentSystem managing child execution, state inheritance policy, and skill inheritance. Demonstrates the `queued/running/succeeded/failed` lifecycle and background session control.
 - **Run:** `uv run python examples/subagent_delegation.py`
 - **Pattern:** `SubagentRegistryComponent` + `SubagentSystem` + `InheritancePolicy`.
 

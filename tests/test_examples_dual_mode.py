@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import os
+from io import StringIO
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -26,6 +27,187 @@ class _OpenAIProviderStub:
                 message=Message(role="assistant", content=content),
             )
         )
+
+
+class _SubagentDelegationOpenAIStub:
+    def __init__(self) -> None:
+        self._manager_turn = 0
+
+    async def complete(
+        self,
+        messages: list[Message],
+        tools: list[Any] | None = None,
+        thread_response_id: str | None = None,
+        stream: bool = False,
+        response_format: dict[str, Any] | None = None,
+    ) -> CompletionResult:
+        _ = thread_response_id
+        _ = stream
+        _ = response_format
+
+        if tools:
+            return self._next_manager_response()
+
+        prompt = messages[-1].content
+        if "early quantum value" in prompt:
+            return _completion(
+                "Synchronous subagent answer: quantum gains will arrive first in optimization and chemistry."
+            )
+        if "slow background answer" in prompt:
+            return _completion(
+                "Slow background answer finished after the queued job waited its turn."
+            )
+        if "queued background answer" in prompt:
+            return _completion(
+                "Queued background answer completed once the slow session released the slot."
+            )
+        if "Stream a concise answer back to the parent" in prompt:
+            return _completion(
+                "Streamed background answer delivered to the parent event bus."
+            )
+
+        raise AssertionError(f"Unexpected subagent prompt: {prompt}")
+
+    def _next_manager_response(self) -> CompletionResult:
+        self._manager_turn += 1
+
+        if self._manager_turn == 1:
+            return CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="Starting synchronous delegation.",
+                    tool_calls=[
+                        ToolCall(
+                            id="call-sync",
+                            name="subagent",
+                            arguments={
+                                "category": "sync-worker",
+                                "prompt": "Give one sentence on where early quantum value appears.",
+                                "background": False,
+                            },
+                        )
+                    ],
+                )
+            )
+
+        if self._manager_turn == 2:
+            return CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="Launching the slow background worker.",
+                    tool_calls=[
+                        ToolCall(
+                            id="call-slow-background",
+                            name="subagent",
+                            arguments={
+                                "category": "slow-worker",
+                                "prompt": "Produce the slow background answer.",
+                                "background": True,
+                            },
+                        )
+                    ],
+                )
+            )
+
+        if self._manager_turn == 3:
+            return CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="Launching the queued background worker.",
+                    tool_calls=[
+                        ToolCall(
+                            id="call-queued-background",
+                            name="subagent",
+                            arguments={
+                                "category": "queued-worker",
+                                "prompt": "Produce the queued background answer.",
+                                "background": True,
+                            },
+                        )
+                    ],
+                )
+            )
+
+        if self._manager_turn == 4:
+            return CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="Collecting the slow background result.",
+                    tool_calls=[
+                        ToolCall(
+                            id="call-slow-result",
+                            name="subagent_result",
+                            arguments={
+                                "session_id": "session-slow-worker",
+                                "timeout": 5.0,
+                            },
+                        )
+                    ],
+                )
+            )
+
+        if self._manager_turn == 5:
+            return CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="Collecting the queued background result.",
+                    tool_calls=[
+                        ToolCall(
+                            id="call-queued-result",
+                            name="subagent_result",
+                            arguments={
+                                "session_id": "session-queued-worker",
+                                "timeout": 5.0,
+                            },
+                        )
+                    ],
+                )
+            )
+
+        if self._manager_turn == 6:
+            return CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="Launching the streaming background worker.",
+                    tool_calls=[
+                        ToolCall(
+                            id="call-stream-background",
+                            name="subagent",
+                            arguments={
+                                "category": "stream-worker",
+                                "prompt": "Stream a concise answer back to the parent.",
+                                "background": True,
+                                "stream": True,
+                            },
+                        )
+                    ],
+                )
+            )
+
+        if self._manager_turn == 7:
+            return CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="Collecting the streaming background result.",
+                    tool_calls=[
+                        ToolCall(
+                            id="call-stream-result",
+                            name="subagent_result",
+                            arguments={
+                                "session_id": "session-stream-worker",
+                                "timeout": 5.0,
+                            },
+                        )
+                    ],
+                )
+            )
+
+        if self._manager_turn == 8:
+            return _completion(
+                "Delegation complete. Sync, background, and stream runs succeeded, and the background lifecycle progressed from queued to running to succeeded."
+            )
+
+        raise AssertionError(f"Unexpected manager turn: {self._manager_turn}")
 
 
 class _EmbeddingProviderStub:
@@ -58,51 +240,6 @@ def _completion(content: str = "fake response") -> CompletionResult:
 
 def _fake_provider(responses: int = 20, content: str = "fake response") -> FakeProvider:
     return FakeProvider(responses=[_completion(content) for _ in range(responses)])
-
-
-def _subagent_delegation_manager_provider() -> FakeProvider:
-    """FakeProvider for manager in subagent delegation example."""
-    return FakeProvider(
-        responses=[
-            CompletionResult(
-                message=Message(
-                    role="assistant",
-                    content="I'll delegate this research to my subagent.",
-                    tool_calls=[
-                        ToolCall(
-                            id="call_001",
-                            name="subagent",
-                            arguments={
-                                "category": "researcher",
-                                "prompt": "Research the most promising near-term applications of quantum computing.",
-                                "background": False,
-                            },
-                        )
-                    ],
-                )
-            ),
-            CompletionResult(
-                message=Message(
-                    role="assistant",
-                    content="Based on my sub-agent's research, here is the summary.",
-                )
-            ),
-        ]
-    )
-
-
-def _subagent_delegation_subagent_provider() -> FakeProvider:
-    """FakeProvider for subagent in delegation example."""
-    return FakeProvider(
-        responses=[
-            CompletionResult(
-                message=Message(
-                    role="assistant",
-                    content="Research findings on quantum computing applications.",
-                )
-            )
-        ]
-    )
 
 
 def _load_example(module_name: str) -> Any:
@@ -267,121 +404,80 @@ class TestPermissionAgentDualMode:
 @pytest.mark.asyncio
 class TestSubagentDelegationDualMode:
     async def test_fake_mode(self) -> None:
+        import ecs_agent.systems.subagent_runtime as runtime_module
+
         module = _load_example("subagent_delegation")
 
-        captured_world = None
-
-        # Patch World to capture the instance created during execution
-        original_world_init = module.World.__init__
-
-        def capture_world_init(self: Any) -> None:
-            nonlocal captured_world
-            original_world_init(self)
-            # Only capture the first World (parent), not child worlds created by SubagentSystem
-            if captured_world is None:
-                captured_world = self
+        stdout = StringIO()
 
         with patch.dict(os.environ, {}, clear=True):
-            with patch(
-                "examples.subagent_delegation.FakeProvider",
-                side_effect=[
-                    _subagent_delegation_manager_provider(),
-                    _subagent_delegation_subagent_provider(),
-                ],
-            ) as fake_ctor:
+            with patch.object(runtime_module, "_GLOBAL_SCHEDULER", None):
                 with patch(
-                    "examples.subagent_delegation.OpenAIProvider", create=True
-                ) as openai_ctor:
-                    with patch.object(module.World, "__init__", capture_world_init):
-                        await module.main()
+                    "examples.subagent_delegation.FakeProvider",
+                    side_effect=FakeProvider,
+                ) as fake_ctor:
+                    with patch(
+                        "examples.subagent_delegation.OpenAIProvider", create=True
+                    ) as openai_ctor:
+                        with patch("sys.stdout", stdout):
+                            await module.main()
 
-        assert fake_ctor.call_count == 2
+        assert fake_ctor.call_count == 5
         openai_ctor.assert_not_called()
 
-        # ===== SEMANTIC ASSERTIONS (subagent-tool roundtrip workflow) =====
-        # When subagent tool is used, we expect:
-        # 1. Tool call with name="subagent" in manager's conversation
-        # 2. Tool result following the tool call
-        # 3. Final assistant summary after tool execution
-
-        assert captured_world is not None, "World was not captured during execution"
-
-        # Find manager entity (has ConversationComponent with user message)
-        from ecs_agent.components import (
-            ConversationComponent,
-            SubagentRegistryComponent,
-        )
-
-        # Entity 1 is the manager (has both ConversationComponent and SubagentRegistryComponent)
-        # Entity 3 is the subagent child (has ConversationComponent but no SubagentRegistryComponent)
-        manager_entity = 1
-
-        assert manager_entity is not None, "Manager entity not found in World"
-
-        manager_conv = captured_world.get_component(
-            manager_entity, ConversationComponent
-        )
-        assert manager_conv is not None
-
-        messages = manager_conv.messages
-
-        # Assert: subagent tool call exists in conversation
-        subagent_tool_call_found = False
-        for msg in messages:
-            if msg.role == "assistant" and msg.tool_calls:
-                for tool_call in msg.tool_calls:
-                    if tool_call.name == "subagent":
-                        subagent_tool_call_found = True
-                        break
-
-        assert subagent_tool_call_found, (
-            "Expected subagent tool call in manager conversation, but none found. "
-            "This indicates the example is not using the subagent-tool roundtrip pattern."
-        )
-
-        # Assert: tool result message exists after tool call
-        tool_result_found = False
-        for msg in messages:
-            if msg.role == "tool" and msg.tool_call_id:
-                tool_result_found = True
-                break
-
-        assert tool_result_found, (
-            "Expected tool result message in manager conversation after subagent call, but none found."
-        )
-
-        # Assert: final assistant summary exists after tool execution cycle
-        final_assistant_message_found = False
-        for i, msg in enumerate(messages):
-            if msg.role == "tool" and i + 1 < len(messages):
-                if messages[i + 1].role == "assistant":
-                    final_assistant_message_found = True
-                    break
-
-        assert final_assistant_message_found, (
-            "Expected final assistant summary message after tool result, but none found. "
-            "The subagent-tool roundtrip should conclude with an assistant message."
-        )
+        output = stdout.getvalue()
+        assert "TOOL CALL HISTORY" in output
+        assert "[Action] subagent" in output
+        assert "[Result]" in output
+        assert "Synchronous subagent run" in output
+        assert "Background queue lifecycle" in output
+        assert "Streamed background subagent" in output
+        assert "sync" in output.lower()
+        assert "background" in output.lower()
+        assert "stream" in output.lower()
+        assert "queued" in output
+        assert "running" in output
+        assert "succeeded" in output
+        assert "Working" not in output
 
     async def test_real_mode(self) -> None:
+        import ecs_agent.systems.subagent_runtime as runtime_module
+
         module = _load_example("subagent_delegation")
 
+        stdout = StringIO()
+
         with patch.dict(os.environ, {"LLM_API_KEY": "test-api-key"}, clear=True):
-            with patch(
-                "examples.subagent_delegation.FakeProvider", side_effect=FakeProvider
-            ) as fake_ctor:
+            with patch.object(runtime_module, "_GLOBAL_SCHEDULER", None):
                 with patch(
-                    "examples.subagent_delegation.OpenAIProvider",
-                    side_effect=[
-                        _OpenAIProviderStub("manager"),
-                        _OpenAIProviderStub("subagent"),
-                    ],
-                    create=True,
-                ) as openai_ctor:
-                    await module.main()
+                    "examples.subagent_delegation.FakeProvider",
+                    side_effect=FakeProvider,
+                ) as fake_ctor:
+                    with patch(
+                        "examples.subagent_delegation.OpenAIProvider",
+                        return_value=_SubagentDelegationOpenAIStub(),
+                        create=True,
+                    ) as openai_ctor:
+                        with patch("sys.stdout", stdout):
+                            await module.main()
 
         fake_ctor.assert_not_called()
-        _assert_openai_defaults(openai_ctor, expected_count=2)
+        _assert_openai_defaults(openai_ctor, expected_count=1)
+
+        output = stdout.getvalue()
+        assert "TOOL CALL HISTORY" in output
+        assert "[Action] subagent" in output
+        assert "[Result]" in output
+        assert "Synchronous subagent run" in output
+        assert "Background queue lifecycle" in output
+        assert "Streamed background subagent" in output
+        assert "sync" in output.lower()
+        assert "background" in output.lower()
+        assert "stream" in output.lower()
+        assert "queued" in output
+        assert "running" in output
+        assert "succeeded" in output
+        assert "Working" not in output
 
 
 @pytest.mark.asyncio

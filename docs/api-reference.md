@@ -121,7 +121,7 @@ class SubagentSessionRecord:
     parent_entity_id: EntityId
     created_at: str
     updated_at: str
-    status: SubagentLifecycleStatus = "Idle"
+    status: SubagentLifecycleStatus = "queued"
     timeout_seconds: float | None = None
     result_excerpt: str | None = None
     error: str | None = None

@@ -1,18 +1,25 @@
 """Tests for Runner checkpoint save/load and resume functionality."""
 
+import asyncio
+import json
 from pathlib import Path
 
 import pytest
 
+from ecs_agent.components import ToolRegistryComponent
 from ecs_agent.components.definitions import (
     ConversationComponent,
     LLMComponent,
     RunnerStateComponent,
+    SubagentRegistryComponent,
+    SubagentSessionTableComponent,
     TerminalComponent,
 )
 from ecs_agent.core.runner import Runner
 from ecs_agent.core.world import World
-from ecs_agent.types import EntityId, Message
+from ecs_agent.serialization import NON_SERIALIZABLE_PLACEHOLDER, WorldSerializer
+from ecs_agent.systems.subagent import SubagentSystem
+from ecs_agent.types import EntityId, Message, SubagentConfig, SubagentSessionRecord
 
 
 class DummyProvider:
@@ -32,6 +39,36 @@ class CounterSystem:
 
     async def process(self, world: World) -> None:
         self.run_count += 1
+
+
+def _build_session_record(
+    parent_entity_id: EntityId,
+    session_id: str,
+    *,
+    category: str,
+    prompt: str,
+    created_at: str,
+    updated_at: str,
+    status: str,
+    started_at: str | None = None,
+    finished_at: str | None = None,
+    result_excerpt: str | None = None,
+    error: str | None = None,
+) -> SubagentSessionRecord:
+    return SubagentSessionRecord(
+        session_id=session_id,
+        category=category,
+        prompt=prompt,
+        parent_entity_id=parent_entity_id,
+        created_at=created_at,
+        updated_at=updated_at,
+        status=status,
+        background=True,
+        started_at=started_at,
+        finished_at=finished_at,
+        result_excerpt=result_excerpt,
+        error=error,
+    )
 
 
 class TerminateAtTickSystem:
@@ -243,3 +280,211 @@ class TestRunnerResume:
 
         with pytest.raises(FileNotFoundError):
             Runner.load_checkpoint(nonexistent_path, providers={}, tool_handlers={})
+
+    @pytest.mark.asyncio
+    async def test_resume_restore_reconciles_queued_and_running_subagent_sessions(
+        self,
+        world: World,
+        runner: Runner,
+        tmp_checkpoint_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import ecs_agent.systems.subagent_runtime as runtime_module
+
+        monkeypatch.setattr(runtime_module, "_GLOBAL_SCHEDULER", None)
+
+        provider = DummyProvider()
+        parent = world.create_entity()
+        world.add_component(parent, LLMComponent(provider=provider, model="test"))
+        world.add_component(
+            parent,
+            ConversationComponent(
+                messages=[Message(role="user", content="resume subagents")]
+            ),
+        )
+        world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+        world.add_component(
+            parent,
+            SubagentRegistryComponent(
+                subagents={
+                    "queued-agent": SubagentConfig(
+                        name="queued-agent", provider=provider, model="test"
+                    ),
+                    "running-agent": SubagentConfig(
+                        name="running-agent", provider=provider, model="test"
+                    ),
+                    "done-agent": SubagentConfig(
+                        name="done-agent", provider=provider, model="test"
+                    ),
+                }
+            ),
+        )
+        world.add_component(
+            parent,
+            SubagentSessionTableComponent(
+                sessions={
+                    "queued-b": _build_session_record(
+                        parent,
+                        "queued-b",
+                        category="queued-agent",
+                        prompt="second queued",
+                        created_at="2026-04-05T10:01:00Z",
+                        updated_at="2026-04-05T10:01:00Z",
+                        status="queued",
+                    ),
+                    "queued-a": _build_session_record(
+                        parent,
+                        "queued-a",
+                        category="queued-agent",
+                        prompt="first queued",
+                        created_at="2026-04-05T10:00:00Z",
+                        updated_at="2026-04-05T10:00:00Z",
+                        status="queued",
+                    ),
+                    "running-z": _build_session_record(
+                        parent,
+                        "running-z",
+                        category="running-agent",
+                        prompt="running when checkpointed",
+                        created_at="2026-04-05T09:58:00Z",
+                        updated_at="2026-04-05T10:02:00Z",
+                        status="running",
+                        started_at="2026-04-05T09:59:00Z",
+                    ),
+                    "done-c": _build_session_record(
+                        parent,
+                        "done-c",
+                        category="done-agent",
+                        prompt="already finished",
+                        created_at="2026-04-05T09:50:00Z",
+                        updated_at="2026-04-05T09:55:00Z",
+                        status="succeeded",
+                        started_at="2026-04-05T09:50:30Z",
+                        finished_at="2026-04-05T09:55:00Z",
+                        result_excerpt="completed before restore",
+                    ),
+                }
+            ),
+        )
+
+        checkpoint_data = WorldSerializer.to_dict(world)
+        subagents = checkpoint_data["entities"][str(int(parent))][
+            "SubagentRegistryComponent"
+        ]["subagents"]
+        for subagent_data in subagents.values():
+            subagent_data["provider"] = NON_SERIALIZABLE_PLACEHOLDER
+
+        checkpoint_data["runner_state"] = {"current_tick": 0}
+        tmp_checkpoint_path.write_text(json.dumps(checkpoint_data), encoding="utf-8")
+
+        loaded_world, _ = Runner.load_checkpoint(
+            tmp_checkpoint_path,
+            providers={"default": provider, "test": provider},
+            tool_handlers={},
+        )
+
+        system = SubagentSystem(max_background_concurrency=1)
+        system.install_subagent_control_tools(loaded_world, parent)
+
+        start_events = {
+            "queued-a": asyncio.Event(),
+            "queued-b": asyncio.Event(),
+        }
+        release_first = asyncio.Event()
+        started_order: list[str] = []
+
+        async def fake_execute_core(
+            world_arg: World,
+            parent_entity_id: EntityId,
+            subagent_name: str,
+            task: str,
+            correlation_id: str,
+            traceparent: str,
+            config_snapshot: SubagentConfig,
+        ) -> tuple[str, bool, str | None]:
+            del (
+                world_arg,
+                parent_entity_id,
+                correlation_id,
+                traceparent,
+                config_snapshot,
+            )
+            if task == "first queued":
+                started_order.append("queued-a")
+                start_events["queued-a"].set()
+                await release_first.wait()
+                return ("queued-a-result", True, None)
+
+            started_order.append("queued-b")
+            start_events["queued-b"].set()
+            return (f"{subagent_name}:{task}", True, None)
+
+        system._execute_subagent_core = fake_execute_core  # type: ignore[method-assign]
+
+        await system.process(loaded_world)
+        await asyncio.wait_for(start_events["queued-a"].wait(), timeout=1.0)
+        await asyncio.sleep(0)
+
+        tools = loaded_world.get_component(parent, ToolRegistryComponent)
+        assert tools is not None
+
+        status_handler = tools.handlers["subagent_status"]
+        result_handler = tools.handlers["subagent_result"]
+
+        queued_status = json.loads(await status_handler(session_id="queued-b"))
+        assert queued_status["lifecycle_status"] == "queued"
+        assert queued_status["queue_position"] == 0
+
+        running_result = json.loads(
+            await result_handler(session_id="running-z", timeout=None)
+        )
+        assert running_result["status"] == "terminal"
+        assert running_result["lifecycle_status"] == "failed"
+        assert running_result["error"] == "restored_without_live_task_handle"
+
+        terminal_result = json.loads(
+            await result_handler(session_id="done-c", timeout=None)
+        )
+        assert terminal_result["status"] == "success"
+        assert terminal_result["lifecycle_status"] == "succeeded"
+
+        scheduler = runtime_module._GLOBAL_SCHEDULER
+        assert scheduler is not None
+        assert [item.session_id for item in scheduler.pending_queue] == ["queued-b"]
+        assert started_order == ["queued-a"]
+
+        await system.process(loaded_world)
+        await asyncio.sleep(0)
+
+        assert [item.session_id for item in scheduler.pending_queue] == ["queued-b"]
+        assert started_order == ["queued-a"]
+
+        release_first.set()
+        first_task = await system._runtime_manager.get_task("queued-a")
+        assert first_task is not None
+        await first_task
+        await asyncio.wait_for(start_events["queued-b"].wait(), timeout=1.0)
+
+        queued_result = json.loads(
+            await asyncio.wait_for(
+                result_handler(session_id="queued-b", timeout=None), timeout=1.0
+            )
+        )
+        assert queued_result["status"] == "success"
+        assert queued_result["lifecycle_status"] == "succeeded"
+
+        restored_table = loaded_world.get_component(
+            parent, SubagentSessionTableComponent
+        )
+        assert restored_table is not None
+        assert restored_table.sessions["running-z"].status == "failed"
+        assert restored_table.sessions["running-z"].finished_at is not None
+        assert restored_table.sessions["done-c"].status == "succeeded"
+        assert (
+            restored_table.sessions["done-c"].result_excerpt
+            == "completed before restore"
+        )
+        assert (
+            restored_table.sessions["queued-b"].result_excerpt
+            == "queued-agent:second queued"
+        )

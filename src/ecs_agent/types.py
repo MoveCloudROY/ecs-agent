@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime, timezone
-from typing import Any, Literal, NewType
+from typing import Any, Literal, NewType, cast, get_args
 
 from ecs_agent.accounting.models import LLMInvocationEvent, UsageRecord
 
@@ -303,6 +303,39 @@ class StreamEndEvent:
 
 
 @dataclass(slots=True)
+class SubagentStreamStartEvent:
+    session_id: str
+    parent_entity_id: EntityId
+    category: str
+    child_world_name: str
+    seq: int
+    timestamp: str
+
+
+@dataclass(slots=True)
+class SubagentStreamDeltaEvent:
+    session_id: str
+    parent_entity_id: EntityId
+    category: str
+    child_world_name: str
+    seq: int
+    timestamp: str
+    delta: str
+    reasoning_delta: str | None = None
+
+
+@dataclass(slots=True)
+class SubagentStreamEndEvent:
+    session_id: str
+    parent_entity_id: EntityId
+    category: str
+    child_world_name: str
+    seq: int
+    timestamp: str
+    total_tokens: int | None = None
+
+
+@dataclass(slots=True)
 class CheckpointCreatedEvent:
     """Event emitted when a checkpoint is created."""
 
@@ -466,12 +499,28 @@ class SubagentConfig:
 
 
 SubagentLifecycleStatus = Literal[
-    "Idle",
-    "Working",
-    "Dead",
-    "Timeout",
-    "Cancelled",
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "timed_out",
+    "cancelled",
 ]
+
+
+def _normalize_subagent_lifecycle_status(status: str) -> SubagentLifecycleStatus:
+    legacy_status_map: dict[str, SubagentLifecycleStatus] = {
+        "Idle": "succeeded",
+        "Working": "running",
+        "Dead": "failed",
+        "Timeout": "timed_out",
+        "Cancelled": "cancelled",
+    }
+    if status in legacy_status_map:
+        return legacy_status_map[status]
+    if status not in get_args(SubagentLifecycleStatus):
+        raise ValueError(f"Invalid subagent lifecycle status: {status}")
+    return cast(SubagentLifecycleStatus, status)
 
 
 @dataclass(slots=True)
@@ -485,8 +534,9 @@ class SubagentSessionRecord:
     created_at: str  # ISO timestamp
     updated_at: str  # ISO timestamp
     load_skills: list[str] = field(default_factory=list)
+    stream: bool = False
     background: bool = False
-    status: SubagentLifecycleStatus = "Idle"
+    status: SubagentLifecycleStatus = "queued"
     correlation_id: str = ""
     traceparent: str = ""
     timeout_seconds: float | None = None
@@ -496,6 +546,21 @@ class SubagentSessionRecord:
     artifact_record_path: str | None = None
     artifact_inline_content: str | None = None
     error: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+
+    def __post_init__(self) -> None:
+        self.status = _normalize_subagent_lifecycle_status(self.status)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name == "status" and isinstance(value, str):
+            object.__setattr__(
+                self,
+                name,
+                _normalize_subagent_lifecycle_status(value),
+            )
+            return
+        object.__setattr__(self, name, value)
 
 
 def validate_subagent_lifecycle_transition(
@@ -503,12 +568,15 @@ def validate_subagent_lifecycle_transition(
     next_status: SubagentLifecycleStatus,
 ) -> None:
     allowed_transitions: dict[SubagentLifecycleStatus, set[SubagentLifecycleStatus]] = {
-        "Idle": {"Working"},
-        "Working": {"Idle", "Dead", "Timeout", "Cancelled"},
-        "Dead": set(),
-        "Timeout": set(),
-        "Cancelled": set(),
+        "queued": {"running", "cancelled"},
+        "running": {"succeeded", "failed", "timed_out", "cancelled"},
+        "succeeded": set(),
+        "failed": set(),
+        "timed_out": set(),
+        "cancelled": set(),
     }
+    current = _normalize_subagent_lifecycle_status(current)
+    next_status = _normalize_subagent_lifecycle_status(next_status)
     if next_status not in allowed_transitions[current]:
         raise ValueError(
             f"Invalid subagent lifecycle transition from '{current}' to '{next_status}'"
@@ -517,10 +585,10 @@ def validate_subagent_lifecycle_transition(
 
 def render_subagent_session_reminder_table(
     sessions: dict[str, SubagentSessionRecord],
-) -> list[str]:
+) -> str:
     """Render subagent session reminder table rows sorted by updated_at desc, then session_id asc."""
     if not sessions:
-        return []
+        return "No active subagent sessions."
 
     # Sort by updated_at descending, then session_id ascending
     sorted_sessions = sorted(
@@ -528,15 +596,21 @@ def render_subagent_session_reminder_table(
         key=lambda item: (-_iso_timestamp_to_sortable(item[1].updated_at), item[0]),
     )
 
-    rows = []
+    rows = [
+        "Session ID       | Category        | Status    | Updated At          | Last Message",
+        "-" * 95,
+    ]
     for session_id, record in sorted_sessions:
-        # Format: session_id | status | category | updated_at
+        result_excerpt = record.result_excerpt or ""
+        if len(result_excerpt) > 50:
+            result_excerpt = result_excerpt[:47] + "..."
         row = (
-            f"{session_id} | {record.status} | {record.category} | {record.updated_at}"
+            f"{session_id:16} | {record.category:15} | {record.status:9} | "
+            f"{record.updated_at:19} | {result_excerpt}"
         )
         rows.append(row)
 
-    return rows
+    return "\n".join(rows)
 
 
 def _iso_timestamp_to_sortable(timestamp: str) -> float:
@@ -877,6 +951,9 @@ __all__ = [
     "StreamStartEvent",
     "SubagentConfig",
     "SubagentLifecycleStatus",
+    "SubagentStreamDeltaEvent",
+    "SubagentStreamEndEvent",
+    "SubagentStreamStartEvent",
     "SubagentSessionRecord",
     "SystemHandle",
     "TaskBlockedEvent",

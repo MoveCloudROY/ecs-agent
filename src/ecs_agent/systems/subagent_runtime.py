@@ -1,18 +1,21 @@
-"""Runtime session manager for async subagent handles.
-
-This module provides in-memory management of async task handles and lifecycle
-state transitions for background subagent sessions. It keeps asyncio.Task
-handles separate from serializable ECS components.
-"""
+"""Process-global runtime support for background subagent sessions."""
 
 from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from collections import deque
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any
 
 from ecs_agent.logging import get_logger
-from ecs_agent.types import SubagentLifecycleStatus, SubagentSessionRecord
+from ecs_agent.types import (
+    SubagentLifecycleStatus,
+    SubagentSessionRecord,
+    validate_subagent_lifecycle_transition,
+)
 
 if TYPE_CHECKING:
     from ecs_agent.core.world import World
@@ -21,28 +24,192 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-class SubagentRuntimeManager:
-    """Manages async task handles and lifecycle transitions for subagent sessions.
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-    This manager maintains the runtime state (asyncio.Task handles) separately from
-    the serializable metadata (SubagentSessionRecord in SubagentSessionTableComponent).
 
-    Thread-safe for concurrent access via asyncio.Lock.
-    """
+@dataclass(slots=True)
+class QueuedSession:
+    session_id: str
+    coroutine_factory: Callable[[], Awaitable[None]]
 
-    def __init__(self) -> None:
-        """Initialize the runtime manager with empty state."""
-        self._sessions: Dict[str, SubagentSessionRecord] = {}
-        self._tasks: Dict[str, asyncio.Task[Any]] = {}
+
+class BackgroundScheduler:
+    def __init__(self, max_concurrency: int = 5) -> None:
+        if max_concurrency <= 0:
+            raise ValueError("max_concurrency must be greater than 0")
+
+        self.max_concurrency = max_concurrency
+        self.pending_queue: deque[QueuedSession] = deque()
+        self.active_count = 0
+        self._running_session_ids: set[str] = set()
         self._lock = asyncio.Lock()
 
-    def create_session(self) -> str:
-        """Generate a unique session ID.
+    async def enqueue(
+        self,
+        session_id: str,
+        coroutine_factory: Callable[[], Awaitable[None]],
+    ) -> None:
+        async with self._lock:
+            self.pending_queue.append(
+                QueuedSession(
+                    session_id=session_id,
+                    coroutine_factory=coroutine_factory,
+                )
+            )
 
-        Returns:
-            A 16-character hexadecimal session ID.
-        """
+    async def reserve_admissions(self) -> list[QueuedSession]:
+        async with self._lock:
+            admitted: list[QueuedSession] = []
+            while self.pending_queue and self.active_count < self.max_concurrency:
+                queued_session = self.pending_queue.popleft()
+                self._running_session_ids.add(queued_session.session_id)
+                self.active_count += 1
+                admitted.append(queued_session)
+
+            return admitted
+
+    async def reserve_running_session(self, session_id: str) -> None:
+        async with self._lock:
+            if session_id in self._running_session_ids:
+                return
+
+            if self.active_count >= self.max_concurrency:
+                raise RuntimeError(
+                    "background scheduler capacity exceeded while registering running task"
+                )
+
+            self._running_session_ids.add(session_id)
+            self.active_count += 1
+
+    async def remove_queued(self, session_id: str) -> bool:
+        async with self._lock:
+            original_length = len(self.pending_queue)
+            self.pending_queue = deque(
+                item for item in self.pending_queue if item.session_id != session_id
+            )
+            return len(self.pending_queue) != original_length
+
+    async def get_queue_position(self, session_id: str) -> int | None:
+        async with self._lock:
+            for index, queued_session in enumerate(self.pending_queue):
+                if queued_session.session_id == session_id:
+                    return index
+
+            return None
+
+    async def release_slot(self, session_id: str) -> bool:
+        async with self._lock:
+            if session_id not in self._running_session_ids:
+                return False
+
+            self._running_session_ids.remove(session_id)
+            self.active_count -= 1
+            return True
+
+
+_GLOBAL_SCHEDULER: BackgroundScheduler | None = None
+
+
+def get_global_scheduler(max_background_concurrency: int = 5) -> BackgroundScheduler:
+    global _GLOBAL_SCHEDULER
+
+    if _GLOBAL_SCHEDULER is None:
+        _GLOBAL_SCHEDULER = BackgroundScheduler(
+            max_concurrency=max_background_concurrency
+        )
+        return _GLOBAL_SCHEDULER
+
+    if _GLOBAL_SCHEDULER.max_concurrency != max_background_concurrency:
+        raise ValueError(
+            "Conflicting max_background_concurrency for global scheduler: "
+            f"existing={_GLOBAL_SCHEDULER.max_concurrency}, "
+            f"requested={max_background_concurrency}"
+        )
+
+    return _GLOBAL_SCHEDULER
+
+
+class SubagentRuntimeManager:
+    def __init__(self, max_background_concurrency: int = 5) -> None:
+        self._sessions: dict[str, SubagentSessionRecord] = {}
+        self._tasks: dict[str, asyncio.Task[Any]] = {}
+        self._lock = asyncio.Lock()
+        self._scheduler = get_global_scheduler(max_background_concurrency)
+
+    def create_session(self) -> str:
         return uuid.uuid4().hex[:16]
+
+    async def enqueue_session(
+        self,
+        session_id: str,
+        metadata: SubagentSessionRecord,
+        coroutine_factory: Callable[[], Awaitable[None]],
+    ) -> None:
+        async with self._lock:
+            self._sessions[session_id] = metadata
+
+        await self._scheduler.enqueue(session_id, coroutine_factory)
+        logger.info(
+            "session_enqueued",
+            session_id=session_id,
+            category=metadata.category,
+            status=metadata.status,
+        )
+        await self._try_admit()
+
+    async def restore_session_metadata(self, metadata: SubagentSessionRecord) -> None:
+        async with self._lock:
+            self._sessions[metadata.session_id] = metadata
+
+        logger.info(
+            "session_metadata_restored",
+            session_id=metadata.session_id,
+            category=metadata.category,
+            status=metadata.status,
+        )
+
+    async def _run_session(
+        self,
+        session_id: str,
+        coroutine_factory: Callable[[], Awaitable[None]],
+    ) -> None:
+        try:
+            await coroutine_factory()
+        finally:
+            await self.release_slot(session_id)
+
+    async def _try_admit(self) -> None:
+        admitted = await self._scheduler.reserve_admissions()
+        for queued_session in admitted:
+            task = asyncio.create_task(
+                self._run_session(
+                    queued_session.session_id,
+                    queued_session.coroutine_factory,
+                )
+            )
+            async with self._lock:
+                self._tasks[queued_session.session_id] = task
+
+            logger.info(
+                "session_admitted",
+                session_id=queued_session.session_id,
+                active_count=self._scheduler.active_count,
+                max_concurrency=self._scheduler.max_concurrency,
+            )
+
+    async def release_slot(self, session_id: str) -> None:
+        released = await self._scheduler.release_slot(session_id)
+        if not released:
+            return
+
+        logger.info(
+            "session_slot_released",
+            session_id=session_id,
+            active_count=self._scheduler.active_count,
+            max_concurrency=self._scheduler.max_concurrency,
+        )
+        await self._try_admit()
 
     async def register_task(
         self,
@@ -50,32 +217,29 @@ class SubagentRuntimeManager:
         task: asyncio.Task[Any],
         metadata: SubagentSessionRecord,
     ) -> None:
-        """Register an async task with its session metadata.
-
-        Args:
-            session_id: Unique session identifier
-            task: The asyncio.Task handle for the background execution
-            metadata: Serializable session metadata
-        """
         async with self._lock:
             self._sessions[session_id] = metadata
             self._tasks[session_id] = task
-            logger.info(
-                "session_registered",
-                session_id=session_id,
-                category=metadata.category,
-                status=metadata.status,
-            )
 
-    async def get_session(self, session_id: str) -> Optional[SubagentSessionRecord]:
-        """Retrieve session metadata by ID.
+        await self._scheduler.reserve_running_session(session_id)
+        logger.info(
+            "session_registered",
+            session_id=session_id,
+            category=metadata.category,
+            status=metadata.status,
+        )
 
-        Args:
-            session_id: Session identifier to query
+        if task.done():
+            await self.release_slot(session_id)
+            return
 
-        Returns:
-            SubagentSessionRecord if found, None otherwise
-        """
+        def _release_when_done(completed_task: asyncio.Task[Any]) -> None:
+            del completed_task
+            asyncio.create_task(self.release_slot(session_id))
+
+        task.add_done_callback(_release_when_done)
+
+    async def get_session(self, session_id: str) -> SubagentSessionRecord | None:
         async with self._lock:
             return self._sessions.get(session_id)
 
@@ -84,15 +248,6 @@ class SubagentRuntimeManager:
         session_id: str,
         status: SubagentLifecycleStatus,
     ) -> None:
-        """Update the lifecycle status of a session.
-
-        Args:
-            session_id: Session identifier
-            status: New lifecycle status
-
-        Raises:
-            ValueError: If session not found
-        """
         async with self._lock:
             metadata = self._sessions.get(session_id)
             if metadata is None:
@@ -101,181 +256,154 @@ class SubagentRuntimeManager:
             old_status = metadata.status
             metadata.status = status
 
-            logger.info(
-                "session_status_updated",
-                session_id=session_id,
-                old_status=old_status,
-                new_status=status,
-            )
+        logger.info(
+            "session_status_updated",
+            session_id=session_id,
+            old_status=old_status,
+            new_status=status,
+        )
 
     async def cancel_session(self, session_id: str) -> None:
-        """Cancel a running session and mark it as Cancelled.
+        removed_from_queue = await self._scheduler.remove_queued(session_id)
+        if removed_from_queue:
+            async with self._lock:
+                metadata = self._sessions.get(session_id)
+                if metadata is not None:
+                    if metadata.status != "queued":
+                        raise ValueError(
+                            "Queued cancellation requires queued session status"
+                        )
+                    validate_subagent_lifecycle_transition(
+                        metadata.status,
+                        "cancelled",
+                    )
+                    metadata.status = "cancelled"
+                    metadata.updated_at = _utc_now_iso()
+                    metadata.finished_at = metadata.updated_at
 
-        Args:
-            session_id: Session identifier to cancel
-        """
+            logger.info("session_cancelled_while_queued", session_id=session_id)
+            return
+
+        task: asyncio.Task[Any] | None
         async with self._lock:
-            task = self._tasks.get(session_id)
-            if task and not task.done():
-                task.cancel()
-                logger.info("session_task_cancelled", session_id=session_id)
-
             metadata = self._sessions.get(session_id)
-            if metadata:
-                metadata.status = "Cancelled"
-                logger.info("session_status_cancelled", session_id=session_id)
+            task = self._tasks.get(session_id)
+
+            if metadata is not None and metadata.status in ("queued", "running"):
+                validate_subagent_lifecycle_transition(metadata.status, "cancelled")
+                metadata.status = "cancelled"
+                metadata.updated_at = _utc_now_iso()
+                if metadata.finished_at is None:
+                    metadata.finished_at = metadata.updated_at
+
+        if task is not None and not task.done():
+            task.cancel()
+            logger.info("session_task_cancelled", session_id=session_id)
+
+        await self.release_slot(session_id)
 
     async def cleanup(self, session_id: str) -> None:
-        """Remove a completed or cancelled session from the runtime map.
+        await self.release_slot(session_id)
 
-        Args:
-            session_id: Session identifier to clean up
-        """
         async with self._lock:
-            if session_id in self._tasks:
-                del self._tasks[session_id]
-            if session_id in self._sessions:
-                del self._sessions[session_id]
+            self._tasks.pop(session_id, None)
+            self._sessions.pop(session_id, None)
 
-            logger.info("session_cleaned_up", session_id=session_id)
+        logger.info("session_cleaned_up", session_id=session_id)
 
-    async def get_all_sessions(self) -> Dict[str, SubagentSessionRecord]:
-        """Get all active session metadata.
-
-        Returns:
-            Dictionary mapping session_id to SubagentSessionRecord
-        """
+    async def get_all_sessions(self) -> dict[str, SubagentSessionRecord]:
         async with self._lock:
             return dict(self._sessions)
 
-    async def get_task(self, session_id: str) -> Optional[asyncio.Task[Any]]:
-        """Retrieve the asyncio.Task for a session.
-        
-        Args:
-            session_id: Session identifier
-        
-        Returns:
-            asyncio.Task if found and still tracked, None otherwise
-        """
+    async def get_task(self, session_id: str) -> asyncio.Task[Any] | None:
         async with self._lock:
             return self._tasks.get(session_id)
 
+    async def get_queue_position(self, session_id: str) -> int | None:
+        return await self._scheduler.get_queue_position(session_id)
+
     async def update_timeout(self, session_id: str, error: str) -> None:
-        """Update session to Timeout status with error message.
-        
-        Args:
-            session_id: Session identifier
-            error: Timeout error message
-        """
         async with self._lock:
             metadata = self._sessions.get(session_id)
             if metadata is None:
-                # Missing session is a no-op (safe async behavior)
                 logger.warning("timeout_update_missing_session", session_id=session_id)
                 return
-            
-            # Validate transition to Timeout
-            from ecs_agent.types import validate_subagent_lifecycle_transition
-            validate_subagent_lifecycle_transition(metadata.status, "Timeout")
-            
-            # Update status and error
-            old_status = metadata.status
-            metadata.status = "Timeout"
-            metadata.error = error
-            
-            from datetime import datetime, timezone
-            metadata.updated_at = datetime.now(timezone.utc).isoformat()
-            
-            logger.info(
-                "session_timeout_updated",
-                session_id=session_id,
-                old_status=old_status,
-                error=error
-            )
 
-    async def sync_to_component(
-        self, world: "World", entity_id: "EntityId"
-    ) -> None:
-        """Sync runtime sessions to ECS component table.
-        
-        Copies current runtime session state to the SubagentSessionTableComponent
-        on the specified entity, making session state visible to other systems.
-        
-        Args:
-            world: World instance
-            entity_id: Entity containing SubagentSessionTableComponent
-        """
+            validate_subagent_lifecycle_transition(metadata.status, "timed_out")
+            old_status = metadata.status
+            metadata.status = "timed_out"
+            metadata.error = error
+            metadata.updated_at = _utc_now_iso()
+
+        logger.info(
+            "session_timeout_updated",
+            session_id=session_id,
+            old_status=old_status,
+            error=error,
+        )
+
+    async def sync_to_component(self, world: "World", entity_id: "EntityId") -> None:
         from ecs_agent.components.definitions import SubagentSessionTableComponent
-        from ecs_agent.core.world import World
-        from ecs_agent.types import EntityId
-        
+
         async with self._lock:
             table = world.get_component(entity_id, SubagentSessionTableComponent)
             if table is None:
                 logger.warning(
                     "sync_missing_table",
                     entity_id=entity_id,
-                    message="SubagentSessionTableComponent not found"
+                    message="SubagentSessionTableComponent not found",
                 )
                 return
-            
-            # Deep copy sessions to avoid shared state
-            from dataclasses import replace
+
             table.sessions = {
                 sid: replace(metadata) for sid, metadata in self._sessions.items()
             }
-            
-            from datetime import datetime, timezone
-            logger.info(
-                "sessions_synced_to_component",
-                entity_id=entity_id,
-                session_count=len(table.sessions)
-            )
+
+        logger.info(
+            "sessions_synced_to_component",
+            entity_id=entity_id,
+            session_count=len(table.sessions),
+        )
 
 
 def render_subagent_session_reminder_table(
-    sessions: Dict[str, SubagentSessionRecord]
+    sessions: dict[str, SubagentSessionRecord],
 ) -> str:
-    """Render deterministic reminder table from sessions.
-    
-    Args:
-        sessions: Dictionary of session_id to SubagentSessionRecord
-    
-    Returns:
-        Formatted table string with columns: session_id | category | status | updated_at | last_message
-        
-    Sorting: updated_at desc (most recent first), then session_id asc (deterministic)
-    """
     if not sessions:
         return "No active subagent sessions."
-    
-    # Convert ISO timestamps to sortable floats for ordering
+
     def iso_to_sortable(iso_str: str) -> float:
-        from datetime import datetime
         try:
-            return datetime.fromisoformat(iso_str.replace('Z', '+00:00')).timestamp()
-        except Exception:
+            return datetime.fromisoformat(iso_str.replace("Z", "+00:00")).timestamp()
+        except ValueError:
             return 0.0
-    
-    # Sort: updated_at desc (negative for reverse), then session_id asc
+
     sorted_sessions = sorted(
         sessions.items(),
-        key=lambda x: (-iso_to_sortable(x[1].updated_at), x[0])
+        key=lambda item: (-iso_to_sortable(item[1].updated_at), item[0]),
     )
-    
-    # Build table
-    lines = []
-    lines.append("Session ID       | Category        | Status    | Updated At          | Last Message")
-    lines.append("-" * 95)
-    
+
+    lines = [
+        "Session ID       | Category        | Status    | Updated At          | Last Message",
+        "-" * 95,
+    ]
     for session_id, metadata in sorted_sessions:
-        # Truncate last_message to 50 chars
-        last_msg = metadata.result_excerpt or ""
-        if len(last_msg) > 50:
-            last_msg = last_msg[:47] + "..."
-        
+        last_message = metadata.result_excerpt or ""
+        if len(last_message) > 50:
+            last_message = last_message[:47] + "..."
+
         lines.append(
-            f"{session_id:16} | {metadata.category:15} | {metadata.status:9} | {metadata.updated_at:19} | {last_msg}"
+            f"{session_id:16} | {metadata.category:15} | {metadata.status:9} | "
+            f"{metadata.updated_at:19} | {last_message}"
         )
-    
+
     return "\n".join(lines)
+
+
+__all__ = [
+    "BackgroundScheduler",
+    "QueuedSession",
+    "SubagentRuntimeManager",
+    "get_global_scheduler",
+    "render_subagent_session_reminder_table",
+]

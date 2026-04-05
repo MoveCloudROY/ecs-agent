@@ -463,3 +463,50 @@ async def test_streaming_emits_reasoning_end_then_content_start_transition_event
         "content_start",
         "content_delta:done",
     ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_contract_emits_single_start_and_end_around_reasoning_and_content() -> (
+    None
+):
+    world = World()
+    provider = ReasoningContentStreamingFakeProvider(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="ignored"))
+        ]
+    )
+
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Hi")]),
+    )
+    world.add_component(entity_id, StreamingComponent(enabled=True))
+
+    seen: list[str] = []
+
+    async def on_start(event: StreamStartEvent) -> None:
+        assert event.entity_id == entity_id
+        seen.append("start")
+
+    async def on_reasoning(event: StreamReasoningDeltaEvent) -> None:
+        assert event.entity_id == entity_id
+        seen.append(f"reasoning:{event.reasoning_delta}")
+
+    async def on_content(event: StreamContentDeltaEvent) -> None:
+        assert event.entity_id == entity_id
+        seen.append(f"content:{event.delta}")
+
+    async def on_end(event: StreamEndEvent) -> None:
+        assert event.entity_id == entity_id
+        seen.append("end")
+
+    world.event_bus.subscribe(StreamStartEvent, on_start)
+    world.event_bus.subscribe(StreamReasoningDeltaEvent, on_reasoning)
+    world.event_bus.subscribe(StreamContentDeltaEvent, on_content)
+    world.event_bus.subscribe(StreamEndEvent, on_end)
+
+    await ReasoningSystem().process(world)
+
+    assert seen == ["start", "reasoning:thinking", "content:done", "end"]
