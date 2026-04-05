@@ -41,6 +41,7 @@ from ecs_agent.types import (
     SubagentSessionRecord,
     SubagentConfig,
     ToolSchema,
+    is_wake_worthy,
     validate_subagent_lifecycle_transition,
 )
 from ecs_agent.systems.message_bus import MessageBusSystem
@@ -279,6 +280,24 @@ def test_invalid_lifecycle_transition_raises_value_error(
         ),
     ):
         validate_subagent_lifecycle_transition(from_status, to_status)
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        ("queued", False),
+        ("running", False),
+        ("succeeded", True),
+        ("failed", True),
+        ("timed_out", True),
+        ("cancelled", False),
+    ],
+)
+def test_is_wake_worthy_returns_expected_terminal_wake_policy(
+    status: SubagentLifecycleStatus,
+    expected: bool,
+) -> None:
+    assert is_wake_worthy(status) is expected
 
 
 def test_subagent_contract_and_lifecycle_session_record_fields() -> None:
@@ -2359,6 +2378,317 @@ async def test_subagent_timeout_sets_state() -> None:
     assert metadata.status == "timed_out"
     assert metadata.error is not None
     assert "timeout" in metadata.error.lower()
+
+
+async def test_completion_enqueues_parent_notification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_global_scheduler(monkeypatch)
+
+    world = World()
+    parent_entity = world.create_entity()
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
+    config = SubagentConfig(name="notify-success", provider=provider, model="fake")
+
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"notify-success": config}),
+    )
+    world.add_component(parent_entity, SubagentSessionTableComponent())
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem()
+    completed_events: list[DelegationCompletedEvent] = []
+    observed_notification_ids: list[str] = []
+    session_id: str | None = None
+
+    async def on_completed(event: DelegationCompletedEvent) -> None:
+        completed_events.append(event)
+        queue = world.get_component(parent_entity, SubagentNotificationQueueComponent)
+        assert queue is not None
+        assert session_id is not None
+        observed_notification_ids.extend(
+            notification.notification_id for notification in queue.notifications
+        )
+        assert observed_notification_ids == [f"{session_id}:succeeded"]
+
+    world.event_bus.subscribe(DelegationCompletedEvent, on_completed)
+
+    system.install_subagent_tool(world, parent_entity)
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+
+    payload = json.loads(
+        await tool_registry.handlers["subagent"](
+            category="notify-success",
+            prompt="finish successfully",
+            load_skills=[],
+            background=True,
+            timeout=None,
+        )
+    )
+    session_id = payload["session_id"]
+
+    task = await system._runtime_manager.get_task(session_id)
+    assert task is not None
+    await task
+
+    queue = world.get_component(parent_entity, SubagentNotificationQueueComponent)
+    assert queue is not None
+    assert len(queue.notifications) == 1
+    notification = queue.notifications[0]
+    assert notification.notification_id == f"{session_id}:succeeded"
+    assert notification.session_id == session_id
+    assert notification.parent_entity_id == parent_entity
+    assert notification.terminal_status == "succeeded"
+    assert notification.summary == "done"
+    assert notification.error is None
+    assert notification.delivered_at is None
+    assert completed_events and completed_events[0].success is True
+    assert observed_notification_ids == [f"{session_id}:succeeded"]
+
+
+async def test_failed_background_session_enqueues_parent_notification_before_completion_event_publish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_global_scheduler(monkeypatch)
+
+    world = World()
+    parent_entity = world.create_entity()
+    provider = FakeProvider(responses=[])
+    config = SubagentConfig(name="notify-failure", provider=provider, model="fake")
+
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"notify-failure": config}),
+    )
+    world.add_component(parent_entity, SubagentSessionTableComponent())
+    world.add_component(
+        parent_entity,
+        SubagentNotificationQueueComponent(),
+    )
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem()
+    completed_events: list[DelegationCompletedEvent] = []
+    session_id: str | None = None
+
+    async def fake_execute_subagent_core(
+        *args: Any, **kwargs: Any
+    ) -> tuple[str, bool, str | None]:
+        del args, kwargs
+        error_msg = "Error during delegation: boom"
+        return (error_msg, False, error_msg)
+
+    system._execute_subagent_core = fake_execute_subagent_core  # type: ignore[method-assign]
+
+    async def on_completed(event: DelegationCompletedEvent) -> None:
+        completed_events.append(event)
+        queue = world.get_component(parent_entity, SubagentNotificationQueueComponent)
+        assert queue is not None
+        assert session_id is not None
+        assert [item.notification_id for item in queue.notifications] == [
+            f"{session_id}:failed"
+        ]
+
+    world.event_bus.subscribe(DelegationCompletedEvent, on_completed)
+
+    system.install_subagent_tool(world, parent_entity)
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+
+    payload = json.loads(
+        await tool_registry.handlers["subagent"](
+            category="notify-failure",
+            prompt="explode",
+            load_skills=[],
+            background=True,
+            timeout=None,
+        )
+    )
+    session_id = payload["session_id"]
+
+    task = await system._runtime_manager.get_task(session_id)
+    assert task is not None
+    await task
+
+    queue = world.get_component(parent_entity, SubagentNotificationQueueComponent)
+    assert queue is not None
+    assert len(queue.notifications) == 1
+    notification = queue.notifications[0]
+    assert notification.notification_id == f"{session_id}:failed"
+    assert notification.session_id == session_id
+    assert notification.terminal_status == "failed"
+    assert notification.summary is None
+    assert notification.error == "Error during delegation: boom"
+    assert notification.delivered_at is None
+    assert len(completed_events) == 1
+    assert completed_events[0].success is False
+    assert completed_events[0].error == "Error during delegation: boom"
+
+
+async def test_timed_out_background_session_enqueues_parent_notification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_global_scheduler(monkeypatch)
+
+    world = World()
+    parent_entity = world.create_entity()
+    provider = SlowFakeProvider(
+        delay=5.0,
+        response=CompletionResult(message=Message(role="assistant", content="done")),
+    )
+    config = SubagentConfig(name="notify-timeout", provider=provider, model="fake")
+
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"notify-timeout": config}),
+    )
+    world.add_component(parent_entity, SubagentSessionTableComponent())
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem(default_timeout=0.05)
+    completed_events: list[DelegationCompletedEvent] = []
+    session_id: str | None = None
+
+    async def on_completed(event: DelegationCompletedEvent) -> None:
+        completed_events.append(event)
+        queue = world.get_component(parent_entity, SubagentNotificationQueueComponent)
+        assert queue is not None
+        assert session_id is not None
+        assert [item.notification_id for item in queue.notifications] == [
+            f"{session_id}:timed_out"
+        ]
+
+    world.event_bus.subscribe(DelegationCompletedEvent, on_completed)
+
+    system.install_subagent_tool(world, parent_entity)
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+
+    payload = json.loads(
+        await tool_registry.handlers["subagent"](
+            category="notify-timeout",
+            prompt="run too long",
+            load_skills=[],
+            background=True,
+            timeout=None,
+        )
+    )
+    session_id = payload["session_id"]
+
+    task = await system._runtime_manager.get_task(session_id)
+    assert task is not None
+    await task
+
+    queue = world.get_component(parent_entity, SubagentNotificationQueueComponent)
+    assert queue is not None
+    assert len(queue.notifications) == 1
+    notification = queue.notifications[0]
+    assert notification.notification_id == f"{session_id}:timed_out"
+    assert notification.session_id == session_id
+    assert notification.terminal_status == "timed_out"
+    assert notification.summary is None
+    assert notification.error is not None
+    assert "timeout" in notification.error.lower()
+    assert notification.delivered_at is None
+    assert len(completed_events) == 1
+    assert completed_events[0].success is False
+    assert completed_events[0].error is not None
+    assert "timeout" in completed_events[0].error.lower()
+
+
+async def test_cancelled_background_session_does_not_enqueue_notification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_global_scheduler(monkeypatch)
+
+    world = World()
+    parent_entity = world.create_entity()
+    provider = SlowFakeProvider(
+        delay=5.0,
+        response=CompletionResult(message=Message(role="assistant", content="done")),
+    )
+    config = SubagentConfig(name="notify-cancel", provider=provider, model="fake")
+
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"notify-cancel": config}),
+    )
+    world.add_component(parent_entity, SubagentSessionTableComponent())
+    world.add_component(parent_entity, SubagentNotificationQueueComponent())
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem()
+    completed_events: list[DelegationCompletedEvent] = []
+
+    async def on_completed(event: DelegationCompletedEvent) -> None:
+        completed_events.append(event)
+
+    world.event_bus.subscribe(DelegationCompletedEvent, on_completed)
+
+    system.install_subagent_control_tools(world, parent_entity)
+    system.install_subagent_tool(world, parent_entity)
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+
+    payload = json.loads(
+        await tool_registry.handlers["subagent"](
+            category="notify-cancel",
+            prompt="cancel me",
+            load_skills=[],
+            background=True,
+            timeout=None,
+        )
+    )
+    session_id = payload["session_id"]
+
+    await asyncio.sleep(0.05)
+    await tool_registry.handlers["subagent_cancel"](session_id=session_id)
+
+    task = await system._runtime_manager.get_task(session_id)
+    if task is not None:
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    queue = world.get_component(parent_entity, SubagentNotificationQueueComponent)
+    assert queue is not None
+    assert queue.notifications == []
+    assert completed_events == []
+
+
+async def test_sync_subagent_call_does_not_enqueue_parent_notification() -> None:
+    world = World()
+    parent_entity = world.create_entity()
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
+    config = SubagentConfig(name="sync-agent", provider=provider, model="fake")
+
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"sync-agent": config}),
+    )
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem()
+    system.install_subagent_tool(world, parent_entity)
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+
+    result = await tool_registry.handlers["subagent"](
+        category="sync-agent",
+        prompt="finish inline",
+        load_skills=[],
+        background=False,
+        timeout=None,
+    )
+
+    assert result == "done"
+    queue = world.get_component(parent_entity, SubagentNotificationQueueComponent)
+    assert queue is None
 
 
 async def test_subagent_retry_default_wrap() -> None:
