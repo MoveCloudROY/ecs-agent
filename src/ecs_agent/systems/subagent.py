@@ -703,8 +703,21 @@ class SubagentSystem:
         """Create handler for subagent_result tool."""
 
         async def result_handler(
-            session_id: str, timeout: float | str | None = None
+            session_id: str,
+            read_method: str = "full",
+            timeout: float | str | None = None,
         ) -> str:
+            if read_method not in {"full", "summary"}:
+                return json.dumps(
+                    {
+                        "error": (
+                            f"Invalid read_method '{read_method}'. "
+                            "Expected one of: full, summary"
+                        ),
+                        "read_method": read_method,
+                        "session_id": session_id,
+                    }
+                )
 
             if isinstance(timeout, str):
                 timeout = float(timeout)
@@ -713,6 +726,7 @@ class SubagentSystem:
                 "subagent_result_requested",
                 parent_entity=parent_entity_id,
                 session_id=session_id,
+                read_method=read_method,
                 timeout=timeout,
             )
             session = await self._runtime_manager.get_session(session_id)

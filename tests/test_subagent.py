@@ -8,7 +8,12 @@ from typing import Any
 
 import pytest
 
-from ecs_agent.components import MessageBusConfigComponent, StreamingComponent
+from ecs_agent.components import (
+    MessageBusConfigComponent,
+    StreamingComponent,
+    SubagentNotificationQueueComponent,
+    SubagentWaitComponent,
+)
 from ecs_agent.components.definitions import (
     SubagentRegistryComponent,
     SubagentSessionTableComponent,
@@ -32,6 +37,7 @@ from ecs_agent.types import (
     SubagentStreamEndEvent,
     SubagentStreamStartEvent,
     SubagentLifecycleStatus,
+    SubagentNotificationRecord,
     SubagentSessionRecord,
     SubagentConfig,
     ToolSchema,
@@ -301,6 +307,44 @@ def test_subagent_contract_and_lifecycle_session_record_fields() -> None:
     assert (
         record.traceparent == "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
     )
+    assert record.result_summary is None
+
+
+def test_subagent_notification_contract_record_fields() -> None:
+    record = SubagentNotificationRecord(
+        notification_id="session-1:succeeded",
+        session_id="session-1",
+        parent_entity_id=1,
+        terminal_status="succeeded",
+        summary="Condensed result",
+        error=None,
+        created_at="2026-04-06T12:00:00Z",
+        delivered_at=None,
+    )
+
+    assert record.notification_id == "session-1:succeeded"
+    assert record.session_id == "session-1"
+    assert record.parent_entity_id == 1
+    assert record.terminal_status == "succeeded"
+    assert record.summary == "Condensed result"
+    assert record.error is None
+    assert record.created_at == "2026-04-06T12:00:00Z"
+    assert record.delivered_at is None
+
+
+def test_subagent_wait_component_defaults_without_runtime_future() -> None:
+    component = SubagentWaitComponent()
+
+    assert component.session_ids is None
+    assert component.timeout is None
+    assert component.future is None
+    assert component.started_at is None
+
+
+def test_subagent_notification_queue_component_starts_empty() -> None:
+    component = SubagentNotificationQueueComponent()
+
+    assert component.notifications == []
 
 
 def test_subagent_stream_start_event_dataclass_fields() -> None:
@@ -3308,6 +3352,98 @@ async def test_subagent_result_timeout() -> None:
         "timeout" in result_data["error"].lower()
         or "timed out" in result_data["error"].lower()
     )
+
+
+async def test_subagent_result_read_method_accepts_full_and_summary() -> None:
+    from ecs_agent.components import ToolRegistryComponent
+    from ecs_agent.components.definitions import SubagentSessionTableComponent
+
+    world = World()
+    system = SubagentSystem()
+    parent = world.create_entity()
+
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+
+    registry = SubagentRegistryComponent()
+    registry.subagents["test-agent"] = SubagentConfig(
+        name="test-agent",
+        provider=FakeProvider(
+            responses=[
+                CompletionResult(
+                    message=Message(role="assistant", content="Completed result")
+                )
+            ]
+        ),
+        model="fake",
+        system_prompt="Test",
+        skills=[],
+    )
+    world.add_component(parent, registry)
+
+    system.install_subagent_control_tools(world, parent)
+    system.install_subagent_tool(world, parent)
+
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+
+    launch_handler = tools.handlers["subagent"]
+    session_id = json.loads(
+        await launch_handler(
+            category="test-agent",
+            prompt="Task",
+            load_skills=[],
+            background=True,
+            timeout=None,
+        )
+    )["session_id"]
+
+    await asyncio.sleep(0.1)
+
+    result_handler = tools.handlers["subagent_result"]
+    full_result = json.loads(
+        await result_handler(session_id=session_id, read_method="full", timeout=None)
+    )
+    summary_result = json.loads(
+        await result_handler(session_id=session_id, read_method="summary", timeout=None)
+    )
+
+    assert full_result["status"] == "success"
+    assert summary_result["status"] == "success"
+    assert full_result["session_id"] == session_id
+    assert summary_result["session_id"] == session_id
+
+
+async def test_subagent_result_read_method_rejects_unknown_value() -> None:
+    from ecs_agent.components import ToolRegistryComponent
+    from ecs_agent.components.definitions import SubagentSessionTableComponent
+
+    world = World()
+    system = SubagentSystem()
+    parent = world.create_entity()
+
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+
+    system.install_subagent_control_tools(world, parent)
+
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+
+    result_handler = tools.handlers["subagent_result"]
+    result = json.loads(
+        await result_handler(
+            session_id="missing-session",
+            read_method="snapshot",
+            timeout=None,
+        )
+    )
+
+    assert result == {
+        "error": "Invalid read_method 'snapshot'. Expected one of: full, summary",
+        "read_method": "snapshot",
+        "session_id": "missing-session",
+    }
 
 
 async def test_subagent_cancel_active_session() -> None:

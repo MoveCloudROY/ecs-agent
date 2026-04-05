@@ -16,6 +16,7 @@ from ecs_agent.types import (
     InterruptionReason,
     Message,
     SubagentConfig,
+    SubagentNotificationRecord,
     SubagentSessionRecord,
     ToolCall,
     ToolSchema,
@@ -415,6 +416,19 @@ class SubagentSessionTableComponent:
     """Table of active and recent subagent sessions."""
 
     sessions: dict[str, "SubagentSessionRecord"] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class SubagentNotificationQueueComponent:
+    notifications: list[SubagentNotificationRecord] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class SubagentWaitComponent:
+    session_ids: list[str] | None = None
+    timeout: float | None = None
+    future: Any | None = field(default=None, repr=False)
+    started_at: str | None = None
 
 
 # ---------------------------------------------------------------------------

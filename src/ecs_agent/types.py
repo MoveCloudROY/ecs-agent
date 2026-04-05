@@ -542,6 +542,7 @@ class SubagentSessionRecord:
     timeout_seconds: float | None = None
     deadline_at: str | None = None  # ISO timestamp
     result_excerpt: str | None = None
+    result_summary: str | None = None
     artifact_id: str | None = None
     artifact_record_path: str | None = None
     artifact_inline_content: str | None = None
@@ -561,6 +562,18 @@ class SubagentSessionRecord:
             )
             return
         object.__setattr__(self, name, value)
+
+
+@dataclass(slots=True)
+class SubagentNotificationRecord:
+    notification_id: str
+    session_id: str
+    parent_entity_id: int
+    terminal_status: Literal["succeeded", "failed", "timed_out"]
+    summary: str | None
+    error: str | None
+    created_at: str
+    delivered_at: str | None
 
 
 def validate_subagent_lifecycle_transition(

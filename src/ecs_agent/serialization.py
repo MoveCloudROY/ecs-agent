@@ -35,9 +35,11 @@ from ecs_agent.components import (
     ScratchbookIndexComponent,
     ScratchbookRefComponent,
     StreamingComponent,
+    SubagentNotificationQueueComponent,
     SystemPromptComponent,
     SubagentRegistryComponent,
     SubagentSessionTableComponent,
+    SubagentWaitComponent,
     TaskComponent,
     TerminalComponent,
     ToolApprovalComponent,
@@ -59,6 +61,8 @@ from ecs_agent.types import (
     ImageUrlPart,
     Message,
     MessagePart,
+    SubagentNotificationRecord,
+    SubagentSessionRecord,
     ToolCall,
     ToolSchema,
 )
@@ -88,8 +92,10 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     ResponsesAPIStateComponent.__name__: ResponsesAPIStateComponent,
     VectorStoreComponent.__name__: VectorStoreComponent,
     StreamingComponent.__name__: StreamingComponent,
+    SubagentNotificationQueueComponent.__name__: SubagentNotificationQueueComponent,
     SubagentRegistryComponent.__name__: SubagentRegistryComponent,
     SubagentSessionTableComponent.__name__: SubagentSessionTableComponent,
+    SubagentWaitComponent.__name__: SubagentWaitComponent,
     CheckpointComponent.__name__: CheckpointComponent,
     CompactionConfigComponent.__name__: CompactionConfigComponent,
     ConversationArchiveComponent.__name__: ConversationArchiveComponent,
@@ -218,6 +224,14 @@ class WorldSerializer:
         - SERIALIZED: Config (timeouts, buffer sizes), subscriptions, conversation history
         - NOT SERIALIZED: Runtime queues, pending futures, in-flight requests
         """
+        if isinstance(component, SubagentWaitComponent):
+            return {
+                "session_ids": component.session_ids,
+                "timeout": component.timeout,
+                "future": None,
+                "started_at": component.started_at,
+            }
+
         serialized = asdict(component)
 
         if isinstance(component, LLMComponent):
@@ -303,6 +317,16 @@ class WorldSerializer:
                     # Already a dict
                     sessions_dict[session_id] = session_record
             serialized["sessions"] = sessions_dict
+
+        if isinstance(component, SubagentNotificationQueueComponent):
+            notifications = []
+            for notification in serialized.get("notifications", []):
+                if hasattr(notification, "__dataclass_fields__"):
+                    notifications.append(asdict(notification))
+                else:
+                    notifications.append(notification)
+            serialized["notifications"] = notifications
+
         return serialized
 
     @staticmethod
@@ -487,8 +511,6 @@ class WorldSerializer:
 
         # SubagentSessionTableComponent: reconstruct SubagentSessionRecord objects in sessions dict
         if component_name == SubagentSessionTableComponent.__name__:
-            from ecs_agent.types import SubagentSessionRecord
-
             sessions_dict = {}
             for session_id, session_data in normalized_data.get("sessions", {}).items():
                 # If session_data is a dict, reconstruct it as SubagentSessionRecord
@@ -504,6 +526,20 @@ class WorldSerializer:
                     # Already a SubagentSessionRecord object
                     sessions_dict[session_id] = session_data
             normalized_data["sessions"] = sessions_dict
+
+        if component_name == SubagentNotificationQueueComponent.__name__:
+            notifications = []
+            for notification_data in normalized_data.get("notifications", []):
+                if isinstance(notification_data, dict):
+                    notifications.append(
+                        SubagentNotificationRecord(**notification_data)
+                    )
+                else:
+                    notifications.append(notification_data)
+            normalized_data["notifications"] = notifications
+
+        if component_name == SubagentWaitComponent.__name__:
+            normalized_data["future"] = None
 
         if component_name == PromptContextQueueComponent.__name__:
             entries_data = normalized_data.get("entries", [])
