@@ -508,6 +508,10 @@ SubagentLifecycleStatus = Literal[
 ]
 
 
+def is_wake_worthy(status: SubagentLifecycleStatus) -> bool:
+    return status in {"succeeded", "failed", "timed_out"}
+
+
 def _normalize_subagent_lifecycle_status(status: str) -> SubagentLifecycleStatus:
     legacy_status_map: dict[str, SubagentLifecycleStatus] = {
         "Idle": "succeeded",

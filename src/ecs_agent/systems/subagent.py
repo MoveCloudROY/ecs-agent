@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
 import json
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from ecs_agent.components import (
     ChildStubComponent,
@@ -16,6 +17,7 @@ from ecs_agent.components import (
     OwnerComponent,
     PermissionComponent,
     StreamingComponent,
+    SubagentNotificationQueueComponent,
     SubagentRegistryComponent,
     ToolRegistryComponent,
 )
@@ -51,11 +53,13 @@ from ecs_agent.types import (
     StreamReasoningDeltaEvent,
     StreamStartEvent,
     SubagentConfig,
+    SubagentNotificationRecord,
     SubagentStreamDeltaEvent,
     SubagentStreamEndEvent,
     SubagentStreamStartEvent,
     SubagentSessionRecord,
     ToolSchema,
+    is_wake_worthy,
 )
 
 # Task 9: Import providers for retry wrapping
@@ -64,6 +68,11 @@ from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.providers.retry_provider import RetryProvider
 
 logger = get_logger(__name__)
+
+_PUBLISH_COMPLETION_EVENT: ContextVar[bool] = ContextVar(
+    "_PUBLISH_COMPLETION_EVENT",
+    default=True,
+)
 
 
 def _build_child_prompt_template(user_prompt: str) -> str:
@@ -201,6 +210,66 @@ class SubagentSystem:
     def _utc_now_iso(self) -> str:
         return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
+    def _notification_summary(
+        self,
+        metadata: SubagentSessionRecord,
+    ) -> str | None:
+        if metadata.result_summary is not None:
+            return metadata.result_summary
+        return metadata.result_excerpt
+
+    def _get_or_create_notification_queue(
+        self,
+        world: World,
+        parent_entity_id: EntityId,
+    ) -> SubagentNotificationQueueComponent:
+        queue = world.get_component(
+            parent_entity_id, SubagentNotificationQueueComponent
+        )
+        if queue is not None:
+            return queue
+
+        queue = SubagentNotificationQueueComponent()
+        world.add_component(parent_entity_id, queue)
+        return queue
+
+    def _enqueue_parent_notification(
+        self,
+        world: World,
+        metadata: SubagentSessionRecord,
+    ) -> None:
+        if not metadata.background or not is_wake_worthy(metadata.status):
+            return
+
+        terminal_status: Literal["succeeded", "failed", "timed_out"]
+        if metadata.status == "succeeded":
+            terminal_status = "succeeded"
+        elif metadata.status == "failed":
+            terminal_status = "failed"
+        else:
+            terminal_status = "timed_out"
+
+        notification_id = f"{metadata.session_id}:{terminal_status}"
+        queue = self._get_or_create_notification_queue(world, metadata.parent_entity_id)
+        if any(
+            notification.notification_id == notification_id
+            for notification in queue.notifications
+        ):
+            return
+
+        queue.notifications.append(
+            SubagentNotificationRecord(
+                notification_id=notification_id,
+                session_id=metadata.session_id,
+                parent_entity_id=metadata.parent_entity_id,
+                terminal_status=terminal_status,
+                summary=self._notification_summary(metadata),
+                error=metadata.error,
+                created_at=datetime.now(tz=timezone.utc).isoformat(),
+                delivered_at=None,
+            )
+        )
+
     def _config_for_session(
         self,
         registry: SubagentRegistryComponent,
@@ -224,7 +293,21 @@ class SubagentSystem:
         resolved_timeout: float | None,
     ) -> Any:
         async def execute_with_config() -> tuple[str, bool, str | None]:
-            if metadata.stream:
+            token = _PUBLISH_COMPLETION_EVENT.set(False)
+            try:
+                if metadata.stream:
+                    return await self._execute_subagent_core(
+                        world,
+                        parent_entity_id,
+                        category,
+                        prompt,
+                        metadata.correlation_id,
+                        metadata.traceparent,
+                        config,
+                        session_id=session_id,
+                        stream=True,
+                    )
+
                 return await self._execute_subagent_core(
                     world,
                     parent_entity_id,
@@ -233,19 +316,9 @@ class SubagentSystem:
                     metadata.correlation_id,
                     metadata.traceparent,
                     config,
-                    session_id=session_id,
-                    stream=True,
                 )
-
-            return await self._execute_subagent_core(
-                world,
-                parent_entity_id,
-                category,
-                prompt,
-                metadata.correlation_id,
-                metadata.traceparent,
-                config,
-            )
+            finally:
+                _PUBLISH_COMPLETION_EVENT.reset(token)
 
         async def run_in_background() -> None:
             metadata.status = "running"
@@ -275,7 +348,38 @@ class SubagentSystem:
                     category=category,
                 )
                 await self._runtime_manager.update_timeout(session_id, error_msg)
+                self._enqueue_parent_notification(world, metadata)
                 await self._runtime_manager.sync_to_component(world, parent_entity_id)
+                await self._publish_delegation_events(
+                    world,
+                    parent_entity_id,
+                    category,
+                    correlation_id=metadata.correlation_id,
+                    traceparent=metadata.traceparent,
+                    result=error_msg,
+                    success=False,
+                    error=error_msg,
+                )
+                return
+            except Exception as exc:
+                error_msg = str(exc)
+                metadata.status = "failed"
+                metadata.error = error_msg
+                metadata.finished_at = self._utc_now_iso()
+                metadata.updated_at = metadata.finished_at
+                await self._runtime_manager.update_status(session_id, metadata.status)
+                self._enqueue_parent_notification(world, metadata)
+                await self._runtime_manager.sync_to_component(world, parent_entity_id)
+                await self._publish_delegation_events(
+                    world,
+                    parent_entity_id,
+                    category,
+                    correlation_id=metadata.correlation_id,
+                    traceparent=metadata.traceparent,
+                    result=error_msg,
+                    success=False,
+                    error=error_msg,
+                )
                 return
 
             metadata.updated_at = self._utc_now_iso()
@@ -304,7 +408,18 @@ class SubagentSystem:
                 result_length=len(result) if success else 0,
                 error=error,
             )
+            self._enqueue_parent_notification(world, metadata)
             await self._runtime_manager.sync_to_component(world, parent_entity_id)
+            await self._publish_delegation_events(
+                world,
+                parent_entity_id,
+                category,
+                correlation_id=metadata.correlation_id,
+                traceparent=metadata.traceparent,
+                result=result,
+                success=success,
+                error=error,
+            )
 
         return run_in_background
 
@@ -1054,6 +1169,7 @@ class SubagentSystem:
             - success: True if successful, False otherwise
             - error: Error message if failed, None otherwise
         """
+        publish_completion_event = _PUBLISH_COMPLETION_EVENT.get()
         # Execute delegation
         try:
             child_entity_id = world.create_entity()
@@ -1103,6 +1219,16 @@ class SubagentSystem:
                     child_world_name=child_world_name,
                 )
 
+            await self._publish_delegation_events(
+                world,
+                parent_entity_id,
+                subagent_name,
+                correlation_id=correlation_id,
+                traceparent=traceparent,
+                task=task,
+                child_world_name=child_world.name,
+            )
+
             try:
                 result = await self._execute_delegation(
                     child_world,
@@ -1138,18 +1264,18 @@ class SubagentSystem:
                 result_length=len(result),
             )
 
-            await self._publish_delegation_events(
-                world,
-                parent_entity_id,
-                subagent_name,
-                correlation_id=correlation_id,
-                traceparent=traceparent,
-                task=task,
-                result=result,
-                success=True,
-                error=None,
-                child_world_name=child_world.name,
-            )
+            if publish_completion_event:
+                await self._publish_delegation_events(
+                    world,
+                    parent_entity_id,
+                    subagent_name,
+                    correlation_id=correlation_id,
+                    traceparent=traceparent,
+                    result=result,
+                    success=True,
+                    error=None,
+                    child_world_name=child_world.name,
+                )
 
             return (result, True, None)
 
@@ -1162,16 +1288,17 @@ class SubagentSystem:
                 correlation_id=correlation_id,
                 exception=str(exc),
             )
-            await self._publish_delegation_events(
-                world,
-                parent_entity_id,
-                subagent_name,
-                correlation_id=correlation_id,
-                traceparent=traceparent,
-                result=error_msg,
-                success=False,
-                error=error_msg,
-            )
+            if publish_completion_event:
+                await self._publish_delegation_events(
+                    world,
+                    parent_entity_id,
+                    subagent_name,
+                    correlation_id=correlation_id,
+                    traceparent=traceparent,
+                    result=error_msg,
+                    success=False,
+                    error=error_msg,
+                )
             return (error_msg, False, error_msg)
 
         except ValueError as exc:
@@ -1182,16 +1309,17 @@ class SubagentSystem:
                 subagent_name=subagent_name,
                 exception=error_msg,
             )
-            await self._publish_delegation_events(
-                world,
-                parent_entity_id,
-                subagent_name,
-                correlation_id=correlation_id,
-                traceparent=traceparent,
-                result=error_msg,
-                success=False,
-                error=error_msg,
-            )
+            if publish_completion_event:
+                await self._publish_delegation_events(
+                    world,
+                    parent_entity_id,
+                    subagent_name,
+                    correlation_id=correlation_id,
+                    traceparent=traceparent,
+                    result=error_msg,
+                    success=False,
+                    error=error_msg,
+                )
             raise
 
         except Exception as exc:
@@ -1202,16 +1330,17 @@ class SubagentSystem:
                 subagent_name=subagent_name,
                 exception=str(exc),
             )
-            await self._publish_delegation_events(
-                world,
-                parent_entity_id,
-                subagent_name,
-                correlation_id=correlation_id,
-                traceparent=traceparent,
-                result=error_msg,
-                success=False,
-                error=error_msg,
-            )
+            if publish_completion_event:
+                await self._publish_delegation_events(
+                    world,
+                    parent_entity_id,
+                    subagent_name,
+                    correlation_id=correlation_id,
+                    traceparent=traceparent,
+                    result=error_msg,
+                    success=False,
+                    error=error_msg,
+                )
             return (error_msg, False, error_msg)
 
     def _bridge_subagent_stream_events(
