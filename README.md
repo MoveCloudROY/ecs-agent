@@ -91,7 +91,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 
 - **Named Worlds** — Pass `name="my-agent"` to `World(name=...)` to tag every log event (`entity_created`, `component_added`, `run_start`, `tick_start`, etc.) with `world_name`. Child worlds spawned by `SubagentSystem` are automatically named `<subagent_name>-<hex8>` for end-to-end log correlation across nested agent calls.
 ### Multi-Agent Orchestration
-- **Subagent Delegation** — Spawn child agents for subtasks with skill and permission inheritance.
+- **Subagent Delegation** — Spawn child agents for subtasks with skill and permission inheritance. Control the `queued/running/succeeded/failed` lifecycle via a process-global FIFO scheduler.
 - **MessageBus** — Parent-child and sibling messaging via pub/sub or request-response patterns.
 - **Unified API** — Control lifecycle with `subagent`, `subagent_status`, `subagent_result`, and `subagent_cancel` tools.
 
@@ -110,7 +110,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **Canonical immutable records** — Tool and subagent outputs persist to `scratchbook/records/tool/tool_<uuid24>` and `scratchbook/records/subagent/subagent_<uuid24>`.
 - **Canonical mutable plan state** — Plan markdown and Boulder machine state live at `scratchbook/<plan_slug>/plan.md` and `scratchbook/<plan_slug>/executes/boulder.json`.
 - **Trigger-to-Boulder lifecycle** — Plan-type script triggers create Boulder; planning/replanning/tool systems update it throughout execution.
-- **Inline payload policy** — Artifact inline content is populated only when UTF-8 payload size is `<= 8192` bytes.
+- **Inline payload policy** — Artifact inline content is populated only when UTF-8 payload size is `<= 8192` bytes. For larger results, `inline_content` in the subagent result payload carries a hint string pointing to the artifact file path instead of being `null`.
 - **Prompt Provider** — Injects scratchbook context into system prompts via `ScratchbookPromptConfig` component.
 
 ### Prompt Normalization & Injection
@@ -285,7 +285,8 @@ The `examples/` directory contains 25 runnable demos:
 | [`tool_approval_agent.py`](examples/tool_approval_agent.py) | Manual approval flow for sensitive tools |
 | [`tree_search_agent.py`](examples/tree_search_agent.py) | MCTS-based planning for complex goals (dual-mode) |
 | [`rag_agent.py`](examples/rag_agent.py) | Retrieval-Augmented Generation demo (dual-mode with real embeddings) |
-| [`subagent_delegation.py`](examples/subagent_delegation.py) | Parent agent delegates subtasks via unified `subagent` tool (dual-mode) |
+| [`subagent_delegation_basic.py`](examples/subagent_delegation_basic.py) | Subagent delegation — standard pattern: sync call, `SystemPromptRenderSystem`, placeholder resolution (dual-mode) |
+| [`subagent_delegation.py`](examples/subagent_delegation.py) | Subagent delegation — full feature demo: background queuing, FIFO scheduler, streaming telemetry, `queued→running→succeeded` lifecycle (dual-mode) |
 | [`task_orchestration_system.py`](examples/task_orchestration_system.py) | Dependency-aware task orchestration with wave planning, mixed local/subagent backends, scratchbook persistence, and serialization |
 | [`claude_agent.py`](examples/claude_agent.py) | Native Anthropic Claude provider usage |
 | [`litellm_agent.py`](examples/litellm_agent.py) | LiteLLM unified provider for 100+ models |
@@ -457,6 +458,7 @@ Four live scenarios are provided:
 - **Responses vision** — add `LLM_MODEL=qwen3-vl-flash` and `IMAGE_URL=<public-image-url>`
 - **Anthropic-compatible text** — `LLM_MODEL=kimi-k2.5`, `LLM_BASE_URL=https://dashscope.aliyuncs.com/apps/anthropic`
 - **Task Executor** — `tests/live/test_task_executor_live.py` exercises the `TaskExecutor` dispatch path end-to-end.
+- **Subagent Delegation** — `tests/live/test_subagent_live.py` covers background queuing, FIFO scheduling, and streaming telemetry.
 
 For the legacy integration test:
 

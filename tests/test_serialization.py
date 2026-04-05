@@ -23,6 +23,7 @@ from ecs_agent.components import (
     RunnerStateComponent,
     SandboxConfigComponent,
     StreamingComponent,
+    SubagentSessionTableComponent,
     SystemPromptComponent,
     TerminalComponent,
     ToolApprovalComponent,
@@ -38,6 +39,7 @@ from ecs_agent.types import (
     FileRefPart,
     ImageUrlPart,
     Message,
+    SubagentSessionRecord,
     ToolCall,
     ToolSchema,
 )
@@ -117,6 +119,7 @@ def test_to_dict_message_with_multimodal_parts_is_deterministic() -> None:
         "tool_calls": None,
         "tool_call_id": None,
     }
+
 
 def test_serialization_roundtrip_message_with_multimodal_parts() -> None:
     world = World()
@@ -393,6 +396,66 @@ def test_serialization_roundtrip_with_tool_approval_component() -> None:
     assert restored_comp.timeout == 45.0
     assert restored_comp.approved_calls == ["call1"]
     assert restored_comp.denied_calls == ["call2"]
+
+
+def test_serialization_roundtrip_preserves_subagent_session_table_records() -> None:
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        SubagentSessionTableComponent(
+            sessions={
+                "queued-b": SubagentSessionRecord(
+                    session_id="queued-b",
+                    category="queued-agent",
+                    prompt="Second queued task",
+                    parent_entity_id=entity,
+                    created_at="2026-04-05T10:01:00Z",
+                    updated_at="2026-04-05T10:01:00Z",
+                    status="queued",
+                    load_skills=["skill-b"],
+                    background=True,
+                ),
+                "running-a": SubagentSessionRecord(
+                    session_id="running-a",
+                    category="running-agent",
+                    prompt="Running during checkpoint",
+                    parent_entity_id=entity,
+                    created_at="2026-04-05T10:00:00Z",
+                    updated_at="2026-04-05T10:02:00Z",
+                    status="running",
+                    background=True,
+                    started_at="2026-04-05T10:00:30Z",
+                ),
+                "done-c": SubagentSessionRecord(
+                    session_id="done-c",
+                    category="done-agent",
+                    prompt="Completed before checkpoint",
+                    parent_entity_id=entity,
+                    created_at="2026-04-05T09:50:00Z",
+                    updated_at="2026-04-05T09:55:00Z",
+                    status="succeeded",
+                    background=True,
+                    result_excerpt="already done",
+                    started_at="2026-04-05T09:50:10Z",
+                    finished_at="2026-04-05T09:55:00Z",
+                ),
+            }
+        ),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+
+    restored_table = restored.get_component(entity, SubagentSessionTableComponent)
+    assert restored_table is not None
+    assert list(restored_table.sessions) == ["queued-b", "running-a", "done-c"]
+    assert restored_table.sessions["queued-b"].status == "queued"
+    assert restored_table.sessions["queued-b"].load_skills == ["skill-b"]
+    assert restored_table.sessions["running-a"].status == "running"
+    assert restored_table.sessions["running-a"].started_at == "2026-04-05T10:00:30Z"
+    assert restored_table.sessions["done-c"].status == "succeeded"
+    assert restored_table.sessions["done-c"].result_excerpt == "already done"
 
 
 def test_serialization_roundtrip_with_sandbox_config() -> None:
@@ -1106,6 +1169,8 @@ def test_subagent_session_table_component_roundtrip() -> None:
         deadline_at="2026-03-10T11:00:00Z",
         result_excerpt="Success",
         error=None,
+        started_at="2026-03-10T10:00:30Z",
+        finished_at="2026-03-10T10:04:59Z",
     )
     session2 = SubagentSessionRecord(
         session_id="sess_002",
@@ -1123,6 +1188,25 @@ def test_subagent_session_table_component_roundtrip() -> None:
         deadline_at=None,
         result_excerpt=None,
         error="Timeout exceeded",
+        started_at="2026-03-10T09:00:10Z",
+        finished_at="2026-03-10T09:30:00Z",
+    )
+    session3 = SubagentSessionRecord(
+        session_id="sess_003",
+        category="quick",
+        prompt="Wait in queue",
+        load_skills=["skill2"],
+        background=True,
+        status="queued",
+        correlation_id="corr_789",
+        traceparent="00-trace-span-02",
+        parent_entity_id=EntityId(44),
+        created_at="2026-03-10T08:00:00Z",
+        updated_at="2026-03-10T08:00:00Z",
+        timeout_seconds=120.0,
+        deadline_at="2026-03-10T08:02:00Z",
+        result_excerpt=None,
+        error=None,
     )
 
     world.add_component(
@@ -1131,6 +1215,7 @@ def test_subagent_session_table_component_roundtrip() -> None:
             sessions={
                 "sess_001": session1,
                 "sess_002": session2,
+                "sess_003": session3,
             }
         ),
     )
@@ -1140,7 +1225,7 @@ def test_subagent_session_table_component_roundtrip() -> None:
 
     restored_comp = restored.get_component(entity, SubagentSessionTableComponent)
     assert restored_comp is not None
-    assert len(restored_comp.sessions) == 2
+    assert len(restored_comp.sessions) == 3
 
     # Verify session1
     restored_session1 = restored_comp.sessions["sess_001"]
@@ -1150,7 +1235,7 @@ def test_subagent_session_table_component_roundtrip() -> None:
     assert restored_session1.load_skills == ["skill1"]
     assert restored_session1.background is True
     assert restored_session1.timeout_seconds == 60.0
-    assert restored_session1.status == "Working"
+    assert restored_session1.status == "running"
     assert restored_session1.correlation_id == "corr_123"
     assert restored_session1.traceparent == "00-trace-span-00"
     assert restored_session1.parent_entity_id == EntityId(42)
@@ -1159,14 +1244,25 @@ def test_subagent_session_table_component_roundtrip() -> None:
     assert restored_session1.deadline_at == "2026-03-10T11:00:00Z"
     assert restored_session1.result_excerpt == "Success"
     assert restored_session1.error is None
+    assert restored_session1.started_at == "2026-03-10T10:00:30Z"
+    assert restored_session1.finished_at == "2026-03-10T10:04:59Z"
 
     # Verify session2
     restored_session2 = restored_comp.sessions["sess_002"]
     assert restored_session2.session_id == "sess_002"
-    assert restored_session2.status == "Dead"
+    assert restored_session2.status == "failed"
     assert restored_session2.parent_entity_id == EntityId(43)
     assert restored_session2.error == "Timeout exceeded"
     assert restored_session2.result_excerpt is None
+    assert restored_session2.started_at == "2026-03-10T09:00:10Z"
+    assert restored_session2.finished_at == "2026-03-10T09:30:00Z"
+
+    restored_session3 = restored_comp.sessions["sess_003"]
+    assert restored_session3.session_id == "sess_003"
+    assert restored_session3.status == "queued"
+    assert restored_session3.parent_entity_id == EntityId(44)
+    assert restored_session3.started_at is None
+    assert restored_session3.finished_at is None
 
 
 def test_subagent_session_table_rejects_runtime_handles() -> None:

@@ -12,8 +12,9 @@ Subagent delegation provides:
 - **Event Tracking**: Monitor delegation lifecycle with `DelegationStartedEvent` and `DelegationCompletedEvent`.
 - **Skill Inheritance**: Subagents can inherit specific skills, system prompts (via `SystemPromptConfigSpec` and `SystemPromptRenderSystem`), and tools from their parent agent via `InheritancePolicy`.
 - **Sync and Background Modes**: Execute tasks immediately or as background sessions with ID tracking.
-- **Lifecycle Management**: Track background sessions through `Idle`, `Working`, `Dead`, `Timeout`, and `Cancelled` states.
-- **Control Tools**: Tools to query status, retrieve results, and cancel background sessions.
+- **Lifecycle Management**: Track background sessions through `queued`, `running`, `succeeded`, `failed`, `timed_out`, and `cancelled` states.
+- **Scheduler & Concurrency**: Process-global FIFO queue with configurable concurrency limits and automatic re-enqueuing on world restore.
+- **Control Tools**: Tools to query status (including queue position), retrieve results (polling-based), and cancel background sessions (atomic for queued tasks).
 - **Timeout Policy**: Per-call timeout overrides with global fallback and automated handling.
 - **Retry Reliability**: Transparent `RetryProvider` wrapping for transient LLM failures.
 
@@ -97,7 +98,7 @@ record = SubagentSessionRecord(
     session_id="session_123",
     category="researcher",
     prompt="...",
-    status="Working",
+    status="running",
     timeout_seconds=30.0,
     artifact_id="subagent_1234567890abcdef12345678",
     artifact_record_path="scratchbook/records/subagent/subagent_1234567890abcdef12345678",
@@ -119,11 +120,27 @@ Background sessions transition through a strict state machine:
 
 | State | Description |
 | :--- | :--- |
-| `Idle` | Completed successfully. |
-| `Working` | Currently executing. |
-| `Dead` | Failed with an error. |
-| `Timeout` | Terminated after exceeding timeout limit. |
-| `Cancelled` | Terminated by explicit cancel request. |
+| `queued` | Waiting in the FIFO queue for an available concurrency slot. |
+| `running` | Currently executing in a child world. |
+| `succeeded` | Completed successfully; result is available. |
+| `failed` | Terminated with an error. |
+| `timed_out` | Terminated after exceeding timeout limit. |
+| `cancelled` | Terminated by explicit cancel request (atomic for queued tasks). |
+
+### Scheduler & Concurrency
+
+The `SubagentSystem` manages a process-global FIFO queue for background sessions.
+
+- **Concurrency Limit**: Configured via `SubagentSystem(max_background_concurrency=N)`. Default is 5.
+- **FIFO Queue**: Sessions are processed in the order they were launched.
+- **Cap Conflict**: If multiple `SubagentSystem` instances are registered with different concurrency caps, a `ValueError` is raised to prevent ambiguous scheduling behavior.
+
+### Restore Semantics
+
+When a `World` is restored from a serialized state (e.g., after a process restart):
+
+- **Queued Sessions**: Automatically re-enqueued in the scheduler to resume their wait.
+- **Running Sessions**: Since the live task handle is lost, these are marked as `failed` with the error `restored_without_live_task_handle`. They do not automatically resume execution.
 
 ### Subagent Control Installer
 
@@ -248,9 +265,32 @@ The `subagent` tool enables parent agents to delegate subtasks with support for 
 
 When running in `background: true` mode, use control tools to manage the session:
 
-1. **Check Status**: `subagent_status(session_id="session_123")` returns current lifecycle state and a summary table if `session_id` is omitted.
-2. **Retrieve Result**: `subagent_result(session_id="session_123", timeout=10.0)` waits for completion and returns the result.
-3. **Cancel**: `subagent_cancel(session_id="session_123")` terminates the session.
+1. **Check Status**: `subagent_status(session_id="session_123")` returns current lifecycle state (including `queue_position` if `queued`) and a summary table if `session_id` is omitted.
+2. **Retrieve Result**: `subagent_result(session_id="session_123", timeout=10.0)` polls durable metadata and returns the result once the session is terminal. It does not require a live task handle.
+3. **Cancel**: `subagent_cancel(session_id="session_123")` terminates the session. For `queued` sessions, this is an atomic removal from the scheduler.
+
+#### Result Payload Fields
+
+The `subagent_result` tool returns a JSON payload with the following fields. **Internal timestamp fields and excerpts are excluded** to avoid polluting LLM context:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | `"success"` \| `"error"` | Whether the subagent execution succeeded or failed. |
+| `session_id` | `str` | The unique session identifier for this delegation. |
+| `category` | `str` | The subagent category/name used for this delegation. |
+| `lifecycle_status` | `str` | Current state machine status: `"queued"`, `"running"`, `"succeeded"`, `"failed"`, `"timed_out"`, or `"cancelled"`. |
+| `artifact_id` | `str` or `null` | Durable artifact identifier (e.g., `subagent_<uuid24>`) for persisted results. |
+| `record_path` | `str` or `null` | Canonical record location (e.g., `scratchbook/records/subagent/subagent_<uuid24>`). |
+| `inline_content` | `str` or `null` | Full result text if result size ≤ 8192 bytes (UTF-8). For large results persisted to an artifact, a hint string: `"Result persisted to <path>. Read that file to access the full content."` If no artifact registry is configured and result is large, `null`. |
+| `error` | `str` or `null` | Error message if execution failed (status is `"error"`), otherwise `null`. |
+| `queue_position` | `int` (optional) | Queue position (0-indexed) only present when `lifecycle_status` is `"queued"`. |
+
+**Fields NOT in payload** (internal use only, present on `SubagentSessionRecord` dataclass but excluded from JSON):
+- `created_at` — Session creation timestamp (internal scheduling)
+- `updated_at` — Last update timestamp (internal tracking)
+- `started_at` — Execution start time (internal telemetry)
+- `finished_at` — Execution end time (internal telemetry)
+- `result_excerpt` — First 200 characters of result (internal UI/rendering for reminder tables)
 
 ### Timeout Precedence
 

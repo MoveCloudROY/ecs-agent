@@ -449,7 +449,7 @@ world.register_system(UserInputSystem(priority=-10), priority=-10)
 
 The SubagentSystem manages subagent delegation, allowing parent agents to spawn child agents for subtask execution with isolated contexts and automatic result aggregation.
 
-- **Constructor**: `__init__(self, priority: int = -1)`
+- **Constructor**: `__init__(self, priority: int = -1, default_timeout: float | None = None, registry: ArtifactRegistry | None = None, max_background_concurrency: int = 5)`
 - **Queries**: `SubagentRegistryComponent`, `ToolRegistryComponent`
 - **Modifies**: `ToolRegistryComponent.tools` (registers `subagent` tool), `ToolRegistryComponent.handlers` (registers subagent handler).
 - **Events Published**: `DelegationStartedEvent(parent_entity, child_entity, subagent_name, task)`, `DelegationCompletedEvent(parent_entity, child_entity, subagent_name, result)`
@@ -465,13 +465,29 @@ The system automatically registers a `subagent` tool for entities that have both
 
 Each subagent runs in complete isolation with its own conversation history and state. The parent agent receives only the final result.
 
+### Scheduler & Concurrency
+The system manages a process-global FIFO queue for background sessions.
+- **Concurrency Limit**: Configured via `max_background_concurrency`. Default is 5.
+- **FIFO Queue**: Sessions are processed in the order they were launched.
+- **Cap Conflict**: If multiple `SubagentSystem` instances are registered with different concurrency caps, a `ValueError` is raised.
+
 ### Tool Schema
 The `subagent` tool accepts parameters:
 - `category` (required): Name of the subagent to invoke (must exist in registry)
 - `prompt` (required): Task description for the subagent
 - `load_skills` (optional): Additional skill names to load on the subagent
 - `background` (optional): If true, executes asynchronously and returns session ID
+- `stream` (optional): If true, enables streaming telemetry events to the parent EventBus
 - `timeout` (optional): Maximum seconds to wait for completion
+
+### Lifecycle States
+Background sessions transition through these states:
+- `queued`: Waiting in the FIFO queue.
+- `running`: Currently executing.
+- `succeeded`: Completed successfully.
+- `failed`: Terminated with an error.
+- `timed_out`: Terminated after exceeding timeout limit.
+- `cancelled`: Terminated by explicit cancel request.
 
 ### Error Handling
 If the specified subagent name is not found in the registry, the tool returns an error message. If the subagent execution fails or times out, the error details are returned as the tool result.

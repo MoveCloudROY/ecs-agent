@@ -15,6 +15,7 @@ from ecs_agent.components import (
     LLMComponent,
     OwnerComponent,
     PermissionComponent,
+    StreamingComponent,
     SubagentRegistryComponent,
     ToolRegistryComponent,
 )
@@ -43,8 +44,16 @@ from ecs_agent.types import (
     EntityId,
     InheritancePolicy,
     Message,
+    render_subagent_session_reminder_table,
     RetryConfig,
+    StreamContentDeltaEvent,
+    StreamEndEvent,
+    StreamReasoningDeltaEvent,
+    StreamStartEvent,
     SubagentConfig,
+    SubagentStreamDeltaEvent,
+    SubagentStreamEndEvent,
+    SubagentStreamStartEvent,
     SubagentSessionRecord,
     ToolSchema,
 )
@@ -119,11 +128,15 @@ class SubagentSystem:
         priority: int = -1,
         default_timeout: float | None = None,
         registry: ArtifactRegistry | None = None,
+        max_background_concurrency: int = 5,
     ) -> None:
         self.priority = priority
-        self._runtime_manager = SubagentRuntimeManager()
+        self._runtime_manager = SubagentRuntimeManager(
+            max_background_concurrency=max_background_concurrency
+        )
         self._default_timeout = default_timeout
         self._registry = registry
+        self._reconciled_session_ids: set[str] = set()
 
     def _persist_subagent_result(
         self,
@@ -142,11 +155,223 @@ class SubagentSystem:
             persist_result.inline_content,
         )
 
+    def _session_inline_content(
+        self,
+        session: SubagentSessionRecord,
+    ) -> str | None:
+        if session.artifact_inline_content is not None:
+            return session.artifact_inline_content
+
+        if session.artifact_record_path is not None:
+            return (
+                f"Result persisted to {session.artifact_record_path}. "
+                "Read that file to access the full content."
+            )
+
+        return None
+
+    def _session_payload(
+        self,
+        session: SubagentSessionRecord,
+        *,
+        status: str,
+        queue_position: int | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "status": status,
+            "session_id": session.session_id,
+            "category": session.category,
+            "lifecycle_status": session.status,
+            "artifact_id": session.artifact_id,
+            "record_path": session.artifact_record_path,
+            "inline_content": self._session_inline_content(session),
+            "error": session.error,
+        }
+        if queue_position is not None:
+            payload["queue_position"] = queue_position
+
+        return payload
+
     def _resolve_timeout(self, per_call_timeout: float | None) -> float | None:
         """Resolve timeout with precedence: per-call > global > None."""
         return (
             per_call_timeout if per_call_timeout is not None else self._default_timeout
         )
+
+    def _utc_now_iso(self) -> str:
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def _config_for_session(
+        self,
+        registry: SubagentRegistryComponent,
+        session: SubagentSessionRecord,
+    ) -> SubagentConfig:
+        base_config = self._resolve_subagent_config(registry, session.category)
+        if session.load_skills == base_config.skills:
+            return base_config
+
+        return replace(base_config, skills=list(session.load_skills))
+
+    def _build_background_coroutine(
+        self,
+        world: World,
+        parent_entity_id: EntityId,
+        category: str,
+        prompt: str,
+        session_id: str,
+        metadata: SubagentSessionRecord,
+        config: SubagentConfig,
+        resolved_timeout: float | None,
+    ) -> Any:
+        async def execute_with_config() -> tuple[str, bool, str | None]:
+            if metadata.stream:
+                return await self._execute_subagent_core(
+                    world,
+                    parent_entity_id,
+                    category,
+                    prompt,
+                    metadata.correlation_id,
+                    metadata.traceparent,
+                    config,
+                    session_id=session_id,
+                    stream=True,
+                )
+
+            return await self._execute_subagent_core(
+                world,
+                parent_entity_id,
+                category,
+                prompt,
+                metadata.correlation_id,
+                metadata.traceparent,
+                config,
+            )
+
+        async def run_in_background() -> None:
+            metadata.status = "running"
+            metadata.started_at = self._utc_now_iso()
+            metadata.updated_at = metadata.started_at
+            await self._runtime_manager.update_status(session_id, metadata.status)
+            await self._runtime_manager.sync_to_component(world, parent_entity_id)
+            try:
+                if resolved_timeout is not None:
+                    result, success, error = await asyncio.wait_for(
+                        execute_with_config(), timeout=resolved_timeout
+                    )
+                else:
+                    result, success, error = await execute_with_config()
+            except asyncio.CancelledError:
+                metadata.finished_at = self._utc_now_iso()
+                metadata.updated_at = metadata.finished_at
+                await self._runtime_manager.sync_to_component(world, parent_entity_id)
+                raise
+            except asyncio.TimeoutError:
+                error_msg = f"Error: Subagent timeout after {resolved_timeout}s"
+                metadata.finished_at = self._utc_now_iso()
+                metadata.updated_at = metadata.finished_at
+                logger.error(
+                    "subagent_background_timeout",
+                    timeout=resolved_timeout,
+                    category=category,
+                )
+                await self._runtime_manager.update_timeout(session_id, error_msg)
+                await self._runtime_manager.sync_to_component(world, parent_entity_id)
+                return
+
+            metadata.updated_at = self._utc_now_iso()
+            if success:
+                metadata.status = "succeeded"
+                metadata.finished_at = metadata.updated_at
+                metadata.result_excerpt = result[:200]
+                if len(result.encode("utf-8")) <= 8192:
+                    metadata.artifact_inline_content = result
+                persisted = self._persist_subagent_result(result)
+                if persisted is not None:
+                    artifact_id, record_path, inline_content = persisted
+                    metadata.artifact_id = artifact_id
+                    metadata.artifact_record_path = record_path
+                    metadata.artifact_inline_content = inline_content
+            else:
+                metadata.status = "failed"
+                metadata.finished_at = metadata.updated_at
+                metadata.error = error
+            await self._runtime_manager.update_status(session_id, metadata.status)
+            logger.info(
+                "subagent_background_finished",
+                session_id=session_id,
+                category=category,
+                status=metadata.status,
+                result_length=len(result) if success else 0,
+                error=error,
+            )
+            await self._runtime_manager.sync_to_component(world, parent_entity_id)
+
+        return run_in_background
+
+    async def _reconcile_restored_sessions(
+        self,
+        world: World,
+        entity_id: EntityId,
+        registry: SubagentRegistryComponent,
+    ) -> None:
+        from ecs_agent.components.definitions import SubagentSessionTableComponent
+
+        table = world.get_component(entity_id, SubagentSessionTableComponent)
+        if table is None or not table.sessions:
+            return
+
+        unreconciled_sessions = [
+            session
+            for session in table.sessions.values()
+            if session.session_id not in self._reconciled_session_ids
+        ]
+        if not unreconciled_sessions:
+            return
+
+        now_iso = self._utc_now_iso()
+        queued_sessions = sorted(
+            (
+                session
+                for session in unreconciled_sessions
+                if session.status == "queued"
+            ),
+            key=lambda session: (session.created_at, session.session_id),
+        )
+
+        for session in unreconciled_sessions:
+            if session.status == "queued":
+                continue
+
+            if session.status == "running":
+                session.status = "failed"
+                session.error = "restored_without_live_task_handle"
+                session.updated_at = now_iso
+                session.finished_at = now_iso
+
+            await self._runtime_manager.restore_session_metadata(session)
+            self._reconciled_session_ids.add(session.session_id)
+
+        for session in queued_sessions:
+            config = self._config_for_session(registry, session)
+            resolved_timeout = self._resolve_timeout(session.timeout_seconds)
+            coroutine_factory = self._build_background_coroutine(
+                world,
+                entity_id,
+                session.category,
+                session.prompt,
+                session.session_id,
+                session,
+                config,
+                resolved_timeout,
+            )
+            await self._runtime_manager.enqueue_session(
+                session.session_id,
+                session,
+                coroutine_factory,
+            )
+            self._reconciled_session_ids.add(session.session_id)
+
+        await self._runtime_manager.sync_to_component(world, entity_id)
 
     def _wrap_retry_provider_if_needed(self, provider: LLMProvider) -> LLMProvider:
         """Wrap provider with RetryProvider if not already wrapped.
@@ -200,9 +425,11 @@ class SubagentSystem:
                 "  load_skills        — extra skill names to inject on top of category defaults.\n"
                 "  background         — if True, returns a JSON payload with session_id immediately; "
                 "                       use subagent_result(session_id) to retrieve the answer later.\n"
+                "  stream             — when background=True, mirror child-world streaming events onto the "
+                "                       parent EventBus as session-scoped SubagentStream* telemetry.\n"
                 "  timeout            — max seconds to wait before aborting (null = no limit).\n\n"
                 "RETURNS (sync): final answer string from the subagent.\n"
-                "RETURNS (background): JSON {session_id, status, category, created_at}.\n\n"
+                "RETURNS (background): JSON {session_id, status, category, lifecycle_status}.\n\n"
                 "EXAMPLES:\n"
                 "  // Synchronous — block until done\n"
                 '  subagent(category="researcher", prompt="Summarize the latest papers on RAG.")\n\n'
@@ -231,6 +458,10 @@ class SubagentSystem:
                     "background": {
                         "type": "boolean",
                         "description": "If true, launch the subagent asynchronously and return immediately with a session_id. Use subagent_result(session_id) to collect the answer later. Default false (synchronous — blocks until done).",
+                    },
+                    "stream": {
+                        "type": "boolean",
+                        "description": "If true, this session bridges streaming token events to the parent entity's EventBus as SubagentStreamDeltaEvent. Only meaningful when background=True. Default false.",
                     },
                     "timeout": {
                         "type": ["number", "null"],
@@ -267,6 +498,8 @@ class SubagentSystem:
             registry_comp, tool_registry = components
             assert isinstance(registry_comp, SubagentRegistryComponent)
             assert isinstance(tool_registry, ToolRegistryComponent)
+
+            await self._reconcile_restored_sessions(world, entity_id, registry_comp)
 
             # Skip if subagent tool already registered
             if "subagent" in tool_registry.tools:
@@ -309,13 +542,13 @@ class SubagentSystem:
                 "to call subagent_result.\n\n"
                 "WHEN TO CALL:\n"
                 "  - After launching one or more background subagents (background=True) to see "
-                "    which have finished (Idle) and which are still running (Working).\n"
+                "    which have succeeded and which are still running.\n"
                 "  - Without arguments to get a summary table of all active sessions.\n"
                 "  - With a specific session_id to get detailed info on one session.\n\n"
                 "INTERFACE:\n"
                 "  session_id (optional) — omit to list all sessions; provide to inspect one.\n\n"
                 "RETURNS (no session_id): JSON {status, session_count, summary_table}.\n"
-                "RETURNS (with session_id): JSON {session_id, status, category, created_at, ...}.\n\n"
+                "RETURNS (with session_id): JSON {session_id, status, category, lifecycle_status, ...}.\n\n"
                 "EXAMPLES:\n"
                 "  // List all running background sessions\n"
                 "  subagent_status()\n\n"
@@ -345,7 +578,7 @@ class SubagentSystem:
                 "WHEN TO CALL:\n"
                 "  - After launching a subagent with background=True and you are ready to use "
                 "    its output.\n"
-                "  - You may call subagent_status first to check if the session is already Idle "
+                "  - You may call subagent_status first to check if the session is already succeeded "
                 "    (avoiding unnecessary blocking).\n\n"
                 "INTERFACE:\n"
                 "  session_id (required) — the session_id from the background subagent response.\n"
@@ -414,9 +647,6 @@ class SubagentSystem:
 
         async def status_handler(session_id: str | None = None) -> str:
             from ecs_agent.components.definitions import SubagentSessionTableComponent
-            from ecs_agent.systems.subagent_runtime import (
-                render_subagent_session_reminder_table,
-            )
 
             logger.debug(
                 "subagent_status_queried",
@@ -453,20 +683,18 @@ class SubagentSystem:
                 session_id=session_id,
                 lifecycle_status=session.status,
             )
+            queue_position: int | None = None
+            if session.status == "queued":
+                queue_position = await self._runtime_manager.get_queue_position(
+                    session.session_id
+                )
+
             return json.dumps(
-                {
-                    "status": "ok",
-                    "session_id": session.session_id,
-                    "category": session.category,
-                    "lifecycle_status": session.status,
-                    "created_at": session.created_at,
-                    "updated_at": session.updated_at,
-                    "result_excerpt": session.result_excerpt,
-                    "artifact_id": session.artifact_id,
-                    "record_path": session.artifact_record_path,
-                    "inline_content": session.artifact_inline_content,
-                    "error": session.error,
-                }
+                self._session_payload(
+                    session,
+                    status="ok",
+                    queue_position=queue_position,
+                )
             )
 
         return status_handler
@@ -474,7 +702,13 @@ class SubagentSystem:
     def _make_result_handler(self, world: World, parent_entity_id: EntityId) -> Any:
         """Create handler for subagent_result tool."""
 
-        async def result_handler(session_id: str, timeout: float | None = None) -> str:
+        async def result_handler(
+            session_id: str, timeout: float | str | None = None
+        ) -> str:
+
+            if isinstance(timeout, str):
+                timeout = float(timeout)
+
             logger.info(
                 "subagent_result_requested",
                 parent_entity=parent_entity_id,
@@ -490,47 +724,17 @@ class SubagentSystem:
                     }
                 )
 
-            if session.status in ("Dead", "Timeout", "Cancelled"):
-                return json.dumps(
-                    {
-                        "status": "terminal",
-                        "session_id": session_id,
-                        "lifecycle_status": session.status,
-                        "result_excerpt": session.result_excerpt,
-                        "artifact_id": session.artifact_id,
-                        "record_path": session.artifact_record_path,
-                        "inline_content": session.artifact_inline_content,
-                        "error": session.error,
-                    }
-                )
+            if session.status in ("failed", "timed_out", "cancelled"):
+                return json.dumps(self._session_payload(session, status="terminal"))
 
-            if session.status == "Idle":
+            if session.status == "succeeded":
                 logger.info(
                     "subagent_result_ready",
                     parent_entity=parent_entity_id,
                     session_id=session_id,
                     result_length=len(session.result_excerpt or ""),
                 )
-                return json.dumps(
-                    {
-                        "status": "success",
-                        "session_id": session_id,
-                        "lifecycle_status": session.status,
-                        "result_excerpt": session.result_excerpt,
-                        "artifact_id": session.artifact_id,
-                        "record_path": session.artifact_record_path,
-                        "inline_content": session.artifact_inline_content,
-                    }
-                )
-
-            task = await self._runtime_manager.get_task(session_id)
-            if task is None:
-                return json.dumps(
-                    {
-                        "error": f"Task handle not found for session: {session_id}",
-                        "session_id": session_id,
-                    }
-                )
+                return json.dumps(self._session_payload(session, status="success"))
 
             logger.info(
                 "subagent_result_awaiting",
@@ -539,38 +743,46 @@ class SubagentSystem:
                 timeout=timeout,
             )
             try:
-                if timeout is not None:
-                    await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
-                else:
-                    await asyncio.shield(task)
+                loop = asyncio.get_running_loop()
+                deadline = None if timeout is None else loop.time() + timeout
+                while True:
+                    session = await self._runtime_manager.get_session(session_id)
+                    if session is None:
+                        return json.dumps(
+                            {
+                                "error": f"Session disappeared while waiting: {session_id}",
+                                "session_id": session_id,
+                            }
+                        )
 
-                session = await self._runtime_manager.get_session(session_id)
-                if session is None:
-                    return json.dumps(
-                        {
-                            "error": f"Session disappeared after await: {session_id}",
-                            "session_id": session_id,
-                        }
-                    )
+                    if session.status == "succeeded":
+                        logger.info(
+                            "subagent_result_collected",
+                            parent_entity=parent_entity_id,
+                            session_id=session_id,
+                            lifecycle_status=session.status,
+                        )
+                        return json.dumps(
+                            self._session_payload(session, status="success")
+                        )
 
-                logger.info(
-                    "subagent_result_collected",
-                    parent_entity=parent_entity_id,
-                    session_id=session_id,
-                    lifecycle_status=session.status,
-                )
-                return json.dumps(
-                    {
-                        "status": "completed",
-                        "session_id": session_id,
-                        "lifecycle_status": session.status,
-                        "result_excerpt": session.result_excerpt,
-                        "artifact_id": session.artifact_id,
-                        "record_path": session.artifact_record_path,
-                        "inline_content": session.artifact_inline_content,
-                        "error": session.error,
-                    }
-                )
+                    if session.status in ("failed", "timed_out", "cancelled"):
+                        logger.info(
+                            "subagent_result_collected",
+                            parent_entity=parent_entity_id,
+                            session_id=session_id,
+                            lifecycle_status=session.status,
+                        )
+                        return json.dumps(
+                            self._session_payload(session, status="terminal")
+                        )
+
+                    remaining = None if deadline is None else deadline - loop.time()
+                    if remaining is not None and remaining <= 0:
+                        raise asyncio.TimeoutError
+
+                    sleep_for = 0.1 if remaining is None else min(0.1, remaining)
+                    await asyncio.sleep(sleep_for)
 
             except asyncio.TimeoutError:
                 logger.warning(
@@ -619,7 +831,7 @@ class SubagentSystem:
                     }
                 )
 
-            if session.status in ("Dead", "Timeout", "Cancelled"):
+            if session.status in ("failed", "timed_out", "cancelled", "succeeded"):
                 return json.dumps(
                     {
                         "error": f"Session already terminal: {session.status}",
@@ -637,13 +849,13 @@ class SubagentSystem:
                 "subagent_cancel_completed",
                 parent_entity=parent_entity_id,
                 session_id=session_id,
-                final_status=session.status if session else "Cancelled",
+                final_status=session.status if session else "cancelled",
             )
             return json.dumps(
                 {
                     "status": "cancelled",
                     "session_id": session_id,
-                    "lifecycle_status": session.status if session else "Cancelled",
+                    "lifecycle_status": session.status if session else "cancelled",
                 }
             )
 
@@ -655,6 +867,7 @@ class SubagentSystem:
             prompt: str,
             load_skills: list[str] | None = None,
             background: bool = False,
+            stream: bool = False,
             timeout: float | None = None,
         ) -> str:
             effective_load_skills = [] if load_skills is None else load_skills
@@ -701,30 +914,28 @@ class SubagentSystem:
             # Resolve timeout for this subagent execution
             resolved_timeout = self._resolve_timeout(resolved_timeout_raw)
 
-            async def execute_with_effective_skills() -> tuple[str, bool, str | None]:
-                original_config = registry_comp.subagents[category]
-                registry_comp.subagents[category] = effective_config
-                try:
-                    return await self._execute_subagent_core(
-                        world,
-                        parent_entity_id,
-                        category,
-                        prompt,
-                        correlation_id,
-                        traceparent,
-                    )
-                finally:
-                    registry_comp.subagents[category] = original_config
+            metadata: SubagentSessionRecord | None = None
+
+            async def execute_with_effective_config() -> tuple[str, bool, str | None]:
+                return await self._execute_subagent_core(
+                    world,
+                    parent_entity_id,
+                    category,
+                    prompt,
+                    correlation_id,
+                    traceparent,
+                    effective_config,
+                )
 
             if not background:
                 # Sync mode: wrap with timeout
                 try:
                     if resolved_timeout is not None:
                         result, success, _ = await asyncio.wait_for(
-                            execute_with_effective_skills(), timeout=resolved_timeout
+                            execute_with_effective_config(), timeout=resolved_timeout
                         )
                     else:
-                        result, success, _ = await execute_with_effective_skills()
+                        result, success, _ = await execute_with_effective_config()
                 except asyncio.TimeoutError:
                     error_msg = f"Error: Subagent timeout after {resolved_timeout}s"
                     logger.error(
@@ -745,7 +956,7 @@ class SubagentSystem:
                 return result
 
             session_id = self._runtime_manager.create_session()
-            now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            now_iso = self._utc_now_iso()
             metadata = SubagentSessionRecord(
                 session_id=session_id,
                 category=category,
@@ -754,62 +965,22 @@ class SubagentSystem:
                 created_at=now_iso,
                 updated_at=now_iso,
                 load_skills=normalized_skills,
+                stream=stream,
                 background=True,
-                status="Working",
                 correlation_id=correlation_id,
                 traceparent=traceparent,
                 timeout_seconds=timeout,
             )
-
-            async def run_in_background() -> None:
-                try:
-                    if resolved_timeout is not None:
-                        result, success, error = await asyncio.wait_for(
-                            execute_with_effective_skills(), timeout=resolved_timeout
-                        )
-                    else:
-                        result, success, error = await execute_with_effective_skills()
-                except asyncio.TimeoutError:
-                    error_msg = f"Error: Subagent timeout after {resolved_timeout}s"
-                    logger.error(
-                        "subagent_background_timeout",
-                        timeout=resolved_timeout,
-                        category=category,
-                    )
-                    # Update session to Timeout status
-                    await self._runtime_manager.update_timeout(session_id, error_msg)
-                    # Hook: Sync to component after timeout
-                    await self._runtime_manager.sync_to_component(
-                        world, parent_entity_id
-                    )
-                    return
-
-                metadata.updated_at = (
-                    datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-                )
-                if success:
-                    metadata.status = "Idle"
-                    metadata.result_excerpt = result[:200]
-                    persisted = self._persist_subagent_result(result)
-                    if persisted is not None:
-                        artifact_id, record_path, inline_content = persisted
-                        metadata.artifact_id = artifact_id
-                        metadata.artifact_record_path = record_path
-                        metadata.artifact_inline_content = inline_content
-                else:
-                    metadata.status = "Dead"
-                    metadata.error = error
-                await self._runtime_manager.update_status(session_id, metadata.status)
-                logger.info(
-                    "subagent_background_finished",
-                    session_id=session_id,
-                    category=category,
-                    status=metadata.status,
-                    result_length=len(result) if success else 0,
-                    error=error,
-                )
-                # Hook: Sync to component after completion/error
-                await self._runtime_manager.sync_to_component(world, parent_entity_id)
+            run_in_background = self._build_background_coroutine(
+                world,
+                parent_entity_id,
+                category,
+                prompt,
+                session_id,
+                metadata,
+                effective_config,
+                resolved_timeout,
+            )
 
             logger.info(
                 "subagent_background_launched",
@@ -818,9 +989,10 @@ class SubagentSystem:
                 category=category,
                 timeout=resolved_timeout,
             )
-            background_task = asyncio.create_task(run_in_background())
-            await self._runtime_manager.register_task(
-                session_id, background_task, metadata
+            await self._runtime_manager.enqueue_session(
+                session_id,
+                metadata,
+                run_in_background,
             )
             # Hook: Sync to component after launch
             await self._runtime_manager.sync_to_component(world, parent_entity_id)
@@ -828,9 +1000,12 @@ class SubagentSystem:
             return json.dumps(
                 {
                     "session_id": session_id,
-                    "status": "Working",
+                    "status": "queued",
+                    "lifecycle_status": metadata.status,
                     "category": category,
+                    "created_at": now_iso,
                     "timeout": timeout,
+                    "stream": stream,
                 }
             )
 
@@ -844,6 +1019,10 @@ class SubagentSystem:
         task: str,
         correlation_id: str,
         traceparent: str,
+        config: SubagentConfig,
+        *,
+        session_id: str | None = None,
+        stream: bool = False,
     ) -> tuple[str, bool, str | None]:
         """Shared subagent execution core for the subagent API.
 
@@ -861,46 +1040,6 @@ class SubagentSystem:
             - success: True if successful, False otherwise
             - error: Error message if failed, None otherwise
         """
-        # Get registry component
-        registry_comp = world.get_component(parent_entity_id, SubagentRegistryComponent)
-        if registry_comp is None:
-            error_msg = f"Error: SubagentRegistryComponent not found on entity {parent_entity_id}"
-            logger.error("delegation_failed", reason=error_msg)
-            await self._publish_delegation_events(
-                world,
-                parent_entity_id,
-                subagent_name,
-                correlation_id=correlation_id,
-                traceparent=traceparent,
-                result=error_msg,
-                success=False,
-                error=error_msg,
-            )
-            return (error_msg, False, error_msg)
-
-        # Resolve config
-        try:
-            config = self._resolve_subagent_config(registry_comp, subagent_name)
-        except ValueError as exc:
-            error_msg = str(exc)
-            logger.error(
-                "delegation_failed",
-                reason="unknown_subagent",
-                subagent_name=subagent_name,
-                available=list(registry_comp.subagents.keys()),
-            )
-            await self._publish_delegation_events(
-                world,
-                parent_entity_id,
-                subagent_name,
-                correlation_id=correlation_id,
-                traceparent=traceparent,
-                result=error_msg,
-                success=False,
-                error=error_msg,
-            )
-            return (error_msg, False, error_msg)
-
         # Execute delegation
         try:
             child_entity_id = world.create_entity()
@@ -934,12 +1073,32 @@ class SubagentSystem:
                 config,
                 parent_child_entity=child_entity_id,
             )
-            result = await self._execute_delegation(
-                child_world,
-                child_world_entity_id,
-                task,
-                config,
-            )
+            bridge_cleanup: Any = None
+            if stream and session_id is not None:
+                child_world_name = child_world.name or subagent_name
+                child_world.add_component(
+                    child_world_entity_id,
+                    StreamingComponent(enabled=True),
+                )
+                bridge_cleanup = self._bridge_subagent_stream_events(
+                    parent_world=world,
+                    child_world=child_world,
+                    parent_entity_id=parent_entity_id,
+                    session_id=session_id,
+                    category=subagent_name,
+                    child_world_name=child_world_name,
+                )
+
+            try:
+                result = await self._execute_delegation(
+                    child_world,
+                    child_world_entity_id,
+                    task,
+                    config,
+                )
+            finally:
+                if bridge_cleanup is not None:
+                    bridge_cleanup()
             # Sync rendered system prompt (populated by SystemPromptRenderSystem) to parent-world stub
             child_llm = child_world.get_component(child_world_entity_id, LLMComponent)
             stub_llm = world.get_component(child_entity_id, LLMComponent)
@@ -1040,6 +1199,101 @@ class SubagentSystem:
                 error=error_msg,
             )
             return (error_msg, False, error_msg)
+
+    def _bridge_subagent_stream_events(
+        self,
+        *,
+        parent_world: World,
+        child_world: World,
+        parent_entity_id: EntityId,
+        session_id: str,
+        category: str,
+        child_world_name: str,
+    ) -> Any:
+        seq = 0
+
+        def next_seq() -> int:
+            nonlocal seq
+            current = seq
+            seq += 1
+            return current
+
+        def publish_translated_event(event: object) -> None:
+            asyncio.create_task(parent_world.event_bus.publish(event))
+
+        async def on_start(event: StreamStartEvent) -> None:
+            publish_translated_event(
+                SubagentStreamStartEvent(
+                    session_id=session_id,
+                    parent_entity_id=parent_entity_id,
+                    category=category,
+                    child_world_name=child_world_name,
+                    seq=next_seq(),
+                    timestamp=self._iso_timestamp(event.timestamp),
+                )
+            )
+
+        async def on_reasoning_delta(event: StreamReasoningDeltaEvent) -> None:
+            publish_translated_event(
+                SubagentStreamDeltaEvent(
+                    session_id=session_id,
+                    parent_entity_id=parent_entity_id,
+                    category=category,
+                    child_world_name=child_world_name,
+                    seq=next_seq(),
+                    timestamp=self._utc_now_iso(),
+                    delta="",
+                    reasoning_delta=event.reasoning_delta,
+                )
+            )
+
+        async def on_content_delta(event: StreamContentDeltaEvent) -> None:
+            publish_translated_event(
+                SubagentStreamDeltaEvent(
+                    session_id=session_id,
+                    parent_entity_id=parent_entity_id,
+                    category=category,
+                    child_world_name=child_world_name,
+                    seq=next_seq(),
+                    timestamp=self._utc_now_iso(),
+                    delta=event.delta,
+                )
+            )
+
+        async def on_end(event: StreamEndEvent) -> None:
+            publish_translated_event(
+                SubagentStreamEndEvent(
+                    session_id=session_id,
+                    parent_entity_id=parent_entity_id,
+                    category=category,
+                    child_world_name=child_world_name,
+                    seq=next_seq(),
+                    timestamp=self._iso_timestamp(event.timestamp),
+                )
+            )
+
+        child_world.event_bus.subscribe(StreamStartEvent, on_start)
+        child_world.event_bus.subscribe(StreamReasoningDeltaEvent, on_reasoning_delta)
+        child_world.event_bus.subscribe(StreamContentDeltaEvent, on_content_delta)
+        child_world.event_bus.subscribe(StreamEndEvent, on_end)
+
+        def cleanup() -> None:
+            child_world.event_bus.unsubscribe(StreamStartEvent, on_start)
+            child_world.event_bus.unsubscribe(
+                StreamReasoningDeltaEvent,
+                on_reasoning_delta,
+            )
+            child_world.event_bus.unsubscribe(StreamContentDeltaEvent, on_content_delta)
+            child_world.event_bus.unsubscribe(StreamEndEvent, on_end)
+
+        return cleanup
+
+    def _iso_timestamp(self, timestamp: float) -> str:
+        return (
+            datetime.fromtimestamp(timestamp, tz=timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
 
     def _resolve_subagent_config(
         self,
