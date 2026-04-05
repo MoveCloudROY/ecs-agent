@@ -23,7 +23,9 @@ from ecs_agent.components import (
     RunnerStateComponent,
     SandboxConfigComponent,
     StreamingComponent,
+    SubagentNotificationQueueComponent,
     SubagentSessionTableComponent,
+    SubagentWaitComponent,
     SystemPromptComponent,
     TerminalComponent,
     ToolApprovalComponent,
@@ -39,6 +41,7 @@ from ecs_agent.types import (
     FileRefPart,
     ImageUrlPart,
     Message,
+    SubagentNotificationRecord,
     SubagentSessionRecord,
     ToolCall,
     ToolSchema,
@@ -456,6 +459,109 @@ def test_serialization_roundtrip_preserves_subagent_session_table_records() -> N
     assert restored_table.sessions["running-a"].started_at == "2026-04-05T10:00:30Z"
     assert restored_table.sessions["done-c"].status == "succeeded"
     assert restored_table.sessions["done-c"].result_excerpt == "already done"
+
+
+def test_serialization_subagent_notification_queue_roundtrip() -> None:
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        SubagentNotificationQueueComponent(
+            notifications=[
+                SubagentNotificationRecord(
+                    notification_id="session-1:succeeded",
+                    session_id="session-1",
+                    parent_entity_id=1,
+                    terminal_status="succeeded",
+                    summary="Background summary",
+                    error=None,
+                    created_at="2026-04-06T12:00:00Z",
+                    delivered_at=None,
+                ),
+                SubagentNotificationRecord(
+                    notification_id="session-2:failed",
+                    session_id="session-2",
+                    parent_entity_id=1,
+                    terminal_status="failed",
+                    summary=None,
+                    error="child failed",
+                    created_at="2026-04-06T12:05:00Z",
+                    delivered_at="2026-04-06T12:06:00Z",
+                ),
+            ]
+        ),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+
+    assert serialized["entities"]["1"]["SubagentNotificationQueueComponent"] == {
+        "notifications": [
+            {
+                "notification_id": "session-1:succeeded",
+                "session_id": "session-1",
+                "parent_entity_id": 1,
+                "terminal_status": "succeeded",
+                "summary": "Background summary",
+                "error": None,
+                "created_at": "2026-04-06T12:00:00Z",
+                "delivered_at": None,
+            },
+            {
+                "notification_id": "session-2:failed",
+                "session_id": "session-2",
+                "parent_entity_id": 1,
+                "terminal_status": "failed",
+                "summary": None,
+                "error": "child failed",
+                "created_at": "2026-04-06T12:05:00Z",
+                "delivered_at": "2026-04-06T12:06:00Z",
+            },
+        ]
+    }
+
+    restored_queue = restored.get_component(entity, SubagentNotificationQueueComponent)
+    assert restored_queue is not None
+    assert len(restored_queue.notifications) == 2
+    assert restored_queue.notifications[0].summary == "Background summary"
+    assert restored_queue.notifications[1].error == "child failed"
+
+
+def test_serialization_subagent_wait_component_excludes_future_runtime_state() -> None:
+    import asyncio
+
+    world = World()
+    entity = world.create_entity()
+    loop = asyncio.new_event_loop()
+    future: asyncio.Future[None] = loop.create_future()
+    world.add_component(
+        entity,
+        SubagentWaitComponent(
+            session_ids=["session-1", "session-2"],
+            timeout=15.0,
+            future=future,
+            started_at="2026-04-06T12:00:00Z",
+        ),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+
+    assert serialized["entities"]["1"]["SubagentWaitComponent"] == {
+        "session_ids": ["session-1", "session-2"],
+        "timeout": 15.0,
+        "future": None,
+        "started_at": "2026-04-06T12:00:00Z",
+    }
+
+    restored_wait = restored.get_component(entity, SubagentWaitComponent)
+    assert restored_wait is not None
+    assert restored_wait.session_ids == ["session-1", "session-2"]
+    assert restored_wait.timeout == 15.0
+    assert restored_wait.future is None
+    assert restored_wait.started_at == "2026-04-06T12:00:00Z"
+
+    loop.close()
 
 
 def test_serialization_roundtrip_with_sandbox_config() -> None:
