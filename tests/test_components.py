@@ -371,7 +371,7 @@ class TestComponentCount:
             and dataclasses.is_dataclass(getattr(d, name, None))
             and getattr(d, name).__module__ == "ecs_agent.components.definitions"
         )
-        assert count <= 46, f"Component count {count} exceeds limit of 46"
+        assert count <= 48, f"Component count {count} exceeds limit of 48"
 
 
 class TestComponentsExportedInInit:
@@ -868,7 +868,6 @@ class TestPromptContextReservationComponent:
         from ecs_agent.components import PromptContextReservationComponent
 
         assert hasattr(PromptContextReservationComponent, "__slots__")
-
 
 
 class TestPromptContractsModule:

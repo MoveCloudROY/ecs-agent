@@ -23,6 +23,7 @@ The table below summarizes the recommended priorities for each system. Priority 
 | RAGSystem | -10 | Retrieves context via vector search before reasoning. |
 | SystemPromptRenderSystem | -20 | Resolves `${name}` placeholders from `SystemPromptConfigSpec` and produces a cached `RenderedSystemPromptComponent` on first render. |
 | UserPromptNormalizationSystem | -10 | Injects trigger templates into user messages and produces `RenderedUserPromptComponent`. ContextPool injection happens later at call-time. |
+| SubagentWaitSystem | -5 | Handles `subagent_wait` tool and background session notifications. |
 | PromptContextCollectorSystem | 0 | Collects tool/subagent results into the context pool. |
 | ToolApprovalSystem | -5 | Filters pending tool calls before execution. |
 | ReasoningSystem | 0 | Generates responses using an LLM. |
@@ -30,7 +31,7 @@ The table below summarizes the recommended priorities for each system. Priority 
 | TreeSearchSystem | 0 | Uses MCTS to find the best plan path. |
 | MessageBusSystem | 5 | Handles pub/sub and request-response messaging. |
 | ToolExecutionSystem | 5 | Executes pending tool calls and returns results. |
-| SubagentSystem | 5 | Manages subagent delegation and execution. |
+| SubagentSystem | -1 | Manages subagent delegation and execution. |
 | ReplanningSystem | 7 | Periodically revises the current plan based on progress. |
 | MemorySystem | 10 | Truncates conversation history to stay within context limits. |
 | CheckpointSystem | (configurable) | Creates world state snapshots for undo. |
@@ -453,7 +454,7 @@ The SubagentSystem manages subagent delegation, allowing parent agents to spawn 
 - **Queries**: `SubagentRegistryComponent`, `ToolRegistryComponent`
 - **Modifies**: `ToolRegistryComponent.tools` (registers `subagent` tool), `ToolRegistryComponent.handlers` (registers subagent handler).
 - **Events Published**: `DelegationStartedEvent(parent_entity, child_entity, subagent_name, task)`, `DelegationCompletedEvent(parent_entity, child_entity, subagent_name, result)`
-- **Recommended Priority**: 5 (runs alongside `MessageBusSystem` and `ToolExecutionSystem`)
+- **Recommended Priority**: -1 (runs before `ReasoningSystem`)
 
 ### Behavior
 The system automatically registers a `subagent` tool for entities that have both `SubagentRegistryComponent` and `ToolRegistryComponent`. When the subagent tool is called by an LLM, the system:
@@ -514,12 +515,41 @@ world.add_component(
 )
 
 # Register system
-world.register_system(SubagentSystem(priority=5), priority=5)
+world.register_system(SubagentSystem(priority=-1), priority=-1)
 ```
 
 ### See Also
 - [Subagent Feature Documentation](features/subagent.md) — Detailed guide with delegation patterns
 - [SubagentRegistryComponent](components.md#subagentregistrycomponent) — Component reference
+---
+
+## 14b. SubagentWaitSystem
+
+The `SubagentWaitSystem` handles the `subagent_wait` tool and manages the delivery of background session completion notifications to the parent agent.
+
+- **Constructor**: `__init__(self, priority: int = -5)`
+- **Queries**: `SubagentWaitComponent`, `SubagentNotificationQueueComponent`, `ConversationComponent`
+- **Modifies**: `SubagentWaitComponent` (resolves future), `ConversationComponent` (appends notification messages), `SubagentNotificationQueueComponent` (marks notifications as delivered).
+- **Recommended Priority**: -5 (REQUIRED to run before `ReasoningSystem`)
+
+### Behavior
+The system monitors entities for `SubagentWaitComponent`. When a matching background session (or any session if `session_ids` is `None`) reaches a terminal state (`succeeded`, `failed`, or `timed_out`), the system:
+1. Resolves the wait future to wake the parent agent.
+2. Batches all unread terminal notifications into a single system message.
+3. Appends the notification message to the parent's conversation history.
+4. Marks the notifications as delivered.
+5. Removes the `SubagentWaitComponent`.
+
+If a timeout is specified in the `subagent_wait` call, the system will terminate the wait and attach an `ErrorComponent` if the timeout is exceeded.
+
+### Usage Example
+```python
+from ecs_agent.systems.subagent_wait import SubagentWaitSystem
+
+# Register system (priority -5 REQUIRED)
+world.register_system(SubagentWaitSystem(priority=-5), priority=-5)
+```
+
 ---
 
 ## Complete Integration Example
