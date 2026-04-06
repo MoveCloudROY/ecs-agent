@@ -181,9 +181,8 @@ def configure_logging(
     """
     global _log_level
     global _module_levels
-    if level is None:
-        level = os.getenv("ECS_AGENT_LOG_LEVEL", "ERROR").upper()
-    _log_level = level
+    env_level = os.getenv("ECS_AGENT_LOG_LEVEL", "OCCUPY").upper()
+    _log_level = env_level if env_level in _LEVEL_MAP else (level or "Error")
     _module_levels = {
         module_name: _LEVEL_MAP.get(module_level.upper(), logging.INFO)
         for module_name, module_level in (module_levels or {}).items()
