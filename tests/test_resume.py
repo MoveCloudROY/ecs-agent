@@ -11,6 +11,7 @@ from ecs_agent.components.definitions import (
     ConversationComponent,
     LLMComponent,
     RunnerStateComponent,
+    SubagentNotificationQueueComponent,
     SubagentRegistryComponent,
     SubagentSessionTableComponent,
     TerminalComponent,
@@ -488,3 +489,91 @@ class TestRunnerResume:
             restored_table.sessions["queued-b"].result_excerpt
             == "queued-agent:second queued"
         )
+
+    @pytest.mark.asyncio
+    async def test_restored_running_session_enqueues_one_failure_notification(
+        self,
+        world: World,
+        runner: Runner,
+        tmp_checkpoint_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import ecs_agent.systems.subagent_runtime as runtime_module
+
+        monkeypatch.setattr(runtime_module, "_GLOBAL_SCHEDULER", None)
+
+        provider = DummyProvider()
+        parent = world.create_entity()
+        world.add_component(parent, LLMComponent(provider=provider, model="test"))
+        world.add_component(
+            parent,
+            ConversationComponent(messages=[Message(role="user", content="resume")]),
+        )
+        world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+        world.add_component(
+            parent,
+            SubagentRegistryComponent(
+                subagents={
+                    "running-agent": SubagentConfig(
+                        name="running-agent", provider=provider, model="test"
+                    )
+                }
+            ),
+        )
+        world.add_component(
+            parent,
+            SubagentSessionTableComponent(
+                sessions={
+                    "running-z": _build_session_record(
+                        parent,
+                        "running-z",
+                        category="running-agent",
+                        prompt="running when checkpointed",
+                        created_at="2026-04-05T09:58:00Z",
+                        updated_at="2026-04-05T10:02:00Z",
+                        status="running",
+                        started_at="2026-04-05T09:59:00Z",
+                    )
+                }
+            ),
+        )
+
+        checkpoint_data = WorldSerializer.to_dict(world)
+        subagents = checkpoint_data["entities"][str(int(parent))][
+            "SubagentRegistryComponent"
+        ]["subagents"]
+        for subagent_data in subagents.values():
+            subagent_data["provider"] = NON_SERIALIZABLE_PLACEHOLDER
+
+        checkpoint_data["runner_state"] = {"current_tick": 0}
+        tmp_checkpoint_path.write_text(json.dumps(checkpoint_data), encoding="utf-8")
+
+        loaded_world, _ = Runner.load_checkpoint(
+            tmp_checkpoint_path,
+            providers={"default": provider, "test": provider},
+            tool_handlers={},
+        )
+
+        system = SubagentSystem(max_background_concurrency=1)
+        system.install_subagent_control_tools(loaded_world, parent)
+
+        await system.process(loaded_world)
+
+        table = loaded_world.get_component(parent, SubagentSessionTableComponent)
+        assert table is not None
+        assert table.sessions["running-z"].status == "failed"
+        assert table.sessions["running-z"].error == "restored_without_live_task_handle"
+
+        queue = loaded_world.get_component(parent, SubagentNotificationQueueComponent)
+        assert queue is not None
+        assert [item.notification_id for item in queue.notifications] == [
+            "running-z:failed"
+        ]
+        assert queue.notifications[0].error == "restored_without_live_task_handle"
+        assert queue.notifications[0].delivered_at is None
+
+        await system.process(loaded_world)
+
+        assert [item.notification_id for item in queue.notifications] == [
+            "running-z:failed"
+        ]

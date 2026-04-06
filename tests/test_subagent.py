@@ -24,6 +24,7 @@ from ecs_agent.components.definitions import (
 from ecs_agent.core.world import World
 from ecs_agent.providers.fake_provider import FakeProvider
 from ecs_agent.scratchbook.artifact_registry import ArtifactRegistry
+from ecs_agent.serialization import WorldSerializer
 from ecs_agent.types import (
     CompletionResult,
     DelegationCompletedEvent,
@@ -2942,6 +2943,82 @@ async def test_completion_notification_is_injected_before_next_reasoning_turn() 
             "for the cached summary."
         ),
     )
+
+
+async def test_restored_unread_notification_is_delivered_once() -> None:
+    world = World()
+    entity_id = world.create_entity()
+
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Resume work")]),
+    )
+    world.add_component(
+        entity_id,
+        SubagentNotificationQueueComponent(
+            notifications=[
+                SubagentNotificationRecord(
+                    notification_id="session-restored:succeeded",
+                    session_id="session-restored",
+                    parent_entity_id=entity_id,
+                    terminal_status="succeeded",
+                    summary="restored summary",
+                    error=None,
+                    created_at="2026-04-06T12:00:00Z",
+                    delivered_at=None,
+                ),
+                SubagentNotificationRecord(
+                    notification_id="session-delivered:failed",
+                    session_id="session-delivered",
+                    parent_entity_id=entity_id,
+                    terminal_status="failed",
+                    summary=None,
+                    error="already delivered",
+                    created_at="2026-04-06T12:01:00Z",
+                    delivered_at="2026-04-06T12:02:00Z",
+                ),
+            ]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        SubagentWaitComponent(session_ids=["session-restored"], timeout=1.0),
+    )
+
+    restored = WorldSerializer.from_dict(
+        WorldSerializer.to_dict(world),
+        providers={},
+        tool_handlers={},
+    )
+    wait_system = SubagentWaitSystem()
+
+    restored_wait = restored.get_component(entity_id, SubagentWaitComponent)
+    assert restored_wait is not None
+    assert restored_wait.future is None
+
+    await wait_system.process(restored)
+
+    conversation = restored.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages[-1] == Message(
+        role="system",
+        content=(
+            "Background subagent updates:\n"
+            '- session-restored succeeded. Call subagent_result(session_id="session-restored") '
+            "for the full result or "
+            'subagent_result(session_id="session-restored", read_method="summary") '
+            "for the cached summary."
+        ),
+    )
+
+    queue = restored.get_component(entity_id, SubagentNotificationQueueComponent)
+    assert queue is not None
+    assert queue.notifications[0].delivered_at is not None
+    assert queue.notifications[1].delivered_at == "2026-04-06T12:02:00Z"
+
+    message_count = len(conversation.messages)
+    await wait_system.process(restored)
+    assert len(conversation.messages) == message_count
 
 
 def test_unread_notifications_are_batched() -> None:

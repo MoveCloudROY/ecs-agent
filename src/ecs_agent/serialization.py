@@ -232,6 +232,13 @@ class WorldSerializer:
                 "started_at": component.started_at,
             }
 
+        if isinstance(component, SubagentNotificationQueueComponent):
+            return {
+                "notifications": [
+                    asdict(notification) for notification in component.notifications
+                ]
+            }
+
         serialized = asdict(component)
 
         if isinstance(component, LLMComponent):
@@ -317,15 +324,6 @@ class WorldSerializer:
                     # Already a dict
                     sessions_dict[session_id] = session_record
             serialized["sessions"] = sessions_dict
-
-        if isinstance(component, SubagentNotificationQueueComponent):
-            notifications = []
-            for notification in serialized.get("notifications", []):
-                if hasattr(notification, "__dataclass_fields__"):
-                    notifications.append(asdict(notification))
-                else:
-                    notifications.append(notification)
-            serialized["notifications"] = notifications
 
         return serialized
 
