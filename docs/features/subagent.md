@@ -14,7 +14,7 @@ Subagent delegation provides:
 - **Sync and Background Modes**: Execute tasks immediately or as background sessions with ID tracking.
 - **Lifecycle Management**: Track background sessions through `queued`, `running`, `succeeded`, `failed`, `timed_out`, and `cancelled` states.
 - **Scheduler & Concurrency**: Process-global FIFO queue with configurable concurrency limits and automatic re-enqueuing on world restore.
-- **Control Tools**: Tools to query status (including queue position), retrieve results (polling-based), and cancel background sessions (atomic for queued tasks).
+- **Control Tools**: Tools to query status (including queue position), retrieve results (explicit wait-based), and cancel background sessions (atomic for queued tasks). Includes `subagent_wait` for non-polling workflows.
 - **Timeout Policy**: Per-call timeout overrides with global fallback and automated handling.
 - **Retry Reliability**: Transparent `RetryProvider` wrapping for transient LLM failures.
 
@@ -154,13 +154,18 @@ subagent_system.install_subagent_control_tools(world, entity_id)
 
 ### Registration
 
-Register the `SubagentSystem` during world setup:
+Register the `SubagentSystem` and `SubagentWaitSystem` during world setup:
 
 ```python
 from ecs_agent.systems.subagent import SubagentSystem
+from ecs_agent.systems.subagent_wait import SubagentWaitSystem
 
-# Register system (priority -1 recommended to run before ReasoningSystem)
+# Register SubagentSystem (priority -1 recommended to run before ReasoningSystem)
 world.register_system(SubagentSystem(priority=-1), priority=-1)
+
+# Register SubagentWaitSystem (priority -5 REQUIRED to run before ReasoningSystem)
+# This system handles the subagent_wait tool and notification delivery.
+world.register_system(SubagentWaitSystem(priority=-5), priority=-5)
 ```
 
 
@@ -182,6 +187,7 @@ from ecs_agent.components import (
     SubagentRegistryComponent,
 )
 from ecs_agent.systems.subagent import SubagentSystem
+from ecs_agent.systems.subagent_wait import SubagentWaitSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import Message, SubagentConfig
@@ -226,7 +232,8 @@ world.add_component(
      ),
 )
 
-# Register systems (SubagentSystem BEFORE ReasoningSystem)
+# Register systems (SubagentWaitSystem and SubagentSystem BEFORE ReasoningSystem)
+world.register_system(SubagentWaitSystem(priority=-5), priority=-5)
 world.register_system(SubagentSystem(priority=-1), priority=-1)
 world.register_system(ReasoningSystem(priority=0), priority=0)
 world.register_system(ToolExecutionSystem(priority=5), priority=5)
@@ -266,8 +273,86 @@ The `subagent` tool enables parent agents to delegate subtasks with support for 
 When running in `background: true` mode, use control tools to manage the session:
 
 1. **Check Status**: `subagent_status(session_id="session_123")` returns current lifecycle state (including `queue_position` if `queued`) and a summary table if `session_id` is omitted.
-2. **Retrieve Result**: `subagent_result(session_id="session_123", timeout=10.0)` polls durable metadata and returns the result once the session is terminal. It does not require a live task handle.
+2. **Retrieve Result**: `subagent_result(session_id="session_123", read_method="full", timeout=10.0)` polls durable metadata and returns the result once the session is terminal. It does not require a live task handle. Supports `read_method="summary"` for cached summary retrieval.
 3. **Cancel**: `subagent_cancel(session_id="session_123")` terminates the session. For `queued` sessions, this is an atomic removal from the scheduler.
+
+## Non-Polling Background Workflow
+
+The recommended way to handle background subagents is using the explicit wait-notification model. This avoids polling and allows the parent agent to sleep until results are ready.
+
+### `subagent_wait` Tool
+
+The `subagent_wait` tool puts the parent agent into a future-based wait state until one or more background sessions complete.
+
+```json
+{
+  "name": "subagent_wait",
+  "arguments": {
+    "session_ids": ["session-a", "session-b"],
+    "timeout": 60.0
+  }
+}
+```
+
+- **`session_ids`**: Optional list of session IDs to wait for. If `null` or omitted, waits for ANY background session to complete.
+- **`timeout`**: Optional maximum seconds to wait.
+- **Behavior**: The parent agent is woken up automatically when a matching session reaches a terminal state.
+
+### Durable Notification Semantics
+
+When a background session completes, the system enqueues a durable unread notification for the parent:
+- **Wake-worthy states**: `succeeded`, `failed`, and `timed_out` sessions generate notifications.
+- **Non-wake-worthy states**: `cancelled` sessions do NOT generate notifications.
+- **Persistence**: Notifications survive world save/load (restore-safe).
+
+### Wake Notification Delivery
+
+When the parent agent is woken by `SubagentWaitSystem`, it receives ONE compact `system` message per wake cycle, even if multiple sessions completed (batched delivery).
+
+**Example Notification:**
+> Background subagent updates:
+> - session-abc succeeded. Call subagent_result(session_id="session-abc") for the full result or subagent_result(session_id="session-abc", read_method="summary") for the cached summary.
+
+Delivered notifications are marked as read and are not re-delivered after a world restore.
+
+### `subagent_result` with Summary Reads
+
+The `subagent_result` tool supports a `read_method` parameter to optimize context usage:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `read_method` | `"full"` \| `"summary"` | Default is `"full"`. `"summary"` returns the cached summary if available. |
+
+- **`read_method="full"`**: Returns the complete result (backward-compatible).
+- **`read_method="summary"`**: Returns the cached summary inline. If no summary is available (e.g., the subagent didn't emit a summary envelope), it returns an error payload.
+
+### Summary Envelope Format
+
+Background subagents can emit a specific XML-like envelope to provide a cacheable summary:
+
+```xml
+<subagent_background_result>
+<summary>Brief summary of the work performed.</summary>
+<full_result>The complete, detailed output.</full_result>
+</subagent_background_result>
+```
+
+If this envelope is present in the subagent's final message, the `summary` content is cached and made available via `read_method="summary"`.
+
+### Recommended Parent Flow
+
+```python
+# 1. Launch background subagents
+subagent(category="researcher", prompt="...", background=true) # returns "session-a"
+
+# 2. Enter explicit wait
+subagent_wait()
+
+# 3. Receive system notification when session-a completes
+
+# 4. Read result (using summary for efficiency)
+subagent_result(session_id="session-a", read_method="summary")
+```
 
 #### Result Payload Fields
 
@@ -279,9 +364,10 @@ The `subagent_result` tool returns a JSON payload with the following fields. **I
 | `session_id` | `str` | The unique session identifier for this delegation. |
 | `category` | `str` | The subagent category/name used for this delegation. |
 | `lifecycle_status` | `str` | Current state machine status: `"queued"`, `"running"`, `"succeeded"`, `"failed"`, `"timed_out"`, or `"cancelled"`. |
+| `read_method` | `"full"` \| `"summary"` | The method used to read the result. Default is `"full"`. |
 | `artifact_id` | `str` or `null` | Durable artifact identifier (e.g., `subagent_<uuid24>`) for persisted results. |
 | `record_path` | `str` or `null` | Canonical record location (e.g., `scratchbook/records/subagent/subagent_<uuid24>`). |
-| `inline_content` | `str` or `null` | Full result text if result size ≤ 8192 bytes (UTF-8). For large results persisted to an artifact, a hint string: `"Result persisted to <path>. Read that file to access the full content."` If no artifact registry is configured and result is large, `null`. |
+| `inline_content` | `str` or `null` | Full result text (if `read_method="full"` and size ≤ 8192 bytes) or cached summary (if `read_method="summary"`). |
 | `error` | `str` or `null` | Error message if execution failed (status is `"error"`), otherwise `null`. |
 | `queue_position` | `int` (optional) | Queue position (0-indexed) only present when `lifecycle_status` is `"queued"`. |
 

@@ -449,56 +449,62 @@ class TestSubagentDelegationDualMode:
                         with patch("sys.stdout", stdout):
                             await module.main()
 
-        assert fake_ctor.call_count == 5
-        openai_ctor.assert_not_called()
+                assert fake_ctor.call_count == 5
+                openai_ctor.assert_not_called()
 
-        output = stdout.getvalue()
-        world, parent_id = module._build_world(
-            parent_provider=FakeProvider(responses=module._fake_parent_responses()),
-            registry=module._build_providers("", DEFAULT_BASE_URL, DEFAULT_MODEL)[1],
-            model="fake-parent",
-        )
-        world.apply_pending_system_operations()
-        system_names = [
-            entry.system.__class__.__name__
-            for entry in world._systems._systems  # type: ignore[attr-defined]
-        ]
-        wait_priorities = [
-            entry.priority
-            for entry in world._systems._systems  # type: ignore[attr-defined]
-            if isinstance(entry.system, SubagentWaitSystem)
-        ]
+                output = stdout.getvalue()
+                world, parent_id = module._build_world(
+                    parent_provider=FakeProvider(
+                        responses=module._fake_parent_responses()
+                    ),
+                    registry=module._build_providers(
+                        "", DEFAULT_BASE_URL, DEFAULT_MODEL
+                    )[1],
+                    model="fake-parent",
+                )
+                world.apply_pending_system_operations()
+                system_names = [
+                    entry.system.__class__.__name__
+                    for entry in world._systems._systems  # type: ignore[attr-defined]
+                ]
+                wait_priorities = [
+                    entry.priority
+                    for entry in world._systems._systems  # type: ignore[attr-defined]
+                    if isinstance(entry.system, SubagentWaitSystem)
+                ]
 
-        assert parent_id >= 0
-        assert "SubagentWaitSystem" in system_names
-        assert wait_priorities == [-5]
-        assert "TOOL CALL HISTORY" in output
-        assert "[Action] subagent" in output
-        assert "[Action] subagent_wait" in output
-        assert (
-            "[Action] subagent_result({'session_id': 'session-slow-worker', 'read_method': 'summary'})"
-            in output
-        )
-        assert (
-            "[Action] subagent_result({'session_id': 'session-queued-worker', 'read_method': 'full'})"
-            in output
-        )
-        assert "[System] Background subagent updates:" in output
-        assert output.index("[System] Background subagent updates:") < output.index(
-            "[Action] subagent_result({'session_id': 'session-slow-worker', 'read_method': 'summary'})"
-        )
-        assert "[Result]" in output
-        assert "Synchronous subagent run" in output
-        assert "Background queue lifecycle" in output
-        assert "Streamed background subagent" in output
-        assert "sync" in output.lower()
-        assert "background" in output.lower()
-        assert "stream" in output.lower()
-        assert "queued" in output
-        assert "running" in output
-        assert "succeeded" in output
-        assert "Working" not in output
-        assert "[Action] subagent_status" not in output
+                assert parent_id >= 0
+                assert "SubagentWaitSystem" in system_names
+                assert wait_priorities == [-5]
+                assert "TOOL CALL HISTORY" in output
+                assert "[Action] subagent" in output
+                assert "[Action] subagent_wait" in output
+                assert (
+                    "[Action] subagent_result({'session_id': 'session-slow-worker', 'read_method': 'summary'})"
+                    in output
+                )
+                assert (
+                    "[Action] subagent_result({'session_id': 'session-queued-worker', 'read_method': 'full'})"
+                    in output
+                )
+                assert "[System] Background subagent updates:" in output
+                assert output.index(
+                    "[System] Background subagent updates:"
+                ) < output.index(
+                    "[Action] subagent_result({'session_id': 'session-slow-worker', 'read_method': 'summary'})"
+                )
+                assert "[Result]" in output
+                assert "Synchronous subagent run" in output
+                assert "Background queue lifecycle" in output
+                assert "Streamed background subagent" in output
+                assert "sync" in output.lower()
+                assert "background" in output.lower()
+                assert "stream" in output.lower()
+                assert "queued" in output
+                assert "running" in output
+                assert "succeeded" in output
+                assert "Working" not in output
+                assert "[Action] subagent_status" not in output
 
     async def test_real_mode(self) -> None:
         import ecs_agent.systems.subagent_runtime as runtime_module

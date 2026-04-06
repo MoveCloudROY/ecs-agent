@@ -93,7 +93,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 ### Multi-Agent Orchestration
 - **Subagent Delegation** — Spawn child agents for subtasks with skill and permission inheritance. Control the `queued/running/succeeded/failed` lifecycle via a process-global FIFO scheduler.
 - **MessageBus** — Parent-child and sibling messaging via pub/sub or request-response patterns.
-- **Unified API** — Control lifecycle with `subagent`, `subagent_status`, `subagent_result`, and `subagent_cancel` tools.
+- **Unified API** — Control lifecycle with `subagent`, `subagent_status`, `subagent_result`, `subagent_wait`, and `subagent_cancel` tools. Supports explicit wait/callback model for background sessions.
 
 ### Advanced Reasoning & Tree Search
 - **Tree Conversations** — Branch reasoning paths, navigate multiple strategies, and linearize history for LLM compatibility.
@@ -458,7 +458,7 @@ Four live scenarios are provided:
 - **Responses vision** — add `LLM_MODEL=qwen3-vl-flash` and `IMAGE_URL=<public-image-url>`
 - **Anthropic-compatible text** — `LLM_MODEL=kimi-k2.5`, `LLM_BASE_URL=https://dashscope.aliyuncs.com/apps/anthropic`
 - **Task Executor** — `tests/live/test_task_executor_live.py` exercises the `TaskExecutor` dispatch path end-to-end.
-- **Subagent Delegation** — `tests/live/test_subagent_live.py` covers background queuing, FIFO scheduling, and streaming telemetry.
+- **Subagent Delegation** — `tests/live/test_subagent_live.py` covers background queuing, FIFO scheduling, and streaming telemetry. Includes `test_aliyun_completions_background_completion_notification_flow` and `test_aliyun_responses_background_completion_notification_flow` for explicit wait/notification flow.
 
 For the legacy integration test:
 

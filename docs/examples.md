@@ -456,9 +456,9 @@ Landmarks:
 
 ### Sub-Agent Delegation
 - **File:** `examples/subagent_delegation.py`
-- **What it demonstrates:** Parent agent delegating tasks via `subagent` tool with SubagentSystem managing child execution, state inheritance policy, and skill inheritance. Demonstrates the `queued/running/succeeded/failed` lifecycle and background session control.
+- **What it demonstrates:** Parent agent delegating tasks via `subagent` tool with SubagentSystem managing child execution, state inheritance policy, and skill inheritance. Demonstrates the `queued/running/succeeded/failed` lifecycle, background session control, and the explicit `subagent_wait` notification flow.
 - **Run:** `uv run python examples/subagent_delegation.py`
-- **Pattern:** `SubagentRegistryComponent` + `SubagentSystem` + `InheritancePolicy`.
+- **Pattern:** `SubagentRegistryComponent` + `SubagentSystem` + `SubagentWaitSystem` + `InheritancePolicy`.
 
 #### Key Code
 ```python
@@ -471,6 +471,9 @@ researcher = SubagentConfig(
 
 # SubagentSystem auto-registers the subagent tool for entities with registry
 world.register_system(SubagentSystem(priority=-1), priority=-1)
+
+# SubagentWaitSystem handles the subagent_wait tool and notification delivery
+world.register_system(SubagentWaitSystem(priority=-5), priority=-5)
 ```
 
 > **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
