@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import asyncio
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -46,6 +47,7 @@ from ecs_agent.types import (
 )
 from ecs_agent.systems.message_bus import MessageBusSystem
 from ecs_agent.systems.subagent import SubagentSystem
+from ecs_agent.systems.subagent_wait import SubagentWaitSystem
 
 
 class ReasoningAndContentStreamingFakeProvider(FakeProvider):
@@ -755,6 +757,7 @@ async def test_subagent_background_parent_event_bus_bridge_cleans_up_after_failu
 
 from ecs_agent.components import (
     ConversationComponent,
+    ErrorComponent,
     LLMComponent,
     OwnerComponent,
     PermissionComponent,
@@ -2689,6 +2692,158 @@ async def test_sync_subagent_call_does_not_enqueue_parent_notification() -> None
     assert result == "done"
     queue = world.get_component(parent_entity, SubagentNotificationQueueComponent)
     assert queue is None
+
+
+async def test_subagent_wait_returns_ack_and_attaches_wait_component() -> None:
+    world = World()
+    parent_entity = world.create_entity()
+    system = SubagentSystem()
+
+    world.add_component(parent_entity, SubagentSessionTableComponent())
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system.install_subagent_control_tools(world, parent_entity)
+    tools = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tools is not None
+
+    result = await tools.handlers["subagent_wait"](
+        session_ids=["session-a", "session-b"],
+        timeout=12.5,
+    )
+
+    assert result == (
+        "Waiting for background subagents. Will be notified when they complete."
+    )
+    wait_component = world.get_component(parent_entity, SubagentWaitComponent)
+    assert wait_component is not None
+    assert wait_component.session_ids == ["session-a", "session-b"]
+    assert wait_component.timeout == 12.5
+    assert wait_component.future is None
+    assert wait_component.started_at is not None
+
+
+async def test_waiting_parent_resumes_without_polling_when_matching_unread_notification_exists() -> (
+    None
+):
+    world = World()
+    parent_entity = world.create_entity()
+
+    world.add_component(
+        parent_entity,
+        SubagentNotificationQueueComponent(
+            notifications=[
+                SubagentNotificationRecord(
+                    notification_id="session-1:succeeded",
+                    session_id="session-1",
+                    parent_entity_id=parent_entity,
+                    terminal_status="succeeded",
+                    summary="done",
+                    error=None,
+                    created_at="2026-04-06T12:00:00Z",
+                    delivered_at=None,
+                )
+            ]
+        ),
+    )
+    world.add_component(
+        parent_entity,
+        SubagentWaitComponent(session_ids=["session-1"], timeout=0.5),
+    )
+
+    system = SubagentWaitSystem()
+    await system.process(world)
+
+    assert world.get_component(parent_entity, SubagentWaitComponent) is None
+    assert world.get_component(parent_entity, TerminalComponent) is None
+    assert world.get_component(parent_entity, ErrorComponent) is None
+
+
+async def test_subagent_wait_timeout_attaches_error_and_terminal_components() -> None:
+    world = World()
+    parent_entity = world.create_entity()
+    world.add_component(parent_entity, SubagentNotificationQueueComponent())
+    world.add_component(
+        parent_entity,
+        SubagentWaitComponent(
+            timeout=0.01,
+            started_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        ),
+    )
+
+    system = SubagentWaitSystem()
+    await system.process(world)
+
+    error = world.get_component(parent_entity, ErrorComponent)
+    terminal = world.get_component(parent_entity, TerminalComponent)
+    wait_component = world.get_component(parent_entity, SubagentWaitComponent)
+
+    assert wait_component is not None
+    assert error is not None
+    assert error.system_name == "SubagentWaitSystem"
+    assert "timeout" in error.error.lower()
+    assert terminal is not None
+    assert terminal.reason == "subagent_wait_timeout"
+
+
+async def test_waiting_parent_future_is_resolved_when_background_completion_notification_arrives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_global_scheduler(monkeypatch)
+
+    world = World()
+    parent_entity = world.create_entity()
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
+    config = SubagentConfig(name="notify-waiter", provider=provider, model="fake")
+
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"notify-waiter": config}),
+    )
+    world.add_component(parent_entity, SubagentSessionTableComponent())
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(
+        parent_entity,
+        SubagentWaitComponent(session_ids=None, timeout=1.0),
+    )
+
+    wait_system = SubagentWaitSystem()
+    wait_task = asyncio.create_task(wait_system.process(world))
+    await asyncio.sleep(0)
+
+    wait_component = world.get_component(parent_entity, SubagentWaitComponent)
+    assert wait_component is not None
+    assert wait_component.future is not None
+    assert wait_component.future.done() is False
+
+    system = SubagentSystem()
+    system.install_subagent_tool(world, parent_entity)
+    tools = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tools is not None
+
+    payload = json.loads(
+        await tools.handlers["subagent"](
+            category="notify-waiter",
+            prompt="finish successfully",
+            load_skills=[],
+            background=True,
+            timeout=None,
+        )
+    )
+    session_id = payload["session_id"]
+
+    task = await system._runtime_manager.get_task(session_id)
+    assert task is not None
+    await task
+    await wait_task
+
+    queue = world.get_component(parent_entity, SubagentNotificationQueueComponent)
+    assert queue is not None
+    assert [item.notification_id for item in queue.notifications] == [
+        f"{session_id}:succeeded"
+    ]
+    assert world.get_component(parent_entity, SubagentWaitComponent) is None
 
 
 async def test_subagent_retry_default_wrap() -> None:

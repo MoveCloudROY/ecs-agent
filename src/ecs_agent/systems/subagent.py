@@ -19,6 +19,7 @@ from ecs_agent.components import (
     StreamingComponent,
     SubagentNotificationQueueComponent,
     SubagentRegistryComponent,
+    SubagentWaitComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.components.definitions import (
@@ -36,6 +37,7 @@ from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
+from ecs_agent.systems.subagent_wait import notification_matches_wait
 from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
 from ecs_agent.scratchbook.artifact_registry import ArtifactKind, ArtifactRegistry
 from ecs_agent.systems.subagent_runtime import SubagentRuntimeManager
@@ -257,18 +259,29 @@ class SubagentSystem:
         ):
             return
 
-        queue.notifications.append(
-            SubagentNotificationRecord(
-                notification_id=notification_id,
-                session_id=metadata.session_id,
-                parent_entity_id=metadata.parent_entity_id,
-                terminal_status=terminal_status,
-                summary=self._notification_summary(metadata),
-                error=metadata.error,
-                created_at=datetime.now(tz=timezone.utc).isoformat(),
-                delivered_at=None,
-            )
+        notification = SubagentNotificationRecord(
+            notification_id=notification_id,
+            session_id=metadata.session_id,
+            parent_entity_id=metadata.parent_entity_id,
+            terminal_status=terminal_status,
+            summary=self._notification_summary(metadata),
+            error=metadata.error,
+            created_at=datetime.now(tz=timezone.utc).isoformat(),
+            delivered_at=None,
         )
+        queue.notifications.append(notification)
+
+        wait_component = world.get_component(
+            metadata.parent_entity_id, SubagentWaitComponent
+        )
+        if wait_component is None:
+            return
+
+        future = wait_component.future
+        if not notification_matches_wait(notification, wait_component):
+            return
+        if isinstance(future, asyncio.Future) and not future.done():
+            future.set_result(None)
 
     def _config_for_session(
         self,
@@ -636,7 +649,6 @@ class SubagentSystem:
         world: World,
         entity_id: EntityId,
     ) -> None:
-        """Install all three subagent control tools: status, result, cancel."""
         from ecs_agent.components.definitions import SubagentSessionTableComponent
 
         table = world.get_component(entity_id, SubagentSessionTableComponent)
@@ -682,6 +694,38 @@ class SubagentSystem:
             },
         )
         tool_registry.handlers["subagent_status"] = self._make_status_handler(
+            world, entity_id
+        )
+
+        tool_registry.tools["subagent_wait"] = ToolSchema(
+            name="subagent_wait",
+            description=(
+                "Explicitly wait for background subagent completion notifications. Use this "
+                "after launching all useful background subagents so the parent can stop "
+                "polling and resume when a matching session finishes.\n\n"
+                "INTERFACE:\n"
+                "  session_ids (optional) — restrict wakeup to specific session IDs.\n"
+                "  timeout     (optional) — max seconds to wait; null = wait indefinitely.\n\n"
+                "RETURNS: acknowledgment string immediately; waiting happens in "
+                "SubagentWaitSystem."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "session_ids": {
+                        "type": ["array", "null"],
+                        "items": {"type": "string"},
+                        "description": "Optional session IDs to wait for. Omit or null to wake on any matching background completion notification.",
+                    },
+                    "timeout": {
+                        "type": ["number", "null"],
+                        "description": "Max seconds to wait before failing with subagent_wait_timeout. null = wait indefinitely.",
+                    },
+                },
+                "required": [],
+            },
+        )
+        tool_registry.handlers["subagent_wait"] = self._make_wait_handler(
             world, entity_id
         )
 
@@ -813,6 +857,33 @@ class SubagentSystem:
             )
 
         return status_handler
+
+    def _make_wait_handler(self, world: World, parent_entity_id: EntityId) -> Any:
+        async def wait_handler(
+            session_ids: list[str] | None = None,
+            timeout: float | str | None = None,
+        ) -> str:
+            if isinstance(timeout, str):
+                timeout = float(timeout)
+
+            wait_component = SubagentWaitComponent(
+                session_ids=session_ids,
+                timeout=timeout,
+                future=None,
+                started_at=self._utc_now_iso(),
+            )
+            world.add_component(parent_entity_id, wait_component)
+            logger.info(
+                "subagent_wait_requested",
+                parent_entity=parent_entity_id,
+                session_ids=session_ids,
+                timeout=timeout,
+            )
+            return (
+                "Waiting for background subagents. Will be notified when they complete."
+            )
+
+        return wait_handler
 
     def _make_result_handler(self, world: World, parent_entity_id: EntityId) -> Any:
         """Create handler for subagent_result tool."""
