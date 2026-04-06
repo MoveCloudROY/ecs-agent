@@ -39,7 +39,9 @@ class SubagentWaitSystem:
             assert isinstance(wait_component, SubagentWaitComponent)
 
             try:
-                if self._has_matching_notification(world, entity_id, wait_component):
+                if self._get_matching_unread_notifications(
+                    world, entity_id, wait_component
+                ):
                     self._resolve_wait(world, entity_id, wait_component)
                     continue
 
@@ -85,18 +87,29 @@ class SubagentWaitSystem:
 
         self._resolve_wait(world, entity_id, component)
 
+    def _get_matching_unread_notifications(
+        self,
+        world: World,
+        entity_id: EntityId,
+        component: SubagentWaitComponent,
+    ) -> list[SubagentNotificationRecord]:
+        queue = world.get_component(entity_id, SubagentNotificationQueueComponent)
+        if queue is None:
+            return []
+        return [
+            notification
+            for notification in queue.notifications
+            if notification_matches_wait(notification, component)
+        ]
+
     def _has_matching_notification(
         self,
         world: World,
         entity_id: EntityId,
         component: SubagentWaitComponent,
     ) -> bool:
-        queue = world.get_component(entity_id, SubagentNotificationQueueComponent)
-        if queue is None:
-            return False
-        return any(
-            notification_matches_wait(notification, component)
-            for notification in queue.notifications
+        return bool(
+            self._get_matching_unread_notifications(world, entity_id, component)
         )
 
     def _resolve_wait(

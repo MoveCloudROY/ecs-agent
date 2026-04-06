@@ -564,6 +564,65 @@ def test_serialization_subagent_wait_component_excludes_future_runtime_state() -
     loop.close()
 
 
+def test_serialization_roundtrip_preserves_notification_delivery_state_and_wait_future_reset() -> (
+    None
+):
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content="resume")]),
+    )
+    world.add_component(
+        entity,
+        SubagentNotificationQueueComponent(
+            notifications=[
+                SubagentNotificationRecord(
+                    notification_id="session-unread:succeeded",
+                    session_id="session-unread",
+                    parent_entity_id=entity,
+                    terminal_status="succeeded",
+                    summary="keep unread",
+                    error=None,
+                    created_at="2026-04-06T12:00:00Z",
+                    delivered_at=None,
+                ),
+                SubagentNotificationRecord(
+                    notification_id="session-read:failed",
+                    session_id="session-read",
+                    parent_entity_id=entity,
+                    terminal_status="failed",
+                    summary=None,
+                    error="already read",
+                    created_at="2026-04-06T12:01:00Z",
+                    delivered_at="2026-04-06T12:02:00Z",
+                ),
+            ]
+        ),
+    )
+    world.add_component(
+        entity,
+        SubagentWaitComponent(
+            session_ids=["session-unread"],
+            timeout=30.0,
+            started_at="2026-04-06T12:00:00Z",
+        ),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+
+    restored_queue = restored.get_component(entity, SubagentNotificationQueueComponent)
+    assert restored_queue is not None
+    assert restored_queue.notifications[0].delivered_at is None
+    assert restored_queue.notifications[1].delivered_at == "2026-04-06T12:02:00Z"
+
+    restored_wait = restored.get_component(entity, SubagentWaitComponent)
+    assert restored_wait is not None
+    assert restored_wait.session_ids == ["session-unread"]
+    assert restored_wait.future is None
+
+
 def test_serialization_roundtrip_with_sandbox_config() -> None:
     """Test that SandboxConfigComponent roundtrips correctly."""
     world = World()
