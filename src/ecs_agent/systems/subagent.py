@@ -75,6 +75,25 @@ _PUBLISH_COMPLETION_EVENT: ContextVar[bool] = ContextVar(
     "_PUBLISH_COMPLETION_EVENT",
     default=True,
 )
+_BACKGROUND_RESULT_ENVELOPE_ENABLED: ContextVar[bool] = ContextVar(
+    "_BACKGROUND_RESULT_ENVELOPE_ENABLED",
+    default=False,
+)
+
+_BACKGROUND_RESULT_WRAPPER_START = "<subagent_background_result>"
+_BACKGROUND_RESULT_WRAPPER_END = "</subagent_background_result>"
+_BACKGROUND_RESULT_SUMMARY_START = "<summary>"
+_BACKGROUND_RESULT_SUMMARY_END = "</summary>"
+_BACKGROUND_RESULT_FULL_START = "<full_result>"
+_BACKGROUND_RESULT_FULL_END = "</full_result>"
+_BACKGROUND_RESULT_INSTRUCTION = (
+    "\n\n## Background Result Format\n"
+    "This is a background subagent run. Your final assistant message must be exactly:\n"
+    "<subagent_background_result>\n"
+    "<summary>brief cached summary for the parent</summary>\n"
+    "<full_result>complete final result for the parent</full_result>\n"
+    "</subagent_background_result>"
+)
 
 
 def _build_child_prompt_template(user_prompt: str) -> str:
@@ -97,6 +116,10 @@ def _build_child_prompt_template(user_prompt: str) -> str:
     if "${_installed_skills}" not in user_prompt:
         suffix_parts.append("\n\n## Available Skills\n${_installed_skills}")
     return user_prompt + "".join(suffix_parts)
+
+
+def _build_background_child_prompt_template(user_prompt: str) -> str:
+    return _build_child_prompt_template(user_prompt) + _BACKGROUND_RESULT_INSTRUCTION
 
 
 class _InheritedSkill:
@@ -181,6 +204,47 @@ class SubagentSystem:
 
         return None
 
+    def _parse_background_result_envelope(
+        self,
+        result: str,
+    ) -> tuple[str, str] | None:
+        stripped = result.strip()
+        if not (
+            stripped.startswith(_BACKGROUND_RESULT_WRAPPER_START)
+            and stripped.endswith(_BACKGROUND_RESULT_WRAPPER_END)
+        ):
+            return None
+
+        body = stripped.removeprefix(_BACKGROUND_RESULT_WRAPPER_START).removesuffix(
+            _BACKGROUND_RESULT_WRAPPER_END
+        )
+        body = body.strip()
+
+        summary_start = body.find(_BACKGROUND_RESULT_SUMMARY_START)
+        summary_end = body.find(_BACKGROUND_RESULT_SUMMARY_END)
+        full_start = body.find(_BACKGROUND_RESULT_FULL_START)
+        full_end = body.find(_BACKGROUND_RESULT_FULL_END)
+
+        if min(summary_start, summary_end, full_start, full_end) < 0:
+            return None
+        if not (summary_start == 0 and summary_end > summary_start):
+            return None
+
+        summary_content_start = summary_start + len(_BACKGROUND_RESULT_SUMMARY_START)
+        summary = body[summary_content_start:summary_end]
+
+        full_section = body[summary_end + len(_BACKGROUND_RESULT_SUMMARY_END) :].strip()
+        if not (
+            full_section.startswith(_BACKGROUND_RESULT_FULL_START)
+            and full_section.endswith(_BACKGROUND_RESULT_FULL_END)
+        ):
+            return None
+
+        full_result = full_section.removeprefix(
+            _BACKGROUND_RESULT_FULL_START
+        ).removesuffix(_BACKGROUND_RESULT_FULL_END)
+        return (summary, full_result)
+
     def _session_payload(
         self,
         session: SubagentSessionRecord,
@@ -201,6 +265,22 @@ class SubagentSystem:
         if queue_position is not None:
             payload["queue_position"] = queue_position
 
+        return payload
+
+    def _summary_payload(
+        self,
+        session: SubagentSessionRecord,
+        *,
+        status: str,
+        queue_position: int | None = None,
+    ) -> dict[str, Any]:
+        payload = self._session_payload(
+            session,
+            status=status,
+            queue_position=queue_position,
+        )
+        payload["read_method"] = "summary"
+        payload["inline_content"] = session.result_summary
         return payload
 
     def _resolve_timeout(self, per_call_timeout: float | None) -> float | None:
@@ -397,12 +477,18 @@ class SubagentSystem:
 
             metadata.updated_at = self._utc_now_iso()
             if success:
+                parsed_result = self._parse_background_result_envelope(result)
+                if parsed_result is None:
+                    metadata.result_summary = None
+                    full_result = result
+                else:
+                    metadata.result_summary, full_result = parsed_result
                 metadata.status = "succeeded"
                 metadata.finished_at = metadata.updated_at
-                metadata.result_excerpt = result[:200]
-                if len(result.encode("utf-8")) <= 8192:
-                    metadata.artifact_inline_content = result
-                persisted = self._persist_subagent_result(result)
+                metadata.result_excerpt = full_result[:200]
+                if len(full_result.encode("utf-8")) <= 8192:
+                    metadata.artifact_inline_content = full_result
+                persisted = self._persist_subagent_result(full_result)
                 if persisted is not None:
                     artifact_id, record_path, inline_content = persisted
                     metadata.artifact_id = artifact_id
@@ -925,6 +1011,16 @@ class SubagentSystem:
                 )
 
             if session.status in ("failed", "timed_out", "cancelled"):
+                if read_method == "summary":
+                    if session.result_summary is None:
+                        return json.dumps(
+                            {
+                                "error": 'Summary not available for this session. Retry with read_method="full".',
+                                "read_method": "summary",
+                                "session_id": session_id,
+                            }
+                        )
+                    return json.dumps(self._summary_payload(session, status="terminal"))
                 return json.dumps(self._session_payload(session, status="terminal"))
 
             if session.status == "succeeded":
@@ -934,6 +1030,16 @@ class SubagentSystem:
                     session_id=session_id,
                     result_length=len(session.result_excerpt or ""),
                 )
+                if read_method == "summary":
+                    if session.result_summary is None:
+                        return json.dumps(
+                            {
+                                "error": 'Summary not available for this session. Retry with read_method="full".',
+                                "read_method": "summary",
+                                "session_id": session_id,
+                            }
+                        )
+                    return json.dumps(self._summary_payload(session, status="success"))
                 return json.dumps(self._session_payload(session, status="success"))
 
             logger.info(
@@ -962,6 +1068,18 @@ class SubagentSystem:
                             session_id=session_id,
                             lifecycle_status=session.status,
                         )
+                        if read_method == "summary":
+                            if session.result_summary is None:
+                                return json.dumps(
+                                    {
+                                        "error": 'Summary not available for this session. Retry with read_method="full".',
+                                        "read_method": "summary",
+                                        "session_id": session_id,
+                                    }
+                                )
+                            return json.dumps(
+                                self._summary_payload(session, status="success")
+                            )
                         return json.dumps(
                             self._session_payload(session, status="success")
                         )
@@ -973,6 +1091,18 @@ class SubagentSystem:
                             session_id=session_id,
                             lifecycle_status=session.status,
                         )
+                        if read_method == "summary":
+                            if session.result_summary is None:
+                                return json.dumps(
+                                    {
+                                        "error": 'Summary not available for this session. Retry with read_method="full".',
+                                        "read_method": "summary",
+                                        "session_id": session_id,
+                                    }
+                                )
+                            return json.dumps(
+                                self._summary_payload(session, status="terminal")
+                            )
                         return json.dumps(
                             self._session_payload(session, status="terminal")
                         )
@@ -1268,12 +1398,18 @@ class SubagentSystem:
             )
             world.add_component(child_entity_id, ChildStubComponent())
 
-            child_world, child_world_entity_id = self._assemble_child_world(
-                world,
-                parent_entity_id,
-                config,
-                parent_child_entity=child_entity_id,
+            background_result_token = _BACKGROUND_RESULT_ENVELOPE_ENABLED.set(
+                session_id is not None
             )
+            try:
+                child_world, child_world_entity_id = self._assemble_child_world(
+                    world,
+                    parent_entity_id,
+                    config,
+                    parent_child_entity=child_entity_id,
+                )
+            finally:
+                _BACKGROUND_RESULT_ENVELOPE_ENABLED.reset(background_result_token)
             bridge_cleanup: Any = None
             if stream and session_id is not None:
                 child_world_name = child_world.name or subagent_name
@@ -1599,6 +1735,7 @@ class SubagentSystem:
         child_world_name = f"{config.name}-{uuid.uuid4().hex[:8]}"
         child_world = World(name=child_world_name)
         child_world_entity_id = child_world.create_entity()
+        background_result_envelope = _BACKGROUND_RESULT_ENVELOPE_ENABLED.get()
         child_world.add_component(
             child_world_entity_id,
             LLMComponent(
@@ -1611,7 +1748,13 @@ class SubagentSystem:
             child_world_entity_id,
             SystemPromptConfigSpec(
                 template_source=PromptTemplateSource(
-                    inline=_build_child_prompt_template(effective_system_prompt or ""),
+                    inline=(
+                        _build_background_child_prompt_template(
+                            effective_system_prompt or ""
+                        )
+                        if background_result_envelope
+                        else _build_child_prompt_template(effective_system_prompt or "")
+                    ),
                 ),
             ),
         )
