@@ -2472,7 +2472,9 @@ async def test_completion_enqueues_parent_notification(
     assert notification.session_id == session_id
     assert notification.parent_entity_id == parent_entity
     assert notification.terminal_status == "succeeded"
-    assert notification.summary == "done"
+    assert (
+        notification.summary is None
+    )  # only set when using <subagent_background_result> envelope
     assert notification.error is None
     assert notification.delivered_at is None
     assert completed_events and completed_events[0].success is True
