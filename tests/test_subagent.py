@@ -10,6 +10,8 @@ from typing import Any
 import pytest
 
 from ecs_agent.components import (
+    ConversationComponent,
+    LLMComponent,
     MessageBusConfigComponent,
     StreamingComponent,
     SubagentNotificationQueueComponent,
@@ -46,6 +48,7 @@ from ecs_agent.types import (
     validate_subagent_lifecycle_transition,
 )
 from ecs_agent.systems.message_bus import MessageBusSystem
+from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.systems.subagent_wait import SubagentWaitSystem
 
@@ -67,6 +70,28 @@ class BrokenStreamingFakeProvider(FakeProvider):
         _ = result
         yield StreamDelta(reasoning_content="thinking")
         raise RuntimeError("stream exploded")
+
+
+class RecordingFakeProvider(FakeProvider):
+    def __init__(self, responses: list[CompletionResult]) -> None:
+        super().__init__(responses=responses)
+        self.calls: list[list[Message]] = []
+
+    async def complete(
+        self,
+        messages: list[Message],
+        tools: list[object] | None = None,
+        stream: bool = False,
+        response_format: dict[str, Any] | None = None,
+    ) -> CompletionResult | AsyncIterator[StreamDelta]:
+        _ = tools
+        self.calls.append(list(messages))
+        return await super().complete(
+            messages,
+            tools=None,
+            stream=stream,
+            response_format=response_format,
+        )
 
 
 def test_subagent_config_dataclass() -> None:
@@ -2844,6 +2869,240 @@ async def test_waiting_parent_future_is_resolved_when_background_completion_noti
         f"{session_id}:succeeded"
     ]
     assert world.get_component(parent_entity, SubagentWaitComponent) is None
+
+
+async def test_completion_notification_is_injected_before_next_reasoning_turn() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    provider = RecordingFakeProvider(
+        responses=[
+            CompletionResult(
+                message=Message(role="assistant", content="I resumed work.")
+            )
+        ]
+    )
+
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Continue.")]),
+    )
+    world.add_component(
+        entity_id,
+        SubagentNotificationQueueComponent(
+            notifications=[
+                SubagentNotificationRecord(
+                    notification_id="session-abc:succeeded",
+                    session_id="session-abc",
+                    parent_entity_id=entity_id,
+                    terminal_status="succeeded",
+                    summary=None,
+                    error=None,
+                    created_at="2026-04-06T12:00:00Z",
+                    delivered_at=None,
+                )
+            ]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        SubagentWaitComponent(session_ids=["session-abc"], timeout=1.0),
+    )
+
+    wait_system = SubagentWaitSystem()
+    await wait_system.process(world)
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages[-1] == Message(
+        role="system",
+        content=(
+            "Background subagent updates:\n"
+            '- session-abc succeeded. Call subagent_result(session_id="session-abc") '
+            "for the full result or "
+            'subagent_result(session_id="session-abc", read_method="summary") '
+            "for the cached summary."
+        ),
+    )
+    queue = world.get_component(entity_id, SubagentNotificationQueueComponent)
+    assert queue is not None
+    assert queue.notifications[0].delivered_at is not None
+
+    reasoning_system = ReasoningSystem(priority=0)
+    await reasoning_system.process(world)
+
+    assert len(provider.calls) == 1
+    assert provider.calls[0][-1] == Message(
+        role="system",
+        content=(
+            "Background subagent updates:\n"
+            '- session-abc succeeded. Call subagent_result(session_id="session-abc") '
+            "for the full result or "
+            'subagent_result(session_id="session-abc", read_method="summary") '
+            "for the cached summary."
+        ),
+    )
+
+
+def test_unread_notifications_are_batched() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Continue.")]),
+    )
+    world.add_component(
+        entity_id,
+        SubagentNotificationQueueComponent(
+            notifications=[
+                SubagentNotificationRecord(
+                    notification_id="session-abc:succeeded",
+                    session_id="session-abc",
+                    parent_entity_id=entity_id,
+                    terminal_status="succeeded",
+                    summary="cached summary",
+                    error=None,
+                    created_at="2026-04-06T12:00:00Z",
+                    delivered_at=None,
+                ),
+                SubagentNotificationRecord(
+                    notification_id="session-def:succeeded",
+                    session_id="session-def",
+                    parent_entity_id=entity_id,
+                    terminal_status="succeeded",
+                    summary=None,
+                    error=None,
+                    created_at="2026-04-06T12:01:00Z",
+                    delivered_at=None,
+                ),
+                SubagentNotificationRecord(
+                    notification_id="session-old:succeeded",
+                    session_id="session-old",
+                    parent_entity_id=entity_id,
+                    terminal_status="succeeded",
+                    summary="already delivered",
+                    error=None,
+                    created_at="2026-04-06T11:59:00Z",
+                    delivered_at="2026-04-06T12:02:00Z",
+                ),
+            ]
+        ),
+    )
+    world.add_component(entity_id, SubagentWaitComponent(timeout=1.0))
+
+    system = SubagentWaitSystem()
+    system._resolve_wait(
+        world,
+        entity_id,
+        world.get_component(entity_id, SubagentWaitComponent),
+    )
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages == [
+        Message(role="user", content="Continue."),
+        Message(
+            role="system",
+            content=(
+                "Background subagent updates:\n"
+                '- session-abc succeeded. Call subagent_result(session_id="session-abc") '
+                "for the full result or "
+                'subagent_result(session_id="session-abc", read_method="summary") '
+                "for the cached summary.\n"
+                '- session-def succeeded. Call subagent_result(session_id="session-def") '
+                "for the full result or "
+                'subagent_result(session_id="session-def", read_method="summary") '
+                "for the cached summary."
+            ),
+        ),
+    ]
+
+    queue = world.get_component(entity_id, SubagentNotificationQueueComponent)
+    assert queue is not None
+    assert queue.notifications[0].delivered_at is not None
+    assert queue.notifications[1].delivered_at is not None
+    assert queue.notifications[2].delivered_at == "2026-04-06T12:02:00Z"
+
+    world.add_component(entity_id, SubagentWaitComponent(timeout=1.0))
+    system._resolve_wait(
+        world,
+        entity_id,
+        world.get_component(entity_id, SubagentWaitComponent),
+    )
+    assert conversation.messages == [
+        Message(role="user", content="Continue."),
+        Message(
+            role="system",
+            content=(
+                "Background subagent updates:\n"
+                '- session-abc succeeded. Call subagent_result(session_id="session-abc") '
+                "for the full result or "
+                'subagent_result(session_id="session-abc", read_method="summary") '
+                "for the cached summary.\n"
+                '- session-def succeeded. Call subagent_result(session_id="session-def") '
+                "for the full result or "
+                'subagent_result(session_id="session-def", read_method="summary") '
+                "for the cached summary."
+            ),
+        ),
+    ]
+
+
+def test_failure_notification_includes_error() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Continue.")]),
+    )
+    world.add_component(
+        entity_id,
+        SubagentNotificationQueueComponent(
+            notifications=[
+                SubagentNotificationRecord(
+                    notification_id="session-xyz:failed",
+                    session_id="session-xyz",
+                    parent_entity_id=entity_id,
+                    terminal_status="failed",
+                    summary=None,
+                    error="Connection refused",
+                    created_at="2026-04-06T12:00:00Z",
+                    delivered_at=None,
+                ),
+                SubagentNotificationRecord(
+                    notification_id="session-def:timed_out",
+                    session_id="session-def",
+                    parent_entity_id=entity_id,
+                    terminal_status="timed_out",
+                    summary=None,
+                    error="Deadline exceeded",
+                    created_at="2026-04-06T12:01:00Z",
+                    delivered_at=None,
+                ),
+            ]
+        ),
+    )
+    world.add_component(entity_id, SubagentWaitComponent(timeout=1.0))
+
+    system = SubagentWaitSystem()
+    system._resolve_wait(
+        world,
+        entity_id,
+        world.get_component(entity_id, SubagentWaitComponent),
+    )
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages[-1] == Message(
+        role="system",
+        content=(
+            "Background subagent updates:\n"
+            "- session-xyz failed: Connection refused. Call "
+            'subagent_result(session_id="session-xyz") for details.\n'
+            "- session-def timed_out: Deadline exceeded. Call "
+            'subagent_result(session_id="session-def") for details.'
+        ),
+    )
 
 
 async def test_subagent_retry_default_wrap() -> None:
