@@ -296,9 +296,7 @@ class SubagentSystem:
         self,
         metadata: SubagentSessionRecord,
     ) -> str | None:
-        if metadata.result_summary is not None:
-            return metadata.result_summary
-        return metadata.result_excerpt
+        return metadata.result_summary
 
     def _get_or_create_notification_queue(
         self,
@@ -854,7 +852,7 @@ class SubagentSystem:
                     },
                     "read_method": {
                         "type": ["string", "null"],
-                        "enum": ["full", "summary", None],
+                        "enum": ["full", "summary"],
                         "description": (
                             "How to read the result. "
                             "'full' (default) returns the complete subagent output. "
