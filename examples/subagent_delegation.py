@@ -36,6 +36,7 @@ from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.subagent import SubagentSystem
+from ecs_agent.systems.subagent_wait import SubagentWaitSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import (
     CompletionResult,
@@ -57,6 +58,19 @@ DEMO_SESSION_IDS = (
     "session-stream-worker",
 )
 
+SLOW_BACKGROUND_RESULT = (
+    "<subagent_background_result>\n"
+    "<summary>Slow background summary for the parent.</summary>\n"
+    "<full_result>Slow background answer finished after the queued job waited its turn.</full_result>\n"
+    "</subagent_background_result>"
+)
+QUEUED_BACKGROUND_RESULT = (
+    "<subagent_background_result>\n"
+    "<summary>Queued background summary for the parent.</summary>\n"
+    "<full_result>Queued background answer completed once the slow session released the slot.</full_result>\n"
+    "</subagent_background_result>"
+)
+
 SYNC_PROMPT = "Give one sentence on where early quantum value appears."
 SLOW_PROMPT = "Produce the slow background answer."
 QUEUED_PROMPT = "Produce the queued background answer."
@@ -66,10 +80,14 @@ PARENT_SYSTEM_PROMPT = (
     "You are a delegation manager demonstrating the subagent tools. "
     "You must complete the task by calling tools, not by inventing results. "
     "Follow the requested order exactly. When a background subagent returns a "
-    "session_id, use that session_id in a later subagent_result call. Only "
-    "produce a final assistant answer after every required tool call succeeds. "
-    "Do not call subagent_status or subagent_cancel in this demo. When you pass "
-    "timeout to subagent_result, keep it numeric rather than a quoted string."
+    "session_id, launch all required background work first, then call "
+    "subagent_wait() exactly once for the slow and queued sessions. After the "
+    "system notification wakes you up, call subagent_result with the same "
+    'session_id values and include read_method="summary" or read_method="full" '
+    "as requested. Only produce a final assistant answer after every required "
+    "tool call succeeds. Do not call subagent_status or subagent_cancel in this "
+    "demo. When you pass timeout to subagent_result, keep it numeric rather than "
+    "a quoted string."
 )
 
 PARENT_USER_PROMPT = (
@@ -78,14 +96,18 @@ PARENT_USER_PROMPT = (
     "2. launch slow-worker in background with the prompt '" + SLOW_PROMPT + "'\n"
     "3. launch queued-worker in background with max_concurrency=1 still in effect "
     "using the prompt '" + QUEUED_PROMPT + "'\n"
-    "4. collect the slow-worker and queued-worker results via subagent_result, "
-    "using the returned session_id values\n"
-    "5. launch stream-worker with background=True and stream=True using the prompt '"
+    "4. after both background launches, call subagent_wait() once for the slow and "
+    "queued session_ids, then wait for the system notification before reading "
+    "results\n"
+    "5. after the notification, call subagent_result for slow-worker with "
+    'read_method="summary" and call subagent_result for queued-worker with '
+    'read_method="full"\n'
+    "6. launch stream-worker with background=True and stream=True using the prompt '"
     + STREAM_PROMPT
     + "'\n"
-    "6. collect the stream-worker result via subagent_result using its returned "
+    "7. collect the stream-worker result via subagent_result using its returned "
     "session_id\n"
-    "7. finish with a concise summary that explicitly mentions sync, background, "
+    "8. finish with a concise summary that explicitly mentions sync, background, "
     "stream, queued, running, and succeeded. Do not call subagent_status or "
     "subagent_cancel. If you include timeout, pass it as a number like 30, not a string."
 )
@@ -183,6 +205,7 @@ def _build_world(
     _install_demo_session_ids(subagent_system)
     _install_demo_tool_wrappers(world, parent_id)
 
+    world.register_system(SubagentWaitSystem(priority=-5), priority=-5)
     world.register_system(subagent_system, priority=-1)
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
@@ -228,10 +251,7 @@ def _build_providers(
                 CompletionResult(
                     message=Message(
                         role="assistant",
-                        content=(
-                            "Slow background answer finished after the queued job "
-                            "waited its turn."
-                        ),
+                        content=SLOW_BACKGROUND_RESULT,
                     )
                 )
             ]
@@ -243,10 +263,7 @@ def _build_providers(
             CompletionResult(
                 message=Message(
                     role="assistant",
-                    content=(
-                        "Queued background answer completed once the slow session "
-                        "released the slot."
-                    ),
+                    content=QUEUED_BACKGROUND_RESULT,
                 )
             )
         ]
@@ -380,14 +397,13 @@ def _fake_parent_responses() -> list[CompletionResult]:
         CompletionResult(
             message=Message(
                 role="assistant",
-                content="Collecting the slow background result.",
+                content="Waiting for the background workers to finish.",
                 tool_calls=[
                     ToolCall(
-                        id="call-slow-result",
-                        name="subagent_result",
+                        id="call-background-wait",
+                        name="subagent_wait",
                         arguments={
-                            "session_id": DEMO_SESSION_IDS[0],
-                            "timeout": 5.0,
+                            "session_ids": [DEMO_SESSION_IDS[0], DEMO_SESSION_IDS[1]],
                         },
                     )
                 ],
@@ -396,14 +412,30 @@ def _fake_parent_responses() -> list[CompletionResult]:
         CompletionResult(
             message=Message(
                 role="assistant",
-                content="Collecting the queued background result.",
+                content="Reading the cached slow background summary.",
+                tool_calls=[
+                    ToolCall(
+                        id="call-slow-result",
+                        name="subagent_result",
+                        arguments={
+                            "session_id": DEMO_SESSION_IDS[0],
+                            "read_method": "summary",
+                        },
+                    )
+                ],
+            )
+        ),
+        CompletionResult(
+            message=Message(
+                role="assistant",
+                content="Reading the full queued background result.",
                 tool_calls=[
                     ToolCall(
                         id="call-queued-result",
                         name="subagent_result",
                         arguments={
                             "session_id": DEMO_SESSION_IDS[1],
-                            "timeout": 5.0,
+                            "read_method": "full",
                         },
                     )
                 ],
@@ -479,6 +511,7 @@ def _install_demo_tool_wrappers(world: World, parent_id: int) -> None:
 
     async def normalized_subagent_result(
         session_id: str,
+        read_method: str = "full",
         timeout: float | str | None = None,
     ) -> str:
         normalized_timeout: float | None
@@ -486,7 +519,11 @@ def _install_demo_tool_wrappers(world: World, parent_id: int) -> None:
             normalized_timeout = float(timeout)
         else:
             normalized_timeout = timeout
-        return await result_handler(session_id=session_id, timeout=normalized_timeout)
+        return await result_handler(
+            session_id=session_id,
+            read_method=read_method,
+            timeout=normalized_timeout,
+        )
 
     tool_registry.handlers["subagent_result"] = normalized_subagent_result
 
@@ -575,6 +612,10 @@ def _conversation_history_lines(messages: list[Message]) -> list[str]:
     for message in messages:
         if message.role == "user":
             lines.append(f"[User] {message.content}")
+            continue
+
+        if message.role == "system":
+            lines.append(f"[System] {message.content}")
             continue
 
         if message.tool_calls:
