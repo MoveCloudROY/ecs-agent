@@ -213,20 +213,27 @@ class ReasoningSystem:
                         ),
                     )
 
+                duration_ms = (time.time() - start_time) * 1000
+                tool_call_names = (
+                    [tc.name for tc in result.message.tool_calls]
+                    if result.message.tool_calls
+                    else []
+                )
+                logger.info(
+                    "reasoning_complete",
+                    entity_id=int(entity_id),
+                    model=active_model,
+                    duration_ms=round(duration_ms, 2),
+                    tool_call_count=len(tool_call_names),
+                    tool_call_names=tool_call_names,
+                    system="ReasoningSystem",
+                )
                 if result.message.tool_calls:
                     world.add_component(
                         entity_id,
                         PendingToolCallsComponent(tool_calls=result.message.tool_calls),
                     )
                 else:
-                    duration_ms = (time.time() - start_time) * 1000
-                    logger.info(
-                        "reasoning_complete",
-                        entity_id=int(entity_id),
-                        model=active_model,
-                        duration_ms=round(duration_ms, 2),
-                        system="ReasoningSystem",
-                    )
                     await world.event_bus.publish(
                         ReasoningCompleteEvent(
                             entity_id=entity_id,
