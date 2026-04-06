@@ -121,10 +121,15 @@ class SubagentWaitSystem:
         future = component.future
         if isinstance(future, asyncio.Future) and not future.done():
             future.set_result(None)
-        self._deliver_unread_notifications(world, entity_id)
+        self._deliver_unread_notifications(world, entity_id, component)
         world.remove_component(entity_id, SubagentWaitComponent)
 
-    def _deliver_unread_notifications(self, world: World, entity_id: EntityId) -> None:
+    def _deliver_unread_notifications(
+        self,
+        world: World,
+        entity_id: EntityId,
+        component: SubagentWaitComponent,
+    ) -> None:
         queue = world.get_component(entity_id, SubagentNotificationQueueComponent)
         if queue is None:
             return
@@ -133,6 +138,10 @@ class SubagentWaitSystem:
             notification
             for notification in queue.notifications
             if notification.delivered_at is None
+            and (
+                component.session_ids is None
+                or notification.session_id in component.session_ids
+            )
         ]
         if not unread_notifications:
             return
@@ -166,13 +175,17 @@ class SubagentWaitSystem:
         notification: SubagentNotificationRecord,
     ) -> str:
         if notification.terminal_status == "succeeded":
-            return (
+            base = (
                 f"- {notification.session_id} succeeded. "
                 f'Call subagent_result(session_id="{notification.session_id}") '
-                "for the full result or "
-                f'subagent_result(session_id="{notification.session_id}", '
-                'read_method="summary") for the cached summary.'
+                "for the full result"
             )
+            if notification.summary is not None:
+                base += (
+                    f' or subagent_result(session_id="{notification.session_id}", '
+                    'read_method="summary") for the cached summary'
+                )
+            return base + "."
 
         error_text = notification.error or "Unknown error"
         return (
