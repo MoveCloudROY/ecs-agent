@@ -828,13 +828,18 @@ class SubagentSystem:
                 "    (avoiding unnecessary blocking).\n\n"
                 "INTERFACE:\n"
                 "  session_id (required) — the session_id from the background subagent response.\n"
-                "  timeout    (optional) — max seconds to wait; null = wait indefinitely.\n\n"
+                "  timeout    (optional) — max seconds to wait; null = wait indefinitely.\n"
+                "  read_method (optional) — 'full' (default) returns the complete result; "
+                "'summary' returns the cached summary captured by the background "
+                "subagent (cheaper). If no summary is cached, returns an error.\n\n"
                 "RETURNS: final answer string from the subagent, or an error/timeout message.\n\n"
                 "EXAMPLES:\n"
                 "  // Wait for a previously launched background subagent\n"
                 '  subagent_result(session_id="ses_abc123")\n\n'
                 "  // Wait with a 60-second timeout\n"
-                '  subagent_result(session_id="ses_abc123", timeout=60)'
+                '  subagent_result(session_id="ses_abc123", timeout=60)\n\n'
+                "  // Fetch only the cached summary (background sessions that used the result envelope)\n"
+                '  subagent_result(session_id="ses_abc123", read_method="summary")'
             ),
             parameters={
                 "type": "object",
@@ -846,6 +851,19 @@ class SubagentSystem:
                     "timeout": {
                         "type": ["number", "null"],
                         "description": "Max seconds to wait before returning a timeout error. null = wait indefinitely until the session finishes.",
+                    },
+                    "read_method": {
+                        "type": ["string", "null"],
+                        "enum": ["full", "summary", None],
+                        "description": (
+                            "How to read the result. "
+                            "'full' (default) returns the complete subagent output. "
+                            "'summary' returns the cached summary captured by the subagent "
+                            "via the <subagent_background_result> envelope — much cheaper "
+                            "than fetching the full result. "
+                            "If summary is not available, an error payload is returned."
+                        ),
+                        "default": "full",
                     },
                 },
                 "required": ["session_id"],
@@ -1052,6 +1070,14 @@ class SubagentSystem:
             try:
                 loop = asyncio.get_running_loop()
                 deadline = None if timeout is None else loop.time() + timeout
+                # Backward-compat direct-result poll path:
+                # This loop polls the session table every 0.1s until the session
+                # reaches a terminal state. This is NOT the recommended path for
+                # background sessions — callers should instead use subagent_wait()
+                # (future-based, zero-poll) followed by subagent_result(). This
+                # polling path exists for callers that invoke subagent_result()
+                # directly without a preceding subagent_wait(), preserving
+                # backward compatibility.
                 while True:
                     session = await self._runtime_manager.get_session(session_id)
                     if session is None:

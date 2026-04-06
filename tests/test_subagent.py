@@ -2920,9 +2920,7 @@ async def test_completion_notification_is_injected_before_next_reasoning_turn() 
         content=(
             "Background subagent updates:\n"
             '- session-abc succeeded. Call subagent_result(session_id="session-abc") '
-            "for the full result or "
-            'subagent_result(session_id="session-abc", read_method="summary") '
-            "for the cached summary."
+            "for the full result."
         ),
     )
     queue = world.get_component(entity_id, SubagentNotificationQueueComponent)
@@ -2938,9 +2936,7 @@ async def test_completion_notification_is_injected_before_next_reasoning_turn() 
         content=(
             "Background subagent updates:\n"
             '- session-abc succeeded. Call subagent_result(session_id="session-abc") '
-            "for the full result or "
-            'subagent_result(session_id="session-abc", read_method="summary") '
-            "for the cached summary."
+            "for the full result."
         ),
     )
 
@@ -3087,9 +3083,7 @@ def test_unread_notifications_are_batched() -> None:
                 'subagent_result(session_id="session-abc", read_method="summary") '
                 "for the cached summary.\n"
                 '- session-def succeeded. Call subagent_result(session_id="session-def") '
-                "for the full result or "
-                'subagent_result(session_id="session-def", read_method="summary") '
-                "for the cached summary."
+                "for the full result."
             ),
         ),
     ]
@@ -3117,12 +3111,73 @@ def test_unread_notifications_are_batched() -> None:
                 'subagent_result(session_id="session-abc", read_method="summary") '
                 "for the cached summary.\n"
                 '- session-def succeeded. Call subagent_result(session_id="session-def") '
-                "for the full result or "
-                'subagent_result(session_id="session-def", read_method="summary") '
-                "for the cached summary."
+                "for the full result."
             ),
         ),
     ]
+
+
+def test_unread_notifications_are_filtered_to_wait_scope() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Continue.")]),
+    )
+    world.add_component(
+        entity_id,
+        SubagentNotificationQueueComponent(
+            notifications=[
+                SubagentNotificationRecord(
+                    notification_id="session-match:succeeded",
+                    session_id="session-match",
+                    parent_entity_id=entity_id,
+                    terminal_status="succeeded",
+                    summary="cached summary",
+                    error=None,
+                    created_at="2026-04-06T12:00:00Z",
+                    delivered_at=None,
+                ),
+                SubagentNotificationRecord(
+                    notification_id="session-other:failed",
+                    session_id="session-other",
+                    parent_entity_id=entity_id,
+                    terminal_status="failed",
+                    summary=None,
+                    error="boom",
+                    created_at="2026-04-06T12:01:00Z",
+                    delivered_at=None,
+                ),
+            ]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        SubagentWaitComponent(session_ids=["session-match"], timeout=1.0),
+    )
+
+    system = SubagentWaitSystem()
+    wait_component = world.get_component(entity_id, SubagentWaitComponent)
+    assert wait_component is not None
+    system._resolve_wait(world, entity_id, wait_component)
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    queue = world.get_component(entity_id, SubagentNotificationQueueComponent)
+
+    assert conversation is not None
+    assert queue is not None
+    assert conversation.messages[-1] == Message(
+        role="system",
+        content=(
+            "Background subagent updates:\n"
+            '- session-match succeeded. Call subagent_result(session_id="session-match") '
+            "for the full result or "
+            'subagent_result(session_id="session-match", read_method="summary") '
+            "for the cached summary."
+        ),
+    )
+    assert queue.notifications[0].delivered_at is not None
+    assert queue.notifications[1].delivered_at is None
 
 
 def test_failure_notification_includes_error() -> None:
@@ -4252,6 +4307,41 @@ async def test_subagent_result_read_method_accepts_full_and_summary() -> None:
     assert full_result["inline_content"] == "Completed result"
     assert summary_result["inline_content"] == "Completed summary"
     assert summary_result["read_method"] == "summary"
+
+
+def test_subagent_result_schema_exposes_read_method() -> None:
+    from ecs_agent.components import ToolRegistryComponent
+    from ecs_agent.components.definitions import SubagentSessionTableComponent
+
+    world = World()
+    system = SubagentSystem()
+    parent = world.create_entity()
+
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(
+        parent,
+        LLMComponent(
+            provider=FakeProvider(responses=[]),
+            model="fake",
+            system_prompt="Test",
+        ),
+    )
+    world.add_component(parent, ConversationComponent(messages=[]))
+
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+
+    system.install_subagent_control_tools(world, parent)
+
+    schema = tools.tools["subagent_result"]
+    properties = schema.parameters["properties"]
+
+    assert "read_method" in properties
+    read_method = properties["read_method"]
+    assert "enum" in read_method
+    assert "full" in read_method["enum"]
+    assert "summary" in read_method["enum"]
 
 
 async def test_subagent_result_defaults_to_full() -> None:
