@@ -11,6 +11,7 @@ import pytest
 from ecs_agent.providers.fake_provider import FakeProvider
 from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.systems.subagent_wait import SubagentWaitSystem
 from ecs_agent.types import CompletionResult, Message
 from ecs_agent.types import ToolCall
 
@@ -55,11 +56,17 @@ class _SubagentDelegationOpenAIStub:
             )
         if "slow background answer" in prompt:
             return _completion(
-                "Slow background answer finished after the queued job waited its turn."
+                "<subagent_background_result>\n"
+                "<summary>Slow background summary for the parent.</summary>\n"
+                "<full_result>Slow background answer finished after the queued job waited its turn.</full_result>\n"
+                "</subagent_background_result>"
             )
         if "queued background answer" in prompt:
             return _completion(
-                "Queued background answer completed once the slow session released the slot."
+                "<subagent_background_result>\n"
+                "<summary>Queued background summary for the parent.</summary>\n"
+                "<full_result>Queued background answer completed once the slow session released the slot.</full_result>\n"
+                "</subagent_background_result>"
             )
         if "Stream a concise answer back to the parent" in prompt:
             return _completion(
@@ -132,14 +139,16 @@ class _SubagentDelegationOpenAIStub:
             return CompletionResult(
                 message=Message(
                     role="assistant",
-                    content="Collecting the slow background result.",
+                    content="Waiting for the background workers to finish.",
                     tool_calls=[
                         ToolCall(
-                            id="call-slow-result",
-                            name="subagent_result",
+                            id="call-background-wait",
+                            name="subagent_wait",
                             arguments={
-                                "session_id": "session-slow-worker",
-                                "timeout": 5.0,
+                                "session_ids": [
+                                    "session-slow-worker",
+                                    "session-queued-worker",
+                                ]
                             },
                         )
                     ],
@@ -150,14 +159,14 @@ class _SubagentDelegationOpenAIStub:
             return CompletionResult(
                 message=Message(
                     role="assistant",
-                    content="Collecting the queued background result.",
+                    content="Reading the cached slow background summary.",
                     tool_calls=[
                         ToolCall(
-                            id="call-queued-result",
+                            id="call-slow-result",
                             name="subagent_result",
                             arguments={
-                                "session_id": "session-queued-worker",
-                                "timeout": 5.0,
+                                "session_id": "session-slow-worker",
+                                "read_method": "summary",
                             },
                         )
                     ],
@@ -165,6 +174,24 @@ class _SubagentDelegationOpenAIStub:
             )
 
         if self._manager_turn == 6:
+            return CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="Reading the full queued background result.",
+                    tool_calls=[
+                        ToolCall(
+                            id="call-queued-result",
+                            name="subagent_result",
+                            arguments={
+                                "session_id": "session-queued-worker",
+                                "read_method": "full",
+                            },
+                        )
+                    ],
+                )
+            )
+
+        if self._manager_turn == 7:
             return CompletionResult(
                 message=Message(
                     role="assistant",
@@ -184,7 +211,7 @@ class _SubagentDelegationOpenAIStub:
                 )
             )
 
-        if self._manager_turn == 7:
+        if self._manager_turn == 8:
             return CompletionResult(
                 message=Message(
                     role="assistant",
@@ -202,7 +229,7 @@ class _SubagentDelegationOpenAIStub:
                 )
             )
 
-        if self._manager_turn == 8:
+        if self._manager_turn == 9:
             return _completion(
                 "Delegation complete. Sync, background, and stream runs succeeded, and the background lifecycle progressed from queued to running to succeeded."
             )
@@ -426,8 +453,40 @@ class TestSubagentDelegationDualMode:
         openai_ctor.assert_not_called()
 
         output = stdout.getvalue()
+        world, parent_id = module._build_world(
+            parent_provider=FakeProvider(responses=module._fake_parent_responses()),
+            registry=module._build_providers("", DEFAULT_BASE_URL, DEFAULT_MODEL)[1],
+            model="fake-parent",
+        )
+        world.apply_pending_system_operations()
+        system_names = [
+            entry.system.__class__.__name__
+            for entry in world._systems._systems  # type: ignore[attr-defined]
+        ]
+        wait_priorities = [
+            entry.priority
+            for entry in world._systems._systems  # type: ignore[attr-defined]
+            if isinstance(entry.system, SubagentWaitSystem)
+        ]
+
+        assert parent_id >= 0
+        assert "SubagentWaitSystem" in system_names
+        assert wait_priorities == [-5]
         assert "TOOL CALL HISTORY" in output
         assert "[Action] subagent" in output
+        assert "[Action] subagent_wait" in output
+        assert (
+            "[Action] subagent_result({'session_id': 'session-slow-worker', 'read_method': 'summary'})"
+            in output
+        )
+        assert (
+            "[Action] subagent_result({'session_id': 'session-queued-worker', 'read_method': 'full'})"
+            in output
+        )
+        assert "[System] Background subagent updates:" in output
+        assert output.index("[System] Background subagent updates:") < output.index(
+            "[Action] subagent_result({'session_id': 'session-slow-worker', 'read_method': 'summary'})"
+        )
         assert "[Result]" in output
         assert "Synchronous subagent run" in output
         assert "Background queue lifecycle" in output
@@ -439,6 +498,7 @@ class TestSubagentDelegationDualMode:
         assert "running" in output
         assert "succeeded" in output
         assert "Working" not in output
+        assert "[Action] subagent_status" not in output
 
     async def test_real_mode(self) -> None:
         import ecs_agent.systems.subagent_runtime as runtime_module
@@ -467,6 +527,19 @@ class TestSubagentDelegationDualMode:
         output = stdout.getvalue()
         assert "TOOL CALL HISTORY" in output
         assert "[Action] subagent" in output
+        assert "[Action] subagent_wait" in output
+        assert (
+            "[Action] subagent_result({'session_id': 'session-slow-worker', 'read_method': 'summary'})"
+            in output
+        )
+        assert (
+            "[Action] subagent_result({'session_id': 'session-queued-worker', 'read_method': 'full'})"
+            in output
+        )
+        assert "[System] Background subagent updates:" in output
+        assert output.index("[System] Background subagent updates:") < output.index(
+            "[Action] subagent_result({'session_id': 'session-slow-worker', 'read_method': 'summary'})"
+        )
         assert "[Result]" in output
         assert "Synchronous subagent run" in output
         assert "Background queue lifecycle" in output
@@ -478,6 +551,7 @@ class TestSubagentDelegationDualMode:
         assert "running" in output
         assert "succeeded" in output
         assert "Working" not in output
+        assert "[Action] subagent_status" not in output
 
 
 @pytest.mark.asyncio

@@ -24,8 +24,10 @@ from ecs_agent.components import (
     ConversationTreeComponent,
     LLMComponent,
     MessageBusConfigComponent,
+    SubagentNotificationQueueComponent,
     SubagentRegistryComponent,
     SubagentSessionTableComponent,
+    SubagentWaitComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.conversation_tree import add_message, linearize
@@ -41,6 +43,7 @@ from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.message_bus import MessageBusSystem
 from ecs_agent.systems.subagent import SubagentSystem
+from ecs_agent.systems.subagent_wait import SubagentWaitSystem
 from ecs_agent.types import (
     CompletionResult,
     ConversationBranch,
@@ -243,8 +246,14 @@ None
         assert "You are a test assistant" in llm.system_prompt
 
 
-async def test_subagent_delegation_end_to_end() -> None:
+async def test_subagent_delegation_end_to_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Test full subagent delegation flow from parent to child."""
+    import ecs_agent.systems.subagent_runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "_GLOBAL_SCHEDULER", None)
+
     world = World()
 
     # Create parent entity
@@ -486,6 +495,124 @@ async def test_subagent_background_stream_events_are_visible_to_parent(
     assert received[0].session_id == session_id
     assert any(isinstance(event, SubagentStreamDeltaEvent) for event in received)
     assert any(isinstance(event, SubagentStreamEndEvent) for event in received)
+
+
+async def test_subagent_wait_injects_notification_and_enables_explicit_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ecs_agent.systems.subagent_runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "_GLOBAL_SCHEDULER", None)
+
+    world = World()
+    parent = world.create_entity()
+
+    provider = FakeProvider(
+        responses=[
+            CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content=(
+                        "<subagent_background_result>\n"
+                        "<summary>Cached parent summary.</summary>\n"
+                        "<full_result>Full background result for the parent.</full_result>\n"
+                        "</subagent_background_result>"
+                    ),
+                )
+            )
+        ]
+    )
+
+    world.add_component(
+        parent,
+        ConversationComponent(messages=[Message(role="user", content="launch worker")]),
+    )
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(parent, SubagentSessionTableComponent(sessions={}))
+    world.add_component(parent, MessageBusConfigComponent(request_timeout=1.0))
+    world.add_component(
+        parent,
+        SubagentRegistryComponent(
+            subagents={
+                "wait-worker": SubagentConfig(
+                    name="wait-worker",
+                    provider=provider,
+                    model="fake",
+                    system_prompt="Return a wrapped background result.",
+                )
+            }
+        ),
+    )
+
+    subagent_system = SubagentSystem(priority=-1, max_background_concurrency=1)
+    wait_system = SubagentWaitSystem(priority=-5)
+    subagent_system.install_subagent_control_tools(world, parent)
+    world.register_system(wait_system, priority=-5)
+    world.register_system(subagent_system, priority=-1)
+    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
+
+    await world.process()
+
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+
+    launch_result = json.loads(
+        await tools.handlers["subagent"](
+            category="wait-worker",
+            prompt="Do the background task.",
+            background=True,
+        )
+    )
+    session_id = launch_result["session_id"]
+
+    wait_ack = await tools.handlers["subagent_wait"](session_ids=[session_id])
+    assert (
+        wait_ack
+        == "Waiting for background subagents. Will be notified when they complete."
+    )
+    assert world.has_component(parent, SubagentWaitComponent)
+
+    wait_task = asyncio.create_task(wait_system.process(world))
+    await asyncio.wait_for(wait_task, timeout=2.0)
+
+    assert not world.has_component(parent, SubagentWaitComponent)
+
+    queue = world.get_component(parent, SubagentNotificationQueueComponent)
+    assert queue is not None
+    assert len(queue.notifications) == 1
+    assert queue.notifications[0].session_id == session_id
+    assert queue.notifications[0].terminal_status == "succeeded"
+    assert queue.notifications[0].delivered_at is not None
+
+    conversation = world.get_component(parent, ConversationComponent)
+    assert conversation is not None
+    system_messages = [
+        message for message in conversation.messages if message.role == "system"
+    ]
+    assert len(system_messages) == 1
+    assert "Background subagent updates:" in system_messages[0].content
+    assert session_id in system_messages[0].content
+    assert 'read_method="summary"' in system_messages[0].content
+
+    summary_result = json.loads(
+        await tools.handlers["subagent_result"](
+            session_id=session_id,
+            read_method="summary",
+        )
+    )
+    assert summary_result["status"] == "success"
+    assert summary_result["read_method"] == "summary"
+    assert summary_result["inline_content"] == "Cached parent summary."
+
+    full_result = json.loads(
+        await tools.handlers["subagent_result"](
+            session_id=session_id,
+            read_method="full",
+        )
+    )
+    assert full_result["status"] == "success"
+    assert full_result["lifecycle_status"] == "succeeded"
+    assert full_result["inline_content"] == "Full background result for the parent."
 
 
 async def test_subagent_queued_session_survives_restore_and_reenqueue(
