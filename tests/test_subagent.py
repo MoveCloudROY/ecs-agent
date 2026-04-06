@@ -3890,7 +3890,15 @@ async def test_subagent_result_completed_session() -> None:
         provider=FakeProvider(
             responses=[
                 CompletionResult(
-                    message=Message(role="assistant", content="Completed result")
+                    message=Message(
+                        role="assistant",
+                        content=(
+                            "<subagent_background_result>"
+                            "<summary>Completed summary</summary>"
+                            "<full_result>Completed result</full_result>"
+                            "</subagent_background_result>"
+                        ),
+                    )
                 )
             ]
         ),
@@ -4115,7 +4123,15 @@ async def test_subagent_result_read_method_accepts_full_and_summary() -> None:
         provider=FakeProvider(
             responses=[
                 CompletionResult(
-                    message=Message(role="assistant", content="Completed result")
+                    message=Message(
+                        role="assistant",
+                        content=(
+                            "<subagent_background_result>"
+                            "<summary>Completed summary</summary>"
+                            "<full_result>Completed result</full_result>"
+                            "</subagent_background_result>"
+                        ),
+                    )
                 )
             ]
         ),
@@ -4156,6 +4172,207 @@ async def test_subagent_result_read_method_accepts_full_and_summary() -> None:
     assert summary_result["status"] == "success"
     assert full_result["session_id"] == session_id
     assert summary_result["session_id"] == session_id
+    assert full_result["inline_content"] == "Completed result"
+    assert summary_result["inline_content"] == "Completed summary"
+    assert summary_result["read_method"] == "summary"
+
+
+async def test_subagent_result_defaults_to_full() -> None:
+    world = World()
+    system = SubagentSystem()
+    parent = world.create_entity()
+
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(
+        parent,
+        SubagentRegistryComponent(
+            subagents={
+                "test-agent": SubagentConfig(
+                    name="test-agent",
+                    provider=FakeProvider(
+                        responses=[
+                            CompletionResult(
+                                message=Message(
+                                    role="assistant",
+                                    content=(
+                                        "<subagent_background_result>"
+                                        "<summary>Short summary</summary>"
+                                        "<full_result>Full background result</full_result>"
+                                        "</subagent_background_result>"
+                                    ),
+                                )
+                            )
+                        ]
+                    ),
+                    model="fake",
+                )
+            }
+        ),
+    )
+
+    system.install_subagent_control_tools(world, parent)
+    system.install_subagent_tool(world, parent)
+
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+
+    session_id = json.loads(
+        await tools.handlers["subagent"](
+            category="test-agent",
+            prompt="Task",
+            load_skills=[],
+            background=True,
+            timeout=None,
+        )
+    )["session_id"]
+
+    await asyncio.sleep(0.1)
+
+    result_payload = json.loads(
+        await tools.handlers["subagent_result"](session_id=session_id, timeout=None)
+    )
+
+    assert result_payload["status"] == "success"
+    assert result_payload["session_id"] == session_id
+    assert result_payload["inline_content"] == "Full background result"
+    assert "read_method" not in result_payload
+
+
+async def test_subagent_result_summary_returns_cached_summary() -> None:
+    world = World()
+    system = SubagentSystem()
+    parent = world.create_entity()
+
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(
+        parent,
+        SubagentRegistryComponent(
+            subagents={
+                "test-agent": SubagentConfig(
+                    name="test-agent",
+                    provider=FakeProvider(
+                        responses=[
+                            CompletionResult(
+                                message=Message(
+                                    role="assistant",
+                                    content=(
+                                        "<subagent_background_result>"
+                                        "<summary>Cached background summary</summary>"
+                                        "<full_result>Detailed background result</full_result>"
+                                        "</subagent_background_result>"
+                                    ),
+                                )
+                            )
+                        ]
+                    ),
+                    model="fake",
+                )
+            }
+        ),
+    )
+
+    system.install_subagent_control_tools(world, parent)
+    system.install_subagent_tool(world, parent)
+
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+
+    session_id = json.loads(
+        await tools.handlers["subagent"](
+            category="test-agent",
+            prompt="Task",
+            load_skills=[],
+            background=True,
+            timeout=None,
+        )
+    )["session_id"]
+
+    await asyncio.sleep(0.1)
+
+    summary_payload = json.loads(
+        await tools.handlers["subagent_result"](
+            session_id=session_id,
+            read_method="summary",
+            timeout=None,
+        )
+    )
+
+    assert summary_payload["status"] == "success"
+    assert summary_payload["session_id"] == session_id
+    assert summary_payload["read_method"] == "summary"
+    assert summary_payload["inline_content"] == "Cached background summary"
+
+    table = world.get_component(parent, SubagentSessionTableComponent)
+    assert table is not None
+    assert table.sessions[session_id].result_summary == "Cached background summary"
+    assert (
+        table.sessions[session_id].artifact_inline_content
+        == "Detailed background result"
+    )
+
+
+async def test_subagent_result_summary_unavailable_returns_error() -> None:
+    world = World()
+    system = SubagentSystem()
+    parent = world.create_entity()
+
+    world.add_component(parent, SubagentSessionTableComponent())
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(
+        parent,
+        SubagentRegistryComponent(
+            subagents={
+                "test-agent": SubagentConfig(
+                    name="test-agent",
+                    provider=FakeProvider(
+                        responses=[
+                            CompletionResult(
+                                message=Message(
+                                    role="assistant",
+                                    content="Raw background result without envelope",
+                                )
+                            )
+                        ]
+                    ),
+                    model="fake",
+                )
+            }
+        ),
+    )
+
+    system.install_subagent_control_tools(world, parent)
+    system.install_subagent_tool(world, parent)
+
+    tools = world.get_component(parent, ToolRegistryComponent)
+    assert tools is not None
+
+    session_id = json.loads(
+        await tools.handlers["subagent"](
+            category="test-agent",
+            prompt="Task",
+            load_skills=[],
+            background=True,
+            timeout=None,
+        )
+    )["session_id"]
+
+    await asyncio.sleep(0.1)
+
+    summary_payload = json.loads(
+        await tools.handlers["subagent_result"](
+            session_id=session_id,
+            read_method="summary",
+            timeout=None,
+        )
+    )
+
+    assert summary_payload == {
+        "error": 'Summary not available for this session. Retry with read_method="full".',
+        "read_method": "summary",
+        "session_id": session_id,
+    }
 
 
 async def test_subagent_result_read_method_rejects_unknown_value() -> None:
@@ -4849,3 +5066,26 @@ def test_build_child_prompt_template_only_appends_missing_tools() -> None:
     assert result.count("${_installed_skills}") == 1
     assert result.count("${_installed_tools}") == 1
     assert "## Available Tools" in result
+
+
+def test_build_child_prompt_template_does_not_append_background_result_envelope() -> (
+    None
+):
+    from ecs_agent.systems.subagent import _build_child_prompt_template
+
+    result = _build_child_prompt_template("You are a coder.")
+
+    assert "<subagent_background_result>" not in result
+
+
+def test_build_background_child_prompt_template_appends_background_result_envelope() -> (
+    None
+):
+    from ecs_agent.systems.subagent import _build_background_child_prompt_template
+
+    result = _build_background_child_prompt_template("You are a coder.")
+
+    assert result.startswith("You are a coder.")
+    assert "<subagent_background_result>" in result
+    assert "<summary>" in result
+    assert "<full_result>" in result
