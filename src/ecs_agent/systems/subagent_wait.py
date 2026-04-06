@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import time
 
 from ecs_agent.components import (
+    ConversationComponent,
     ErrorComponent,
     SubagentNotificationQueueComponent,
     SubagentWaitComponent,
@@ -12,7 +13,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
-from ecs_agent.types import EntityId, SubagentNotificationRecord
+from ecs_agent.types import EntityId, Message, SubagentNotificationRecord
 
 logger = get_logger(__name__)
 
@@ -107,7 +108,65 @@ class SubagentWaitSystem:
         future = component.future
         if isinstance(future, asyncio.Future) and not future.done():
             future.set_result(None)
+        self._deliver_unread_notifications(world, entity_id)
         world.remove_component(entity_id, SubagentWaitComponent)
+
+    def _deliver_unread_notifications(self, world: World, entity_id: EntityId) -> None:
+        queue = world.get_component(entity_id, SubagentNotificationQueueComponent)
+        if queue is None:
+            return
+
+        unread_notifications = [
+            notification
+            for notification in queue.notifications
+            if notification.delivered_at is None
+        ]
+        if not unread_notifications:
+            return
+
+        conversation = world.get_component(entity_id, ConversationComponent)
+        if conversation is None:
+            return
+
+        conversation.messages.append(
+            Message(
+                role="system",
+                content=self._format_notification_message(unread_notifications),
+            )
+        )
+
+        delivered_at = datetime.now(tz=timezone.utc).isoformat()
+        for notification in unread_notifications:
+            notification.delivered_at = delivered_at
+
+    def _format_notification_message(
+        self,
+        notifications: list[SubagentNotificationRecord],
+    ) -> str:
+        lines = ["Background subagent updates:"]
+        for notification in notifications:
+            lines.append(self._format_notification_line(notification))
+        return "\n".join(lines)
+
+    def _format_notification_line(
+        self,
+        notification: SubagentNotificationRecord,
+    ) -> str:
+        if notification.terminal_status == "succeeded":
+            return (
+                f"- {notification.session_id} succeeded. "
+                f'Call subagent_result(session_id="{notification.session_id}") '
+                "for the full result or "
+                f'subagent_result(session_id="{notification.session_id}", '
+                'read_method="summary") for the cached summary.'
+            )
+
+        error_text = notification.error or "Unknown error"
+        return (
+            f"- {notification.session_id} {notification.terminal_status}: {error_text}. "
+            f'Call subagent_result(session_id="{notification.session_id}") '
+            "for details."
+        )
 
     def _mark_timeout(
         self,
