@@ -293,6 +293,7 @@ The `examples/` directory contains 25 runnable demos:
 | [`claude_agent.py`](examples/claude_agent.py) | Native Anthropic Claude provider usage |
 | [`litellm_agent.py`](examples/litellm_agent.py) | LiteLLM unified provider for 100+ models |
 | [`streaming_system_agent.py`](examples/streaming_system_agent.py) | System-level streaming with events |
+| [`compaction_agent.py`](examples/compaction_agent.py) | All compaction strategies: `full_history`, `predrop_then_compact`, custom prompt template, and repeated compaction with summary folding (dual-mode) |
 | [`context_management_agent.py`](examples/context_management_agent.py) | Checkpoint, undo, and compaction demo (dual-mode) |
 | [`skill_agent.py`](examples/skill_agent.py) | Skill system and BuiltinTools ScriptSkill (read/write/edit) lifecycle |
 | [`skill_discovery_agent.py`](examples/skill_discovery_agent.py) | File-based skill loading from folder (dual-mode) |
