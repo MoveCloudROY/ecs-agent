@@ -5,6 +5,7 @@ import pytest
 from ecs_agent.components import (
     CompactionConfigComponent,
     ContextBudgetConfig,
+    CurrentCompactionSummaryComponent,
     ConversationArchiveComponent,
     ConversationComponent,
     LLMComponent,
@@ -88,17 +89,23 @@ def _subagent_session(
     )
 
 
-def test_compaction_role_survives_serialization() -> None:
+def test_legacy_compaction_message_restores_current_summary_state() -> None:
     world = World()
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
         ConversationComponent(
             messages=[
+                Message(role="user", content="hello"),
                 Message(
                     role="compaction",
                     content="Previous conversation summary: compacted state",
-                )
+                ),
+                Message(
+                    role="compaction",
+                    content="Previous conversation summary: newer compacted state",
+                ),
+                Message(role="assistant", content="latest reply"),
             ]
         ),
     )
@@ -106,14 +113,73 @@ def test_compaction_role_survives_serialization() -> None:
     serialized = WorldSerializer.to_dict(world)
     restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
     restored_conversation = restored.get_component(entity_id, ConversationComponent)
+    current_summary = restored.get_component(
+        entity_id, CurrentCompactionSummaryComponent
+    )
 
     assert restored_conversation is not None
+    assert current_summary == CurrentCompactionSummaryComponent(
+        summary="newer compacted state"
+    )
     assert restored_conversation.messages == [
+        Message(role="user", content="hello"),
         Message(
-            role="compaction",
-            content="Previous conversation summary: compacted state",
-        )
+            role="assistant",
+            content="latest reply",
+        ),
     ]
+
+
+def test_reserialized_world_does_not_emit_compaction_role_messages() -> None:
+    legacy_data = {
+        "next_entity_id": 2,
+        "entities": {
+            "1": {
+                "ConversationComponent": {
+                    "messages": [
+                        {
+                            "role": "compaction",
+                            "content": "Previous conversation summary: compacted state",
+                            "tool_calls": None,
+                            "tool_call_id": None,
+                        },
+                        {
+                            "role": "user",
+                            "content": "hello",
+                            "tool_calls": None,
+                            "tool_call_id": None,
+                        },
+                    ]
+                }
+            }
+        },
+        "_entity_registry": {},
+        "_entity_tags": {},
+        "world_name": None,
+    }
+
+    restored = WorldSerializer.from_dict(legacy_data, providers={}, tool_handlers={})
+
+    reserialized = WorldSerializer.to_dict(restored)
+    messages = reserialized["entities"]["1"]["ConversationComponent"]["messages"]
+
+    assert all(message["role"] != "compaction" for message in messages)
+    assert reserialized["entities"]["1"]["CurrentCompactionSummaryComponent"] == {
+        "summary": "compacted state",
+        "metadata": None,
+    }
+
+
+def test_current_compaction_summary_component_can_be_stored_independently() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    component = CurrentCompactionSummaryComponent(summary="plain-text summary")
+
+    world.add_component(entity_id, component)
+
+    assert (
+        world.get_component(entity_id, CurrentCompactionSummaryComponent) == component
+    )
 
 
 @pytest.mark.asyncio

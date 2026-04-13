@@ -302,6 +302,12 @@ class ConversationArchiveComponent:
 
 
 @dataclass(slots=True)
+class CurrentCompactionSummaryComponent:
+    summary: str = ""
+    metadata: dict[str, Any] | None = None
+
+
+@dataclass(slots=True)
 class RunnerStateComponent:
     """Maintains runner execution state."""
 
