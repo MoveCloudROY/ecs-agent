@@ -34,3 +34,15 @@
 - No synthetic boundary message is reintroduced; the compaction boundary is now entirely encoded by: (1) system message position, (2) presence of CurrentCompactionSummaryComponent.
 - Multi-entity truncation still works correctly; the old test `test_truncation_preserves_latest_compaction_message_and_following_history` now passes via the no-summary path (applies trailing-window behavior).
 
+## [2026-04-13T15:22:00Z] Task 5: provider-special-casing-removal
+- All three adapters (OpenAI Chat, OpenAI Responses, Anthropic) had identical `_COMPACTION_SENTINEL = "[COMPACTION SUMMARY]\n"` constants that are now removed.
+- Removed branches: OpenAI Chat (lines 228-245), OpenAI Responses (lines 306-319), Anthropic (lines 100-112) — all checked for `msg.role == "compaction"`.
+- Old sentinel approach encoded compaction as a user message with a hardcoded prefix string; this prevented the system from seeing the summary as system prompt context.
+- New approach: System prompt containing XML summary is passed directly through the adapter without any special handling — the prompt render system ensures the XML is already embedded before provider receives messages.
+- Tests rewritten to assert on actual request bodies:
+  - OpenAI Chat: verified XML summary appears in messages[0]["role"] == "system"
+  - OpenAI Responses: verified XML summary in `instructions` field only, NOT in `input` items
+  - Anthropic: verified XML summary in returned `system` string from build_messages
+- All 42 provider tests pass; no regression in standard message conversion for user/assistant/system/tool roles.
+- mypy strict typecheck passes with no issues.
+
