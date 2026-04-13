@@ -1,7 +1,7 @@
 """Live tests for conversation compaction behavior.
 
 Run:
-    LLM_API_KEY=your-api-key \
+    LLM_API_KEY=your-api-key \\
         uv run pytest tests/live/test_compaction_live.py -v
 """
 
@@ -13,14 +13,18 @@ from ecs_agent.components import (
     CompactionConfigComponent,
     ConversationArchiveComponent,
     ConversationComponent,
+    CurrentCompactionSummaryComponent,
     LLMComponent,
+    RenderedSystemPromptComponent,
 )
 from ecs_agent.components.definitions import EntityRegistryComponent
 from ecs_agent.core import World
+from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.openai_provider import OpenAIProvider
 from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.memory import MemorySystem
+from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.types import CompletionResult, Message
 
 _registry_module = pytest.importorskip("ecs_agent.providers.registry")
@@ -106,7 +110,7 @@ def _build_python_conversation() -> list[Message]:
     return messages
 
 
-def _build_compaction_world(provider: object) -> tuple[World, object]:
+def _build_compaction_world(provider: object) -> tuple[World, EntityId]:
     world = World()
     entity_id = world.create_entity()
     world.add_component(entity_id, LLMComponent(provider=provider, model=MODEL))
@@ -118,58 +122,112 @@ def _build_compaction_world(provider: object) -> tuple[World, object]:
     return world, entity_id
 
 
-def _get_compaction_message(messages: list[Message]) -> Message:
-    return next(message for message in messages if message.role == "compaction")
-
-
 @pytest.mark.asyncio
-async def test_live_compaction_role_chat_completions(live_api_key: str) -> None:
+async def test_live_compaction_xml_summary_visible_chat_completions(
+    live_api_key: str,
+) -> None:
     provider = get_llm_provider(
         "aliyun/qwen3.5-flash",
         registry=_live_registry(),
         api_key=live_api_key,
     )
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        LLMComponent(
+            provider=provider,
+            model=MODEL,
+            system_prompt="You are a helpful assistant.",
+        ),
+    )
+    world.add_component(
+        entity_id,
+        CompactionConfigComponent(threshold_tokens=4000),
+    )
+    world.add_component(
+        entity_id,
+        CurrentCompactionSummaryComponent(
+            summary="The secret codename for this session is: orchid-47"
+        ),
+    )
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="You are a helpful assistant.")
+        ),
+    )
+
+    render_system = SystemPromptRenderSystem()
+    await render_system.process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert "<chat_history_summary>" in rendered.text
+    assert "orchid-47" in rendered.text
 
     result = await provider.complete(
         [
-            Message(
-                role="compaction",
-                content=(
-                    "Previous conversation summary: The user asked about Python. "
-                    "We discussed list comprehensions."
-                ),
-            ),
-            Message(role="user", content="Continue our discussion."),
+            Message(role="system", content=rendered.text),
+            Message(role="user", content="What is the secret codename?"),
         ]
     )
 
     assert isinstance(result, CompletionResult)
-    assert len(result.message.content.strip()) > 0
+    assert "orchid-47" in result.message.content
 
 
 @pytest.mark.asyncio
-async def test_live_compaction_role_responses_api(live_api_key: str) -> None:
+async def test_live_compaction_xml_summary_visible_responses_api(
+    live_api_key: str,
+) -> None:
     provider = get_llm_provider(
         "aliyun-responses/qwen3.5-flash",
         registry=_live_registry(),
         api_key=live_api_key,
     )
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        LLMComponent(
+            provider=provider,
+            model=MODEL,
+            system_prompt="You are a helpful assistant.",
+        ),
+    )
+    world.add_component(
+        entity_id,
+        CompactionConfigComponent(threshold_tokens=4000),
+    )
+    world.add_component(
+        entity_id,
+        CurrentCompactionSummaryComponent(
+            summary="The secret codename for this session is: orchid-47"
+        ),
+    )
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="You are a helpful assistant.")
+        ),
+    )
+
+    render_system = SystemPromptRenderSystem()
+    await render_system.process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
 
     result = await provider.complete(
         [
-            Message(
-                role="compaction",
-                content=(
-                    "Previous conversation summary: The user asked about Python. "
-                    "We discussed list comprehensions."
-                ),
-            ),
-            Message(role="user", content="Continue our discussion."),
+            Message(role="system", content=rendered.text),
+            Message(role="user", content="What is the secret codename?"),
         ]
     )
 
     assert isinstance(result, CompletionResult)
-    assert len(result.message.content.strip()) > 0
+    assert "orchid-47" in result.message.content
 
 
 @pytest.mark.asyncio
@@ -192,14 +250,16 @@ async def test_live_compaction_system_triggers_and_summarizes_chat(
 
     conv = world.get_component(entity_id, ConversationComponent)
     archive = world.get_component(entity_id, ConversationArchiveComponent)
+    current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
 
     assert conv is not None
     assert archive is not None
-    assert sum(message.role == "compaction" for message in conv.messages) == 1
-    compaction_message = _get_compaction_message(conv.messages)
-    assert compaction_message.content.startswith("Previous conversation summary:")
+    assert current_summary is not None
+    assert len(current_summary.summary) > 0
     assert len(archive.archived_summaries) == 1
+    assert archive.archived_summaries[0] == current_summary.summary
     assert len(conv.messages) < 20
+    assert all(message.role != "compaction" for message in conv.messages)
 
 
 @pytest.mark.asyncio
@@ -222,14 +282,16 @@ async def test_live_compaction_system_triggers_and_summarizes_responses(
 
     conv = world.get_component(entity_id, ConversationComponent)
     archive = world.get_component(entity_id, ConversationArchiveComponent)
+    current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
 
     assert conv is not None
     assert archive is not None
-    assert sum(message.role == "compaction" for message in conv.messages) == 1
-    compaction_message = _get_compaction_message(conv.messages)
-    assert compaction_message.content.startswith("Previous conversation summary:")
+    assert current_summary is not None
+    assert len(current_summary.summary) > 0
     assert len(archive.archived_summaries) == 1
+    assert archive.archived_summaries[0] == current_summary.summary
     assert len(conv.messages) < 20
+    assert all(message.role != "compaction" for message in conv.messages)
 
 
 @pytest.mark.asyncio
@@ -252,11 +314,13 @@ async def test_live_compaction_full_history_method(live_api_key: str) -> None:
     await system.process(world)
 
     conv = world.get_component(entity_id, ConversationComponent)
+    current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
 
     assert conv is not None
-    assert len(conv.messages) <= 2
-    assert any(message.role == "compaction" for message in conv.messages)
-    assert _get_compaction_message(conv.messages).content.strip()
+    assert current_summary is not None
+    assert len(current_summary.summary) > 0
+    assert len(conv.messages) <= 1
+    assert all(message.role != "compaction" for message in conv.messages)
 
 
 @pytest.mark.asyncio
@@ -280,12 +344,14 @@ async def test_live_compaction_custom_prompt_template(live_api_key: str) -> None
 
     conv = world.get_component(entity_id, ConversationComponent)
     archive = world.get_component(entity_id, ConversationArchiveComponent)
+    current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
 
     assert conv is not None
     assert archive is not None
-    assert any(message.role == "compaction" for message in conv.messages)
+    assert current_summary is not None
     assert len(archive.archived_summaries) == 1
     assert len(archive.archived_summaries[0]) > 0
+    assert archive.archived_summaries[0] == current_summary.summary
 
 
 @pytest.mark.asyncio
@@ -313,35 +379,39 @@ async def test_live_compaction_summary_model_id_routing(live_api_key: str) -> No
 
     conv = world.get_component(entity_id, ConversationComponent)
     archive = world.get_component(entity_id, ConversationArchiveComponent)
+    current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
 
     assert conv is not None
     assert archive is not None
-    assert any(message.role == "compaction" for message in conv.messages)
+    assert current_summary is not None
     assert len(archive.archived_summaries) == 1
+    assert archive.archived_summaries[0] == current_summary.summary
 
 
 @pytest.mark.asyncio
-async def test_live_memory_system_preserves_compaction_boundary(
+async def test_live_memory_system_preserves_post_compaction_turns(
     live_api_key: str,
 ) -> None:
     world = World()
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
+        CurrentCompactionSummaryComponent(
+            summary="Previous conversation summary: We discussed A."
+        ),
+    )
+    world.add_component(
+        entity_id,
         ConversationComponent(
             max_messages=5,
             messages=[
                 Message(role="system", content="You are helpful."),
-                Message(role="user", content="old1"),
-                Message(role="assistant", content="old2"),
-                Message(
-                    role="compaction",
-                    content="Previous conversation summary: We discussed A.",
-                ),
                 Message(role="user", content="post-compact1"),
                 Message(role="assistant", content="post-compact2"),
                 Message(role="user", content="post-compact3"),
                 Message(role="assistant", content="post-compact4"),
+                Message(role="user", content="post-compact5"),
+                Message(role="assistant", content="post-compact6"),
             ],
         ),
     )
@@ -352,17 +422,6 @@ async def test_live_memory_system_preserves_compaction_boundary(
     conv = world.get_component(entity_id, ConversationComponent)
 
     assert conv is not None
-    assert conv.messages[0].role == "system"
-    assert any(message.role == "compaction" for message in conv.messages)
-    assert conv.messages[1:] == [
-        Message(
-            role="compaction",
-            content="Previous conversation summary: We discussed A.",
-        ),
-        Message(role="user", content="post-compact1"),
-        Message(role="assistant", content="post-compact2"),
-        Message(role="user", content="post-compact3"),
-        Message(role="assistant", content="post-compact4"),
-    ]
-    assert all(message.content != "old1" for message in conv.messages)
-    assert all(message.content != "old2" for message in conv.messages)
+    assert len(conv.messages) == 7
+    assert conv.messages[0].content == "You are helpful."
+    assert conv.messages[-1].content == "post-compact6"
