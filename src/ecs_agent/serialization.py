@@ -11,6 +11,7 @@ from ecs_agent.components import (
     ContextBudgetConfig,
     ContextCacheComponent,
     ContextEntry,
+    CurrentCompactionSummaryComponent,
     ConversationArchiveComponent,
     ConversationComponent,
     ConversationTreeComponent,
@@ -71,6 +72,7 @@ from ecs_agent.types import (
 )
 
 NON_SERIALIZABLE_PLACEHOLDER = "<non-serializable>"
+LEGACY_COMPACTION_SUMMARY_PREFIX = "Previous conversation summary: "
 
 EPHEMERAL_COMPONENT_TYPES: tuple[type[Any], ...] = ()
 
@@ -103,6 +105,7 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     ContextBudgetConfig.__name__: ContextBudgetConfig,
     CompactionConfigComponent.__name__: CompactionConfigComponent,
     ContextCacheComponent.__name__: ContextCacheComponent,
+    CurrentCompactionSummaryComponent.__name__: CurrentCompactionSummaryComponent,
     ConversationArchiveComponent.__name__: ConversationArchiveComponent,
     RunnerStateComponent.__name__: RunnerStateComponent,
     MessageBusConfigComponent.__name__: MessageBusConfigComponent,
@@ -179,6 +182,17 @@ class WorldSerializer:
                 if component_type is None:
                     continue
 
+                current_summary: str | None = None
+                if component_name == ConversationComponent.__name__:
+                    current_summary = (
+                        WorldSerializer._current_compaction_summary_from_messages(
+                            [
+                                WorldSerializer._message_from_dict(message_data)
+                                for message_data in component_data.get("messages", [])
+                            ]
+                        )
+                    )
+
                 normalized_data = WorldSerializer._normalize_component_data(
                     component_name,
                     component_data,
@@ -186,6 +200,11 @@ class WorldSerializer:
                     tool_handlers,
                 )
                 world.add_component(entity_id, component_type(**normalized_data))
+                if current_summary is not None:
+                    world.add_component(
+                        entity_id,
+                        CurrentCompactionSummaryComponent(summary=current_summary),
+                    )
 
         next_entity_id = int(data.get("next_entity_id", 1))
         world._entity_gen._counter = max(0, next_entity_id - 1)
@@ -355,10 +374,13 @@ class WorldSerializer:
         normalized_data = dict(component_data)
 
         if component_name == ConversationComponent.__name__:
-            normalized_data["messages"] = [
+            deserialized_messages = [
                 WorldSerializer._message_from_dict(msg)
                 for msg in normalized_data.get("messages", [])
             ]
+            normalized_data["messages"] = (
+                WorldSerializer._strip_legacy_compaction_messages(deserialized_messages)
+            )
 
         if component_name == PendingToolCallsComponent.__name__:
             normalized_data["tool_calls"] = [
@@ -637,6 +659,33 @@ class WorldSerializer:
             serialized["compaction_metadata"] = message.compaction_metadata
 
         return serialized
+
+    @staticmethod
+    def _strip_legacy_compaction_messages(messages: list[Message]) -> list[Message]:
+        return [
+            message
+            for message in messages
+            if not WorldSerializer._is_legacy_compaction_message(message)
+        ]
+
+    @staticmethod
+    def _current_compaction_summary_from_messages(
+        messages: list[Message],
+    ) -> str | None:
+        current_summary: str | None = None
+        for message in messages:
+            if not WorldSerializer._is_legacy_compaction_message(message):
+                continue
+            current_summary = message.content.removeprefix(
+                LEGACY_COMPACTION_SUMMARY_PREFIX
+            )
+        return current_summary
+
+    @staticmethod
+    def _is_legacy_compaction_message(message: Message) -> bool:
+        return message.role == "compaction" and message.content.startswith(
+            LEGACY_COMPACTION_SUMMARY_PREFIX
+        )
 
     @staticmethod
     def _message_part_to_dict(part: MessagePart) -> dict[str, Any]:

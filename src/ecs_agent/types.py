@@ -39,7 +39,9 @@ class FileRefPart:
 
 MessagePart = ImageUrlPart | FileRefPart
 DroppableContextKind = Literal["tool_result", "reasoning"]
-MessageRole = Literal["system", "user", "assistant", "tool", "compaction"]
+MessageRole = Literal["system", "user", "assistant", "tool"]
+LegacyMessageRole = Literal["compaction"]
+AcceptedMessageRole = MessageRole | LegacyMessageRole
 CompactionMethod = Literal["bisect", "full_history", "predrop_then_compact"]
 
 
@@ -93,7 +95,7 @@ class Message:
         )
     """
 
-    role: MessageRole
+    role: AcceptedMessageRole
     content: str
     parts: list[MessagePart] | None = None
     tool_calls: list[ToolCall] | None = None
