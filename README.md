@@ -134,7 +134,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 
 ### Production Infrastructure
 - **5 LLM Providers + Streaming** — OpenAI, Claude, LiteLLM (100+ models), Fake, and Retry providers with real-time SSE token delivery.
-- **Context Management** — Checkpoints (undo/resume), conversation compaction (compression), and memory windowing.
+- **Context Management** — Checkpoints (undo/resume), conversation compaction (XML system-prompt summaries), and memory windowing.
 - **Tool Ecosystem** — Auto-discovery via `@tool` decorator, manual approval flows, secure `bwrap` sandboxing, and composable skills.
 - **MCP Integration** — Connect to external MCP tool servers via stdio, SSE, or HTTP transports with namespaced tool mapping.
 
@@ -461,7 +461,7 @@ Four live scenarios are provided:
 - **Anthropic-compatible text** — `LLM_MODEL=kimi-k2.5`, `LLM_BASE_URL=https://dashscope.aliyuncs.com/apps/anthropic`
 - **Task Executor** — `tests/live/test_task_executor_live.py` exercises the `TaskExecutor` dispatch path end-to-end.
 - **Subagent Delegation** — `tests/live/test_subagent_live.py` covers background queuing, FIFO scheduling, and streaming telemetry. Includes `test_aliyun_completions_background_completion_notification_flow` and `test_aliyun_responses_background_completion_notification_flow` for explicit wait/notification flow.
-- **Compaction** — `tests/live/test_compaction_live.py` covers `role="compaction"` encoding on Chat Completions and Responses API, full `CompactionSystem.process()` end-to-end with `bisect`/`full_history`/`custom prompt` methods, `summary_model_id` routing, and `MemorySystem` compaction-boundary protection.
+- **Compaction** — `tests/live/test_compaction_live.py` covers XML system-summary injection on Chat Completions and Responses API, full `CompactionSystem.process()` end-to-end with `bisect`/`full_history`/`custom prompt` methods, `summary_model_id` routing, and `MemorySystem` preservation.
 
 For the legacy integration test:
 
