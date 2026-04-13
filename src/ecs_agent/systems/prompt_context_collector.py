@@ -14,6 +14,7 @@ from ecs_agent.components import (
 from ecs_agent.core.world import World
 from ecs_agent.types import (
     DelegationCompletedEvent,
+    DroppableContextKind,
     EntityId,
     ToolExecutionCompletedEvent,
 )
@@ -60,7 +61,9 @@ class PromptContextCollectorSystem:
                 + 1
             )
 
-            for priority, source, content in self._collect_entries(world, entity_id):
+            for priority, source, content, droppable_kind in self._collect_entries(
+                world, entity_id
+            ):
                 queue.entries.append(
                     ContextEntry(
                         entry_id=uuid.uuid4().hex,
@@ -68,6 +71,7 @@ class PromptContextCollectorSystem:
                         source_label=source,
                         content=content,
                         registration_order=next_registration_order,
+                        droppable_kind=droppable_kind,
                     )
                 )
                 next_registration_order += 1
@@ -105,8 +109,8 @@ class PromptContextCollectorSystem:
 
     def _collect_entries(
         self, world: World, entity_id: EntityId
-    ) -> list[tuple[int, str, str]]:
-        entries: list[tuple[int, str, str]] = []
+    ) -> list[tuple[int, str, str, DroppableContextKind | None]]:
+        entries: list[tuple[int, str, str, DroppableContextKind | None]] = []
 
         tool_events = self._tool_events.pop(entity_id, [])
         for event in tool_events:
@@ -122,6 +126,7 @@ class PromptContextCollectorSystem:
                         result=event.result,
                         error=error,
                     ),
+                    "tool_result",
                 )
             )
 
@@ -138,6 +143,7 @@ class PromptContextCollectorSystem:
                         result=delegation_event.result,
                         error=delegation_event.error or "",
                     ),
+                    None,
                 )
             )
 
@@ -158,6 +164,7 @@ class PromptContextCollectorSystem:
                             result=result,
                             error="",
                         ),
+                        "tool_result",
                     )
                 )
 

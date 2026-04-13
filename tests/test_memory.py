@@ -99,6 +99,45 @@ async def test_event_published_on_truncation_with_removed_count() -> None:
 
 
 @pytest.mark.asyncio
+async def test_truncation_preserves_latest_compaction_message_and_following_history() -> (
+    None
+):
+    world = World()
+    entity_id = world.create_entity()
+    messages = [
+        _msg("system", "sys"),
+        _msg("user", "u0"),
+        _msg("assistant", "a0"),
+        _msg("compaction", "summary-1"),
+        _msg("user", "u1"),
+        _msg("assistant", "a1"),
+        _msg("user", "u2"),
+    ]
+    world.add_component(
+        entity_id, ConversationComponent(messages=messages, max_messages=3)
+    )
+
+    await MemorySystem().process(world)
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert [message.role for message in conversation.messages] == [
+        "system",
+        "compaction",
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert [message.content for message in conversation.messages] == [
+        "sys",
+        "summary-1",
+        "u1",
+        "a1",
+        "u2",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_processes_multiple_entities() -> None:
     world = World()
     first = world.create_entity()

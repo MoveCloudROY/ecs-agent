@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from typing import Any
 
 from ecs_agent.accounting.models import (
@@ -15,6 +16,8 @@ from ecs_agent.components import (
     ChildStubComponent,
     ConversationComponent,
     ConversationTreeComponent,
+    ContextBudgetConfig,
+    ContextEntry,
     ErrorComponent,
     InterruptionComponent,
     LLMComponent,
@@ -182,6 +185,12 @@ class ReasoningSystem:
                             "Provider returned stream iterator in non-streaming mode"
                         )
                     result = non_stream_result
+
+                self._queue_reasoning_context_if_configured(
+                    world=world,
+                    entity_id=entity_id,
+                    reasoning_content=result.reasoning_content,
+                )
 
                 await self._publish_llm_invocation_event(
                     world=world,
@@ -401,6 +410,7 @@ class ReasoningSystem:
 
         stream = stream_result
         content_chunks: list[str] = []
+        reasoning_chunks: list[str] = []
         tool_call_buffers: dict[str, dict[str, Any]] = {}
         usage = None
         stream_started_at = time.perf_counter()
@@ -442,6 +452,7 @@ class ReasoningSystem:
                     )
 
                 if delta.reasoning_content is not None:
+                    reasoning_chunks.append(delta.reasoning_content)
                     reasoning_phase_active = True
                     if non_blocking_delta_publish:
                         self._publish_stream_reasoning_delta_non_blocking(
@@ -578,6 +589,43 @@ class ReasoningSystem:
             ),
             usage=usage,
             response_id=response_id,
+            reasoning_content="".join(reasoning_chunks) or None,
+        )
+
+    def _queue_reasoning_context_if_configured(
+        self,
+        *,
+        world: World,
+        entity_id: EntityId,
+        reasoning_content: str | None,
+    ) -> None:
+        if not reasoning_content:
+            return
+
+        budget_config = world.get_component(entity_id, ContextBudgetConfig)
+        if budget_config is None or not budget_config.prune_reasoning:
+            return
+
+        conversation = world.get_component(entity_id, ConversationComponent)
+        if conversation is None:
+            return
+
+        queue = world.get_component(entity_id, PromptContextQueueComponent)
+        if queue is None:
+            return
+
+        next_registration_order = (
+            max((entry.registration_order for entry in queue.entries), default=-1) + 1
+        )
+        queue.entries.append(
+            ContextEntry(
+                entry_id=uuid.uuid4().hex,
+                priority=0,
+                source_label="reasoning",
+                content=reasoning_content,
+                registration_order=next_registration_order,
+                droppable_kind="reasoning",
+            )
         )
 
     def _publish_stream_delta_non_blocking(

@@ -99,7 +99,6 @@ async def _execute_live_dispatch(
     assert result.backend_type == "subagent"
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
 async def test_task_executor_dispatch_compatible_mode(live_api_key: str) -> None:
     await _execute_live_dispatch(
@@ -109,7 +108,6 @@ async def test_task_executor_dispatch_compatible_mode(live_api_key: str) -> None
     )
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
 async def test_task_executor_dispatch_responses_mode(live_api_key: str) -> None:
     await _execute_live_dispatch(

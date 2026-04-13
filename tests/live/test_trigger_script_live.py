@@ -7,7 +7,7 @@ Environment variables required (skip gracefully if absent):
 
 Run:
     LLM_API_KEY=sk-... LLM_BASE_URL=... LLM_MODEL=qwen3.5-flash \
-        uv run pytest tests/live/test_trigger_script_live.py -m live -v
+        uv run pytest tests/live/test_trigger_script_live.py -v
 """
 
 from __future__ import annotations
@@ -47,11 +47,8 @@ def _make_provider(api_key: str, base_url: str, model: str) -> OpenAIProvider:
     )
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
-async def test_live_script_action_rewrites_prompt_before_llm(
-    live_api_key: str,
-) -> None:
+async def test_live_script_action_rewrites_prompt_before_llm(live_api_key: str) -> None:
     base_url = os.getenv(
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
@@ -111,7 +108,6 @@ async def test_live_script_action_rewrites_prompt_before_llm(
     assert "TAGGED_OK" in last_assistant.content
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
 async def test_live_script_action_world_mutation_persists(live_api_key: str) -> None:
     base_url = os.getenv(

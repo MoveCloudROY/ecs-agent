@@ -15,6 +15,8 @@ from ecs_agent.types import (
     ToolSchema,
 )
 
+COMPACTION_SENTINEL = "[COMPACTION SUMMARY]\n"
+
 
 def _openai_config(
     *,
@@ -488,6 +490,74 @@ async def test_multimodal_responses_request_maps_image_and_file_parts() -> None:
         "file_id": "file_456",
         "filename": "report.pdf",
     }
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_adapter_encodes_compaction_as_user_with_sentinel() -> None:
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    mock_response.raise_for_status = Mock()
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post.return_value = mock_response
+
+    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
+    provider._client = mock_client
+
+    await provider.complete([Message(role="compaction", content="Summary: X happened")])
+
+    body = mock_client.post.call_args[1]["json"]
+    assert body["messages"] == [
+        {
+            "role": "user",
+            "content": f"{COMPACTION_SENTINEL}Summary: X happened",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_adapter_encodes_compaction_as_user_with_sentinel() -> (
+    None
+):
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "id": "resp_compaction_1",
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok"}],
+            }
+        ],
+    }
+    mock_response.raise_for_status = Mock()
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post.return_value = mock_response
+
+    provider = OpenAIProvider(
+        config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
+    )
+    provider._client = mock_client
+
+    await provider.complete([Message(role="compaction", content="Summary: X happened")])
+
+    body = mock_client.post.call_args[1]["json"]
+    assert body["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": f"{COMPACTION_SENTINEL}Summary: X happened",
+                }
+            ],
+        }
+    ]
 
 
 @pytest.mark.asyncio

@@ -2,9 +2,16 @@
 
 import uuid
 from datetime import datetime, timezone
+from typing import cast
 
 from ecs_agent.components.definitions import ConversationTreeComponent
-from ecs_agent.types import ConversationBranch, ConversationMessage, Message, ToolCall
+from ecs_agent.types import (
+    ConversationBranch,
+    ConversationMessage,
+    Message,
+    MessageRole,
+    ToolCall,
+)
 
 
 def add_message(
@@ -78,7 +85,7 @@ def linearize(tree: ConversationTreeComponent, leaf_message_id: str) -> list[Mes
     messages: list[Message] = []
     for conv_msg in path:
         msg = Message(
-            role=conv_msg.role,
+            role=cast(MessageRole, conv_msg.role),
             content=conv_msg.content or "",
             tool_calls=conv_msg.tool_calls,
             tool_call_id=conv_msg.tool_call_id,

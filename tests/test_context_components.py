@@ -1,14 +1,17 @@
 """Tests for context management component types."""
 
-import pytest
+from dataclasses import fields
 
 from ecs_agent.components import (
-    StreamingComponent,
     CheckpointComponent,
     CompactionConfigComponent,
+    ContextBudgetConfig,
+    ContextCacheComponent,
     ConversationArchiveComponent,
     RunnerStateComponent,
+    StreamingComponent,
 )
+from ecs_agent.types import CachedToolResultRef
 
 
 def test_streaming_component_instantiation_default() -> None:
@@ -217,3 +220,68 @@ def test_runner_state_large_tick_count() -> None:
     """Test RunnerStateComponent with large tick counts."""
     component = RunnerStateComponent(current_tick=1000000)
     assert component.current_tick == 1000000
+
+
+def test_context_budget_config_component_defaults() -> None:
+    component = ContextBudgetConfig(max_tokens=4096)
+
+    assert component.max_tokens == 4096
+    assert component.prune_tool_results is True
+    assert component.prune_reasoning is False
+    assert component.token_estimation_chars_per_token == 4.0
+    assert component.overflow_behavior == "error"
+
+
+def test_context_budget_config_component_is_dataclass_with_slots() -> None:
+    component = ContextBudgetConfig(max_tokens=1024)
+
+    assert hasattr(component, "__slots__")
+
+
+def test_context_budget_config_component_field_types() -> None:
+    field_map = {
+        field_info.name: field_info.type for field_info in fields(ContextBudgetConfig)
+    }
+
+    assert field_map == {
+        "max_tokens": int,
+        "prune_tool_results": bool,
+        "prune_reasoning": bool,
+        "token_estimation_chars_per_token": float,
+        "overflow_behavior": str,
+    }
+
+
+def test_context_cache_component_defaults() -> None:
+    component = ContextCacheComponent()
+
+    assert component.cached_tool_results == []
+
+
+def test_context_cache_component_default_factory_independence() -> None:
+    first = ContextCacheComponent()
+    second = ContextCacheComponent()
+
+    first.cached_tool_results.append(
+        CachedToolResultRef(
+            tool_call_id="tool-1",
+            artifact_path="scratchbook/records/tool/tool_123",
+            summary="cached output",
+        )
+    )
+
+    assert second.cached_tool_results == []
+
+
+def test_context_cache_component_is_dataclass_with_slots() -> None:
+    component = ContextCacheComponent()
+
+    assert hasattr(component, "__slots__")
+
+
+def test_context_cache_component_field_type() -> None:
+    field_map = {
+        field_info.name: field_info.type for field_info in fields(ContextCacheComponent)
+    }
+
+    assert field_map == {"cached_tool_results": list[CachedToolResultRef]}

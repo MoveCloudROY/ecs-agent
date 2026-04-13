@@ -227,14 +227,14 @@ class ReplanningSystem:
 
         for msg in conversation.messages:
             if msg.role == "assistant":
+                if found_step_assistant:
+                    break
                 if step_assistant_count == step_index:
                     found_step_assistant = True
                     assistant_content = msg.content or ""
                 step_assistant_count += 1
             elif msg.role == "tool" and found_step_assistant:
                 tool_results.append(msg.content)
-            elif msg.role == "assistant" and found_step_assistant:
-                break  # Next assistant message = next step
 
         if tool_results:
             return "; ".join(tool_results)

@@ -2,11 +2,14 @@ import pytest
 
 from ecs_agent.components import (
     ConversationComponent,
+    ContextBudgetConfig,
+    ContextCacheComponent,
     PendingToolCallsComponent,
     ToolRegistryComponent,
     ToolResultsComponent,
 )
 from ecs_agent.core import World
+from ecs_agent.scratchbook import ArtifactRegistry
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import Message, ToolCall, ToolSchema
 
@@ -223,3 +226,66 @@ async def test_entities_missing_required_components_are_skipped() -> None:
         Message(role="tool", content="pong", tool_call_id="ok-1")
     ]
     assert world.get_component(valid, PendingToolCallsComponent) is None
+
+
+@pytest.mark.asyncio
+async def test_tool_execution_caches_result_on_overflow(tmp_path) -> None:
+    scratchbook_root = tmp_path / ".scratchbook"
+    registry = ArtifactRegistry(root=scratchbook_root)
+
+    world = World()
+    entity_id = world.create_entity()
+
+    async def verbose_tool() -> str:
+        return "cached payload " * 80
+
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="run the tool")]),
+    )
+    world.add_component(
+        entity_id,
+        ContextBudgetConfig(
+            max_tokens=5,
+            token_estimation_chars_per_token=1.0,
+            overflow_behavior="warn",
+        ),
+    )
+    world.add_component(
+        entity_id,
+        ToolRegistryComponent(
+            tools={
+                "verbose_tool": ToolSchema(
+                    name="verbose_tool",
+                    description="Return large payload",
+                    parameters={"type": "object"},
+                )
+            },
+            handlers={"verbose_tool": verbose_tool},
+        ),
+    )
+    world.add_component(
+        entity_id,
+        PendingToolCallsComponent(
+            tool_calls=[ToolCall(id="overflow-1", name="verbose_tool", arguments={})]
+        ),
+    )
+
+    await ToolExecutionSystem(registry=registry).process(world)
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages[-1].role == "tool"
+    assert "cached" in conversation.messages[-1].content.lower()
+    assert "scratchbook/records/tool/tool_" in conversation.messages[-1].content
+
+    cache = world.get_component(entity_id, ContextCacheComponent)
+    assert cache is not None
+    assert len(cache.cached_tool_results) == 1
+    assert cache.cached_tool_results[0].tool_call_id == "overflow-1"
+    assert cache.cached_tool_results[0].original_content == "cached payload " * 80
+
+    artifact_path = scratchbook_root / cache.cached_tool_results[0].artifact_path
+    assert artifact_path.exists()
+    artifact_payload = artifact_path.read_text(encoding="utf-8")
+    assert "cached payload " in artifact_payload

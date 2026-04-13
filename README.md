@@ -250,6 +250,8 @@ World
 | `StreamingComponent` | Enables system-level streaming output |
 | `CheckpointComponent` | Stores world state snapshots for undo |
 | `CompactionConfigComponent` | Token threshold and model for compaction |
+| `ContextBudgetConfig` | Outbound token budget limits: max tokens, tool-result/reasoning pruning policy, overflow behavior |
+| `ContextCacheComponent` | Cache of evicted tool-result refs pruned from outbound context by the budget reducer |
 | `ConversationArchiveComponent` | Archived conversation summaries |
 | `RunnerStateComponent` | Tracks runner tick state and pause |
 | `UserInputComponent` | Async user input with optional timeout |
@@ -443,13 +445,13 @@ Run live adapter tests against a real LLM endpoint (e.g. DashScope). Tests skip 
 
 ```bash
 # Discover available live tests
-uv run pytest tests/live/test_llm_api_live.py -m live --collect-only
+uv run pytest tests/live/test_llm_api_live.py --collect-only
 
 # Run all live tests (requires LLM_API_KEY env var)
 LLM_API_KEY="$LLM_API_KEY" \
   LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
   LLM_MODEL=qwen3.5-flash \
-  uv run pytest tests/live/test_llm_api_live.py -m live -v
+  uv run pytest tests/live/test_llm_api_live.py -v
 ```
 
 Four live scenarios are provided:
@@ -459,6 +461,7 @@ Four live scenarios are provided:
 - **Anthropic-compatible text** — `LLM_MODEL=kimi-k2.5`, `LLM_BASE_URL=https://dashscope.aliyuncs.com/apps/anthropic`
 - **Task Executor** — `tests/live/test_task_executor_live.py` exercises the `TaskExecutor` dispatch path end-to-end.
 - **Subagent Delegation** — `tests/live/test_subagent_live.py` covers background queuing, FIFO scheduling, and streaming telemetry. Includes `test_aliyun_completions_background_completion_notification_flow` and `test_aliyun_responses_background_completion_notification_flow` for explicit wait/notification flow.
+- **Compaction** — `tests/live/test_compaction_live.py` covers `role="compaction"` encoding on Chat Completions and Responses API, full `CompactionSystem.process()` end-to-end with `bisect`/`full_history`/`custom prompt` methods, `summary_model_id` routing, and `MemorySystem` compaction-boundary protection.
 
 For the legacy integration test:
 
@@ -467,6 +470,10 @@ LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
   LLM_MODEL=qwen3.5-flash \
   LLM_API_KEY="$LLM_API_KEY" \
   uv run pytest tests/test_real_llm_integration.py -k "prompt" -v
+
+# Compaction live tests
+LLM_API_KEY="$LLM_API_KEY" \
+  uv run pytest tests/live/test_compaction_live.py -v
 ```
 
 ### Type Checking

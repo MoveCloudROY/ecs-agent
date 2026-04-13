@@ -45,6 +45,8 @@ class _OpenAIProviderFacade(Protocol):
 class OpenAIChatAdapter:
     """Adapter for OpenAI-compatible Chat Completions requests."""
 
+    _COMPACTION_SENTINEL = "[COMPACTION SUMMARY]\n"
+
     def __init__(self, provider: _OpenAIProviderFacade) -> None:
         self._provider = provider
 
@@ -221,13 +223,26 @@ class OpenAIChatAdapter:
     ) -> list[dict[str, Any]]:
         openai_messages: list[dict[str, Any]] = []
         for msg in messages:
-            openai_msg: dict[str, Any] = {"role": msg.role}
+            role = msg.role
+            content_override: str | None = None
+            if msg.role == "compaction":
+                role = "user"
+                content_override = f"{self._COMPACTION_SENTINEL}{msg.content}"
+
+            openai_msg: dict[str, Any] = {"role": role}
 
             message_content = self._convert_message_content(msg)
             if message_content is not None:
+                if content_override is not None and isinstance(message_content, list):
+                    message_content = [
+                        {"type": "text", "text": content_override},
+                        *message_content[1:],
+                    ]
                 openai_msg["content"] = message_content
             else:
-                openai_msg["content"] = msg.content
+                openai_msg["content"] = (
+                    content_override if content_override is not None else msg.content
+                )
 
             if msg.tool_calls and not msg.content and not msg.parts:
                 openai_msg["content"] = None

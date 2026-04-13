@@ -93,7 +93,6 @@ class _CapturingAsyncClient:
         return await self._inner.post(url, **kwargs)
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
 @pytest.mark.parametrize("base_url,api_format", _ENDPOINT_PARAMS)
 async def test_live_scratchbook_placeholders_render_into_system_prompt_snapshot(
@@ -154,7 +153,6 @@ async def test_live_scratchbook_placeholders_render_into_system_prompt_snapshot(
     }.issubset(set(rendered.placeholder_snapshot))
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
 @pytest.mark.parametrize("base_url,api_format", _ENDPOINT_PARAMS)
 async def test_live_scratchbook_rendered_prompt_reaches_aliyun_outbound_channel(
