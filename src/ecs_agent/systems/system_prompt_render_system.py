@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from string import Template
 
@@ -197,6 +198,17 @@ def _iter_render_targets(
     return targets
 
 
+_XML_TAIL_RE = re.compile(
+    r"\n\$\{_chat_history_summary_xml\}$"
+    r"|\n\$_chat_history_summary_xml$"
+    r"|\n<chat_history_summary>[^<]*</chat_history_summary>$",
+)
+
+
+def _strip_compaction_xml_tail(template: str) -> str:
+    return _XML_TAIL_RE.sub("", template)
+
+
 def _resolve_legacy_prompt_template(world: World, entity_id: EntityId) -> str | None:
     rendered_component = world.get_component(entity_id, RenderedSystemPromptComponent)
     if rendered_component is not None:
@@ -208,11 +220,11 @@ def _resolve_legacy_prompt_template(world: World, entity_id: EntityId) -> str | 
 
     legacy_system_prompt = world.get_component(entity_id, SystemPromptComponent)
     if legacy_system_prompt is not None and legacy_system_prompt.content:
-        return legacy_system_prompt.content
+        return _strip_compaction_xml_tail(legacy_system_prompt.content)
 
     llm_component = world.get_component(entity_id, LLMComponent)
     if llm_component is not None and llm_component.system_prompt:
-        return llm_component.system_prompt
+        return _strip_compaction_xml_tail(llm_component.system_prompt)
 
     return None
 
