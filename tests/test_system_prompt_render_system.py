@@ -1284,6 +1284,52 @@ async def test_legacy_agent_gets_xml_tail_without_explicit_placeholder() -> None
     assert llm.system_prompt == rendered.text
 
 
+@pytest.mark.asyncio
+async def test_rerender_legacy_agent_after_summary_change_no_double_block() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(entity_id, CompactionConfigComponent(threshold_tokens=100))
+    world.add_component(
+        entity_id,
+        LLMComponent(
+            provider=FakeProvider(responses=[]),
+            model="fake",
+            system_prompt="You are helpful.",
+        ),
+    )
+    world.add_component(
+        entity_id,
+        CurrentCompactionSummaryComponent(summary="first summary"),
+    )
+
+    system = SystemPromptRenderSystem()
+    await system.process(world)
+
+    rendered_first = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered_first is not None
+    first_text = rendered_first.text
+    assert first_text.count("<chat_history_summary>") == 1
+    assert "first summary" in first_text
+
+    world.remove_component(entity_id, RenderedSystemPromptComponent)
+    world.remove_component(entity_id, CurrentCompactionSummaryComponent)
+    world.add_component(
+        entity_id,
+        CurrentCompactionSummaryComponent(summary="second summary"),
+    )
+
+    await system.process(world)
+
+    rendered_second = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered_second is not None
+    second_text = rendered_second.text
+    assert second_text.count("<chat_history_summary>") == 1, (
+        f"Expected exactly one <chat_history_summary> block, got:\n{second_text}"
+    )
+    assert "second summary" in second_text
+    assert "first summary" not in second_text
+
+
 class _ContractProvider:
     def __init__(
         self,
