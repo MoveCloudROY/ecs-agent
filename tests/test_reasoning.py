@@ -1,12 +1,16 @@
+from collections.abc import AsyncIterator
+
 import pytest
 
 from ecs_agent.components import (
+    ContextBudgetConfig,
     ContextEntry,
     ConversationComponent,
     ErrorComponent,
     LLMComponent,
     PendingToolCallsComponent,
     PromptContextQueueComponent,
+    StreamingComponent,
     UserPromptConfigComponent,
     SystemPromptComponent,
     TerminalComponent,
@@ -17,6 +21,7 @@ from ecs_agent.core import World
 from ecs_agent.providers import FakeProvider
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import CompletionResult, Message, ToolCall, ToolSchema
+from ecs_agent.types import StreamDelta
 
 
 class RecordingFakeProvider(FakeProvider):
@@ -42,6 +47,17 @@ class ErrorFakeProvider(FakeProvider):
         _ = messages
         _ = tools
         raise RuntimeError("provider exploded")
+
+
+class ReasoningContentStreamingFakeProvider(FakeProvider):
+    async def _stream_complete(
+        self, result: CompletionResult
+    ) -> AsyncIterator[StreamDelta]:
+        _ = result
+        yield StreamDelta(reasoning_content="first thought ")
+        yield StreamDelta(reasoning_content="second thought")
+        yield StreamDelta(content="done")
+        yield StreamDelta(finish_reason="stop")
 
 
 @pytest.mark.asyncio
@@ -561,7 +577,15 @@ async def test_event_trigger_injection_is_transient_for_reasoning_provider_call(
     world.add_component(
         entity_id,
         UserPromptConfigComponent(
-            triggers=[TriggerSpec(pattern="summary", match_mode="keyword", action="inject", content="Prefer using successful tool evidence", priority=0)],
+            triggers=[
+                TriggerSpec(
+                    pattern="summary",
+                    match_mode="keyword",
+                    action="inject",
+                    content="Prefer using successful tool evidence",
+                    priority=0,
+                )
+            ],
             enable_context_pool=True,
         ),
     )
@@ -593,3 +617,126 @@ async def test_event_trigger_injection_is_transient_for_reasoning_provider_call(
     conversation = world.get_component(entity_id, ConversationComponent)
     assert conversation is not None
     assert conversation.messages[0].content == "Need summary"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_content_becomes_droppable_context_entry_when_enabled() -> None:
+    world = World()
+    provider = ReasoningContentStreamingFakeProvider(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="ignored"))
+        ]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Hi")]),
+    )
+    world.add_component(entity_id, StreamingComponent(enabled=True))
+    world.add_component(entity_id, PromptContextQueueComponent())
+    world.add_component(
+        entity_id,
+        ContextBudgetConfig(max_tokens=1024, prune_reasoning=True),
+    )
+
+    await ReasoningSystem().process(world)
+
+    queue = world.get_component(entity_id, PromptContextQueueComponent)
+    assert queue is not None
+    assert len(queue.entries) == 1
+    assert queue.entries[0].droppable_kind == "reasoning"
+    assert queue.entries[0].source_label == "reasoning"
+    assert queue.entries[0].content == "first thought second thought"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_context_is_noop_when_disabled() -> None:
+    world = World()
+    provider = ReasoningContentStreamingFakeProvider(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="ignored"))
+        ]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Hi")]),
+    )
+    world.add_component(entity_id, StreamingComponent(enabled=True))
+    world.add_component(entity_id, PromptContextQueueComponent())
+    world.add_component(
+        entity_id,
+        ContextBudgetConfig(max_tokens=1024, prune_reasoning=False),
+    )
+
+    await ReasoningSystem().process(world)
+
+    queue = world.get_component(entity_id, PromptContextQueueComponent)
+    assert queue is not None
+    assert queue.entries == []
+
+    no_reasoning_world = World()
+    no_reasoning_provider = FakeProvider(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="plain reply"))
+        ]
+    )
+    no_reasoning_entity = no_reasoning_world.create_entity()
+    no_reasoning_world.add_component(
+        no_reasoning_entity,
+        LLMComponent(provider=no_reasoning_provider, model="fake"),
+    )
+    no_reasoning_world.add_component(
+        no_reasoning_entity,
+        ConversationComponent(messages=[Message(role="user", content="Hi")]),
+    )
+    no_reasoning_world.add_component(
+        no_reasoning_entity,
+        PromptContextQueueComponent(),
+    )
+    no_reasoning_world.add_component(
+        no_reasoning_entity,
+        ContextBudgetConfig(max_tokens=1024, prune_reasoning=True),
+    )
+
+    await ReasoningSystem().process(no_reasoning_world)
+
+    no_reasoning_queue = no_reasoning_world.get_component(
+        no_reasoning_entity, PromptContextQueueComponent
+    )
+    assert no_reasoning_queue is not None
+    assert no_reasoning_queue.entries == []
+
+
+@pytest.mark.asyncio
+async def test_reasoning_context_capture_does_not_mutate_conversation() -> None:
+    world = World()
+    provider = ReasoningContentStreamingFakeProvider(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="ignored"))
+        ]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Hi")]),
+    )
+    world.add_component(entity_id, StreamingComponent(enabled=True))
+    world.add_component(entity_id, PromptContextQueueComponent())
+    world.add_component(
+        entity_id,
+        ContextBudgetConfig(max_tokens=1024, prune_reasoning=True),
+    )
+
+    await ReasoningSystem().process(world)
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert [(message.role, message.content) for message in conversation.messages] == [
+        ("user", "Hi"),
+        ("assistant", "done"),
+    ]
+    assert all("thought" not in message.content for message in conversation.messages)

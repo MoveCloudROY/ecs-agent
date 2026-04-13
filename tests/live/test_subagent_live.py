@@ -274,7 +274,6 @@ async def _execute_live_notification_flow(
     assert "hello" in full_result["inline_content"].lower()
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
 async def test_subagent_compatible_mode(live_api_key: str) -> None:
     await _execute_live_subagent(
@@ -284,7 +283,6 @@ async def test_subagent_compatible_mode(live_api_key: str) -> None:
     )
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
 async def test_subagent_responses_mode(live_api_key: str) -> None:
     await _execute_live_subagent(
@@ -294,7 +292,6 @@ async def test_subagent_responses_mode(live_api_key: str) -> None:
     )
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
 async def test_subagent_streaming_smoke(live_api_key: str) -> None:
     await _execute_live_subagent(
@@ -305,7 +302,6 @@ async def test_subagent_streaming_smoke(live_api_key: str) -> None:
     )
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
 async def test_aliyun_completions_background_completion_notification_flow(
     live_api_key: str,
@@ -317,7 +313,6 @@ async def test_aliyun_completions_background_completion_notification_flow(
     )
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
 async def test_aliyun_responses_background_completion_notification_flow(
     live_api_key: str,

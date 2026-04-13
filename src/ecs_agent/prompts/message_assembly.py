@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Protocol
+from math import ceil
+from typing import TYPE_CHECKING, Protocol, TypeVar
 
 from ecs_agent.prompts.contracts import (
     PromptTemplate,
@@ -22,7 +23,13 @@ CONTEXT_POOL_DELIMITER = "\n\n---\n\n"
 CONTEXT_POOL_MARKER = "[PROMPT_CONTEXT_POOL]"
 
 if TYPE_CHECKING:
+    from ecs_agent.components.definitions import (
+        ContextBudgetConfig,
+        ContextCacheComponent,
+        ContextEntry,
+    )
     from ecs_agent.core import World
+    from ecs_agent.types import DroppableContextKind
     from ecs_agent.types import EntityId
     from ecs_agent.components.definitions import (
         PromptContextQueueComponent,
@@ -37,6 +44,132 @@ class ContextEntryProtocol(Protocol):
     source_label: str
     content: str
     registration_order: int
+    droppable_kind: DroppableContextKind | None
+
+
+ContextEntryT = TypeVar("ContextEntryT", bound=ContextEntryProtocol)
+
+
+def apply_outbound_budget(
+    messages: list[Message],
+    system_prompt: str,
+    context_entries: list[ContextEntry],
+    config: ContextBudgetConfig,
+    *,
+    cache_component: ContextCacheComponent | None = None,
+) -> list[Message]:
+    _ = cache_component
+    reduced_messages = list(messages)
+    reduced_context_entries = list(context_entries)
+
+    if (
+        _estimate_total_tokens(
+            reduced_messages,
+            system_prompt=system_prompt,
+            context_entries=reduced_context_entries,
+            chars_per_token=config.token_estimation_chars_per_token,
+        )
+        <= config.max_tokens
+    ):
+        return reduced_messages
+
+    if config.prune_tool_results:
+        while True:
+            if (
+                _estimate_total_tokens(
+                    reduced_messages,
+                    system_prompt=system_prompt,
+                    context_entries=reduced_context_entries,
+                    chars_per_token=config.token_estimation_chars_per_token,
+                )
+                <= config.max_tokens
+            ):
+                return reduced_messages
+            next_messages = _drop_oldest_tool_span(reduced_messages)
+            if len(next_messages) == len(reduced_messages):
+                break
+            reduced_messages = next_messages
+
+        while True:
+            if (
+                _estimate_total_tokens(
+                    reduced_messages,
+                    system_prompt=system_prompt,
+                    context_entries=reduced_context_entries,
+                    chars_per_token=config.token_estimation_chars_per_token,
+                )
+                <= config.max_tokens
+            ):
+                return reduced_messages
+
+            next_context_entries = _drop_oldest_context_entries_by_kind(
+                reduced_context_entries,
+                kind="tool_result",
+                cache_component=cache_component,
+            )
+            if len(next_context_entries) == len(reduced_context_entries):
+                break
+            dropped_ids = {e.entry_id for e in next_context_entries}
+            for entry in reduced_context_entries:
+                if entry.entry_id not in dropped_ids:
+                    logger.info(
+                        "context_entry_pruned",
+                        reason="tool_result",
+                        entry_id=entry.entry_id,
+                        source_label=entry.source_label,
+                    )
+            reduced_context_entries = next_context_entries
+            reduced_messages = _replace_context_pool_block(
+                reduced_messages,
+                original_entries=context_entries,
+                remaining_entries=reduced_context_entries,
+                cache_component=cache_component,
+            )
+
+    if config.prune_reasoning:
+        reasoning_entries = [
+            entry
+            for entry in reduced_context_entries
+            if _context_entry_kind(entry) == "reasoning"
+        ]
+        if reasoning_entries:
+            reduced_context_entries = [
+                entry
+                for entry in reduced_context_entries
+                if _context_entry_kind(entry) != "reasoning"
+            ]
+            reduced_messages = _replace_context_pool_block(
+                reduced_messages,
+                original_entries=context_entries,
+                remaining_entries=reduced_context_entries,
+                cache_component=cache_component,
+            )
+            if (
+                _estimate_total_tokens(
+                    reduced_messages,
+                    system_prompt=system_prompt,
+                    context_entries=reduced_context_entries,
+                    chars_per_token=config.token_estimation_chars_per_token,
+                )
+                <= config.max_tokens
+            ):
+                return reduced_messages
+
+    estimated_tokens = _estimate_total_tokens(
+        reduced_messages,
+        system_prompt=system_prompt,
+        context_entries=reduced_context_entries,
+        chars_per_token=config.token_estimation_chars_per_token,
+    )
+    if config.overflow_behavior == "error":
+        raise ValueError("Protected content exceeds configured budget")
+
+    logger.warning(
+        "outbound_budget_exceeded",
+        estimated_tokens=estimated_tokens,
+        max_tokens=config.max_tokens,
+    )
+    return reduced_messages
 
 
 def build_keyword_registry(triggers: dict[str, str]) -> PromptRegistry:
@@ -162,6 +295,7 @@ def prepare_outbound_messages(
     from ecs_agent.components.definitions import (
         ConversationComponent,
         ConversationTreeComponent,
+        ContextBudgetConfig,
         PromptContextQueueComponent,
         PromptContextReservationComponent,
         RenderedUserPromptComponent,
@@ -170,6 +304,7 @@ def prepare_outbound_messages(
     from ecs_agent.conversation_tree import get_active_leaf, linearize
 
     prompt_config = world.get_component(entity_id, UserPromptConfigComponent)
+    budget_config = world.get_component(entity_id, ContextBudgetConfig)
     context_queue = world.get_component(entity_id, PromptContextQueueComponent)
     context_reservation = world.get_component(
         entity_id, PromptContextReservationComponent
@@ -183,6 +318,8 @@ def prepare_outbound_messages(
     # -------------------------------------------------------------------
     # Resolve conversation messages
     # -------------------------------------------------------------------
+    tree = world.get_component(entity_id, ConversationTreeComponent)
+
     if conversation_override is not None:
         # Override path: skip World read, skip RenderedUserPromptComponent.
         # Convert config triggers to trigger_specs for inline injection.
@@ -192,7 +329,6 @@ def prepare_outbound_messages(
             trigger_specs = list(prompt_config.triggers)
     else:
         # Normal path: read from World, apply RenderedUserPromptComponent.
-        tree = world.get_component(entity_id, ConversationTreeComponent)
         conversation = world.get_component(entity_id, ConversationComponent)
 
         conversation_messages: list[Message] = []
@@ -272,6 +408,17 @@ def prepare_outbound_messages(
         context_pool_items=context_pool_items_for_assembly,
         trigger_specs=trigger_specs,
     )
+
+    if budget_config is not None and tree is None:
+        from ecs_agent.components.definitions import ContextCacheComponent
+
+        messages = apply_outbound_budget(
+            messages,
+            system_prompt=system_prompt or "",
+            context_entries=list(context_pool_items_for_assembly or []),
+            config=budget_config,
+            cache_component=world.get_component(entity_id, ContextCacheComponent),
+        )
 
     logger.debug(
         "outbound_messages_assembled",
@@ -451,6 +598,8 @@ def _format_slash_skill_context(
 
 def _render_context_pool_block(
     context_pool_items: Sequence[ContextEntryProtocol] | None,
+    *,
+    cache_component: ContextCacheComponent | None = None,
 ) -> str:
     if not context_pool_items:
         return ""
@@ -459,12 +608,167 @@ def _render_context_pool_block(
         context_pool_items,
         key=lambda entry: (-entry.priority, entry.registration_order),
     )
-    rendered_entries = [entry.content for entry in sorted_items if entry.content]
+    rendered_entries = [
+        _render_context_entry(entry, cache_component=cache_component)
+        for entry in sorted_items
+        if _render_context_entry(entry, cache_component=cache_component)
+    ]
     if not rendered_entries:
         return ""
 
     joined_entries = CONTEXT_POOL_DELIMITER.join(rendered_entries)
     return f"{CONTEXT_POOL_MARKER}\n{joined_entries}"
+
+
+def _estimate_total_tokens(
+    messages: list[Message],
+    *,
+    system_prompt: str,
+    context_entries: Sequence[ContextEntryProtocol],
+    chars_per_token: float,
+) -> int:
+    total_chars = sum(len(message.content or "") for message in messages)
+    total_chars += len(system_prompt)
+    total_chars += sum(len(entry.content) for entry in context_entries)
+    return ceil(total_chars / chars_per_token)
+
+
+def _drop_oldest_tool_span(messages: list[Message]) -> list[Message]:
+    for index, message in enumerate(messages):
+        if message.role != "assistant" or not message.tool_calls:
+            continue
+
+        tool_call_ids = {tool_call.id for tool_call in message.tool_calls}
+        if not tool_call_ids:
+            continue
+
+        end_index = index + 1
+        matched_tool_result = False
+        while end_index < len(messages):
+            candidate = messages[end_index]
+            if candidate.role != "tool":
+                break
+            if candidate.tool_call_id in tool_call_ids:
+                matched_tool_result = True
+                end_index += 1
+                continue
+            break
+
+        if not matched_tool_result:
+            continue
+
+        return [*messages[:index], *messages[end_index:]]
+
+    return list(messages)
+
+
+def _context_entry_kind(entry: ContextEntryProtocol) -> DroppableContextKind | None:
+    if entry.droppable_kind is not None:
+        return entry.droppable_kind
+    if entry.source_label == "reasoning":
+        return "reasoning"
+    if entry.source_label.startswith("tool:") or entry.source_label.startswith(
+        "structured_output:"
+    ):
+        return "tool_result"
+    return None
+
+
+def _drop_oldest_context_entries_by_kind(
+    entries: Sequence[ContextEntryT],
+    *,
+    kind: DroppableContextKind,
+    cache_component: ContextCacheComponent | None = None,
+) -> list[ContextEntryT]:
+    matching_entries = [
+        entry for entry in entries if _context_entry_kind(entry) == kind
+    ]
+    if not matching_entries:
+        return list(entries)
+
+    oldest_entry = min(
+        matching_entries,
+        key=lambda entry: (
+            0
+            if _cached_artifact_path_for_entry(entry, cache_component=cache_component)
+            else 1,
+            entry.registration_order,
+        ),
+    )
+    return [entry for entry in entries if entry.entry_id != oldest_entry.entry_id]
+
+
+def _replace_context_pool_block(
+    messages: list[Message],
+    *,
+    original_entries: Sequence[ContextEntryProtocol],
+    remaining_entries: Sequence[ContextEntryProtocol],
+    cache_component: ContextCacheComponent | None = None,
+) -> list[Message]:
+    original_block = _render_context_pool_block(
+        original_entries,
+        cache_component=cache_component,
+    )
+    if not original_block:
+        return list(messages)
+
+    remaining_block = _render_context_pool_block(
+        remaining_entries,
+        cache_component=cache_component,
+    )
+    replaced_messages = list(messages)
+    for index in range(len(replaced_messages) - 1, -1, -1):
+        message = replaced_messages[index]
+        if message.role != "user" or original_block not in message.content:
+            continue
+
+        updated_content = message.content.replace(original_block, remaining_block, 1)
+        if not remaining_block:
+            updated_content = updated_content.replace("\n\n\n\n", "\n\n")
+            updated_content = updated_content.replace(f"{CONTEXT_POOL_MARKER}\n", "", 1)
+        replaced_messages[index] = Message(
+            role=message.role,
+            content=updated_content,
+            parts=message.parts,
+            tool_calls=message.tool_calls,
+            tool_call_id=message.tool_call_id,
+            compaction_metadata=message.compaction_metadata,
+        )
+        break
+    return replaced_messages
+
+
+def _render_context_entry(
+    entry: ContextEntryProtocol,
+    *,
+    cache_component: ContextCacheComponent | None,
+) -> str:
+    artifact_path = _cached_artifact_path_for_entry(
+        entry,
+        cache_component=cache_component,
+    )
+    if artifact_path is not None:
+        return (
+            f"source: {entry.source_label}\n"
+            "status: cached\n"
+            f"result: [Tool result cached - retrieve full content from {artifact_path}]"
+        )
+    return entry.content
+
+
+def _cached_artifact_path_for_entry(
+    entry: ContextEntryProtocol,
+    *,
+    cache_component: ContextCacheComponent | None,
+) -> str | None:
+    if cache_component is None or not entry.source_label.startswith("tool:"):
+        return None
+
+    tool_call_id = entry.source_label.split(":", 1)[1]
+    for cached_result in cache_component.cached_tool_results:
+        if cached_result.tool_call_id == tool_call_id:
+            return cached_result.artifact_path
+    return None
 
 
 def _inject_context_block(
@@ -480,6 +784,7 @@ def _inject_context_block(
 
 
 __all__ = [
+    "apply_outbound_budget",
     "assemble_messages",
     "build_keyword_registry",
     "build_trigger_specs",

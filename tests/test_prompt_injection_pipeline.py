@@ -2,6 +2,7 @@ import pytest
 
 from ecs_agent.components import (
     ConversationComponent,
+    ContextBudgetConfig,
     ContextEntry,
     LLMComponent,
     PromptContextQueueComponent,
@@ -14,6 +15,8 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import World
 from ecs_agent.prompts.message_assembly import (
+    apply_outbound_budget,
+    assemble_messages,
     commit_prompt_context_reservation,
     prepare_outbound_messages,
     reserve_prompt_context_reservation,
@@ -31,6 +34,7 @@ from ecs_agent.types import (
     CompletionResult,
     DelegationCompletedEvent,
     Message,
+    ToolCall,
     ToolExecutionCompletedEvent,
     ToolSchema,
 )
@@ -76,6 +80,308 @@ class RecordingProvider(FakeProvider):
         _ = tools
         self.calls.append(list(messages))
         return await super().complete(messages, tools)
+
+
+def test_budget_reducer_non_mutating() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    original_messages = [
+        Message(role="user", content="start"),
+        Message(
+            role="assistant",
+            content="calling tool",
+            tool_calls=[ToolCall(id="call-1", name="search", arguments={})],
+        ),
+        Message(role="tool", content="tool output", tool_call_id="call-1"),
+        Message(role="user", content="final question"),
+    ]
+    conversation = ConversationComponent(messages=list(original_messages))
+    world.add_component(entity_id, conversation)
+    world.add_component(
+        entity_id,
+        ContextBudgetConfig(
+            max_tokens=25,
+            prune_tool_results=True,
+            prune_reasoning=False,
+            token_estimation_chars_per_token=1.0,
+            overflow_behavior="error",
+        ),
+    )
+
+    outbound_messages, _ = prepare_outbound_messages(
+        world,
+        entity_id,
+        current_tick=1,
+    )
+
+    assert [
+        (message.role, message.content, message.tool_call_id, message.tool_calls)
+        for message in conversation.messages
+    ] == [
+        (message.role, message.content, message.tool_call_id, message.tool_calls)
+        for message in original_messages
+    ]
+    assert [message.role for message in outbound_messages] == ["user", "user"]
+
+
+def test_budget_reducer_prunes_tool_spans_atomically() -> None:
+    reduced = apply_outbound_budget(
+        messages=[
+            Message(role="user", content="start"),
+            Message(
+                role="assistant",
+                content="calling tool",
+                tool_calls=[ToolCall(id="call-1", name="search", arguments={})],
+            ),
+            Message(role="tool", content="tool output", tool_call_id="call-1"),
+            Message(role="assistant", content="final answer"),
+        ],
+        system_prompt="",
+        context_entries=[],
+        config=ContextBudgetConfig(
+            max_tokens=30,
+            prune_tool_results=True,
+            prune_reasoning=False,
+            token_estimation_chars_per_token=1.0,
+            overflow_behavior="error",
+        ),
+    )
+
+    assert [(message.role, message.content) for message in reduced] == [
+        ("user", "start"),
+        ("assistant", "final answer"),
+    ]
+
+
+def test_tool_span_atomic_removal_from_conversation() -> None:
+    reduced = apply_outbound_budget(
+        messages=[
+            Message(role="user", content="start"),
+            Message(
+                role="assistant",
+                content="calling tool 1",
+                tool_calls=[ToolCall(id="call-1", name="search", arguments={})],
+            ),
+            Message(role="tool", content="tool output 1", tool_call_id="call-1"),
+            Message(role="assistant", content="middle answer"),
+            Message(
+                role="assistant",
+                content="calling tool 2",
+                tool_calls=[ToolCall(id="call-2", name="read", arguments={})],
+            ),
+            Message(role="tool", content="tool output 2", tool_call_id="call-2"),
+            Message(role="assistant", content="final answer"),
+        ],
+        system_prompt="",
+        context_entries=[],
+        config=ContextBudgetConfig(
+            max_tokens=55,
+            prune_tool_results=True,
+            prune_reasoning=False,
+            token_estimation_chars_per_token=1.0,
+            overflow_behavior="error",
+        ),
+    )
+
+    assert [(message.role, message.content) for message in reduced] == [
+        ("user", "start"),
+        ("assistant", "middle answer"),
+        ("assistant", "final answer"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tool_result_context_entries_are_tagged() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
+    world.add_component(entity_id, PromptContextQueueComponent())
+
+    collector = PromptContextCollectorSystem()
+    await collector.process(world)
+    await world.event_bus.publish(
+        ToolExecutionCompletedEvent(
+            entity_id=entity_id,
+            tool_call_id="tool-1",
+            result="tool facts",
+            success=True,
+        )
+    )
+    await collector.process(world)
+
+    queue = world.get_component(entity_id, PromptContextQueueComponent)
+    assert queue is not None
+    assert len(queue.entries) == 1
+    assert queue.entries[0].source_label == "tool:tool-1"
+    assert queue.entries[0].droppable_kind == "tool_result"
+
+
+def test_budget_prunes_tool_result_context_entries() -> None:
+    tool_context = ContextEntry(
+        entry_id="tool-entry",
+        priority=30,
+        source_label="tool:call-1",
+        content="source: tool:call-1\nstatus: success\nresult: durable/path.md",
+        registration_order=0,
+        droppable_kind="tool_result",
+    )
+    reasoning_context = ContextEntry(
+        entry_id="reasoning-entry",
+        priority=20,
+        source_label="reasoning",
+        content="source: reasoning\nstatus: success\nresult: keep me",
+        registration_order=1,
+        droppable_kind="reasoning",
+    )
+
+    reduced = apply_outbound_budget(
+        messages=assemble_messages(
+            conversation_messages=[Message(role="user", content="Need answer")],
+            enable_context_pool=True,
+            context_pool_items=[tool_context, reasoning_context],
+        ),
+        system_prompt="",
+        context_entries=[tool_context, reasoning_context],
+        config=ContextBudgetConfig(
+            max_tokens=140,
+            prune_tool_results=True,
+            prune_reasoning=False,
+            token_estimation_chars_per_token=1.0,
+            overflow_behavior="error",
+        ),
+    )
+
+    assert len(reduced) == 1
+    assert reduced[0].role == "user"
+    assert "source: tool:call-1" not in reduced[0].content
+    assert "durable/path.md" not in reduced[0].content
+    assert "source: reasoning" in reduced[0].content
+    assert reduced[0].content.endswith("Need answer")
+
+
+def test_budget_reducer_prune_order_tool_before_reasoning() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[
+                Message(role="user", content="start"),
+                Message(
+                    role="assistant",
+                    content="calling tool",
+                    tool_calls=[ToolCall(id="call-1", name="search", arguments={})],
+                ),
+                Message(role="tool", content="tool output", tool_call_id="call-1"),
+                Message(role="user", content="final question"),
+            ]
+        ),
+    )
+    world.add_component(entity_id, UserPromptConfigComponent(enable_context_pool=True))
+    world.add_component(
+        entity_id,
+        PromptContextQueueComponent(
+            entries=[
+                ContextEntry(
+                    entry_id="reasoning-1",
+                    priority=10,
+                    source_label="reasoning",
+                    content="reasoning notes stay",
+                    registration_order=0,
+                )
+            ]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        ContextBudgetConfig(
+            max_tokens=90,
+            prune_tool_results=True,
+            prune_reasoning=True,
+            token_estimation_chars_per_token=1.0,
+            overflow_behavior="error",
+        ),
+    )
+
+    outbound_messages, reservation = prepare_outbound_messages(
+        world,
+        entity_id,
+        current_tick=1,
+    )
+
+    assert reservation is not None
+    assert [message.role for message in outbound_messages] == ["user", "user"]
+    assert "reasoning notes stay" in outbound_messages[-1].content
+
+
+def test_budget_protected_overflow_raises_error() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[
+                Message(role="user", content="user content"),
+                Message(role="assistant", content="assistant content"),
+            ]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        ContextBudgetConfig(
+            max_tokens=5,
+            prune_tool_results=True,
+            prune_reasoning=True,
+            token_estimation_chars_per_token=1.0,
+            overflow_behavior="error",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Protected content exceeds configured budget"):
+        prepare_outbound_messages(
+            world,
+            entity_id,
+            system_prompt="system content",
+            current_tick=1,
+        )
+
+
+def test_budget_protected_overflow_warn_returns_oversized() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[
+                Message(role="user", content="user content"),
+                Message(role="assistant", content="assistant content"),
+            ]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        ContextBudgetConfig(
+            max_tokens=5,
+            prune_tool_results=True,
+            prune_reasoning=True,
+            token_estimation_chars_per_token=1.0,
+            overflow_behavior="warn",
+        ),
+    )
+
+    outbound_messages, reservation = prepare_outbound_messages(
+        world,
+        entity_id,
+        system_prompt="system content",
+        current_tick=1,
+    )
+
+    assert reservation is None
+    assert [(message.role, message.content) for message in outbound_messages] == [
+        ("system", "system content"),
+        ("user", "user content"),
+        ("assistant", "assistant content"),
+    ]
 
 
 def test_reserve_prompt_context_reuses_existing_reservation_on_retry() -> None:

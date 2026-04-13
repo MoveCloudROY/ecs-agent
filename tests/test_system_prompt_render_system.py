@@ -29,7 +29,10 @@ from ecs_agent.scratchbook import (
     ScratchbookPromptConfig,
 )
 import ecs_agent.systems.system_prompt_render_system as render_module
-from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
+from ecs_agent.systems.system_prompt_render_system import (
+    SystemPromptRenderSystem,
+    render_compaction_prompt,
+)
 from ecs_agent.types import SubagentConfig, ToolSchema
 
 
@@ -946,6 +949,116 @@ async def test_system_prompt_render_system_renders_once_when_no_change(
     assert rendered is not None
     assert rendered.text == "- none"
     assert call_count == 1
+
+
+def test_render_compaction_prompt_does_not_mutate_runtime_prompt_state() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(
+                inline="Hello ${name}\n${_installed_tools}"
+            ),
+            placeholders=[PlaceholderSpec(name="name", value="Compaction")],
+        ),
+    )
+    world.add_component(
+        entity_id,
+        ToolRegistryComponent(
+            tools={
+                "write_file": ToolSchema(
+                    name="write_file",
+                    description="write",
+                    parameters={"type": "object", "properties": {}},
+                )
+            },
+            handlers={},
+        ),
+    )
+    world.add_component(
+        entity_id,
+        RenderedSystemPromptComponent(
+            text="runtime cache",
+            placeholder_snapshot={"_cache_key": "cached"},
+        ),
+    )
+    world.add_component(
+        entity_id,
+        LLMComponent(
+            provider=FakeProvider(responses=[]),
+            model="fake",
+            system_prompt="live llm prompt",
+        ),
+    )
+    world.add_component(
+        entity_id,
+        SystemPromptComponent(content="legacy runtime prompt"),
+    )
+
+    rendered = render_compaction_prompt(
+        template="Hello ${name}\n${_installed_tools}",
+        world=world,
+        entity=entity_id,
+    )
+
+    runtime_cache = world.get_component(entity_id, RenderedSystemPromptComponent)
+    llm = world.get_component(entity_id, LLMComponent)
+    legacy_prompt = world.get_component(entity_id, SystemPromptComponent)
+    assert rendered == "Hello Compaction\n- write_file: write"
+    assert runtime_cache is not None
+    assert runtime_cache.text == "runtime cache"
+    assert runtime_cache.placeholder_snapshot == {"_cache_key": "cached"}
+    assert llm is not None
+    assert llm.system_prompt == "live llm prompt"
+    assert legacy_prompt is not None
+    assert legacy_prompt.content == "legacy runtime prompt"
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_render_system_cached_process_still_bridges_runtime_state() -> (
+    None
+):
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_installed_tools}"),
+        ),
+    )
+    world.add_component(entity_id, SkillComponent(skills={}))
+    world.add_component(
+        entity_id,
+        LLMComponent(
+            provider=FakeProvider(responses=[]),
+            model="fake",
+            system_prompt="stale llm prompt",
+        ),
+    )
+    world.add_component(
+        entity_id,
+        SystemPromptComponent(content="stale legacy prompt"),
+    )
+
+    system = SystemPromptRenderSystem()
+    await system.process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text == "- none"
+
+    llm = world.get_component(entity_id, LLMComponent)
+    legacy_prompt = world.get_component(entity_id, SystemPromptComponent)
+    assert llm is not None
+    assert legacy_prompt is not None
+    llm.system_prompt = "changed after initial render"
+    legacy_prompt.content = "legacy changed after initial render"
+
+    await system.process(world)
+
+    assert llm.system_prompt == "- none"
+    assert legacy_prompt.content == "- none"
 
 
 @pytest.mark.asyncio

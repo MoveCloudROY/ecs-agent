@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from collections.abc import AsyncIterator
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import httpx
 
@@ -15,6 +15,7 @@ from ecs_agent.types import (
     ImageUrlPart,
     Message,
     MessagePart,
+    MessageRole,
     StreamDelta,
     ToolCall,
     ToolSchema,
@@ -48,6 +49,8 @@ class _OpenAIProviderFacade(Protocol):
 
 class OpenAIResponsesAdapter:
     """Adapter for OpenAI-compatible Responses requests."""
+
+    _COMPACTION_SENTINEL = "[COMPACTION SUMMARY]\n"
 
     def __init__(self, provider: _OpenAIProviderFacade) -> None:
         self._provider = provider
@@ -300,6 +303,21 @@ class OpenAIResponsesAdapter:
                         }
                     )
 
+            if msg.role == "compaction":
+                content_items = [
+                    {
+                        "type": "input_text",
+                        "text": f"{self._COMPACTION_SENTINEL}{msg.content}",
+                    }
+                ]
+                input_items.append(
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": content_items,
+                    }
+                )
+
             if msg.role == "assistant" and msg.tool_calls:
                 for tool_call in msg.tool_calls:
                     input_items.append(
@@ -402,7 +420,7 @@ class OpenAIResponsesAdapter:
                 )
 
         return Message(
-            role=role,
+            role=cast(MessageRole, role),
             content="".join(text_parts),
             parts=message_parts or None,
             tool_calls=tool_calls or None,

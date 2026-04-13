@@ -38,6 +38,33 @@ class FileRefPart:
 
 
 MessagePart = ImageUrlPart | FileRefPart
+DroppableContextKind = Literal["tool_result", "reasoning"]
+MessageRole = Literal["system", "user", "assistant", "tool", "compaction"]
+CompactionMethod = Literal["bisect", "full_history", "predrop_then_compact"]
+
+
+@dataclass(slots=True)
+class CachedToolResultRef:
+    tool_call_id: str
+    artifact_path: str
+    summary: str | None = None
+    original_content: str | None = None
+
+
+@dataclass(slots=True)
+class ToolResultCachedEvent:
+    entity_id: EntityId
+    tool_call_id: str
+    artifact_path: str
+
+
+@dataclass(slots=True)
+class ContextPrunedEvent:
+    entity_id: EntityId
+    reason: str
+    tool_call_id: str | None = None
+    artifact_path: str | None = None
+    source_label: str | None = None
 
 
 @dataclass(slots=True)
@@ -66,11 +93,12 @@ class Message:
         )
     """
 
-    role: str
+    role: MessageRole
     content: str
     parts: list[MessagePart] | None = None
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
+    compaction_metadata: dict[str, Any] | None = field(default=None)
 
 
 @dataclass(slots=True)
@@ -79,7 +107,7 @@ class ConversationMessage:
 
     id: str
     parent_message_id: str | None
-    role: str  # 'system' | 'user' | 'assistant' | 'tool'
+    role: str  # 'system' | 'user' | 'assistant' | 'tool' | 'compaction'
     content: str | None
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
@@ -115,6 +143,7 @@ class CompletionResult:
     message: Message
     usage: Usage | None = None
     response_id: str | None = None
+    reasoning_content: str | None = None
 
 
 @dataclass(slots=True)

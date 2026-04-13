@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import time
 
@@ -8,6 +9,7 @@ from ecs_agent.components import (
     ConversationComponent,
     ErrorComponent,
     SubagentNotificationQueueComponent,
+    SubagentSessionTableComponent,
     SubagentWaitComponent,
     TerminalComponent,
 )
@@ -16,6 +18,55 @@ from ecs_agent.logging import get_logger
 from ecs_agent.types import EntityId, Message, SubagentNotificationRecord
 
 logger = get_logger(__name__)
+
+PENDING_SUBAGENT_STATUSES = {"queued", "running"}
+COMPLETED_SUBAGENT_STATUSES = {"succeeded", "failed", "timed_out", "cancelled"}
+
+
+@dataclass(slots=True)
+class SubagentCompactionState:
+    pending: list[str]
+    completed: list[tuple[str, str]]
+    notifications: list[str]
+
+
+def build_subagent_compaction_state(
+    table: SubagentSessionTableComponent | None,
+    queue: SubagentNotificationQueueComponent | None,
+) -> SubagentCompactionState:
+    pending: list[str] = []
+    completed: list[tuple[str, str]] = []
+
+    if table is not None:
+        for session_id, record in sorted(table.sessions.items()):
+            if record.status in PENDING_SUBAGENT_STATUSES:
+                pending.append(session_id)
+                continue
+            if record.status in COMPLETED_SUBAGENT_STATUSES:
+                completed.append((session_id, record.status))
+
+    notifications: list[str] = []
+    if queue is not None:
+        for notification in sorted(
+            queue.notifications,
+            key=lambda item: (item.session_id, item.created_at),
+        ):
+            delivered = "yes" if notification.delivered_at is not None else "no"
+            parts = [
+                f"{notification.session_id}: notification status={notification.terminal_status}",
+                f"delivered={delivered}",
+            ]
+            if notification.summary is not None:
+                parts.append(f'summary="{notification.summary}"')
+            if notification.error is not None:
+                parts.append(f'error="{notification.error}"')
+            notifications.append(" ".join(parts))
+
+    return SubagentCompactionState(
+        pending=pending,
+        completed=completed,
+        notifications=notifications,
+    )
 
 
 def notification_matches_wait(
@@ -229,4 +280,9 @@ class SubagentWaitSystem:
         return component.timeout - elapsed
 
 
-__all__ = ["SubagentWaitSystem", "notification_matches_wait"]
+__all__ = [
+    "SubagentCompactionState",
+    "SubagentWaitSystem",
+    "build_subagent_compaction_state",
+    "notification_matches_wait",
+]

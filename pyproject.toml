@@ -27,7 +27,6 @@ mcp = ["mcp>=1.20.0"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-markers = ["live: marks tests as requiring live LLM credentials"]
 
 [tool.mypy]
 strict = true

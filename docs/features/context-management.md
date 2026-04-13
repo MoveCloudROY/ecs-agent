@@ -38,28 +38,73 @@ The `undo` method pops the last snapshot, restores the world state via `WorldSer
 
 ## Compaction System
 
-The `CompactionSystem` reduces conversation length by summarizing older messages using the entity's LLM provider.
+The `CompactionSystem` reduces conversation length by summarizing older messages. It supports three compaction strategies, custom prompt templates, and routing summaries to a dedicated model via `summary_model_id`.
 
 ### Components
 
-- **`CompactionConfigComponent`**: Configures compaction thresholds and models.
-  - `threshold_tokens: int` — Token count threshold triggering compaction
-  - `summary_model: str` — Model identifier for summary generation
+- **`CompactionConfigComponent`**: Configures compaction thresholds and behavior.
+  - `threshold_tokens: int` — Token count threshold triggering compaction (estimated as `word_count * 1.3`)
+  - `summary_model: str | None` — *(deprecated)* Legacy model override; prefer `summary_model_id`
+  - `compaction_method: CompactionMethod` — Strategy for selecting messages to summarize (default: `"bisect"`). Options:
+    - `"bisect"` — Summarize the first `bisect_ratio` (default 50%) of non-system messages; retain the rest
+    - `"full_history"` — Summarize ALL non-system messages; no messages retained (result: `[system_msg, compaction_msg]`)
+    - `"predrop_then_compact"` — Drop droppable context (tool results) via `ContextBudgetConfig` first, then summarize everything
+  - `summary_model_id: str | None` — Canonical `provider/model` ID for routing the summary call to a different provider. Requires a `ProviderRegistry` on the entity (see below).
+  - `compaction_prompt_template: str | None` — Custom prompt template for the summarization call. If `None`, uses the built-in `DEFAULT_COMPACTION_PROMPT` ("Please summarize the following conversation history…"). Plain string templates are supported (no placeholder expansion currently).
+
+- **`ContextBudgetConfig`**: Configures token budget limits for outbound message pruning. Used internally by the `predrop_then_compact` compaction method.
+  - `max_tokens: int` — Maximum estimated tokens allowed
+  - `prune_tool_results: bool` — Whether to drop tool result messages (default: `True`)
+  - `prune_reasoning: bool` — Whether to drop assistant reasoning/thinking messages (default: `False`)
+  - `token_estimation_chars_per_token: float` — Characters per token for estimation (default: `4.0`)
+  - `overflow_behavior: str` — What to do when budget is exceeded: `"truncate"` or `"error"` (default: `"error"`)
+
+- **`ContextCacheComponent`**: Stores references to evicted tool results that were pruned from the outbound context but can be restored if needed.
+  - `cached_tool_results: list[CachedToolResultRef]` — List of cached tool result references (default: `[]`)
 
 - **`ConversationArchiveComponent`**: Stores archived summaries.
   - `archived_summaries: list[str]` — Past conversation summaries (default: `[]`)
 
+### The `compaction` Message Role
+
+After compaction, a `Message(role="compaction", content="Previous conversation summary: <text>")` is inserted into `conversation.messages`. All LLM adapters encode this as a `user`-role message with a sentinel prefix so the LLM receives the summary as context without confusing it with a genuine user turn.
+
+The `MemorySystem` respects the compaction boundary: when truncating messages by `max_messages`, it finds the last `role="compaction"` message and always preserves it plus all subsequent messages, preventing the compaction summary from being lost.
+
 ### Events
 
-- `CompactionCompleteEvent(entity_id, removed_count, summary_length)` — Published after compaction.
+- `CompactionCompleteEvent(entity_id, original_tokens, compacted_tokens)` — Published after compaction with token counts before and after.
 
 ### How It Works
 
-1. The system estimates token count using `word_count * 1.3`.
-2. When the estimate exceeds `threshold_tokens`, it splits messages at `bisect_ratio` (default: `0.5`).
-3. The older half is summarized via the entity's LLM provider.
-4. The summary is archived in `ConversationArchiveComponent`.
-5. Older messages are replaced with a single summary message.
+1. The system estimates token count using `int(math.ceil(word_count * 1.3))`.
+2. When the estimate exceeds `threshold_tokens`, the configured `compaction_method` selects which messages to summarize.
+3. The selected messages are formatted as `role: content` lines and sent to the summary provider.
+4. The summary is stored in `ConversationArchiveComponent.archived_summaries`.
+5. Summarized messages are replaced with a single `Message(role="compaction", content="Previous conversation summary: <text>")`.
+6. A `CompactionCompleteEvent` is published with `original_tokens` and `compacted_tokens`.
+
+### Routing Summaries to a Dedicated Model
+
+Set `summary_model_id` to route compaction calls to a different provider/model than the main agent:
+
+```python
+from ecs_agent.components.definitions import EntityRegistryComponent
+from ecs_agent.providers.registry import ProviderRegistry
+
+registry = ProviderRegistry.from_dict({
+    "fast": {"base_url": "...", "api_format": "openai_chat_completions"},
+})
+world.add_component(agent, CompactionConfigComponent(
+    threshold_tokens=4000,
+    summary_model_id="fast/gpt-4o-mini",
+))
+world.add_component(agent, EntityRegistryComponent(
+    entity_id=agent,
+    name="my-agent",
+    metadata={"provider_registry": registry},
+))
+```
 
 ### Setup
 
@@ -67,7 +112,10 @@ The `CompactionSystem` reduces conversation length by summarizing older messages
 from ecs_agent.components import CompactionConfigComponent, ConversationArchiveComponent
 from ecs_agent.systems.compaction import CompactionSystem
 
-world.add_component(agent, CompactionConfigComponent(threshold_tokens=4000, summary_model="qwen-plus"))
+world.add_component(agent, CompactionConfigComponent(
+    threshold_tokens=4000,
+    compaction_method="bisect",   # "bisect" | "full_history" | "predrop_then_compact"
+))
 world.add_component(agent, ConversationArchiveComponent())
 world.register_system(CompactionSystem(bisect_ratio=0.5), priority=20)
 ```

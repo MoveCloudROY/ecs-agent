@@ -28,6 +28,8 @@ _BUILTIN_PLACEHOLDER_PROVIDERS: list[BuiltinPlaceholderProvider] = [
 
 logger = get_logger(__name__)
 
+PlaceholderProviderRegistry = list[BuiltinPlaceholderProvider]
+
 
 class SystemPromptRenderSystem:
     def __init__(self, priority: int = 0) -> None:
@@ -91,18 +93,39 @@ def _render_system_prompt(
     prompt_config: SystemPromptConfigSpec,
 ) -> tuple[str, dict[str, str]]:
     template_text = _read_template(prompt_config.template_source)
-    template = Template(template_text)
-
-    user_values = _resolve_user_placeholders(prompt_config)
-    builtins = _aggregate_provider_placeholders(world, entity_id, user_values)
-    snapshot = {**user_values, **builtins}
-
-    try:
-        rendered = template.substitute(snapshot)
-    except KeyError as exc:
-        missing = str(exc).strip("'\"")
-        raise ValueError(f"unknown placeholders in template: {missing}") from exc
+    rendered, snapshot = render_prompt_template(
+        template=template_text,
+        world=world,
+        entity=entity_id,
+    )
     return rendered, snapshot
+
+
+def render_prompt_template(
+    template: str,
+    world: World,
+    entity: EntityId,
+    placeholder_registry: PlaceholderProviderRegistry | None = None,
+    user_values: dict[str, str] | None = None,
+) -> tuple[str, dict[str, str]]:
+    resolved_user_values = (
+        dict(user_values)
+        if user_values is not None
+        else _resolve_entity_user_placeholders(world, entity)
+    )
+    builtins = _aggregate_provider_placeholders(
+        world,
+        entity,
+        resolved_user_values,
+        placeholder_registry=placeholder_registry,
+    )
+    snapshot = {**resolved_user_values, **builtins}
+    return _substitute_prompt_template(template, snapshot), snapshot
+
+
+def render_compaction_prompt(template: str, world: World, entity: EntityId) -> str:
+    rendered, _ = render_prompt_template(template=template, world=world, entity=entity)
+    return rendered
 
 
 def _read_template(template_source: PromptTemplateSource) -> str:
@@ -125,6 +148,25 @@ def _resolve_user_placeholders(prompt_config: SystemPromptConfigSpec) -> dict[st
     return resolve_placeholder_values(prompt_config.placeholders)
 
 
+def _resolve_entity_user_placeholders(
+    world: World, entity_id: EntityId
+) -> dict[str, str]:
+    prompt_config = world.get_component(entity_id, SystemPromptConfigSpec)
+    if prompt_config is None:
+        return {}
+    return _resolve_user_placeholders(prompt_config)
+
+
+def _substitute_prompt_template(template_text: str, snapshot: dict[str, str]) -> str:
+    template = Template(template_text)
+
+    try:
+        return template.substitute(snapshot)
+    except KeyError as exc:
+        missing = str(exc).strip("'\"")
+        raise ValueError(f"unknown placeholders in template: {missing}") from exc
+
+
 def _provider_id(provider: BuiltinPlaceholderProvider) -> str:
     provider_id = getattr(provider, "provider_id", None)
     if not isinstance(provider_id, str):
@@ -136,11 +178,18 @@ def _aggregate_provider_placeholders(
     world: World,
     entity_id: EntityId,
     user_values: dict[str, str],
+    placeholder_registry: PlaceholderProviderRegistry | None = None,
 ) -> dict[str, str]:
     aggregated: dict[str, str] = {}
     key_to_provider_id: dict[str, str] = {}
 
-    for provider in _iter_placeholder_providers(world, entity_id):
+    providers = (
+        list(placeholder_registry)
+        if placeholder_registry is not None
+        else _iter_placeholder_providers(world, entity_id)
+    )
+
+    for provider in providers:
         provider_id = _provider_id(provider)
         values = provider.resolve_placeholders(world, entity_id)
         for key, value in values.items():
@@ -202,4 +251,8 @@ def _bridge_rendered_prompt(world: World, entity_id: EntityId, rendered: str) ->
         legacy_system_prompt.content = rendered
 
 
-__all__ = ["SystemPromptRenderSystem"]
+__all__ = [
+    "SystemPromptRenderSystem",
+    "render_compaction_prompt",
+    "render_prompt_template",
+]

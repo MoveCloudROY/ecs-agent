@@ -8,6 +8,8 @@ from typing import Any
 from ecs_agent.components import (
     CheckpointComponent,
     CompactionConfigComponent,
+    ContextBudgetConfig,
+    ContextCacheComponent,
     ContextEntry,
     ConversationArchiveComponent,
     ConversationComponent,
@@ -56,6 +58,7 @@ from ecs_agent.prompts.contracts import (
 )
 from ecs_agent.types import (
     ApprovalPolicy,
+    CachedToolResultRef,
     EntityId,
     FileRefPart,
     ImageUrlPart,
@@ -97,7 +100,9 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     SubagentSessionTableComponent.__name__: SubagentSessionTableComponent,
     SubagentWaitComponent.__name__: SubagentWaitComponent,
     CheckpointComponent.__name__: CheckpointComponent,
+    ContextBudgetConfig.__name__: ContextBudgetConfig,
     CompactionConfigComponent.__name__: CompactionConfigComponent,
+    ContextCacheComponent.__name__: ContextCacheComponent,
     ConversationArchiveComponent.__name__: ConversationArchiveComponent,
     RunnerStateComponent.__name__: RunnerStateComponent,
     MessageBusConfigComponent.__name__: MessageBusConfigComponent,
@@ -236,6 +241,19 @@ class WorldSerializer:
             return {
                 "notifications": [
                     asdict(notification) for notification in component.notifications
+                ]
+            }
+
+        if isinstance(component, ContextCacheComponent):
+            return {
+                "cached_tool_results": [
+                    {
+                        "tool_call_id": ref.tool_call_id,
+                        "artifact_path": ref.artifact_path,
+                        "summary": ref.summary,
+                        "original_content": ref.original_content,
+                    }
+                    for ref in component.cached_tool_results
                 ]
             }
 
@@ -557,6 +575,15 @@ class WorldSerializer:
                 for entry_data in entries_data
             ]
 
+        if component_name == ContextCacheComponent.__name__:
+            cached_tool_results_data = normalized_data.get("cached_tool_results", [])
+            normalized_data["cached_tool_results"] = [
+                CachedToolResultRef(**cached_tool_result_data)
+                if isinstance(cached_tool_result_data, dict)
+                else cached_tool_result_data
+                for cached_tool_result_data in cached_tool_results_data
+            ]
+
         return normalized_data
 
     @staticmethod
@@ -579,6 +606,7 @@ class WorldSerializer:
             parts=parts,
             tool_calls=tool_calls,
             tool_call_id=data.get("tool_call_id"),
+            compaction_metadata=data.get("compaction_metadata"),
         )
 
     @staticmethod
@@ -604,6 +632,9 @@ class WorldSerializer:
                 }
                 for tool_call in message.tool_calls
             ]
+
+        if message.compaction_metadata is not None:
+            serialized["compaction_metadata"] = message.compaction_metadata
 
         return serialized
 

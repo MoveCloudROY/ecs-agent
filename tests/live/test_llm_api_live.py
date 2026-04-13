@@ -32,7 +32,6 @@ def _live_registry() -> ProviderRegistry:
     )
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
 async def test_live_openai_chat_text_response(live_api_key: str) -> None:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
@@ -50,7 +49,6 @@ async def test_live_openai_chat_text_response(live_api_key: str) -> None:
     assert len(result.message.content.strip()) > 0
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
 async def test_live_openai_responses_text_response(live_api_key: str) -> None:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
@@ -68,11 +66,9 @@ async def test_live_openai_responses_text_response(live_api_key: str) -> None:
     assert len(result.message.content.strip()) > 0
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
 async def test_live_openai_responses_vision_response(
-    live_api_key: str,
-    live_image_url: str,
+    live_api_key: str, live_image_url: str
 ) -> None:
     model = os.getenv("LLM_MODEL", "qwen3-vl-flash")
     provider = get_llm_provider(
@@ -97,7 +93,6 @@ async def test_live_openai_responses_vision_response(
     assert len(result.message.content.strip()) > 0
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
 async def test_live_anthropic_messages_text_response(live_api_key: str) -> None:
     model = os.getenv("LLM_MODEL", "kimi-k2.5")

@@ -33,6 +33,8 @@ class AnthropicMessagesRequest:
 
 
 class AnthropicMessagesAdapter:
+    _COMPACTION_SENTINEL = "[COMPACTION SUMMARY]\n"
+
     def __init__(self, config: AnthropicMessagesAdapterConfig) -> None:
         self._config = config
 
@@ -89,6 +91,20 @@ class AnthropicMessagesAdapter:
                                 "type": "tool_result",
                                 "tool_use_id": msg.tool_call_id,
                                 "content": msg.content,
+                            }
+                        ],
+                    }
+                )
+                continue
+
+            if msg.role == "compaction":
+                anthropic_messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"{self._COMPACTION_SENTINEL}{msg.content}",
                             }
                         ],
                     }
@@ -174,8 +190,6 @@ class AnthropicMessagesAdapter:
 
         if msg.parts:
             for part in msg.parts:
-
-
                 if isinstance(part, ImageUrlPart):
                     if not self._config.supports_vision:
                         raise ValueError(

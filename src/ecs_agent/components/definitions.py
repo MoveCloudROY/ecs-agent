@@ -10,8 +10,11 @@ import time
 from ecs_agent.prompts.contracts import TriggerSpec
 from ecs_agent.types import (
     ApprovalPolicy,
+    CachedToolResultRef,
+    CompactionMethod,
     ConversationBranch,
     ConversationMessage,
+    DroppableContextKind,
     EntityId,
     InterruptionReason,
     Message,
@@ -267,11 +270,28 @@ class CheckpointComponent:
 
 
 @dataclass(slots=True)
+class ContextBudgetConfig:
+    max_tokens: int
+    prune_tool_results: bool = True
+    prune_reasoning: bool = False
+    token_estimation_chars_per_token: float = 4.0
+    overflow_behavior: str = "error"
+
+
+@dataclass(slots=True)
 class CompactionConfigComponent:
     """Configuration for context compaction."""
 
     threshold_tokens: int
-    summary_model: str
+    summary_model: str | None = None
+    compaction_method: CompactionMethod = "bisect"
+    summary_model_id: str | None = None
+    compaction_prompt_template: str | None = None
+
+
+@dataclass(slots=True)
+class ContextCacheComponent:
+    cached_tool_results: list[CachedToolResultRef] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -455,6 +475,7 @@ class ContextEntry:
     source_label: str
     content: str
     registration_order: int
+    droppable_kind: DroppableContextKind | None = field(default=None)
 
 
 @dataclass(slots=True)

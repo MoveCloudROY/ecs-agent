@@ -58,11 +58,9 @@ def _make_provider(api_key: str, base_url: str, model: str) -> OpenAIProvider:
     )
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
 async def test_live_tool_execution_persists_canonical_artifact(
-    live_api_key: str,
-    tmp_path: Path,
+    live_api_key: str, tmp_path: Path
 ) -> None:
     _ = live_api_key
     registry = ArtifactRegistry(root=tmp_path)
@@ -118,7 +116,6 @@ async def test_live_tool_execution_persists_canonical_artifact(
     assert payload["result"] == "tool-ok:artifact"
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
 @pytest.mark.parametrize("base_url", _ENDPOINT_PARAMS)
 async def test_live_planning_writes_canonical_plan_md(
@@ -156,11 +153,9 @@ async def test_live_planning_writes_canonical_plan_md(
     assert not content.lstrip().startswith("{")
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
 async def test_live_trigger_creates_boulder_on_plan_script(
-    live_api_key: str,
-    tmp_path: Path,
+    live_api_key: str, tmp_path: Path
 ) -> None:
     _ = live_api_key
     registry = ArtifactRegistry(root=tmp_path)
@@ -215,7 +210,6 @@ async def test_live_trigger_creates_boulder_on_plan_script(
     assert payload["active_plan"] == "@plan Live Boulder state"
 
 
-@pytest.mark.live
 @pytest.mark.asyncio
 @pytest.mark.parametrize("base_url", _ENDPOINT_PARAMS)
 async def test_live_no_legacy_category_paths_written(

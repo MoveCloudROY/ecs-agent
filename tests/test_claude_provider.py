@@ -18,6 +18,8 @@ from ecs_agent.types import (
     ToolSchema,
 )
 
+COMPACTION_SENTINEL = "[COMPACTION SUMMARY]\n"
+
 
 class _MockStreamResponse:
     def __init__(self, lines: list[str]) -> None:
@@ -120,6 +122,29 @@ def test_build_messages_converts_tool_result_to_user_tool_result_block() -> None
                     "type": "tool_result",
                     "tool_use_id": "toolu_123",
                     "content": "22C and sunny",
+                }
+            ],
+        }
+    ]
+
+
+def test_build_messages_encodes_compaction_as_user_with_sentinel() -> None:
+    provider = ClaudeProvider(
+        config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
+    )
+
+    system, anthropic_messages = provider._build_messages(
+        [Message(role="compaction", content="Summary: X happened")]
+    )
+
+    assert system is None
+    assert anthropic_messages == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"{COMPACTION_SENTINEL}Summary: X happened",
                 }
             ],
         }
