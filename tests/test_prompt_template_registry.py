@@ -157,6 +157,7 @@ class TestPlaceholderRegistry:
             "toolSelection",
             "exploreSection",
             "librarianSection",
+            "_chat_history_summary_xml",
             "alpha",
             "mid",
             "zeta",
@@ -174,10 +175,11 @@ class TestPlaceholderRegistry:
             "toolSelection",
             "exploreSection",
             "librarianSection",
+            "_chat_history_summary_xml",
             "alpha",
             "zeta",
         )
-        assert core_flags == (True, True, True, False, False)
+        assert core_flags == (True, True, True, True, False, False)
 
     def test_register_extension_rejects_duplicates(self) -> None:
         registry = PlaceholderRegistry()
