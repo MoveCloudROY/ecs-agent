@@ -493,7 +493,10 @@ async def test_multimodal_responses_request_maps_image_and_file_parts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_openai_chat_adapter_encodes_compaction_as_user_with_sentinel() -> None:
+async def test_openai_chat_adapter_delivers_system_prompt_containing_summary_xml() -> (
+    None
+):
+    """Test that OpenAI Chat Completions request contains XML summary in system message."""
     mock_response = Mock(spec=httpx.Response)
     mock_response.json.return_value = {
         "choices": [{"message": {"role": "assistant", "content": "ok"}}],
@@ -507,21 +510,24 @@ async def test_openai_chat_adapter_encodes_compaction_as_user_with_sentinel() ->
     provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
-    await provider.complete([Message(role="compaction", content="Summary: X happened")])
+    summary_xml = "<chat_history_summary>Summary: X happened</chat_history_summary>"
+    await provider.complete(
+        [
+            Message(role="system", content=f"You are helpful.\n\n{summary_xml}"),
+            Message(role="user", content="Hello"),
+        ]
+    )
 
     body = mock_client.post.call_args[1]["json"]
-    assert body["messages"] == [
-        {
-            "role": "user",
-            "content": f"{COMPACTION_SENTINEL}Summary: X happened",
-        }
-    ]
+    messages = body["messages"]
+    assert len(messages) >= 1
+    assert messages[0]["role"] == "system"
+    assert summary_xml in messages[0]["content"]
 
 
 @pytest.mark.asyncio
-async def test_openai_responses_adapter_encodes_compaction_as_user_with_sentinel() -> (
-    None
-):
+async def test_openai_responses_adapter_delivers_summary_xml_in_instructions() -> None:
+    """Test that OpenAI Responses API request contains XML summary in instructions field only."""
     mock_response = Mock(spec=httpx.Response)
     mock_response.json.return_value = {
         "id": "resp_compaction_1",
@@ -543,21 +549,28 @@ async def test_openai_responses_adapter_encodes_compaction_as_user_with_sentinel
     )
     provider._client = mock_client
 
-    await provider.complete([Message(role="compaction", content="Summary: X happened")])
+    summary_xml = "<chat_history_summary>Summary: X happened</chat_history_summary>"
+    await provider.complete(
+        [
+            Message(role="system", content=f"You are helpful.\n\n{summary_xml}"),
+            Message(role="user", content="Hello"),
+        ]
+    )
 
     body = mock_client.post.call_args[1]["json"]
-    assert body["input"] == [
-        {
-            "type": "message",
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": f"{COMPACTION_SENTINEL}Summary: X happened",
-                }
-            ],
-        }
-    ]
+
+    # Verify instructions field contains the XML summary
+    assert "instructions" in body
+    assert summary_xml in body["instructions"]
+
+    # Verify no input item contains the summary XML
+    assert "input" in body
+    for item in body["input"]:
+        if item.get("type") == "message" and item.get("role") == "user":
+            content = item.get("content", [])
+            for content_item in content:
+                if "text" in content_item:
+                    assert summary_xml not in content_item["text"]
 
 
 @pytest.mark.asyncio
