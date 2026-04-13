@@ -1,0 +1,11 @@
+Command: uv run pytest tests/test_system_prompt_render_system.py -k "compaction or fingerprint or rerender or summary_xml" -v
+Date: 2026-04-13
+
+Relevant evidence:
+- tests/test_system_prompt_render_system.py::test_compaction_summary_xml_empty_block_for_new_entity PASSED
+- tests/test_system_prompt_render_system.py::test_compaction_summary_xml_with_content PASSED
+- tests/test_system_prompt_render_system.py::test_compaction_summary_xml_escapes_special_chars PASSED
+
+Summary:
+- Focused compaction summary XML render coverage passed.
+- Empty summary now renders exactly <chat_history_summary></chat_history_summary>.

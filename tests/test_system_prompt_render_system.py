@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 
 from ecs_agent.components import (
+    CompactionConfigComponent,
+    CurrentCompactionSummaryComponent,
     LLMComponent,
     RenderedSystemPromptComponent,
     RenderedUserPromptComponent,
@@ -1083,6 +1085,203 @@ async def test_system_prompt_render_system_bridges_legacy_system_prompt_componen
     assert rendered is not None
     assert legacy_prompt is not None
     assert legacy_prompt.content == rendered.text == "Hello Bridge"
+
+
+@pytest.mark.asyncio
+async def test_compaction_summary_xml_empty_block_for_new_entity() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(
+                inline="Base prompt\n${_chat_history_summary_xml}"
+            )
+        ),
+    )
+    world.add_component(entity_id, CompactionConfigComponent(threshold_tokens=100))
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text.endswith("<chat_history_summary></chat_history_summary>")
+    assert rendered.text.count("<chat_history_summary>") == 1
+    assert rendered.placeholder_snapshot["_chat_history_summary_xml"] == (
+        "<chat_history_summary></chat_history_summary>"
+    )
+
+
+@pytest.mark.asyncio
+async def test_compaction_summary_xml_with_content() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(
+                inline="Base prompt\n${_chat_history_summary_xml}"
+            )
+        ),
+    )
+    world.add_component(entity_id, CompactionConfigComponent(threshold_tokens=100))
+    world.add_component(
+        entity_id,
+        CurrentCompactionSummaryComponent(summary="hello world"),
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text.endswith(
+        "<chat_history_summary>hello world</chat_history_summary>"
+    )
+
+
+@pytest.mark.asyncio
+async def test_compaction_summary_xml_escapes_special_chars() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(
+                inline="Base prompt\n${_chat_history_summary_xml}"
+            )
+        ),
+    )
+    world.add_component(entity_id, CompactionConfigComponent(threshold_tokens=100))
+    world.add_component(
+        entity_id,
+        CurrentCompactionSummaryComponent(
+            summary="<tag>&value></chat_history_summary>"
+        ),
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text.endswith(
+        "<chat_history_summary>"
+        "&lt;tag&gt;&amp;value&gt;&lt;/chat_history_summary&gt;"
+        "</chat_history_summary>"
+    )
+
+
+def test_compaction_summary_fingerprint_changes_with_summary() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(entity_id, CompactionConfigComponent(threshold_tokens=100))
+    provider = prompt_provider_module.CompactionSummaryPlaceholderProvider()
+
+    empty_fingerprint = provider.provider_fingerprint(world, entity_id)
+
+    world.add_component(
+        entity_id,
+        CurrentCompactionSummaryComponent(summary="first summary"),
+    )
+    first_fingerprint = provider.provider_fingerprint(world, entity_id)
+
+    world.add_component(
+        entity_id,
+        CurrentCompactionSummaryComponent(summary="second summary"),
+    )
+    second_fingerprint = provider.provider_fingerprint(world, entity_id)
+
+    world.remove_component(entity_id, CurrentCompactionSummaryComponent)
+    cleared_fingerprint = provider.provider_fingerprint(world, entity_id)
+
+    assert empty_fingerprint != first_fingerprint
+    assert first_fingerprint != second_fingerprint
+    assert second_fingerprint != cleared_fingerprint
+
+
+@pytest.mark.asyncio
+async def test_compaction_summary_cache_invalidates_on_summary_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(
+                inline="Base prompt\n${_chat_history_summary_xml}"
+            )
+        ),
+    )
+    world.add_component(entity_id, CompactionConfigComponent(threshold_tokens=100))
+
+    call_count = 0
+    original_render = render_module._render_system_prompt
+
+    def _counting_render(
+        target_world: World,
+        target_entity_id: object,
+        prompt_config: SystemPromptConfigSpec,
+    ) -> tuple[str, dict[str, str]]:
+        nonlocal call_count
+        call_count += 1
+        return original_render(target_world, target_entity_id, prompt_config)
+
+    monkeypatch.setattr(render_module, "_render_system_prompt", _counting_render)
+
+    system = SystemPromptRenderSystem()
+
+    await system.process(world)
+    assert call_count == 1
+
+    await system.process(world)
+    assert call_count == 1
+
+    world.add_component(
+        entity_id,
+        CurrentCompactionSummaryComponent(summary="first summary"),
+    )
+    await system.process(world)
+    assert call_count == 2
+
+    await system.process(world)
+    assert call_count == 2
+
+    world.add_component(
+        entity_id,
+        CurrentCompactionSummaryComponent(summary="second summary"),
+    )
+    await system.process(world)
+    assert call_count == 3
+
+    world.remove_component(entity_id, CurrentCompactionSummaryComponent)
+    await system.process(world)
+    assert call_count == 4
+
+
+@pytest.mark.asyncio
+async def test_legacy_agent_gets_xml_tail_without_explicit_placeholder() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(entity_id, CompactionConfigComponent(threshold_tokens=100))
+    world.add_component(
+        entity_id,
+        LLMComponent(
+            provider=FakeProvider(responses=[]),
+            model="fake",
+            system_prompt="Legacy base",
+        ),
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    llm = world.get_component(entity_id, LLMComponent)
+    assert rendered is not None
+    assert llm is not None
+    assert rendered.text == (
+        "Legacy base\n<chat_history_summary></chat_history_summary>"
+    )
+    assert llm.system_prompt == rendered.text
 
 
 class _ContractProvider:

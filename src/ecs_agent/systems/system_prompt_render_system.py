@@ -6,6 +6,7 @@ from pathlib import Path
 from string import Template
 
 from ecs_agent.components import (
+    CompactionConfigComponent,
     LLMComponent,
     RenderedSystemPromptComponent,
     SystemPromptComponent,
@@ -15,6 +16,7 @@ from ecs_agent.logging import get_logger
 from ecs_agent.prompts.contracts import SystemPromptConfigSpec, PromptTemplateSource
 from ecs_agent.prompts.provider import (
     BuiltinPlaceholderProvider,
+    CompactionSummaryPlaceholderProvider,
     InventoryPlaceholderProvider,
 )
 from ecs_agent.prompts.registry import resolve_placeholder_values
@@ -24,6 +26,7 @@ from ecs_agent.types import EntityId
 
 _BUILTIN_PLACEHOLDER_PROVIDERS: list[BuiltinPlaceholderProvider] = [
     InventoryPlaceholderProvider(),
+    CompactionSummaryPlaceholderProvider(),
 ]
 
 logger = get_logger(__name__)
@@ -36,8 +39,10 @@ class SystemPromptRenderSystem:
         self.priority = priority
 
     async def process(self, world: World) -> None:
-        for entity_id, (prompt_config,) in world.query(SystemPromptConfigSpec):
-            cache_key = _render_cache_key(world, entity_id)
+        for entity_id, prompt_config, template_metadata in _iter_render_targets(world):
+            cache_key = (
+                _render_cache_key(world, entity_id) + template_metadata.cache_suffix
+            )
             rendered_component = world.get_component(
                 entity_id, RenderedSystemPromptComponent
             )
@@ -61,6 +66,8 @@ class SystemPromptRenderSystem:
                     world, entity_id, prompt_config
                 )
                 snapshot["_cache_key"] = cache_key
+                if template_metadata.legacy_template is not None:
+                    snapshot["_legacy_template"] = template_metadata.legacy_template
                 world.add_component(
                     entity_id,
                     RenderedSystemPromptComponent(
@@ -93,6 +100,9 @@ def _render_system_prompt(
     prompt_config: SystemPromptConfigSpec,
 ) -> tuple[str, dict[str, str]]:
     template_text = _read_template(prompt_config.template_source)
+    template_text = _normalize_compaction_summary_template(
+        world, entity_id, template_text
+    )
     rendered, snapshot = render_prompt_template(
         template=template_text,
         world=world,
@@ -142,6 +152,84 @@ def _read_template(template_source: PromptTemplateSource) -> str:
         return path.read_text(encoding="utf-8")
     except OSError as exc:
         raise ValueError(f"unreadable template file: {file_path}") from exc
+
+
+class _RenderTemplateMetadata:
+    def __init__(
+        self,
+        *,
+        cache_suffix: str = "",
+        legacy_template: str | None = None,
+    ) -> None:
+        self.cache_suffix = cache_suffix
+        self.legacy_template = legacy_template
+
+
+def _iter_render_targets(
+    world: World,
+) -> list[tuple[EntityId, SystemPromptConfigSpec, _RenderTemplateMetadata]]:
+    targets: list[tuple[EntityId, SystemPromptConfigSpec, _RenderTemplateMetadata]] = []
+    configured_entities: set[EntityId] = set()
+
+    for entity_id, (prompt_config,) in world.query(SystemPromptConfigSpec):
+        configured_entities.add(entity_id)
+        targets.append((entity_id, prompt_config, _RenderTemplateMetadata()))
+
+    for entity_id, _ in world.query(CompactionConfigComponent):
+        if entity_id in configured_entities:
+            continue
+        legacy_template = _resolve_legacy_prompt_template(world, entity_id)
+        if legacy_template is None:
+            continue
+        targets.append(
+            (
+                entity_id,
+                SystemPromptConfigSpec(
+                    template_source=PromptTemplateSource(inline=legacy_template)
+                ),
+                _RenderTemplateMetadata(
+                    cache_suffix=f"|legacy:{legacy_template}",
+                    legacy_template=legacy_template,
+                ),
+            )
+        )
+
+    return targets
+
+
+def _resolve_legacy_prompt_template(world: World, entity_id: EntityId) -> str | None:
+    rendered_component = world.get_component(entity_id, RenderedSystemPromptComponent)
+    if rendered_component is not None:
+        cached_template = rendered_component.placeholder_snapshot.get(
+            "_legacy_template"
+        )
+        if cached_template is not None:
+            return cached_template
+
+    legacy_system_prompt = world.get_component(entity_id, SystemPromptComponent)
+    if legacy_system_prompt is not None and legacy_system_prompt.content:
+        return legacy_system_prompt.content
+
+    llm_component = world.get_component(entity_id, LLMComponent)
+    if llm_component is not None and llm_component.system_prompt:
+        return llm_component.system_prompt
+
+    return None
+
+
+def _normalize_compaction_summary_template(
+    world: World,
+    entity_id: EntityId,
+    template_text: str,
+) -> str:
+    if world.get_component(entity_id, CompactionConfigComponent) is None:
+        return template_text
+    placeholder = "${_chat_history_summary_xml}"
+    if placeholder in template_text or "$_chat_history_summary_xml" in template_text:
+        return template_text
+    if not template_text:
+        return placeholder
+    return f"{template_text}\n{placeholder}"
 
 
 def _resolve_user_placeholders(prompt_config: SystemPromptConfigSpec) -> dict[str, str]:
@@ -215,6 +303,8 @@ def _render_cache_key(world: World, entity_id: EntityId) -> str:
     fingerprints: list[str] = []
     for provider in _iter_placeholder_providers(world, entity_id):
         provider_id = _provider_id(provider)
+        if not provider.resolve_placeholders(world, entity_id):
+            continue
         fingerprint = provider.provider_fingerprint(world, entity_id)
         fingerprints.append(f"{provider_id}:{fingerprint}")
     return "|".join(fingerprints)
