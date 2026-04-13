@@ -242,7 +242,9 @@ async def test_live_compaction_system_triggers_and_summarizes_chat(
     world, entity_id = _build_compaction_world(provider)
     world.add_component(
         entity_id,
-        CompactionConfigComponent(threshold_tokens=30, compaction_method="bisect"),
+        CompactionConfigComponent(
+            threshold_tokens=30, compaction_method="full_history"
+        ),
     )
 
     system = CompactionSystem()
@@ -274,7 +276,9 @@ async def test_live_compaction_system_triggers_and_summarizes_responses(
     world, entity_id = _build_compaction_world(provider)
     world.add_component(
         entity_id,
-        CompactionConfigComponent(threshold_tokens=30, compaction_method="bisect"),
+        CompactionConfigComponent(
+            threshold_tokens=30, compaction_method="full_history"
+        ),
     )
 
     system = CompactionSystem()

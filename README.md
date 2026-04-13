@@ -461,7 +461,7 @@ Four live scenarios are provided:
 - **Anthropic-compatible text** — `LLM_MODEL=kimi-k2.5`, `LLM_BASE_URL=https://dashscope.aliyuncs.com/apps/anthropic`
 - **Task Executor** — `tests/live/test_task_executor_live.py` exercises the `TaskExecutor` dispatch path end-to-end.
 - **Subagent Delegation** — `tests/live/test_subagent_live.py` covers background queuing, FIFO scheduling, and streaming telemetry. Includes `test_aliyun_completions_background_completion_notification_flow` and `test_aliyun_responses_background_completion_notification_flow` for explicit wait/notification flow.
-- **Compaction** — `tests/live/test_compaction_live.py` covers XML system-summary injection on Chat Completions and Responses API, full `CompactionSystem.process()` end-to-end with `bisect`/`full_history`/`custom prompt` methods, `summary_model_id` routing, and `MemorySystem` preservation.
+- **Compaction** — `tests/live/test_compaction_live.py` covers XML system-summary injection on Chat Completions and Responses API, full `CompactionSystem.process()` end-to-end with `full_history`/`custom prompt` methods, `summary_model_id` routing, and `MemorySystem` preservation.
 
 For the legacy integration test:
 

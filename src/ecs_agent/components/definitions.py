@@ -284,7 +284,7 @@ class CompactionConfigComponent:
 
     threshold_tokens: int
     summary_model: str | None = None
-    compaction_method: CompactionMethod = "bisect"
+    compaction_method: CompactionMethod = "full_history"
     summary_model_id: str | None = None
     compaction_prompt_template: str | None = None
 

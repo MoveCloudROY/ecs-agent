@@ -42,7 +42,7 @@ DroppableContextKind = Literal["tool_result", "reasoning"]
 MessageRole = Literal["system", "user", "assistant", "tool"]
 LegacyMessageRole = Literal["compaction"]
 AcceptedMessageRole = MessageRole | LegacyMessageRole
-CompactionMethod = Literal["bisect", "full_history", "predrop_then_compact"]
+CompactionMethod = Literal["full_history", "predrop_then_compact"]
 
 
 @dataclass(slots=True)

@@ -99,12 +99,7 @@ async def test_event_published_on_truncation_with_removed_count() -> None:
 
 
 @pytest.mark.asyncio
-async def test_with_current_summary_component_preserves_all_post_compaction_messages() -> (
-    None
-):
-    """When CurrentCompactionSummaryComponent is present, preserve system message + all remaining conversation."""
-    from ecs_agent.components import CurrentCompactionSummaryComponent
-
+async def test_truncation_with_system_message_applies_trailing_window() -> None:
     world = World()
     entity_id = world.create_entity()
     messages = [
@@ -118,57 +113,11 @@ async def test_with_current_summary_component_preserves_all_post_compaction_mess
     world.add_component(
         entity_id, ConversationComponent(messages=messages, max_messages=3)
     )
-    world.add_component(
-        entity_id, CurrentCompactionSummaryComponent(summary="summary-of-first-part")
-    )
 
     await MemorySystem().process(world)
 
     conversation = world.get_component(entity_id, ConversationComponent)
     assert conversation is not None
-    # With summary present, all messages should be preserved (no truncation)
-    assert len(conversation.messages) == 6
-    assert [message.role for message in conversation.messages] == [
-        "system",
-        "user",
-        "assistant",
-        "user",
-        "assistant",
-        "user",
-    ]
-    assert [message.content for message in conversation.messages] == [
-        "sys",
-        "u0",
-        "a0",
-        "u1",
-        "a1",
-        "u2",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_without_current_summary_component_applies_trailing_window() -> None:
-    """When CurrentCompactionSummaryComponent is absent, use trailing-window truncation."""
-    world = World()
-    entity_id = world.create_entity()
-    messages = [
-        _msg("system", "sys"),
-        _msg("user", "u0"),
-        _msg("assistant", "a0"),
-        _msg("user", "u1"),
-        _msg("assistant", "a1"),
-        _msg("user", "u2"),
-    ]
-    world.add_component(
-        entity_id, ConversationComponent(messages=messages, max_messages=3)
-    )
-    # Deliberately do NOT attach CurrentCompactionSummaryComponent
-
-    await MemorySystem().process(world)
-
-    conversation = world.get_component(entity_id, ConversationComponent)
-    assert conversation is not None
-    # Without summary, apply trailing-window truncation
     assert [message.content for message in conversation.messages] == [
         "sys",
         "a1",
