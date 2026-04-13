@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import html
 import importlib
 from typing import Protocol, cast, runtime_checkable
 
 from ecs_agent.components import (
+    CompactionConfigComponent,
+    CurrentCompactionSummaryComponent,
     SkillComponent,
     SubagentRegistryComponent,
     ToolRegistryComponent,
@@ -127,6 +131,37 @@ class InventoryPlaceholderProvider:
         return sorted(set(entries), key=lambda e: e[0])
 
 
+class CompactionSummaryPlaceholderProvider:
+    provider_id = "compaction_summary"
+
+    def resolve_placeholders(self, world: World, entity_id: EntityId) -> dict[str, str]:
+        if world.get_component(entity_id, CompactionConfigComponent) is None:
+            return {}
+        summary = self._summary_text(world, entity_id)
+        escaped_summary = html.escape(summary)
+        return {
+            "_chat_history_summary_xml": (
+                f"<chat_history_summary>{escaped_summary}</chat_history_summary>"
+            )
+        }
+
+    def provider_fingerprint(self, world: World, entity_id: EntityId) -> str:
+        if world.get_component(entity_id, CompactionConfigComponent) is None:
+            return "disabled"
+        summary = self._summary_text(world, entity_id)
+        digest = hashlib.sha256(summary.encode("utf-8")).hexdigest()
+        return f"enabled:{digest}"
+
+    @staticmethod
+    def _summary_text(world: World, entity_id: EntityId) -> str:
+        summary_component = world.get_component(
+            entity_id, CurrentCompactionSummaryComponent
+        )
+        if summary_component is None:
+            return ""
+        return summary_component.summary
+
+
 def _extract_entry(tool: object) -> tuple[str, str] | None:
     if isinstance(tool, dict):
         name = tool.get("name")
@@ -154,4 +189,8 @@ def _format_bullets(entries: list[tuple[str, str]]) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["BuiltinPlaceholderProvider", "InventoryPlaceholderProvider"]
+__all__ = [
+    "BuiltinPlaceholderProvider",
+    "CompactionSummaryPlaceholderProvider",
+    "InventoryPlaceholderProvider",
+]

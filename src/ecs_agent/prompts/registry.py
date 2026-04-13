@@ -1,4 +1,5 @@
 """Prompt template registry and placeholder resolution utilities."""
+
 from __future__ import annotations
 
 import re
@@ -13,11 +14,13 @@ _LEGACY_REQUIRED_TEMPLATE_KEYS: tuple[str, str, str] = (
     "exploreSection",
     "librarianSection",
 )
+_RESERVED_BUILTIN_PLACEHOLDER_KEYS: tuple[str, ...] = ("_chat_history_summary_xml",)
 
 
 @dataclass(slots=True)
 class PlaceholderContract:
     """Contract describing a placeholder key (core or extension)."""
+
     key: str
     is_core: bool
 
@@ -74,7 +77,11 @@ class PlaceholderRegistry:
             self.register_extension(key)
 
     def contains(self, key: str) -> bool:
-        return key in _LEGACY_REQUIRED_TEMPLATE_KEYS or key in self._extensions
+        return (
+            key in _LEGACY_REQUIRED_TEMPLATE_KEYS
+            or key in _RESERVED_BUILTIN_PLACEHOLDER_KEYS
+            or key in self._extensions
+        )
 
     def core_keys(self) -> tuple[str, ...]:
         return _LEGACY_REQUIRED_TEMPLATE_KEYS
@@ -83,7 +90,11 @@ class PlaceholderRegistry:
         return tuple(sorted(self._extensions))
 
     def ordered_keys(self) -> tuple[str, ...]:
-        return (*_LEGACY_REQUIRED_TEMPLATE_KEYS, *self.extension_keys())
+        return (
+            *_LEGACY_REQUIRED_TEMPLATE_KEYS,
+            *_RESERVED_BUILTIN_PLACEHOLDER_KEYS,
+            *self.extension_keys(),
+        )
 
     def contracts(self) -> tuple[PlaceholderContract, ...]:
         """Return all placeholders (core and extensions) as contract objects."""
@@ -91,10 +102,13 @@ class PlaceholderRegistry:
         # Add core placeholders
         for key in _LEGACY_REQUIRED_TEMPLATE_KEYS:
             contracts.append(PlaceholderContract(key=key, is_core=True))
+        for key in _RESERVED_BUILTIN_PLACEHOLDER_KEYS:
+            contracts.append(PlaceholderContract(key=key, is_core=True))
         # Add extensions (sorted)
         for key in self.extension_keys():
             contracts.append(PlaceholderContract(key=key, is_core=False))
         return tuple(contracts)
+
     def validate_core_placeholders(self, template: str) -> None:
         missing = [
             key
