@@ -6,10 +6,12 @@ from typing import cast
 from ecs_agent.components import (
     CompactionConfigComponent,
     ContextBudgetConfig,
+    CurrentCompactionSummaryComponent,
     ConversationArchiveComponent,
     ConversationComponent,
     EntityRegistryComponent,
     LLMComponent,
+    RenderedSystemPromptComponent,
     SubagentNotificationQueueComponent,
     SubagentSessionTableComponent,
 )
@@ -61,6 +63,10 @@ class CompactionSystem:
                 system_message = working_messages[0]
                 working_messages = working_messages[1:]
 
+            working_messages = [
+                message for message in working_messages if message.role != "compaction"
+            ]
+
             if len(working_messages) < 2:
                 continue
 
@@ -80,9 +86,19 @@ class CompactionSystem:
                 entity_id=entity_id,
                 config=config,
             )
+            current_summary = world.get_component(
+                entity_id, CurrentCompactionSummaryComponent
+            )
             summary = await self._summarize(
                 provider=summary_provider,
-                messages=messages_to_summarize,
+                messages=self._build_summary_input_messages(
+                    previous_summary=(
+                        current_summary.summary
+                        if current_summary is not None and current_summary.summary
+                        else None
+                    ),
+                    messages_to_summarize=messages_to_summarize,
+                ),
                 system_prompt=summary_prompt,
                 subagent_state=self._render_subagent_summary_state(world, entity_id),
             )
@@ -93,15 +109,19 @@ class CompactionSystem:
                 world.add_component(entity_id, archive)
             archive.archived_summaries.append(summary)
 
+            world.add_component(
+                entity_id,
+                CurrentCompactionSummaryComponent(summary=summary),
+            )
+            if (
+                world.get_component(entity_id, RenderedSystemPromptComponent)
+                is not None
+            ):
+                world.remove_component(entity_id, RenderedSystemPromptComponent)
+
             new_messages: list[Message] = []
             if system_message is not None:
                 new_messages.append(system_message)
-            new_messages.append(
-                Message(
-                    role="compaction",
-                    content=f"Previous conversation summary: {summary}",
-                )
-            )
             new_messages.extend(retained_messages)
             conversation.messages = new_messages
 
@@ -159,6 +179,27 @@ class CompactionSystem:
             return list(pruned_messages), []
 
         raise ValueError(f"Unsupported compaction method: {config.compaction_method}")
+
+    def _build_summary_input_messages(
+        self,
+        *,
+        previous_summary: str | None,
+        messages_to_summarize: list[Message],
+    ) -> list[Message]:
+        if previous_summary is None:
+            return list(messages_to_summarize)
+
+        return [
+            Message(
+                role="user",
+                content=(
+                    "Previous summary:\n\n"
+                    f"{previous_summary}\n\n"
+                    "Conversation to summarize:"
+                ),
+            ),
+            *messages_to_summarize,
+        ]
 
     def _render_subagent_summary_state(
         self,

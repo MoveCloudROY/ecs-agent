@@ -24,3 +24,8 @@
 - `CompactionSummaryPlaceholderProvider` should emit nothing for entities without `CompactionConfigComponent`; that keeps existing non-compaction cache keys stable while still fingerprinting compaction-enabled entities.
 - Legacy prompt normalization is safest as an in-memory synthetic `SystemPromptConfigSpec` path: reuse the stored rendered snapshot's `_legacy_template` on re-render so summary changes do not permanently overwrite the original legacy prompt template.
 - Appending `\n${_chat_history_summary_xml}` only when the placeholder is absent avoids double insertion while guaranteeing compaction-enabled prompts end with the XML block.
+
+## [2026-04-13T13:50:00Z] Task 3: compaction-state-switch
+- `CompactionSystem.process()` can switch carriers cleanly by filtering legacy `role="compaction"` messages out of the working set before strategy selection, then rebuilding `ConversationComponent.messages` from only the preserved system message plus retained post-compaction turns.
+- Repeated compaction works best by prepending a plain-text synthetic user message containing the existing `CurrentCompactionSummaryComponent.summary` before newly selected messages, which preserves summary continuity without folding XML into the summarization prompt.
+- Prompt cache invalidation belongs in compaction itself: after writing a new `CurrentCompactionSummaryComponent`, removing `RenderedSystemPromptComponent` ensures the next system-prompt render picks up the new summary XML while leaving prompt-render helpers unchanged.
