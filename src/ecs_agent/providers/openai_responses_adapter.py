@@ -50,8 +50,6 @@ class _OpenAIProviderFacade(Protocol):
 class OpenAIResponsesAdapter:
     """Adapter for OpenAI-compatible Responses requests."""
 
-    _COMPACTION_SENTINEL = "[COMPACTION SUMMARY]\n"
-
     def __init__(self, provider: _OpenAIProviderFacade) -> None:
         self._provider = provider
 
@@ -302,21 +300,6 @@ class OpenAIResponsesAdapter:
                             "content": content_items,
                         }
                     )
-
-            if msg.role == "compaction":
-                content_items = [
-                    {
-                        "type": "input_text",
-                        "text": f"{self._COMPACTION_SENTINEL}{msg.content}",
-                    }
-                ]
-                input_items.append(
-                    {
-                        "type": "message",
-                        "role": "user",
-                        "content": content_items,
-                    }
-                )
 
             if msg.role == "assistant" and msg.tool_calls:
                 for tool_call in msg.tool_calls:

@@ -25,7 +25,12 @@
 - Legacy prompt normalization is safest as an in-memory synthetic `SystemPromptConfigSpec` path: reuse the stored rendered snapshot's `_legacy_template` on re-render so summary changes do not permanently overwrite the original legacy prompt template.
 - Appending `\n${_chat_history_summary_xml}` only when the placeholder is absent avoids double insertion while guaranteeing compaction-enabled prompts end with the XML block.
 
-## [2026-04-13T13:50:00Z] Task 3: compaction-state-switch
-- `CompactionSystem.process()` can switch carriers cleanly by filtering legacy `role="compaction"` messages out of the working set before strategy selection, then rebuilding `ConversationComponent.messages` from only the preserved system message plus retained post-compaction turns.
-- Repeated compaction works best by prepending a plain-text synthetic user message containing the existing `CurrentCompactionSummaryComponent.summary` before newly selected messages, which preserves summary continuity without folding XML into the summarization prompt.
-- Prompt cache invalidation belongs in compaction itself: after writing a new `CurrentCompactionSummaryComponent`, removing `RenderedSystemPromptComponent` ensures the next system-prompt render picks up the new summary XML while leaving prompt-render helpers unchanged.
+## [2026-04-13T13:54:00Z] Task 4: memory-boundary-logic
+- The MemorySystem's search for `role="compaction"` messages (lines 20-36) was a transitional boundary marker that is no longer needed with `CurrentCompactionSummaryComponent`.
+- Implementation replaced the synthetic message boundary search with a `world.get_component(entity_id, CurrentCompactionSummaryComponent)` check.
+- When `CurrentCompactionSummaryComponent` is present: preserve system message (if exists) + ALL remaining non-system messages without any truncation, even if count exceeds `max_messages`. This protects post-compaction conversation history from loss.
+- When `CurrentCompactionSummaryComponent` is absent: apply trailing-window truncation as before (keep last N messages + system if present). This ensures backward compatibility for entities that have never undergone compaction.
+- TDD approach: wrote two new failing tests first (with/without summary component), then modified MemorySystem logic, then verified all 8 memory tests pass.
+- No synthetic boundary message is reintroduced; the compaction boundary is now entirely encoded by: (1) system message position, (2) presence of CurrentCompactionSummaryComponent.
+- Multi-entity truncation still works correctly; the old test `test_truncation_preserves_latest_compaction_message_and_following_history` now passes via the no-summary path (applies trailing-window behavior).
+
