@@ -208,45 +208,8 @@ async def test_compaction_triggers_when_threshold_exceeded() -> None:
     current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
     assert conversation is not None
     assert len(provider.calls) == 1
-    assert len(conversation.messages) == 3
-    assert all(message.role != "compaction" for message in conversation.messages)
+    assert len(conversation.messages) == 0
     assert current_summary == CurrentCompactionSummaryComponent(summary="brief")
-
-
-@pytest.mark.asyncio
-async def test_compaction_bisects_messages_and_keeps_recent_half() -> None:
-    world = World()
-    provider = RecordingFakeProvider(
-        responses=[
-            CompletionResult(message=Message(role="assistant", content="older summary"))
-        ]
-    )
-    entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
-    original = [
-        _message("old-0"),
-        _message("old-1"),
-        _message("new-2"),
-        _message("new-3"),
-        _message("new-4"),
-    ]
-    world.add_component(entity_id, ConversationComponent(messages=list(original)))
-    world.add_component(
-        entity_id,
-        CompactionConfigComponent(threshold_tokens=1, summary_model="summary-model"),
-    )
-
-    await CompactionSystem().process(world)
-
-    conversation = world.get_component(entity_id, ConversationComponent)
-    current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
-    assert conversation is not None
-    assert [message.content for message in conversation.messages] == [
-        "new-2",
-        "new-3",
-        "new-4",
-    ]
-    assert current_summary == CurrentCompactionSummaryComponent(summary="older summary")
 
 
 @pytest.mark.asyncio
@@ -716,7 +679,7 @@ async def test_repeated_compaction_folds_previous_current_summary_into_next_summ
     previous_summary_index = second_summary_input.index(
         "user: Previous summary:\n\nfirst summary"
     )
-    retained_message_index = second_summary_input.index("user: new-3")
+    retained_message_index = second_summary_input.index("user: latest-4")
 
     assert previous_summary_index < retained_message_index
     assert "Conversation to summarize:" in second_summary_input
@@ -1069,45 +1032,6 @@ async def test_compaction_renders_custom_prompt_template() -> None:
     assert legacy_prompt.content == "runtime legacy prompt"
 
 
-@pytest.mark.asyncio
-async def test_bisect_ratio_is_configurable() -> None:
-    world = World()
-    provider = RecordingFakeProvider(
-        responses=[
-            CompletionResult(message=Message(role="assistant", content="summary"))
-        ]
-    )
-    entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
-    original_messages = [
-        _message("m0"),
-        _message("m1"),
-        _message("m2"),
-        _message("m3"),
-        _message("m4"),
-        _message("m5"),
-    ]
-    world.add_component(
-        entity_id, ConversationComponent(messages=list(original_messages))
-    )
-    world.add_component(
-        entity_id,
-        CompactionConfigComponent(threshold_tokens=1, summary_model="summary-model"),
-    )
-
-    await CompactionSystem(bisect_ratio=0.25).process(world)
-
-    conversation = world.get_component(entity_id, ConversationComponent)
-    assert conversation is not None
-    assert [message.content for message in conversation.messages] == [
-        "m1",
-        "m2",
-        "m3",
-        "m4",
-        "m5",
-    ]
-
-
 def test_compaction_config_component_accepts_legacy_summary_model_string() -> None:
     component = CompactionConfigComponent(
         threshold_tokens=1000,
@@ -1123,6 +1047,6 @@ def test_compaction_config_component_new_fields_have_expected_defaults() -> None
         summary_model="gpt-4o-mini",
     )
 
-    assert component.compaction_method == "bisect"
+    assert component.compaction_method == "full_history"
     assert component.summary_model_id is None
     assert component.compaction_prompt_template is None

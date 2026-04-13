@@ -409,19 +409,19 @@ world.register_system(CheckpointSystem(), priority=15)
 
 Compresses conversation history by summarizing older messages using the entity's LLM provider.
 
-- **Constructor**: `__init__(self, bisect_ratio: float = 0.5)` (ratio must be in (0, 1))
+- **Constructor**: `__init__(self)` (no parameters)
 - **Queries**: `CompactionConfigComponent`, `LLMComponent`, `ConversationComponent`
 - **Optional Components**: `ConversationArchiveComponent`
-- **Modifies**: `ConversationComponent.messages` (replaces older messages with summary), `ConversationArchiveComponent.archived_summaries`.
+- **Modifies**: `ConversationComponent.messages` (replaces all non-system messages with `[system_msg]` after compaction), `ConversationArchiveComponent.archived_summaries`.
 - **Events Published**: `CompactionCompleteEvent`.
 
 ### Behavior
-The system estimates token count using `word_count * 1.3`. When the estimate exceeds `CompactionConfigComponent.threshold_tokens`, it splits messages at `bisect_ratio`, summarizes the older half via the entity's LLM provider using `CompactionConfigComponent.summary_model`, archives the summary in `ConversationArchiveComponent`, and replaces the older messages with a single summary message.
+The system estimates token count using `word_count * 1.3`. When the estimate exceeds `CompactionConfigComponent.threshold_tokens`, the configured `compaction_method` selects which messages to summarize. Both `full_history` and `predrop_then_compact` result in `retained_messages = []`, so after compaction `conversation.messages = [system_msg]`. The summary is archived in `ConversationArchiveComponent` and stored in `CurrentCompactionSummaryComponent` for injection into the system prompt via `SystemPromptRenderSystem`.
 
 ### Usage Example
 ```python
 from ecs_agent.systems.compaction import CompactionSystem
-world.register_system(CompactionSystem(bisect_ratio=0.5), priority=20)
+world.register_system(CompactionSystem(), priority=20)
 ```
 
 ---
@@ -601,7 +601,7 @@ world.register_system(ReplanningSystem(priority=7), priority=7)
 # Maintenance
 world.register_system(MemorySystem(), priority=10)
 world.register_system(CheckpointSystem(), priority=15)
-world.register_system(CompactionSystem(bisect_ratio=0.5), priority=20)
+world.register_system(CompactionSystem(), priority=20)
 
 # Global error handling (always run last)
 world.register_system(ErrorHandlingSystem(priority=99), priority=99)

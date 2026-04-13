@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from ecs_agent.components import (
     ConversationComponent,
-    CurrentCompactionSummaryComponent,
 )
 from ecs_agent.core import World
 from ecs_agent.types import ConversationTruncatedEvent
@@ -19,20 +18,10 @@ class MemorySystem:
                 continue
 
             has_system = len(messages) > 0 and messages[0].role == "system"
-
-            current_summary = world.get_component(
-                entity_id, CurrentCompactionSummaryComponent
-            )
-
-            if current_summary is not None:
-                leading_messages = messages[:1] if has_system else []
-                remaining_messages = messages[1:] if has_system else messages
-                new_messages = leading_messages + remaining_messages
-            else:
-                keep_count = max_messages - (1 if has_system else 0)
-                keep_count = max(keep_count, 0)
-                trailing = messages[-keep_count:] if keep_count > 0 else []
-                new_messages = (messages[:1] if has_system else []) + trailing
+            keep_count = max_messages - (1 if has_system else 0)
+            keep_count = max(keep_count, 0)
+            trailing = messages[-keep_count:] if keep_count > 0 else []
+            new_messages = (messages[:1] if has_system else []) + trailing
             removed_count = len(messages) - len(new_messages)
 
             if removed_count <= 0:

@@ -40,11 +40,6 @@ DEFAULT_COMPACTION_PROMPT = (
 
 
 class CompactionSystem:
-    def __init__(self, bisect_ratio: float = 0.5) -> None:
-        if bisect_ratio <= 0 or bisect_ratio >= 1:
-            raise ValueError("bisect_ratio must be between 0 and 1")
-        self.bisect_ratio = bisect_ratio
-
     async def process(self, world: World) -> None:
         for entity_id, (config, conversation) in world.query(
             CompactionConfigComponent, ConversationComponent
@@ -143,10 +138,6 @@ class CompactionSystem:
                 resolved_summary_model=summary_model,
             )
 
-    def _split_index(self, message_count: int) -> int:
-        split_index = int(math.floor(message_count * self.bisect_ratio))
-        return min(max(split_index, 1), message_count - 1)
-
     def _estimate_tokens(self, messages: list[Message]) -> int:
         word_count = sum(len(message.content.split()) for message in messages)
         return int(math.ceil(word_count * 1.3))
@@ -157,10 +148,6 @@ class CompactionSystem:
         config: CompactionConfigComponent,
         messages: list[Message],
     ) -> tuple[list[Message], list[Message]]:
-        if config.compaction_method == "bisect":
-            split_index = self._split_index(len(messages))
-            return messages[:split_index], messages[split_index:]
-
         if config.compaction_method == "full_history":
             return list(messages), []
 

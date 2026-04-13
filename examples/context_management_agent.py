@@ -46,10 +46,9 @@ from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import CompletionResult, Message, Usage
 
 
-
 def create_provider() -> FakeProvider | OpenAIProvider:
     """Create LLM provider based on environment variables.
-    
+
     Uses OpenAIProvider if LLM_API_KEY is set, otherwise FakeProvider.
     """
     api_key = os.environ.get("LLM_API_KEY", "")
@@ -57,9 +56,17 @@ def create_provider() -> FakeProvider | OpenAIProvider:
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
     model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
-    
+
     if api_key:
-        return OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        return OpenAIProvider(
+            config=ProviderConfig(
+                provider_id="openai",
+                base_url=base_url,
+                api_key=api_key,
+                api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+            ),
+            model=model,
+        )
     return FakeProvider(
         responses=[
             CompletionResult(
@@ -310,7 +317,7 @@ async def part_3_compact() -> None:
     print(f"\nBefore compaction: {len(initial_messages)} messages")
 
     # Register systems
-    world.register_system(CompactionSystem(bisect_ratio=0.5), priority=0)
+    world.register_system(CompactionSystem(), priority=0)
     world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 

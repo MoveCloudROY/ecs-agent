@@ -539,7 +539,7 @@ class CheckpointSystem:
 ### CompactionSystem
 
 ```python
-class CompactionSystem(bisect_ratio: float = 0.5):
+class CompactionSystem():
     async def process(self, world: World) -> None: ...
 ```
 

@@ -45,8 +45,7 @@ The `CompactionSystem` reduces conversation length by summarizing older messages
 - **`CompactionConfigComponent`**: Configures compaction thresholds and behavior.
   - `threshold_tokens: int` — Token count threshold triggering compaction (estimated as `word_count * 1.3`)
   - `summary_model: str | None` — *(deprecated)* Legacy model override; prefer `summary_model_id`
-  - `compaction_method: CompactionMethod` — Strategy for selecting messages to summarize (default: `"bisect"`). Options:
-    - `"bisect"` — Summarize the first `bisect_ratio` (default 50%) of non-system messages; retain the rest
+  - `compaction_method: CompactionMethod` — Strategy for selecting messages to summarize (default: `"full_history"`). Options:
     - `"full_history"` — Summarize ALL non-system messages; no messages retained (result: `[system_msg]`)
     - `"predrop_then_compact"` — Drop droppable context (tool results) via `ContextBudgetConfig` first, then summarize everything
   - `summary_model_id: str | None` — Canonical `provider/model` ID for routing the summary call to a different provider. Requires a `ProviderRegistry` on the entity (see below).
@@ -80,7 +79,7 @@ The user asked about Python list comprehensions. We discussed syntax and perform
 
 This block is appended to the end of the effective system prompt. This approach ensures the LLM receives the summary as high-priority context without polluting the conversation history with artificial messages.
 
-The `MemorySystem` respects this state: when `CurrentCompactionSummaryComponent` is present, it preserves all messages in the `ConversationComponent`, as the summary already covers the historical context.
+The `MemorySystem` applies trailing-window truncation: it keeps the system message and the most recent `max_messages` messages. Since all compaction strategies leave only `[system_msg]` after compaction, the window naturally handles the post-compaction state.
 
 ### Events
 
@@ -126,10 +125,10 @@ from ecs_agent.systems.compaction import CompactionSystem
 
 world.add_component(agent, CompactionConfigComponent(
     threshold_tokens=4000,
-    compaction_method="bisect",   # "bisect" | "full_history" | "predrop_then_compact"
+    compaction_method="full_history",   # "full_history" | "predrop_then_compact"
 ))
 world.add_component(agent, ConversationArchiveComponent())
-world.register_system(CompactionSystem(bisect_ratio=0.5), priority=20)
+world.register_system(CompactionSystem(), priority=20)
 ```
 
 ## Resume from Checkpoint
