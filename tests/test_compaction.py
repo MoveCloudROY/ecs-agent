@@ -205,10 +205,12 @@ async def test_compaction_triggers_when_threshold_exceeded() -> None:
     await CompactionSystem().process(world)
 
     conversation = world.get_component(entity_id, ConversationComponent)
+    current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
     assert conversation is not None
     assert len(provider.calls) == 1
-    assert len(conversation.messages) == 4
-    assert conversation.messages[0].content.startswith("Previous conversation summary:")
+    assert len(conversation.messages) == 3
+    assert all(message.role != "compaction" for message in conversation.messages)
+    assert current_summary == CurrentCompactionSummaryComponent(summary="brief")
 
 
 @pytest.mark.asyncio
@@ -237,12 +239,14 @@ async def test_compaction_bisects_messages_and_keeps_recent_half() -> None:
     await CompactionSystem().process(world)
 
     conversation = world.get_component(entity_id, ConversationComponent)
+    current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
     assert conversation is not None
-    assert [message.content for message in conversation.messages[1:]] == [
+    assert [message.content for message in conversation.messages] == [
         "new-2",
         "new-3",
         "new-4",
     ]
+    assert current_summary == CurrentCompactionSummaryComponent(summary="older summary")
 
 
 @pytest.mark.asyncio
@@ -278,11 +282,12 @@ async def test_compaction_full_history_method_replaces_all_non_system_history() 
     await CompactionSystem().process(world)
 
     conversation = world.get_component(entity_id, ConversationComponent)
+    current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
     assert conversation is not None
     assert [(message.role, message.content) for message in conversation.messages] == [
         ("system", "You are a strict assistant"),
-        ("compaction", "Previous conversation summary: full summary"),
     ]
+    assert current_summary == CurrentCompactionSummaryComponent(summary="full summary")
 
     sent_messages, _, _ = provider.calls[0]
     assert sent_messages[1].role == "user"
@@ -361,15 +366,15 @@ async def test_compaction_predrop_then_compact_uses_budgeted_view_without_mutati
     assert "user: keep me" in summarized_input
 
     conversation = world.get_component(entity_id, ConversationComponent)
+    current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
     assert conversation is not None
     assert conversation.messages[0].role == "system"
-    assert conversation.messages[1].role == "compaction"
     assert conversation.messages == [
         Message(role="system", content="You are a strict assistant"),
-        Message(
-            role="compaction", content="Previous conversation summary: budgeted summary"
-        ),
     ]
+    assert current_summary == CurrentCompactionSummaryComponent(
+        summary="budgeted summary"
+    )
     assert original_messages[1].tool_calls is not None
 
 
@@ -514,8 +519,10 @@ async def test_summary_is_stored_in_archive_component() -> None:
     await CompactionSystem().process(world)
 
     archive = world.get_component(entity_id, ConversationArchiveComponent)
+    current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
     assert archive is not None
     assert archive.archived_summaries == ["saved summary"]
+    assert current_summary == CurrentCompactionSummaryComponent(summary="saved summary")
 
 
 @pytest.mark.asyncio
@@ -608,9 +615,116 @@ async def test_system_message_is_preserved_during_compaction() -> None:
     await CompactionSystem().process(world)
 
     conversation = world.get_component(entity_id, ConversationComponent)
+    current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
     assert conversation is not None
     assert conversation.messages[0].role == "system"
     assert conversation.messages[0].content == "You are a strict assistant"
+    assert all(message.role != "compaction" for message in conversation.messages)
+    assert current_summary == CurrentCompactionSummaryComponent(summary="summary")
+
+
+@pytest.mark.asyncio
+async def test_compaction_updates_current_summary_and_clears_rendered_prompt_cache() -> (
+    None
+):
+    world = World()
+    provider = RecordingFakeProvider(
+        responses=[
+            CompletionResult(
+                message=Message(role="assistant", content="state-backed summary")
+            )
+        ]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[_message("first"), _message("second"), _message("third")]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        CompactionConfigComponent(threshold_tokens=1, summary_model="summary-model"),
+    )
+    world.add_component(
+        entity_id,
+        RenderedSystemPromptComponent(
+            text="cached runtime prompt",
+            placeholder_snapshot={"_cache_key": "runtime-cache"},
+        ),
+    )
+
+    await CompactionSystem().process(world)
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
+
+    assert conversation is not None
+    assert all(message.role != "compaction" for message in conversation.messages)
+    assert current_summary == CurrentCompactionSummaryComponent(
+        summary="state-backed summary"
+    )
+    assert world.get_component(entity_id, RenderedSystemPromptComponent) is None
+
+
+@pytest.mark.asyncio
+async def test_repeated_compaction_folds_previous_current_summary_into_next_summary_input() -> (
+    None
+):
+    world = World()
+    provider = RecordingFakeProvider(
+        responses=[
+            CompletionResult(
+                message=Message(role="assistant", content="first summary")
+            ),
+            CompletionResult(
+                message=Message(role="assistant", content="second summary")
+            ),
+        ]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[
+                _message("old-0"),
+                _message("old-1"),
+                _message("new-2"),
+                _message("new-3"),
+            ]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        CompactionConfigComponent(threshold_tokens=1, summary_model="summary-model"),
+    )
+    world.add_component(entity_id, ConversationArchiveComponent())
+
+    await CompactionSystem().process(world)
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.extend([_message("latest-4"), _message("latest-5")])
+
+    await CompactionSystem().process(world)
+
+    archive = world.get_component(entity_id, ConversationArchiveComponent)
+    current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
+    second_summary_input = provider.calls[1][0][1].content
+    previous_summary_index = second_summary_input.index(
+        "user: Previous summary:\n\nfirst summary"
+    )
+    retained_message_index = second_summary_input.index("user: new-3")
+
+    assert previous_summary_index < retained_message_index
+    assert "Conversation to summarize:" in second_summary_input
+    assert archive is not None
+    assert archive.archived_summaries == ["first summary", "second summary"]
+    assert current_summary == CurrentCompactionSummaryComponent(
+        summary="second summary"
+    )
 
 
 def test_compaction_prompt_render_does_not_mutate_runtime_state() -> None:
@@ -950,8 +1064,7 @@ async def test_compaction_renders_custom_prompt_template() -> None:
     assert sent_messages[0].content == "Summary for compaction"
     assert llm is not None
     assert llm.system_prompt == "runtime llm prompt"
-    assert runtime_cache is not None
-    assert runtime_cache.text == "cached runtime prompt"
+    assert runtime_cache is None
     assert legacy_prompt is not None
     assert legacy_prompt.content == "runtime legacy prompt"
 
@@ -986,7 +1099,7 @@ async def test_bisect_ratio_is_configurable() -> None:
 
     conversation = world.get_component(entity_id, ConversationComponent)
     assert conversation is not None
-    assert [message.content for message in conversation.messages[1:]] == [
+    assert [message.content for message in conversation.messages] == [
         "m1",
         "m2",
         "m3",
