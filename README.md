@@ -219,58 +219,15 @@ World
 
 ### Components
 
-| Component | Purpose |
-|-----------|---------|
-| `LLMComponent` | Provider, model, system prompt |
-| `ConversationComponent` | Message history with optional size limit |
-| `PlanComponent` | Multi-step plan with progress tracking |
-| `ToolRegistryComponent` | Tool schemas and async handler functions |
-| `PendingToolCallsComponent` | Tool calls awaiting execution |
-| `ToolResultsComponent` | Results from completed tool calls |
-| `MessageBusConfigComponent` | Configuration for messaging (timeouts, queue sizes) |
-| `MessageBusSubscriptionComponent` | Registry of topic subscriptions for an entity |
-| `MessageBusConversationComponent` | Tracks active request-response conversations |
-| `SystemPromptComponent` | Legacy system prompt storage (template + sections); prefer `SystemPromptConfigSpec` for new agents |
-| `SystemPromptConfigSpec` | New-style prompt spec with `${name}` placeholder templates; resolved by `SystemPromptRenderSystem` |
-| `UserPromptConfigComponent` | User prompt normalization config (triggers with `replace`/`inject`/`script` actions, context pool settings, and `script_handlers` registry for Python-callable script triggers) |
-| `PromptContextQueueComponent` | Context entries for injection into outbound user messages |
-| `RenderedSystemPromptComponent` | cached/frozen rendered system prompt produced by `SystemPromptRenderSystem` on first render; reused on subsequent ticks |
-| `RenderedUserPromptComponent` | Normalized user prompt text produced by `UserPromptNormalizationSystem` for the current tick |
-| `KVStoreComponent` | Generic key-value scratch space |
-| `ErrorComponent` | Error details for failed operations |
-| `InterruptionComponent` | Signals graceful stop with partial content preservation (user or system requested) |
-| `TerminalComponent` | Signals agent completion |
-| `TerminalComponent` | Signals agent completion |
-| `ToolApprovalComponent` | Policy-based tool call filtering |
-| `SandboxConfigComponent` | Execution limits for tools |
-| `PlanSearchComponent` | MCTS search configuration |
-| `RAGTriggerComponent` | Vector search retrieval state |
-| `EmbeddingComponent` | Embedding provider reference |
-| `VectorStoreComponent` | Vector store reference |
-| `StreamingComponent` | Enables system-level streaming output |
-| `CheckpointComponent` | Stores world state snapshots for undo |
-| `CompactionConfigComponent` | Token threshold and model for compaction |
-| `ContextBudgetConfig` | Outbound token budget limits: max tokens, tool-result/reasoning pruning policy, overflow behavior |
-| `ContextCacheComponent` | Cache of evicted tool-result refs pruned from outbound context by the budget reducer |
-| `ConversationArchiveComponent` | Archived conversation summaries |
-| `RunnerStateComponent` | Tracks runner tick state and pause |
-| `UserInputComponent` | Async user input with optional timeout |
-| `SkillComponent` | Registry of installed skills and metadata |
-| `PermissionComponent` | Tool whitelist/blacklist for permission control |
-| `SkillMetadata` | Tier 1 metadata for an installed skill |
-| `MCPConfigComponent` | Configuration for MCP transport (stdio/SSE/HTTP) |
-| `MCPClientComponent` | Active MCP client session and tool cache |
-| `ConversationTreeComponent` | Tree-structured conversation with branching and linearization |
-| `ResponsesAPIStateComponent` | Tracks OpenAI Responses API state and metadata |
-| `SubagentRegistryComponent` | Registry of named subagent configurations |
-| `TaskComponent` | Multi-step task definition and tracking |
-| `ScratchbookRefComponent` | Reference to a scratchbook artifact |
-| `ScratchbookIndexComponent` | Index of scratchbook artifacts |
-| `ChildStubComponent` | Marker for parent-world stub entities tracking delegated child subagents; skipped by `ReasoningSystem` |
+README stays at the overview level. For the full component catalog and field-by-field reference, use:
+
+- [`docs/components.md`](docs/components.md) — every component, defaults, usage, and system relationships
+- [`docs/systems.md`](docs/systems.md) — which systems produce and consume each component
+- [`docs/core-concepts.md`](docs/core-concepts.md) — how `World`, entities, components, and systems fit together
 
 ## Examples
 
-The `examples/` directory contains 25 runnable demos:
+The `examples/` directory contains runnable demos for the major patterns in the framework:
 
 | Example | Description |
 |---------|-------------|
@@ -319,109 +276,23 @@ uv run python examples/react_agent.py
 LLM_API_KEY=your-api-key EMBEDDING_MODEL=text-embedding-3-small uv run python examples/rag_agent.py
 ```
 
-## Using a Real LLM
+## Real LLM Configuration
 
-Copy `.env.example` to `.env` and add your API credentials:
+The Quick Start above uses a real LLM. Set these environment variables before running it:
 
 ```bash
-cp .env.example .env
+export LLM_API_KEY=your-api-key
+export LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+export LLM_MODEL=qwen3.5-flash
 ```
 
-```ini
-LLM_API_KEY=your-api-key-here
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_MODEL=qwen3.5-plus
+Then run any dual-mode example, for example:
 
-# For DashScope (Aliyun), also set:
-DASHSCOPE_API_KEY=your-api-key-here
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_MODEL=qwen3.5-plus
+```bash
+uv run python examples/chat_agent.py
 ```
 
-Then use `OpenAIProvider` with an explicit `ProviderConfig` (works with any OpenAI-compatible API):
-
-```python
-from ecs_agent.providers import OpenAIProvider
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
-
-config = ProviderConfig(
-    provider_id="aliyun",
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-    api_key="your-api-key",
-    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-)
-provider = OpenAIProvider(config=config, model="qwen3.5-plus")
-```
-
-Wrap with `RetryProvider` for automatic retries on transient failures:
-
-```python
-from ecs_agent import RetryProvider, RetryConfig
-from ecs_agent.providers import OpenAIProvider
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
-
-config = ProviderConfig(
-    provider_id="aliyun",
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-    api_key="your-api-key",
-    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-)
-provider = RetryProvider(
-    provider=OpenAIProvider(config=config, model="qwen3.5-plus"),
-    config=RetryConfig(max_retries=3, initial_wait=1.0, max_wait=30.0),
-)
-```
-
-## Provider Architecture
-
-The LLM layer is built around three linked concepts: a canonical `provider/model` identifier,
-an explicit `ProviderConfig` that holds endpoint/auth/protocol settings, and event-driven
-accounting that tracks usage and cache behavior.
-
-### End-to-End Flow — ProviderRegistry (recommended)
-
-```python
-import os
-from ecs_agent.providers.registry import ProviderRegistry, get_llm_provider
-from ecs_agent.accounting.subscriber import AccountingSubscriber
-from ecs_agent.core import World
-
-# 1) Load provider configs from TOML (or from_dict)
-registry = ProviderRegistry.from_dict({
-    "aliyun": {
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "api_format": "openai_chat_completions",
-        "api_key_env": "LLM_API_KEY",
-    }
-})
-
-# 2) One call: parse model ID, resolve config, construct the right provider
-provider = get_llm_provider("aliyun/qwen3.5-flash", registry=registry)
-
-# 3) Attach accounting to the World's event bus
-world = World()
-subscriber = AccountingSubscriber()
-subscriber.subscribe(world.event_bus)
-```
-
-### Manual Construction
-
-```python
-import os
-from ecs_agent.providers import OpenAIProvider
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
-
-config = ProviderConfig(
-    provider_id="aliyun",
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-    api_key=os.environ["LLM_API_KEY"],
-    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-)
-provider = OpenAIProvider(config=config, model="qwen3.5-flash")
-```
-
-Model IDs must use `provider/model` (slash-separated). Colon-delimited IDs are rejected with `ValueError`.
-See [`docs/providers.md`](docs/providers.md) for the full reference.
+Provider setup, registry-based construction, supported protocols, and model ID rules are documented in [`docs/providers.md`](docs/providers.md).
 
 ## Development
 
@@ -442,40 +313,19 @@ uv run pytest -v
 ```
 ### Real-LLM Integration Tests
 
-Run live adapter tests against a real LLM endpoint (e.g. DashScope). Tests skip gracefully if `LLM_API_KEY` is not set:
+Live tests are optional and skip cleanly when `LLM_API_KEY` is not set. Run the suite you care about with the same environment variables you use for examples:
 
 ```bash
-# Discover available live tests
-uv run pytest tests/live/test_llm_api_live.py --collect-only
-
-# Run all live tests (requires LLM_API_KEY env var)
 LLM_API_KEY="$LLM_API_KEY" \
   LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
   LLM_MODEL=qwen3.5-flash \
   uv run pytest tests/live/test_llm_api_live.py -v
-```
 
-Four live scenarios are provided:
-- **Chat Completions text** — `LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`
-- **Responses text** — `LLM_BASE_URL=https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1`
-- **Responses vision** — add `LLM_MODEL=qwen3-vl-flash` and `IMAGE_URL=<public-image-url>`
-- **Anthropic-compatible text** — `LLM_MODEL=kimi-k2.5`, `LLM_BASE_URL=https://dashscope.aliyuncs.com/apps/anthropic`
-- **Task Executor** — `tests/live/test_task_executor_live.py` exercises the `TaskExecutor` dispatch path end-to-end.
-- **Subagent Delegation** — `tests/live/test_subagent_live.py` covers background queuing, FIFO scheduling, and streaming telemetry. Includes `test_aliyun_completions_background_completion_notification_flow` and `test_aliyun_responses_background_completion_notification_flow` for explicit wait/notification flow.
-- **Compaction** — `tests/live/test_compaction_live.py` covers XML system-summary injection on Chat Completions and Responses API, full `CompactionSystem.process()` end-to-end with `full_history`/`custom prompt` methods, `summary_model_id` routing, and `MemorySystem` preservation.
-
-For the legacy integration test:
-
-```bash
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
-  LLM_MODEL=qwen3.5-flash \
-  LLM_API_KEY="$LLM_API_KEY" \
-  uv run pytest tests/test_real_llm_integration.py -k "prompt" -v
-
-# Compaction live tests
 LLM_API_KEY="$LLM_API_KEY" \
   uv run pytest tests/live/test_compaction_live.py -v
 ```
+
+See `tests/live/` for the available live suites.
 
 ### Type Checking
 
@@ -503,11 +353,11 @@ See [`docs/`](docs/) for detailed guides:
 - [Architecture](docs/architecture.md), ECS pattern, data flow, system lifecycle
 - [Core Concepts](docs/core-concepts.md), World, Entity, Component, System, Runner
 - [API Reference](docs/api-reference.md), Complete API surface
-- [Examples](docs/examples.md), Walkthrough of all 21 examples
+- [Examples](docs/examples.md), Walkthrough of the example gallery
 
 ### Core Features
-- [Components](docs/components.md), All 27 components with usage examples
-- [Systems](docs/systems.md), All 14 systems with configuration details
+- [Components](docs/components.md), Complete component catalog with usage examples
+- [Systems](docs/systems.md), Built-in systems and configuration details
 - [Providers](docs/providers.md), LLM provider protocol, built-in providers
 - [Streaming](docs/features/streaming.md), SSE streaming setup and usage
 - [Structured Output](docs/features/structured-output.md), Pydantic schema → JSON mode
