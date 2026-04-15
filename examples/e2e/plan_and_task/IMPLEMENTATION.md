@@ -1,0 +1,35 @@
+# Implementation Notes
+
+## Modules
+
+- `commands.py`: Defines a closed slash-command grammar and parser for the workflow.
+- `runtime.py`: Manages the interactive stdin loop and event-driven user input.
+- `artifacts.py`: Implements `ArtifactAdapter` for atomic, durable persistence of all workflow data.
+- `state_models.py`: Dataclass definitions for `RuntimeState`, `TaskRecord`, `ReviewVerdict`, and `SubagentRecord`.
+- `plan_schema.py`: Handles parsing and validation of the Markdown-based workflow plans with YAML frontmatter.
+- `controller.py`: `PlanController` manages the high-level workflow logic, including plan initialization and review gating.
+- `task_exec.py`: `TaskExec` handles plan loading, dependency-aware task queueing, and subagent execution context assembly.
+- `state_machine.py`: `WorkflowStateMachine` defines valid phase transitions and handles process restart recovery.
+- `prompts.py`: Contains system prompt templates for the planner and other subagents.
+- `main.py`: Entrypoint that bootstraps the ECS world, registers systems, and handles provider selection.
+
+## Architecture Decisions
+
+- **No TaskSystem/TaskComponent usage**: This example intentionally uses a custom `TaskExec` and `RuntimeState` to demonstrate manual orchestration and artifact-based persistence instead of the built-in ECS task components.
+- **Persisted State + Atomic Writes**: All state changes are persisted to disk using atomic file operations (temp file + rename) to ensure consistency even on crashes.
+- **Strong State Machine**: Explicit phase transitions prevent invalid operations (e.g., starting a task before the plan is finalized).
+- **Review-Gated Planning**: The workflow requires approved verdicts from both an Advisor and a QA subagent before a plan can be finalized.
+- **Circuit-Breaker for Delegation**: `TaskExec` tracks retry counts for each task and blocks execution if a task fails repeatedly.
+
+## Artifact Layout
+
+The system uses a canonical directory structure under `.artifacts/workflows/<workflow_id>/`:
+- `plan/`: Drafts and finalized plans.
+- `state/`: Runtime state, event logs, and task queues.
+- `memory/`: Shared knowledge across tasks.
+- `review/`: Structured review verdicts.
+
+## Testing
+
+- **Integration Tests**: `tests/integration/test_plan_and_task_flow.py` covers the entire command surface, state machine, and artifact persistence using `FakeProvider`.
+- **Live Tests**: `tests/live/test_plan_and_task_flow_live.py` provides credential-gated acceptance tests using a real LLM provider for the controller logic.
