@@ -10,10 +10,8 @@ from pathlib import Path
 import pytest
 
 from ecs_agent.components.definitions import TerminalComponent
-from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeProvider
+from ecs_agent.core import World
 from ecs_agent.systems import TerminalCleanupSystem
-from ecs_agent.types import CompletionResult, Message
 from examples.e2e.plan_and_task.artifacts import ArtifactAdapter
 from examples.e2e.plan_and_task.commands import (
     Command,
@@ -449,55 +447,6 @@ def test_missing_plan_reference_raises_explicit_value_error(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_plan_task_fake_provider_runtime_boots() -> None:
-    """Test in-process world boot with FakeProvider.
-
-    Verifies the example can instantiate a World, register all systems,
-    and run a single tick without exception when using FakeProvider
-    (no LLM_API_KEY required).
-    """
-    from ecs_agent.components import ConversationComponent, LLMComponent
-    from ecs_agent.systems.error_handling import ErrorHandlingSystem
-    from ecs_agent.systems.memory import MemorySystem
-    from ecs_agent.systems.reasoning import ReasoningSystem
-    from ecs_agent.systems.tool_execution import ToolExecutionSystem
-
-    world = World()
-
-    # Create a FakeProvider (no API key needed)
-    provider = FakeProvider(
-        responses=[
-            CompletionResult(
-                message=Message(
-                    role="assistant",
-                    content="Plan-and-task example is running with FakeProvider.",
-                )
-            )
-        ]
-    )
-
-    # Create agent and attach components
-    agent_id = world.create_entity()
-    world.add_component(agent_id, LLMComponent(provider=provider, model="fake"))
-    world.add_component(agent_id, ConversationComponent(messages=[]))
-
-    # Register systems in standard order
-    world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(ToolExecutionSystem(priority=5), priority=5)
-    world.register_system(MemorySystem(), priority=10)
-    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
-
-    # Run one tick — should not raise
-    runner = Runner()
-    await runner.run(world, max_ticks=1)
-
-    # Verify conversation occurred
-    conv = world.get_component(agent_id, ConversationComponent)
-    assert conv is not None
-    assert len(conv.messages) > 0
-
-
-@pytest.mark.asyncio
 async def test_plan_task_terminal_cleanup_guard() -> None:
     """Test TerminalCleanupSystem only clears 'reasoning_complete'.
 
@@ -527,40 +476,38 @@ async def test_plan_task_terminal_cleanup_guard() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    not os.environ.get("LLM_API_KEY"),
+    reason="LLM_API_KEY not set",
+)
 async def test_plan_task_cli_automation() -> None:
-    """Test CLI automation with piped stdin input (FakeProvider mode).
-
-    This test simulates interactive CLI usage by piping stdin to main.py
-    without LLM_API_KEY set, ensuring FakeProvider fallback is used.
-    Verifies the agent responds and exits cleanly on piped "exit" command.
-    """
-    # Input sequence: exit (piped, no interactive tty)
     input_sequence = b"exit\n"
 
-    # Run main.py with stdin piped, without LLM_API_KEY
     result = subprocess.run(
         ["uv", "run", "python", "examples/e2e/plan_and_task/main.py"],
         input=input_sequence,
         capture_output=True,
         timeout=30,
-        env={**os.environ, "LLM_API_KEY": "", "PLAN_TASK_INTERACTIVE": "1"},
+        env={**os.environ, "PLAN_TASK_INTERACTIVE": "1"},
         cwd=Path(__file__).parent.parent.parent,
     )
 
-    # Verify successful execution
     assert result.returncode == 0, (
         f"Expected exit code 0, got {result.returncode}. "
         f"stderr: {result.stderr.decode('utf-8', errors='replace')}"
     )
 
-    # Verify FakeProvider was used (should log or print)
     output = result.stdout.decode("utf-8", errors="replace")
-    assert "FakeProvider" in output or "No LLM_API_KEY" in output, (
-        f"Expected FakeProvider indication in output. Got:\n{output}"
+    assert "OpenAIProvider" in output, (
+        f"Expected OpenAIProvider indication in output. Got:\n{output}"
     )
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    not os.environ.get("LLM_API_KEY"),
+    reason="LLM_API_KEY not set",
+)
 async def test_cli_slash_command_plan_start_and_status() -> None:
     """Test CLI slash command execution: /plan:start and /plan:status.
 
@@ -570,13 +517,10 @@ async def test_cli_slash_command_plan_start_and_status() -> None:
     - Output contains workflow_id
     - Runtime state file exists with correct phase
     """
-    # Input sequence: /plan:start, /plan:status, exit
     input_sequence = b"/plan:start Build demo\n/plan:status\nexit\n"
 
-    # Run main.py with stdin piped, without LLM_API_KEY, deterministic workflow_id
     env = {
         **os.environ,
-        "LLM_API_KEY": "",
         "PLAN_TASK_INTERACTIVE": "1",
         "PLAN_TASK_WORKFLOW_ID": "cli-slash-cmd-test",
     }
@@ -589,13 +533,11 @@ async def test_cli_slash_command_plan_start_and_status() -> None:
         cwd=Path(__file__).parent.parent.parent,
     )
 
-    # Verify successful execution
     assert result.returncode == 0, (
         f"Expected exit code 0, got {result.returncode}. "
         f"stderr: {result.stderr.decode('utf-8', errors='replace')}"
     )
 
-    # Verify output contains expected markers
     output = result.stdout.decode("utf-8", errors="replace")
     assert "PLAN_INTERVIEW" in output, (
         f"Expected 'PLAN_INTERVIEW' phase in output. Got:\n{output}"
