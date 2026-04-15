@@ -16,6 +16,7 @@ The workflow follows a structured lifecycle:
 - **State Machine**: Explicit phase transitions managed by `WorkflowStateMachine`.
 - **Artifacts**: Durable persistence of plans, state, and execution evidence via `ArtifactAdapter`.
 - **Controller**: `PlanController` manages the high-level workflow logic and review gates.
+- **Subagent Reviews**: Advisor and QA review steps are wired as ECS subagents via `SubagentRegistryComponent`. The planner invokes them with `subagent(category="advisor", ...)` and records verdicts via `record_advisor_verdict` / `record_qa_verdict` tool calls.
 - **Task Execution**: `TaskExec` handles plan loading, dependency resolution, and subagent dispatch.
 
 ## Supported Commands
@@ -76,6 +77,8 @@ Run the integration suite to verify command parsing, state machine logic, artifa
 uv run pytest tests/integration/test_plan_and_task_flow.py -v
 ```
 
+- `uv run pytest tests/integration/test_plan_and_task_flow.py -k "subagent"` — verifies subagent component wiring
+
 ### Specific test filters
 
 ```bash
@@ -105,6 +108,7 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py -v
 
 ## Implementation Details
 
+- **Testable World Factory**: `build_plan_task_world(provider, model, workflow_id, base_dir)` is a public function that returns `(world, agent_id, adapter, runtime_state)`, enabling direct world setup in tests without running the CLI.
 - **Atomic Writes**: All artifact updates use atomic file operations to prevent corruption.
 - **Circuit Breaker**: `TaskExec` implements a retry budget to prevent infinite loops on failing tasks.
 - **Review Gating**: Finalization is strictly blocked until both `PLAN_ADVISOR_REVIEW` and `PLAN_QA_REVIEW` have `approved` verdicts.
