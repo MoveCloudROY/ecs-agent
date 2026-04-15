@@ -14,6 +14,9 @@ if __package__ in {None, ""}:
 from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
+    SubagentRegistryComponent,
+    SubagentSessionTableComponent,
+    ToolRegistryComponent,
     UserPromptConfigComponent,
 )
 from ecs_agent.core import Runner, World
@@ -21,19 +24,26 @@ from ecs_agent.logging import configure_logging, get_logger
 from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
 from ecs_agent.providers import OpenAIProvider
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.systems.user_prompt_normalization_system import (
     UserPromptNormalizationSystem,
 )
+from ecs_agent.types import EntityId, InheritancePolicy, SubagentConfig, ToolSchema
 
 from examples.e2e.plan_and_task.artifacts import ArtifactAdapter
 from examples.e2e.plan_and_task.commands import parse_command
 from examples.e2e.plan_and_task.controller import PlanController
-from examples.e2e.plan_and_task.prompts import PLAN_INTERVIEW_SYSTEM_PROMPT
+from examples.e2e.plan_and_task.prompts import (
+    PLAN_INTERVIEW_SYSTEM_PROMPT,
+    build_advisor_prompt,
+    build_qa_prompt,
+)
 from examples.e2e.plan_and_task.runtime import (
     build_runtime_config,
     setup_interactive_input,
@@ -167,14 +177,149 @@ def _handle_command(
     raise ValueError(f"Unsupported command: {command.name}")
 
 
+def build_plan_task_world(
+    provider: LLMProvider,
+    model: str,
+    workflow_id: str,
+    base_dir: Path | None = None,
+) -> tuple[World, EntityId, ArtifactAdapter, list[RuntimeState | None]]:
+    world = World()
+
+    agent_id = world.create_entity()
+    world.add_component(
+        agent_id,
+        LLMComponent(provider=provider, model=model),
+    )
+    world.add_component(agent_id, ConversationComponent(messages=[]))
+    world.add_component(
+        agent_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline=PLAN_INTERVIEW_SYSTEM_PROMPT)
+        ),
+    )
+    world.add_component(agent_id, UserPromptConfigComponent(triggers=[]))
+    world.add_component(agent_id, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(agent_id, SubagentSessionTableComponent(sessions={}))
+    world.add_component(
+        agent_id,
+        SubagentRegistryComponent(
+            subagents={
+                "advisor": SubagentConfig(
+                    name="advisor",
+                    provider=provider,
+                    model=model,
+                    description="Reviews workflow drafts as an advisor.",
+                    system_prompt=build_advisor_prompt("<current draft content>"),
+                    max_ticks=5,
+                    inheritance_policy=InheritancePolicy(
+                        inherit_system_prompt=False,
+                        inherit_tools=[],
+                    ),
+                ),
+                "qa": SubagentConfig(
+                    name="qa",
+                    provider=provider,
+                    model=model,
+                    description="Performs QA review of workflow drafts.",
+                    system_prompt=build_qa_prompt(
+                        "<current draft content>",
+                        "<advisor verdict>",
+                    ),
+                    max_ticks=5,
+                    inheritance_policy=InheritancePolicy(
+                        inherit_system_prompt=False,
+                        inherit_tools=[],
+                    ),
+                ),
+            }
+        ),
+    )
+
+    adapter = ArtifactAdapter(
+        base_dir=base_dir or _WORKFLOW_BASE_DIR,
+        workflow_id=workflow_id,
+    )
+    controller = PlanController()
+    runtime_state: list[RuntimeState | None] = [None]
+
+    tool_registry = world.get_component(agent_id, ToolRegistryComponent)
+    if tool_registry is None:
+        raise ValueError("ToolRegistryComponent is required for plan-and-task world")
+
+    tool_registry.tools["record_advisor_verdict"] = ToolSchema(
+        name="record_advisor_verdict",
+        description="Record the advisor review verdict for the current workflow draft.",
+        parameters={
+            "verdict": {
+                "type": "string",
+                "description": "Advisor verdict: approved, revise, or blocked.",
+            },
+            "notes": {
+                "type": "string",
+                "description": "Optional notes from the advisor review.",
+                "required": False,
+            },
+        },
+    )
+
+    async def record_advisor_verdict(verdict: str, notes: str = "") -> str:
+        runtime_state[0] = controller.handle_advisor_review(
+            _require_state(runtime_state[0]),
+            adapter,
+            verdict,
+            notes=notes or None,
+        )
+        return f"Advisor verdict '{verdict}' recorded."
+
+    tool_registry.handlers["record_advisor_verdict"] = record_advisor_verdict
+
+    tool_registry.tools["record_qa_verdict"] = ToolSchema(
+        name="record_qa_verdict",
+        description="Record the QA review verdict for the current workflow draft.",
+        parameters={
+            "verdict": {
+                "type": "string",
+                "description": "QA verdict: approved, revise, or blocked.",
+            },
+            "notes": {
+                "type": "string",
+                "description": "Optional notes from the QA review.",
+                "required": False,
+            },
+        },
+    )
+
+    async def record_qa_verdict(verdict: str, notes: str = "") -> str:
+        runtime_state[0] = controller.handle_qa_review(
+            _require_state(runtime_state[0]),
+            adapter,
+            verdict,
+            notes=notes or None,
+        )
+        return f"QA verdict '{verdict}' recorded."
+
+    tool_registry.handlers["record_qa_verdict"] = record_qa_verdict
+
+    world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
+    world.register_system(UserPromptNormalizationSystem(priority=-10), priority=-10)
+    subagent_system = SubagentSystem(priority=-1)
+    world.register_system(subagent_system, priority=-1)
+    subagent_system.install_subagent_tool(world, agent_id, tool_name="subagent")
+    subagent_system.install_subagent_control_tools(world, agent_id)
+    world.register_system(ReasoningSystem(priority=0), priority=0)
+    world.register_system(ToolExecutionSystem(priority=5), priority=5)
+    world.register_system(MemorySystem(), priority=10)
+    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
+
+    return world, agent_id, adapter, runtime_state
+
+
 async def main() -> None:
     debug_mode = os.environ.get("DEBUG", "").lower() in ("1", "true")
     configure_logging(json_output=False, level="DEBUG" if debug_mode else None)
 
     if debug_mode:
         logger.info("debug_mode_enabled")
-
-    world = World()
 
     api_key: str = os.environ.get("LLM_API_KEY", "")
     base_url: str = os.environ.get(
@@ -201,35 +346,15 @@ async def main() -> None:
         model=model,
     )
 
-    agent_id = world.create_entity()
-    world.add_component(
-        agent_id,
-        LLMComponent(provider=provider, model=model),
-    )
-    world.add_component(agent_id, ConversationComponent(messages=[]))
-    world.add_component(
-        agent_id,
-        SystemPromptConfigSpec(
-            template_source=PromptTemplateSource(inline=PLAN_INTERVIEW_SYSTEM_PROMPT)
-        ),
-    )
-    world.add_component(agent_id, UserPromptConfigComponent(triggers=[]))
-
-    world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
-    world.register_system(UserPromptNormalizationSystem(priority=-10), priority=-10)
-    world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(ToolExecutionSystem(priority=5), priority=5)
-    world.register_system(MemorySystem(), priority=10)
-    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
-
     runtime_config = build_runtime_config()
-    adapter = ArtifactAdapter(
-        base_dir=_WORKFLOW_BASE_DIR,
+    world, agent_id, adapter, runtime_state = build_plan_task_world(
+        provider=provider,
+        model=model,
         workflow_id=runtime_config.workflow_id,
+        base_dir=_WORKFLOW_BASE_DIR,
     )
     controller = PlanController()
     state_machine = WorkflowStateMachine()
-    runtime_state: list[RuntimeState | None] = [None]
 
     state_path = adapter.state_dir / "runtime_state.json"
     if state_path.exists():

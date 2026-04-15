@@ -1705,3 +1705,96 @@ def test_task_completion_writes_evidence_artifact(
     assert evidence_payload["summary"] == "done"
     assert evidence_payload["evidence_refs"] == ["ref-1"]
     assert "completed_at" in evidence_payload
+
+
+def _build_test_world(
+    tmp_path: Path,
+) -> tuple[World, object, ArtifactAdapter, list[RuntimeState | None]]:
+    from ecs_agent.providers import FakeProvider
+    from ecs_agent.types import CompletionResult, Message
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="ready"))]
+    )
+
+    return build_plan_task_world(
+        provider=provider,
+        model="fake-plan-task",
+        workflow_id="test-workflow-001",
+        base_dir=tmp_path,
+    )
+
+
+@pytest.mark.asyncio
+async def test_main_world_setup_installs_subagent_infrastructure(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent.components import (
+        SubagentRegistryComponent,
+        SubagentSessionTableComponent,
+        ToolRegistryComponent,
+    )
+    from ecs_agent.systems.subagent import SubagentSystem
+
+    world, agent_id, _, _ = _build_test_world(tmp_path)
+    world.apply_pending_system_operations()
+
+    registry = world.get_component(agent_id, SubagentRegistryComponent)
+    tool_registry = world.get_component(agent_id, ToolRegistryComponent)
+    session_table = world.get_component(agent_id, SubagentSessionTableComponent)
+
+    assert registry is not None
+    assert set(registry.subagents) >= {"advisor", "qa"}
+    assert tool_registry is not None
+    assert "record_advisor_verdict" in tool_registry.tools
+    assert "record_advisor_verdict" in tool_registry.handlers
+    assert "record_qa_verdict" in tool_registry.tools
+    assert "record_qa_verdict" in tool_registry.handlers
+    assert session_table is not None
+    assert any(
+        isinstance(entry.system, SubagentSystem) and entry.priority == -1
+        for entry in world._systems._systems
+    )
+
+
+@pytest.mark.asyncio
+async def test_verdict_tool_handlers_update_runtime_state(tmp_path: Path) -> None:
+    from ecs_agent.components import ToolRegistryComponent
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    controller = PlanController()
+    runtime_state[0] = controller.handle_plan_start(adapter, "Build a workflow")
+
+    tool_registry = world.get_component(agent_id, ToolRegistryComponent)
+    assert tool_registry is not None
+
+    advisor_result = await tool_registry.handlers["record_advisor_verdict"](
+        verdict="approved",
+        notes="looks good",
+    )
+    qa_result = await tool_registry.handlers["record_qa_verdict"](
+        verdict="approved",
+        notes="ship it",
+    )
+
+    assert advisor_result == "Advisor verdict 'approved' recorded."
+    assert qa_result == "QA verdict 'approved' recorded."
+    assert runtime_state[0] is not None
+    assert [verdict.phase for verdict in runtime_state[0].review_verdicts] == [
+        "PLAN_ADVISOR_REVIEW",
+        "PLAN_QA_REVIEW",
+    ]
+
+
+def test_prompt_builders_return_non_empty_strings() -> None:
+    from examples.e2e.plan_and_task.prompts import (
+        build_advisor_prompt,
+        build_draft_prompt,
+        build_qa_prompt,
+    )
+
+    assert build_advisor_prompt("some draft").strip()
+    assert build_qa_prompt("some draft", "approved").strip()
+    assert build_draft_prompt("a description", []).strip()

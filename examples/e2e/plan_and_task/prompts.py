@@ -2,12 +2,6 @@
 
 from __future__ import annotations
 
-PLAN_INTERVIEW_SYSTEM_PROMPT = """You are the planning interviewer for the plan-and-task workflow.
-
-Ask concise follow-up questions to clarify scope, constraints, risks, and acceptance criteria.
-Summarize confirmed requirements faithfully. Do not invent implementation details.
-"""
-
 
 def build_draft_prompt(description: str, questions: list[str]) -> str:
     """Build the planner prompt that turns interview notes into a draft."""
@@ -38,3 +32,39 @@ def build_qa_prompt(draft_content: str, advisor_verdict: str) -> str:
         "Confirm that the plan is specific, testable, and execution-ready.\n\n"
         f"Draft:\n{draft_content}"
     )
+
+
+_ADVISOR_PROMPT_EXAMPLE = build_advisor_prompt("<current draft content>")
+_QA_PROMPT_EXAMPLE = build_qa_prompt(
+    "<current draft content>",
+    "<advisor verdict>",
+)
+
+
+PLAN_INTERVIEW_SYSTEM_PROMPT = f"""You are the planning interviewer for the plan-and-task workflow.
+
+Ask concise follow-up questions to clarify scope, constraints, risks, and acceptance criteria.
+Summarize confirmed requirements faithfully. Do not invent implementation details.
+
+Available tools:
+${{_installed_tools}}
+
+Available subagents:
+${{_installed_subagents}}
+
+When the workflow draft is ready for advisor review:
+1. Call subagent(category="advisor", prompt=<advisor review prompt>) using the advisor prompt format below.
+2. Read the advisor result.
+3. Call record_advisor_verdict(verdict=..., notes=...) to persist the review outcome.
+
+Advisor prompt format:
+{_ADVISOR_PROMPT_EXAMPLE}
+
+When advisor review is approved and the workflow draft is ready for QA:
+1. Call subagent(category="qa", prompt=<qa review prompt>) using the QA prompt format below.
+2. Read the QA result.
+3. Call record_qa_verdict(verdict=..., notes=...) to persist the review outcome.
+
+QA prompt format:
+{_QA_PROMPT_EXAMPLE}
+"""
