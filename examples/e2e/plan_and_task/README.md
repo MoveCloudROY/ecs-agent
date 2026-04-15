@@ -11,7 +11,8 @@ The workflow follows a structured lifecycle:
 
 ## Architecture
 
-- **ECS Core**: Uses `ReasoningSystem`, `ToolExecutionSystem`, and `MemorySystem`.
+- **ECS Core**: Uses `SystemPromptRenderSystem`, `UserPromptNormalizationSystem`, `ReasoningSystem`, `ToolExecutionSystem`, and `MemorySystem`.
+- **Prompt Configuration**: The planner entity declares `SystemPromptConfigSpec` with `PLAN_INTERVIEW_SYSTEM_PROMPT`, and `SystemPromptRenderSystem` bridges the rendered value into `LLMComponent.system_prompt` before reasoning.
 - **State Machine**: Explicit phase transitions managed by `WorkflowStateMachine`.
 - **Artifacts**: Durable persistence of plans, state, and execution evidence via `ArtifactAdapter`.
 - **Controller**: `PlanController` manages the high-level workflow logic and review gates.
@@ -47,16 +48,8 @@ All workflow data is persisted in `.artifacts/workflows/<workflow_id>/`:
 Run the entry point to start an interactive session.
 
 ```bash
-# Using FakeProvider (No API key needed)
-uv run python examples/e2e/plan_and_task/main.py
-
-# Using Real LLM
 LLM_API_KEY=your-api-key uv run python examples/e2e/plan_and_task/main.py
 ```
-
-### FakeProvider Mode (no API key)
-
-If `LLM_API_KEY` is not set, the example automatically falls back to `FakeProvider`, allowing you to test the command grammar and state transitions without incurring API costs.
 
 ### Automation Mode (piped input)
 
@@ -75,9 +68,9 @@ The workflow can be restarted at any time. On startup, the system:
 
 ## Testing
 
-### Deterministic tests (no credentials)
+### Integration tests
 
-Run the integration suite to verify command parsing, state machine logic, and artifact persistence:
+Run the integration suite to verify command parsing, state machine logic, artifact persistence, and credential-gated CLI coverage:
 
 ```bash
 uv run pytest tests/integration/test_plan_and_task_flow.py -v

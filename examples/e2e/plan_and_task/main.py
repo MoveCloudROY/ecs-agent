@@ -18,18 +18,22 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import configure_logging, get_logger
-from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
+from ecs_agent.providers import OpenAIProvider
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
-from ecs_agent.types import CompletionResult, Message
+from ecs_agent.systems.user_prompt_normalization_system import (
+    UserPromptNormalizationSystem,
+)
 
 from examples.e2e.plan_and_task.artifacts import ArtifactAdapter
 from examples.e2e.plan_and_task.commands import parse_command
 from examples.e2e.plan_and_task.controller import PlanController
+from examples.e2e.plan_and_task.prompts import PLAN_INTERVIEW_SYSTEM_PROMPT
 from examples.e2e.plan_and_task.runtime import (
     build_runtime_config,
     setup_interactive_input,
@@ -178,44 +182,41 @@ async def main() -> None:
     )
     model: str = os.environ.get("LLM_MODEL", "qwen3.5-flash")
 
-    provider: LLMProvider
-    if api_key:
-        logger.info("using_provider", provider="OpenAIProvider", model=model)
-        print(f"Using OpenAIProvider with model: {model}")
-        provider = OpenAIProvider(
-            config=ProviderConfig(
-                provider_id="openai",
-                base_url=base_url,
-                api_key=api_key,
-                api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-            ),
-            model=model,
+    if not api_key:
+        print("Error: LLM_API_KEY environment variable is required.")
+        print(
+            "Example: LLM_API_KEY=sk-... uv run python examples/e2e/plan_and_task/main.py"
         )
-    else:
-        logger.info("using_provider", provider="FakeProvider")
-        print("No LLM_API_KEY set. Using FakeProvider for demonstration.")
-        provider = FakeProvider(
-            responses=[
-                CompletionResult(
-                    message=Message(
-                        role="assistant",
-                        content=(
-                            "Plan-and-task example scaffold is active. "
-                            "Use one of the supported slash commands to continue."
-                        ),
-                    )
-                )
-            ]
-        )
+        sys.exit(1)
+
+    logger.info("using_provider", provider="OpenAIProvider", model=model)
+    print(f"Using OpenAIProvider with model: {model}")
+    provider = OpenAIProvider(
+        config=ProviderConfig(
+            provider_id="openai",
+            base_url=base_url,
+            api_key=api_key,
+            api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+        ),
+        model=model,
+    )
 
     agent_id = world.create_entity()
     world.add_component(
         agent_id,
-        LLMComponent(provider=provider, model=model if api_key else "fake"),
+        LLMComponent(provider=provider, model=model),
     )
     world.add_component(agent_id, ConversationComponent(messages=[]))
+    world.add_component(
+        agent_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline=PLAN_INTERVIEW_SYSTEM_PROMPT)
+        ),
+    )
     world.add_component(agent_id, UserPromptConfigComponent(triggers=[]))
 
+    world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
+    world.register_system(UserPromptNormalizationSystem(priority=-10), priority=-10)
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
     world.register_system(MemorySystem(), priority=10)

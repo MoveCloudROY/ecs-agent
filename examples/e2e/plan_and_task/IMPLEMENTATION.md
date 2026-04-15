@@ -11,11 +11,12 @@
 - `task_exec.py`: `TaskExec` handles plan loading, dependency-aware task queueing, and subagent execution context assembly.
 - `state_machine.py`: `WorkflowStateMachine` defines valid phase transitions and handles process restart recovery.
 - `prompts.py`: Contains system prompt templates for the planner and other subagents.
-- `main.py`: Entrypoint that bootstraps the ECS world, registers systems, and handles provider selection.
+- `main.py`: Entrypoint that bootstraps the ECS world, requires real provider credentials, installs prompt systems, and wires the planner prompt template.
 
 ## Architecture Decisions
 
 - **No TaskSystem/TaskComponent usage**: This example intentionally uses a custom `TaskExec` and `RuntimeState` to demonstrate manual orchestration and artifact-based persistence instead of the built-in ECS task components.
+- **Prompt systems run before reasoning**: `SystemPromptRenderSystem` renders `PLAN_INTERVIEW_SYSTEM_PROMPT` from `SystemPromptConfigSpec` at priority `-20`, and `UserPromptNormalizationSystem` normalizes outbound user prompts at priority `-10` before the LLM turn begins.
 - **Persisted State + Atomic Writes**: All state changes are persisted to disk using atomic file operations (temp file + rename) to ensure consistency even on crashes.
 - **Strong State Machine**: Explicit phase transitions prevent invalid operations (e.g., starting a task before the plan is finalized).
 - **Review-Gated Planning**: The workflow requires approved verdicts from both an Advisor and a QA subagent before a plan can be finalized.
@@ -31,5 +32,5 @@ The system uses a canonical directory structure under `.artifacts/workflows/<wor
 
 ## Testing
 
-- **Integration Tests**: `tests/integration/test_plan_and_task_flow.py` covers the entire command surface, state machine, and artifact persistence using `FakeProvider`.
-- **Live Tests**: `tests/live/test_plan_and_task_flow_live.py` provides credential-gated acceptance tests using a real LLM provider for the controller logic.
+ - **Integration Tests**: `tests/integration/test_plan_and_task_flow.py` covers the command surface, state machine, artifact persistence, and credential-gated CLI checks without depending on `FakeProvider`.
+ - **Live Tests**: `tests/live/test_plan_and_task_flow_live.py` provides credential-gated acceptance tests using a real LLM provider for the controller logic.
