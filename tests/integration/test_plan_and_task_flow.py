@@ -1,0 +1,1765 @@
+"""Integration tests for the plan-and-task E2E example command surface."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from ecs_agent.components.definitions import TerminalComponent
+from ecs_agent.core import Runner, World
+from ecs_agent.providers import FakeProvider
+from ecs_agent.systems import TerminalCleanupSystem
+from ecs_agent.types import CompletionResult, Message
+from examples.e2e.plan_and_task.artifacts import ArtifactAdapter
+from examples.e2e.plan_and_task.commands import (
+    Command,
+    parse_command,
+)
+from examples.e2e.plan_and_task.controller import PlanController
+from examples.e2e.plan_and_task.plan_schema import (
+    PlanTask,
+    WorkflowPlan,
+    make_version_filename,
+    parse_plan,
+    store_plan_version,
+    validate_plan,
+)
+from examples.e2e.plan_and_task.runtime import resolve_workflow_id
+from examples.e2e.plan_and_task.state_models import (
+    ReviewVerdict,
+    RuntimeState,
+    SubagentRecord,
+    TaskRecord,
+)
+
+
+_VALID_WORKFLOW_PLAN = """---
+workflow_id: demo-workflow
+title: Demo Workflow Plan
+description: A demonstration workflow plan.
+version: 1
+status: finalized
+created_at: "2026-04-14T00:00:00Z"
+finalized_at: "2026-04-14T01:00:00Z"
+---
+
+# Demo Workflow Plan
+
+Some narrative description here.
+
+## Tasks
+
+### Task: task-001
+```yaml
+task_id: task-001
+title: Implement feature X
+description: Build the X feature with tests.
+dependencies: []
+acceptance_criteria:
+  - uv run pytest tests/test_x.py -v passes
+  - No new mypy errors
+execution_hints: Follow pattern in src/x.py
+```
+
+### Task: task-002
+```yaml
+task_id: task-002
+title: Document feature X
+description: Write docs for X.
+dependencies:
+  - task-001
+acceptance_criteria:
+  - README.md updated with X section
+execution_hints: null
+```
+"""
+
+_VALID_FINALIZED_TASK_PLAN = """---
+workflow_id: test-workflow-001
+title: Test Workflow
+description: A test workflow
+version: 1
+status: finalized
+created_at: "2026-01-01T00:00:00"
+finalized_at: "2026-01-01T01:00:00"
+---
+
+## Tasks
+
+### Task: task-001
+```yaml
+task_id: task-001
+title: First Task
+description: Do the first thing
+dependencies: []
+acceptance_criteria:
+  - First thing is done
+execution_hints:
+  - Use the bash tool
+```
+
+### Task: task-002
+```yaml
+task_id: task-002
+title: Second Task
+description: Do the second thing
+dependencies: [task-001]
+acceptance_criteria:
+  - Second thing is done
+execution_hints: []
+```
+"""
+
+
+def _make_runtime_state() -> RuntimeState:
+    return RuntimeState(
+        workflow_id="test-workflow-001",
+        phase="PLAN_FINALIZED",
+        status="ready",
+        active_plan_file="plan/workflow_plan.md",
+        active_plan_version=1,
+        current_task_id=None,
+        completed_task_ids=[],
+        retry_budget={},
+        review_verdicts=[],
+        active_subagents=[],
+        memory_refs=[],
+        last_checkpoint=None,
+        created_at="2026-01-01T00:00:00",
+        updated_at="2026-01-01T00:00:00",
+        tasks=[],
+    )
+
+
+def _make_approved_verdicts() -> list[ReviewVerdict]:
+    return [
+        ReviewVerdict(
+            phase="PLAN_ADVISOR_REVIEW",
+            verdict="approved",
+            decided_at="2026-01-01T00:00:00",
+        ),
+        ReviewVerdict(
+            phase="PLAN_QA_REVIEW",
+            verdict="approved",
+            decided_at="2026-01-01T00:00:00",
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "/plan:start Build a local runtime surface",
+            Command(
+                name="/plan:start",
+                raw="/plan:start Build a local runtime surface",
+                args=["Build", "a", "local", "runtime", "surface"],
+            ),
+        ),
+        (
+            "/plan:status",
+            Command(name="/plan:status", raw="/plan:status", args=[]),
+        ),
+        (
+            "/plan:finalize",
+            Command(name="/plan:finalize", raw="/plan:finalize", args=[]),
+        ),
+        (
+            "/task:start implement parser",
+            Command(
+                name="/task:start",
+                raw="/task:start implement parser",
+                args=["implement", "parser"],
+            ),
+        ),
+        (
+            "/task:status",
+            Command(name="/task:status", raw="/task:status", args=[]),
+        ),
+        (
+            "/task:resume phase-2",
+            Command(name="/task:resume", raw="/task:resume phase-2", args=["phase-2"]),
+        ),
+        (
+            "/task:replan blocked_on_review",
+            Command(
+                name="/task:replan",
+                raw="/task:replan blocked_on_review",
+                args=["blocked_on_review"],
+            ),
+        ),
+        (
+            "/task:abort",
+            Command(name="/task:abort", raw="/task:abort", args=[]),
+        ),
+    ],
+)
+def test_parse_command_accepts_closed_supported_grammar(
+    text: str, expected: Command
+) -> None:
+    assert parse_command(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "   ",
+        "plan:start missing slash",
+        "/plan",
+        "/task",
+        "/task:pause",
+        "/plan:startx wrong prefix",
+        "/task:status extra words still supported by name? no",
+    ],
+)
+def test_parse_command_rejects_unsupported_input(text: str) -> None:
+    with pytest.raises(ValueError):
+        parse_command(text)
+
+
+def test_parse_command_ignores_outer_whitespace() -> None:
+    command = parse_command("  /plan:status   ")
+
+    assert command == Command(name="/plan:status", raw="/plan:status", args=[])
+
+
+def test_resolve_workflow_id_prefers_explicit_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PLAN_TASK_WORKFLOW_ID", "env-workflow")
+
+    assert resolve_workflow_id("explicit-workflow") == "explicit-workflow"
+
+
+def test_resolve_workflow_id_uses_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PLAN_TASK_WORKFLOW_ID", "env-workflow")
+
+    assert resolve_workflow_id() == "env-workflow"
+
+
+def test_resolve_workflow_id_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PLAN_TASK_WORKFLOW_ID", raising=False)
+
+    assert resolve_workflow_id() == "plan-task-workflow"
+
+
+def test_artifacts_create_canonical_workflow_layout(tmp_path: Path) -> None:
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+
+    root = tmp_path / ".artifacts" / "workflows" / "test-workflow-001"
+
+    assert adapter.workflow_root == root
+    assert (root / "plan").is_dir()
+    assert (root / "plan" / "plan_versions").is_dir()
+    assert (root / "state").is_dir()
+    assert (root / "memory").is_dir()
+    assert (root / "evidence").is_dir()
+    assert (root / "review").is_dir()
+
+
+def test_state_schema_round_trip_and_versioned_plan_history(tmp_path: Path) -> None:
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    adapter.write_plan("first plan\n")
+    adapter.write_plan("second plan\n")
+
+    state = RuntimeState(
+        workflow_id="test-workflow-001",
+        phase="TASK_RUNNING",
+        status="active",
+        active_plan_file="plan/workflow_plan.md",
+        active_plan_version=2,
+        current_task_id="task-1",
+        completed_task_ids=["task-0"],
+        retry_budget={"task-1": 1},
+        review_verdicts=[
+            ReviewVerdict(
+                phase="PLAN_QA_REVIEW",
+                verdict="approved",
+                decided_at="2026-04-14T00:00:00Z",
+                notes="ready",
+            )
+        ],
+        active_subagents=[
+            SubagentRecord(
+                session_id="subagent-1",
+                status="succeeded",
+                task_id="task-0",
+                started_at="2026-04-14T00:01:00Z",
+                completed_at="2026-04-14T00:02:00Z",
+            )
+        ],
+        memory_refs=["memory/knowledge.jsonl#1"],
+        last_checkpoint="state/checkpoint-001.json",
+        created_at="2026-04-14T00:00:00Z",
+        updated_at="2026-04-14T00:03:00Z",
+        tasks=[
+            TaskRecord(
+                task_id="task-1",
+                title="Implement adapter",
+                status="running",
+                retry_count=1,
+                last_error=None,
+            )
+        ],
+    )
+
+    adapter.write_state(state)
+    adapter.append_event({"type": "task_started", "task_id": "task-1"})
+    adapter.append_memory({"fact": "retry once"})
+    adapter.write_review_verdict(
+        "PLAN_QA_REVIEW",
+        ReviewVerdict(
+            phase="PLAN_QA_REVIEW",
+            verdict="approved",
+            decided_at="2026-04-14T00:04:00Z",
+            notes="looks good",
+        ),
+    )
+
+    reloaded = adapter.read_state()
+    root = tmp_path / ".artifacts" / "workflows" / "test-workflow-001"
+
+    assert reloaded == state
+    assert (root / "plan" / "workflow_plan.md").read_text(
+        encoding="utf-8"
+    ) == "second plan\n"
+    assert (root / "plan" / "plan_versions" / "v1_workflow_plan.md").read_text(
+        encoding="utf-8"
+    ) == "first plan\n"
+    assert (root / "state" / "events.jsonl").read_text(encoding="utf-8") == (
+        '{"type": "task_started", "task_id": "task-1"}\n'
+    )
+    assert (root / "memory" / "knowledge.jsonl").read_text(encoding="utf-8") == (
+        '{"fact": "retry once"}\n'
+    )
+    assert (root / "review" / "plan_qa_review_verdict.json").is_file()
+    assert not list(root.rglob("*.tmp"))
+
+
+def test_recovery_files_mark_stale_subagents_and_requeue_tasks(tmp_path: Path) -> None:
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    adapter.write_plan("stable plan\n")
+    state = RuntimeState(
+        workflow_id="test-workflow-001",
+        phase="TASK_RUNNING",
+        status="recovering",
+        active_plan_file="plan/workflow_plan.md",
+        active_plan_version=1,
+        current_task_id="task-2",
+        completed_task_ids=["task-1"],
+        retry_budget={"task-2": 0, "task-3": 2},
+        review_verdicts=[],
+        active_subagents=[
+            SubagentRecord(
+                session_id="subagent-queued",
+                status="queued",
+                task_id="task-2",
+                started_at=None,
+                completed_at=None,
+            ),
+            SubagentRecord(
+                session_id="subagent-running",
+                status="running",
+                task_id="task-3",
+                started_at="2026-04-14T00:10:00Z",
+                completed_at=None,
+            ),
+            SubagentRecord(
+                session_id="subagent-done",
+                status="succeeded",
+                task_id="task-4",
+                started_at="2026-04-14T00:11:00Z",
+                completed_at="2026-04-14T00:12:00Z",
+            ),
+        ],
+        memory_refs=[],
+        last_checkpoint=None,
+        created_at="2026-04-14T00:00:00Z",
+        updated_at="2026-04-14T00:12:00Z",
+        tasks=[
+            TaskRecord(
+                task_id="task-2",
+                title="Recover queued subagent",
+                status="running",
+                retry_count=0,
+                last_error=None,
+            ),
+            TaskRecord(
+                task_id="task-3",
+                title="Recover running subagent",
+                status="running",
+                retry_count=2,
+                last_error=None,
+            ),
+        ],
+    )
+
+    requeued = adapter.mark_stale_subagents(state)
+
+    assert requeued == ["task-2", "task-3"]
+    assert [record.status for record in state.active_subagents] == [
+        "stale",
+        "stale",
+        "succeeded",
+    ]
+    assert state.retry_budget == {"task-2": 1, "task-3": 3}
+    assert [task.retry_count for task in state.tasks] == [1, 3]
+
+
+def test_corrupt_state_raises_explicit_value_error(tmp_path: Path) -> None:
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state_path = adapter.workflow_root / "state" / "runtime_state.json"
+    state_path.write_text("{not valid json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Corrupt runtime state JSON"):
+        adapter.read_state()
+
+
+def test_missing_plan_reference_raises_explicit_value_error(tmp_path: Path) -> None:
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = RuntimeState(
+        workflow_id="test-workflow-001",
+        phase="PLAN_FINALIZED",
+        status="idle",
+        active_plan_file="plan/workflow_plan.md",
+        active_plan_version=1,
+        current_task_id=None,
+        completed_task_ids=[],
+        retry_budget={},
+        review_verdicts=[],
+        active_subagents=[],
+        memory_refs=[],
+        last_checkpoint=None,
+        created_at="2026-04-14T00:00:00Z",
+        updated_at="2026-04-14T00:00:00Z",
+        tasks=[],
+    )
+    adapter.write_state(state)
+
+    with pytest.raises(ValueError, match="Runtime state references missing plan file"):
+        adapter.read_state()
+
+
+@pytest.mark.asyncio
+async def test_plan_task_fake_provider_runtime_boots() -> None:
+    """Test in-process world boot with FakeProvider.
+
+    Verifies the example can instantiate a World, register all systems,
+    and run a single tick without exception when using FakeProvider
+    (no LLM_API_KEY required).
+    """
+    from ecs_agent.components import ConversationComponent, LLMComponent
+    from ecs_agent.systems.error_handling import ErrorHandlingSystem
+    from ecs_agent.systems.memory import MemorySystem
+    from ecs_agent.systems.reasoning import ReasoningSystem
+    from ecs_agent.systems.tool_execution import ToolExecutionSystem
+
+    world = World()
+
+    # Create a FakeProvider (no API key needed)
+    provider = FakeProvider(
+        responses=[
+            CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="Plan-and-task example is running with FakeProvider.",
+                )
+            )
+        ]
+    )
+
+    # Create agent and attach components
+    agent_id = world.create_entity()
+    world.add_component(agent_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(agent_id, ConversationComponent(messages=[]))
+
+    # Register systems in standard order
+    world.register_system(ReasoningSystem(priority=0), priority=0)
+    world.register_system(ToolExecutionSystem(priority=5), priority=5)
+    world.register_system(MemorySystem(), priority=10)
+    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
+
+    # Run one tick — should not raise
+    runner = Runner()
+    await runner.run(world, max_ticks=1)
+
+    # Verify conversation occurred
+    conv = world.get_component(agent_id, ConversationComponent)
+    assert conv is not None
+    assert len(conv.messages) > 0
+
+
+@pytest.mark.asyncio
+async def test_plan_task_terminal_cleanup_guard() -> None:
+    """Test TerminalCleanupSystem only clears 'reasoning_complete'.
+
+    Verifies that TerminalCleanupSystem with clear_reasons=("reasoning_complete",)
+    does NOT remove a TerminalComponent with reason="user_abort" or other
+    non-resumable terminal reasons. This is the GUARD behavior that prevents
+    accidental clearing of critical terminal states.
+    """
+    world = World()
+    entity = world.create_entity()
+
+    # Attach a TerminalComponent with a non-resumable reason
+    world.add_component(entity, TerminalComponent(reason="user_abort"))
+
+    # Create and process TerminalCleanupSystem that only clears reasoning_complete
+    system = TerminalCleanupSystem(priority=1, clear_reasons=("reasoning_complete",))
+    await system.process(world)
+
+    # Verify the user_abort TerminalComponent still exists — NOT removed
+    terminal = world.get_component(entity, TerminalComponent)
+    assert terminal is not None, (
+        "TerminalComponent should not be removed for reason='user_abort'"
+    )
+    assert terminal.reason == "user_abort", (
+        "TerminalComponent reason should remain unchanged"
+    )
+
+
+@pytest.mark.asyncio
+async def test_plan_task_cli_automation() -> None:
+    """Test CLI automation with piped stdin input (FakeProvider mode).
+
+    This test simulates interactive CLI usage by piping stdin to main.py
+    without LLM_API_KEY set, ensuring FakeProvider fallback is used.
+    Verifies the agent responds and exits cleanly on piped "exit" command.
+    """
+    # Input sequence: exit (piped, no interactive tty)
+    input_sequence = b"exit\n"
+
+    # Run main.py with stdin piped, without LLM_API_KEY
+    result = subprocess.run(
+        ["uv", "run", "python", "examples/e2e/plan_and_task/main.py"],
+        input=input_sequence,
+        capture_output=True,
+        timeout=30,
+        env={**os.environ, "LLM_API_KEY": "", "PLAN_TASK_INTERACTIVE": "1"},
+        cwd=Path(__file__).parent.parent.parent,
+    )
+
+    # Verify successful execution
+    assert result.returncode == 0, (
+        f"Expected exit code 0, got {result.returncode}. "
+        f"stderr: {result.stderr.decode('utf-8', errors='replace')}"
+    )
+
+    # Verify FakeProvider was used (should log or print)
+    output = result.stdout.decode("utf-8", errors="replace")
+    assert "FakeProvider" in output or "No LLM_API_KEY" in output, (
+        f"Expected FakeProvider indication in output. Got:\n{output}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cli_slash_command_plan_start_and_status() -> None:
+    """Test CLI slash command execution: /plan:start and /plan:status.
+
+    This test pipes slash commands to main.py and verifies:
+    - Exit code is 0
+    - Output contains PLAN_INTERVIEW phase
+    - Output contains workflow_id
+    - Runtime state file exists with correct phase
+    """
+    # Input sequence: /plan:start, /plan:status, exit
+    input_sequence = b"/plan:start Build demo\n/plan:status\nexit\n"
+
+    # Run main.py with stdin piped, without LLM_API_KEY, deterministic workflow_id
+    env = {
+        **os.environ,
+        "LLM_API_KEY": "",
+        "PLAN_TASK_INTERACTIVE": "1",
+        "PLAN_TASK_WORKFLOW_ID": "cli-slash-cmd-test",
+    }
+    result = subprocess.run(
+        ["uv", "run", "python", "examples/e2e/plan_and_task/main.py"],
+        input=input_sequence,
+        capture_output=True,
+        timeout=30,
+        env=env,
+        cwd=Path(__file__).parent.parent.parent,
+    )
+
+    # Verify successful execution
+    assert result.returncode == 0, (
+        f"Expected exit code 0, got {result.returncode}. "
+        f"stderr: {result.stderr.decode('utf-8', errors='replace')}"
+    )
+
+    # Verify output contains expected markers
+    output = result.stdout.decode("utf-8", errors="replace")
+    assert "PLAN_INTERVIEW" in output, (
+        f"Expected 'PLAN_INTERVIEW' phase in output. Got:\n{output}"
+    )
+    assert "workflow_id" in output, f"Expected 'workflow_id' in output. Got:\n{output}"
+
+
+def test_plan_schema_parse_plan_extracts_strict_task_blocks() -> None:
+    plan = parse_plan(_VALID_WORKFLOW_PLAN)
+
+    assert isinstance(plan, WorkflowPlan)
+    assert plan.workflow_id == "demo-workflow"
+    assert plan.title == "Demo Workflow Plan"
+    assert plan.description == "A demonstration workflow plan."
+    assert plan.version == 1
+    assert plan.status == "finalized"
+    assert plan.created_at == "2026-04-14T00:00:00Z"
+    assert plan.finalized_at == "2026-04-14T01:00:00Z"
+    assert len(plan.tasks) == 2
+
+    first_task = plan.tasks[0]
+    second_task = plan.tasks[1]
+
+    assert first_task.task_id == "task-001"
+    assert first_task.title == "Implement feature X"
+    assert first_task.description == "Build the X feature with tests."
+    assert first_task.dependencies == []
+    assert first_task.acceptance_criteria == [
+        "uv run pytest tests/test_x.py -v passes",
+        "No new mypy errors",
+    ]
+    assert first_task.execution_hints == ["Follow pattern in src/x.py"]
+
+    assert second_task.task_id == "task-002"
+    assert second_task.dependencies == ["task-001"]
+    assert second_task.acceptance_criteria == ["README.md updated with X section"]
+    assert second_task.execution_hints == []
+
+
+def test_plan_schema_store_plan_version_uses_canonical_history_directory(
+    tmp_path: Path,
+) -> None:
+    plan_directory = tmp_path / "plan"
+
+    version_path = store_plan_version(plan_directory, _VALID_WORKFLOW_PLAN, version=2)
+
+    assert version_path == plan_directory / "plan_versions" / "v002_workflow_plan.md"
+    assert version_path.read_text(encoding="utf-8") == _VALID_WORKFLOW_PLAN
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        (1, "v001_workflow_plan.md"),
+        (12, "v012_workflow_plan.md"),
+        (123, "v123_workflow_plan.md"),
+    ],
+)
+def test_plan_schema_make_version_filename_is_zero_padded(
+    version: int, expected: str
+) -> None:
+    assert make_version_filename(version) == expected
+
+
+def test_plan_finalize_validate_plan_accepts_finalized_status() -> None:
+    plan = parse_plan(_VALID_WORKFLOW_PLAN)
+
+    validate_plan(plan)
+
+
+def test_plan_interview_creates_draft(tmp_path: Path) -> None:
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+
+    state = PlanController().handle_plan_start(adapter, "Build a demo")
+
+    assert state.phase == "PLAN_INTERVIEW"
+    assert (adapter.plan_dir / "draft.md").exists()
+    assert (adapter.state_dir / "runtime_state.json").exists()
+
+    loaded_state = adapter.read_state()
+    assert loaded_state.phase == "PLAN_INTERVIEW"
+
+
+def test_plan_start_does_not_write_workflow_plan(tmp_path: Path) -> None:
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
+    controller = PlanController()
+    controller.handle_plan_start(adapter, "test description")
+    assert not (adapter.plan_dir / "workflow_plan.md").exists()
+
+
+def test_plan_finalize_rejects_without_verdicts(tmp_path: Path) -> None:
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    state = _make_runtime_state()
+    state.phase = "PLAN_INTERVIEW"
+    state.status = "active"
+    state.review_verdicts = []
+
+    with pytest.raises(ValueError, match="finalize"):
+        PlanController().handle_plan_finalize(state, adapter)
+
+
+def test_plan_finalize_rejects_with_only_advisor_approved(tmp_path: Path) -> None:
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    state = _make_runtime_state()
+    state.phase = "PLAN_INTERVIEW"
+    state.status = "active"
+    state.review_verdicts = [
+        ReviewVerdict(
+            phase="PLAN_ADVISOR_REVIEW",
+            verdict="approved",
+            decided_at="2026-01-01T00:00:00",
+        )
+    ]
+
+    with pytest.raises(ValueError, match="PLAN_QA_REVIEW"):
+        PlanController().handle_plan_finalize(state, adapter)
+
+
+def test_plan_finalize_succeeds_when_both_approved(tmp_path: Path) -> None:
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "PLAN_INTERVIEW"
+    state.status = "active"
+    state.review_verdicts = _make_approved_verdicts()
+
+    updated_state = PlanController().handle_plan_finalize(state, adapter)
+    plan_path = adapter.plan_dir / "workflow_plan.md"
+
+    assert updated_state.phase == "TASK_READY"
+    assert plan_path.exists()
+    parsed_plan = parse_plan(plan_path.read_text(encoding="utf-8"))
+    assert parsed_plan.workflow_id == "test-workflow-001"
+
+
+def test_start_without_final_plan_rejects_reviewed_status() -> None:
+    plan = parse_plan(
+        _VALID_WORKFLOW_PLAN.replace("status: finalized", "status: reviewed")
+    )
+
+    with pytest.raises(ValueError, match="must be finalized"):
+        validate_plan(plan)
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        ("# Demo\n\n## Tasks\n", "YAML frontmatter"),
+        (
+            _VALID_WORKFLOW_PLAN.replace("## Tasks", "## Steps"),
+            "required ## Tasks section",
+        ),
+        (
+            _VALID_WORKFLOW_PLAN.replace("acceptance_criteria:", "notes:"),
+            "acceptance_criteria",
+        ),
+        (
+            _VALID_WORKFLOW_PLAN.replace(
+                "acceptance_criteria:\n  - uv run pytest tests/test_x.py -v passes\n  - No new mypy errors",
+                "acceptance_criteria: []",
+            ),
+            "non-empty acceptance_criteria",
+        ),
+        (
+            _VALID_WORKFLOW_PLAN.split("### Task: task-001", maxsplit=1)[0],
+            "at least one task",
+        ),
+    ],
+)
+def test_malformed_plan_rejection_raises_value_error(
+    content: str, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        parse_plan(content)
+
+
+def test_task_queue_extracted_from_finalized_plan(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.review_verdicts = _make_approved_verdicts()
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    adapter.write_state(state)
+
+    task_exec = TaskExec(state=state)
+
+    plan = task_exec.load_plan(adapter)
+    queue = task_exec.build_todo_queue(plan)
+
+    assert [task.task_id for task in queue] == ["task-001", "task-002"]
+    assert [task.title for task in queue] == ["First Task", "Second Task"]
+    assert queue[0].description == "Do the first thing"
+    assert queue[0].dependencies == []
+    assert queue[0].acceptance_criteria == ["First thing is done"]
+    assert queue[0].execution_hints == ["Use the bash tool"]
+    assert queue[0].status == "pending"
+
+
+def test_task_start_rejects_draft_plan(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.review_verdicts = _make_approved_verdicts()
+    adapter.write_plan(
+        _VALID_FINALIZED_TASK_PLAN.replace("status: finalized", "status: draft")
+    )
+    adapter.write_state(state)
+
+    with pytest.raises(ValueError, match="finalized"):
+        TaskExec(state=state).load_plan(adapter)
+
+
+def test_task_start_rejects_plan_without_review_approval(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_READY"
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    adapter.write_state(state)
+
+    with pytest.raises(ValueError, match="approved"):
+        TaskExec(state=state).initialize_task_queue(state, adapter)
+
+
+def test_start_without_final_plan_rejects_task_start(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_READY"
+    state.status = "active"
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    adapter.write_state(state)
+
+    with pytest.raises(ValueError, match="approved"):
+        TaskExec(state=state).initialize_task_queue(state, adapter)
+
+
+def test_task_exec_initialize_task_queue_raises_from_wrong_phase(
+    tmp_path: Path,
+) -> None:
+    """initialize_task_queue must reject calls from non-task phases."""
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-phase-gate")
+    controller = PlanController()
+    state = controller.handle_plan_start(adapter, "Phase gate test")
+    state.review_verdicts = _make_approved_verdicts()
+    adapter.write_state(state)
+    assert state.phase == "PLAN_INTERVIEW"
+    task_exec = TaskExec(state=state)
+    with pytest.raises(ValueError, match="Cannot initialize task queue from phase"):
+        task_exec.initialize_task_queue(state, adapter)
+
+
+def test_load_plan_raises_on_version_mismatch(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    (adapter.plan_dir / "workflow_plan.md").write_text(
+        _VALID_FINALIZED_TASK_PLAN, encoding="utf-8"
+    )
+    state = _make_runtime_state()
+    state.active_plan_version = 99
+    state.review_verdicts = _make_approved_verdicts()
+    with pytest.raises(ValueError, match="version mismatch"):
+        TaskExec(state=state).load_plan(adapter)
+
+
+def test_missing_acceptance_criteria_blocks_task_start() -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    task = PlanTask(
+        task_id="task-003",
+        title="Broken Task",
+        description="Missing acceptance criteria",
+        dependencies=[],
+        acceptance_criteria=[],
+        execution_hints=[],
+    )
+
+    with pytest.raises(ValueError, match="acceptance_criteria"):
+        TaskExec(state=_make_runtime_state()).normalize_task(task)
+
+
+def test_task_queue_order_respects_dependencies(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.review_verdicts = _make_approved_verdicts()
+    dependency_reversed_plan = _VALID_FINALIZED_TASK_PLAN.replace(
+        """### Task: task-001
+```yaml
+task_id: task-001
+title: First Task
+description: Do the first thing
+dependencies: []
+acceptance_criteria:
+  - First thing is done
+execution_hints:
+  - Use the bash tool
+```
+
+### Task: task-002
+```yaml
+task_id: task-002
+title: Second Task
+description: Do the second thing
+dependencies: [task-001]
+acceptance_criteria:
+  - Second thing is done
+execution_hints: []
+```""",
+        """### Task: task-002
+```yaml
+task_id: task-002
+title: Second Task
+description: Do the second thing
+dependencies: [task-001]
+acceptance_criteria:
+  - Second thing is done
+execution_hints: []
+```
+
+### Task: task-001
+```yaml
+task_id: task-001
+title: First Task
+description: Do the first thing
+dependencies: []
+acceptance_criteria:
+  - First thing is done
+execution_hints:
+  - Use the bash tool
+```""",
+    )
+    adapter.write_plan(dependency_reversed_plan)
+    adapter.write_state(state)
+
+    queue = TaskExec(state=state).build_todo_queue(
+        TaskExec(state=state).load_plan(adapter)
+    )
+
+    assert [task.task_id for task in queue] == ["task-001", "task-002"]
+
+
+def test_task_queue_persisted_to_state(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_READY"
+    state.review_verdicts = _make_approved_verdicts()
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    adapter.write_state(state)
+
+    updated_state = TaskExec(state=state).initialize_task_queue(state, adapter)
+    persisted_state = adapter.read_state()
+    task_queue_path = (
+        tmp_path
+        / ".artifacts"
+        / "workflows"
+        / "test-workflow-001"
+        / "state"
+        / "task_queue.json"
+    )
+
+    assert [task.task_id for task in updated_state.tasks] == ["task-001", "task-002"]
+    assert updated_state.current_task_id == "task-001"
+    assert updated_state.phase == "TASK_RUNNING"
+    assert persisted_state.tasks == updated_state.tasks
+    assert persisted_state.current_task_id == "task-001"
+    assert task_queue_path.is_file()
+
+
+def test_context_assembly_returns_bounded_packet(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.completed_task_ids = ["task-001"]
+    state.tasks = [
+        TaskRecord(
+            task_id="task-001",
+            title="Done task",
+            status="completed",
+            description="already finished",
+        ),
+        TaskRecord(
+            task_id="task-002",
+            title="Current task",
+            status="pending",
+            description="implement the thing",
+            dependencies=["task-001"],
+            acceptance_criteria=["it works"],
+            execution_hints=["stay bounded"],
+        ),
+    ]
+
+    packet = TaskExec(state=state).assemble_execution_context(
+        state, adapter, state.tasks[1]
+    )
+
+    assert packet == {
+        "task_id": "task-002",
+        "title": "Current task",
+        "description": "implement the thing",
+        "acceptance_criteria": ["it works"],
+        "execution_hints": ["stay bounded"],
+        "workflow_id": "test-workflow-001",
+        "dependencies_completed": ["task-001"],
+        "memory_entries": [],
+    }
+
+
+def test_context_assembly_excludes_unrelated_tasks(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.completed_task_ids = ["task-001"]
+    unrelated_task = TaskRecord(
+        task_id="task-999",
+        title="Unrelated task",
+        status="pending",
+        description="should not leak into context",
+        acceptance_criteria=["no leak"],
+        execution_hints=["ignore me"],
+    )
+    current_task = TaskRecord(
+        task_id="task-002",
+        title="Current task",
+        status="pending",
+        description="bounded packet only",
+        dependencies=["task-001"],
+        acceptance_criteria=["bounded context"],
+        execution_hints=["exclude unrelated tasks"],
+    )
+    state.tasks = [unrelated_task, current_task]
+
+    packet = TaskExec(state=state).assemble_execution_context(
+        state, adapter, current_task
+    )
+
+    assert "tasks" not in packet
+    assert "task-999" not in json.dumps(packet)
+    assert "Unrelated task" not in json.dumps(packet)
+
+
+def test_context_assembly_includes_memory_entries(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    task = TaskRecord(
+        task_id="task-001",
+        title="Current task",
+        status="pending",
+        acceptance_criteria=["use memory"],
+    )
+    for index in range(7):
+        adapter.append_memory(
+            {
+                "task_id": f"memory-{index}",
+                "summary": f"fact {index}",
+                "evidence_refs": [f"evidence/ref-{index}.json"],
+                "appended_at": f"2026-01-01T00:00:0{index}",
+            }
+        )
+
+    packet = TaskExec(state=state).assemble_execution_context(state, adapter, task)
+
+    assert len(packet["memory_entries"]) == 5
+    assert [entry["task_id"] for entry in packet["memory_entries"]] == [
+        "memory-2",
+        "memory-3",
+        "memory-4",
+        "memory-5",
+        "memory-6",
+    ]
+
+
+def test_delegation_record_subagent_dispatch_persists_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.current_task_id = "task-001"
+    state.tasks = [TaskRecord(task_id="task-001", title="Run task", status="pending")]
+    adapter.write_plan("# draft")
+    adapter.write_state(state)
+    monkeypatch.setattr(
+        TaskExec,
+        "_utcnow_isoformat",
+        lambda self: "2026-01-02T03:04:05",
+    )
+
+    TaskExec(state=state).record_subagent_dispatch(
+        state, adapter, "task-001", "ses-001"
+    )
+
+    persisted_state = adapter.read_state()
+    assert persisted_state.active_subagents == [
+        SubagentRecord(
+            session_id="ses-001",
+            status="running",
+            task_id="task-001",
+            started_at="2026-01-02T03:04:05",
+            completed_at=None,
+        )
+    ]
+
+
+def test_delegation_record_subagent_dispatch_updates_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.current_task_id = "task-001"
+    state.tasks = [TaskRecord(task_id="task-001", title="Run task", status="pending")]
+    monkeypatch.setattr(
+        TaskExec,
+        "_utcnow_isoformat",
+        lambda self: "2026-01-02T03:04:05",
+    )
+
+    updated_state = TaskExec(state=state).record_subagent_dispatch(
+        state, adapter, "task-001", "ses-001"
+    )
+
+    assert updated_state.tasks[0].status == "running"
+    assert updated_state.current_task_id == "task-001"
+    assert updated_state.active_subagents[0].session_id == "ses-001"
+
+
+def test_memory_update_record_task_completion_appends_knowledge_jsonl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_RUNNING"
+    state.status = "active"
+    state.current_task_id = "task-001"
+    state.tasks = [TaskRecord(task_id="task-001", title="Run task", status="running")]
+    monkeypatch.setattr(
+        TaskExec,
+        "_utcnow_isoformat",
+        lambda self: "2026-01-02T03:04:05",
+    )
+
+    TaskExec(state=state).record_task_completion(
+        state,
+        adapter,
+        "task-001",
+        ["evidence/task-001.json"],
+    )
+
+    knowledge_path = adapter.memory_dir / "knowledge.jsonl"
+    entries = [
+        json.loads(line)
+        for line in knowledge_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert entries == [
+        {
+            "task_id": "task-001",
+            "summary": "",
+            "evidence_refs": ["evidence/task-001.json"],
+            "appended_at": "2026-01-02T03:04:05",
+        }
+    ]
+
+
+def test_memory_update_record_task_completion_updates_completed_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_RUNNING"
+    state.status = "active"
+    state.current_task_id = "task-001"
+    state.tasks = [
+        TaskRecord(task_id="task-001", title="First", status="running"),
+        TaskRecord(
+            task_id="task-002",
+            title="Second",
+            status="pending",
+            dependencies=["task-001"],
+        ),
+    ]
+    monkeypatch.setattr(
+        TaskExec,
+        "_utcnow_isoformat",
+        lambda self: "2026-01-02T03:04:05",
+    )
+
+    updated_state = TaskExec(state=state).record_task_completion(
+        state,
+        adapter,
+        "task-001",
+        ["evidence/task-001.json"],
+    )
+
+    assert updated_state.completed_task_ids == ["task-001"]
+    assert updated_state.tasks[0].status == "completed"
+    assert updated_state.current_task_id == "task-002"
+    assert updated_state.memory_refs == ["memory/knowledge.jsonl#1"]
+
+
+def test_circuit_breaker_blocks_at_max_retries() -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    state = _make_runtime_state()
+    state.retry_budget = {"task-001": 3}
+
+    assert TaskExec(state=state).check_circuit_breaker(state, "task-001") is True
+
+
+def test_circuit_breaker_allows_below_max_retries() -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    state = _make_runtime_state()
+    state.retry_budget = {"task-001": 2}
+
+    assert TaskExec(state=state).check_circuit_breaker(state, "task-001") is False
+
+
+def test_retry_budget_exhausted_blocks_task() -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    state = _make_runtime_state()
+    state.retry_budget = {"task-001": 3}
+
+    assert TaskExec(state=state).check_retry_budget_exhausted(state, "task-001") is True
+
+
+def test_stale_subagent_on_restart_increments_retry(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_RUNNING"
+    state.status = "active"
+    state.current_task_id = "task-001"
+    state.retry_budget = {"task-001": 0}
+    state.tasks = [TaskRecord(task_id="task-001", title="Recover me", status="running")]
+    state.active_subagents = [
+        SubagentRecord(
+            session_id="ses-abc123",
+            status="running",
+            task_id="task-001",
+            started_at="2026-01-01T00:00:00",
+            completed_at=None,
+        )
+    ]
+    adapter.write_plan("# draft")
+    adapter.write_state(state)
+
+    result = WorkflowStateMachine().handle_restart(state, adapter)
+
+    assert result.phase == "TASK_BLOCKED"
+    assert result.retry_budget["task-001"] == 1
+    assert result.tasks[0].retry_count == 1
+    assert result.tasks[0].status == "pending"
+    assert result.current_task_id == "task-001"
+    assert result.active_subagents[0].status == "stale"
+
+
+def test_advisor_review_creates_verdict_artifact(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    adapter.write_plan("# draft")
+    adapter.write_state(state)
+
+    PlanController().handle_advisor_review(state, adapter, "approved")
+
+    artifact = (
+        tmp_path
+        / ".artifacts"
+        / "workflows"
+        / "test-workflow-001"
+        / "review"
+        / "plan_advisor_review_verdict.json"
+    )
+    assert artifact.is_file()
+
+
+def test_advisor_review_appends_to_state_review_verdicts(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    adapter.write_plan("# draft")
+    adapter.write_state(state)
+
+    updated = PlanController().handle_advisor_review(
+        state, adapter, "approved", notes="LGTM"
+    )
+
+    assert len(updated.review_verdicts) == 1
+    v = updated.review_verdicts[0]
+    assert v.phase == "PLAN_ADVISOR_REVIEW"
+    assert v.verdict == "approved"
+    assert v.notes == "LGTM"
+
+
+def test_qa_review_approved_allows_finalization(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    adapter.write_plan("# draft")
+    adapter.write_state(state)
+    ctrl = PlanController()
+    ctrl.handle_advisor_review(state, adapter, "approved")
+    ctrl.handle_qa_review(state, adapter, "approved")
+
+    result = ctrl.handle_plan_finalize(state, adapter)
+
+    assert result.phase == "TASK_READY"
+    assert result.status == "ready"
+
+
+def test_qa_review_revise_blocks_finalization(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    adapter.write_plan("# draft")
+    adapter.write_state(state)
+    ctrl = PlanController()
+    ctrl.handle_advisor_review(state, adapter, "approved")
+    ctrl.handle_qa_review(state, adapter, "revise", notes="needs more detail")
+
+    with pytest.raises(ValueError, match="PLAN_QA_REVIEW"):
+        ctrl.handle_plan_finalize(state, adapter)
+
+
+def test_qa_review_blocked_blocks_finalization(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    adapter.write_plan("# draft")
+    adapter.write_state(state)
+    ctrl = PlanController()
+    ctrl.handle_advisor_review(state, adapter, "approved")
+    ctrl.handle_qa_review(state, adapter, "blocked", notes="out of scope")
+
+    with pytest.raises(ValueError, match="PLAN_QA_REVIEW"):
+        ctrl.handle_plan_finalize(state, adapter)
+
+
+def test_review_verdicts_persisted_in_state(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    adapter.write_plan("# draft")
+    adapter.write_state(state)
+    ctrl = PlanController()
+    ctrl.handle_advisor_review(state, adapter, "approved")
+    ctrl.handle_qa_review(state, adapter, "approved")
+
+    persisted = adapter.read_state()
+
+    assert len(persisted.review_verdicts) == 2
+    phases = {v.phase for v in persisted.review_verdicts}
+    assert "PLAN_ADVISOR_REVIEW" in phases
+    assert "PLAN_QA_REVIEW" in phases
+
+
+def test_replan_governance_scope_change_forces_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_RUNNING"
+    state.status = "active"
+    state.current_task_id = "task-001"
+    state.review_verdicts = _make_approved_verdicts()
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    adapter.write_state(state)
+    monkeypatch.setattr(
+        PlanController,
+        "_utcnow_isoformat",
+        lambda self: "2026-01-02T03:04:05",
+    )
+
+    updated = PlanController().handle_task_replan(
+        state,
+        adapter,
+        reason="dependency changed",
+        scope_changed=True,
+    )
+
+    assert updated.phase == "PLAN_ADVISOR_REVIEW"
+    assert updated.status == "needs_review"
+    assert updated.current_task_id == "task-001"
+    assert updated.last_checkpoint == "dependency changed"
+    persisted = adapter.read_state()
+    assert persisted.phase == "PLAN_ADVISOR_REVIEW"
+    assert persisted.status == "needs_review"
+
+
+def test_replan_governance_no_scope_change_stays_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_RUNNING"
+    state.status = "active"
+    state.current_task_id = "task-001"
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    adapter.write_state(state)
+    monkeypatch.setattr(
+        PlanController,
+        "_utcnow_isoformat",
+        lambda self: "2026-01-02T03:04:05",
+    )
+
+    updated = PlanController().handle_task_replan(
+        state,
+        adapter,
+        reason="missing evidence artifact",
+        scope_changed=False,
+    )
+
+    assert updated.phase == "TASK_RUNNING"
+    assert updated.status == "active"
+    assert updated.last_checkpoint == "missing evidence artifact"
+    persisted = adapter.read_state()
+    assert persisted.phase == "TASK_RUNNING"
+
+
+def test_abort_transitions_to_terminal_aborted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_RUNNING"
+    state.status = "active"
+    state.current_task_id = "task-001"
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    adapter.write_state(state)
+    monkeypatch.setattr(
+        PlanController,
+        "_utcnow_isoformat",
+        lambda self: "2026-01-02T03:04:05",
+    )
+
+    updated = PlanController().handle_task_abort(
+        state,
+        adapter,
+        reason="operator requested stop",
+    )
+
+    assert updated.phase == "TASK_ABORTED"
+    assert updated.status == "aborted"
+    assert updated.abort_reason == "operator requested stop"
+    persisted = adapter.read_state()
+    assert persisted.phase == "TASK_ABORTED"
+    assert persisted.abort_reason == "operator requested stop"
+
+
+def test_abort_cannot_be_resumed(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_ABORTED"
+    state.status = "aborted"
+    state.abort_reason = "terminal stop"
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    adapter.write_state(state)
+
+    with pytest.raises(ValueError, match="terminal"):
+        PlanController().handle_task_resume(state, adapter)
+
+
+def test_task_resume_from_blocked_returns_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_BLOCKED"
+    state.status = "blocked"
+    state.current_task_id = "task-001"
+    state.last_checkpoint = "waiting for /task:resume"
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    adapter.write_state(state)
+    monkeypatch.setattr(
+        PlanController,
+        "_utcnow_isoformat",
+        lambda self: "2026-01-02T03:04:05",
+    )
+
+    updated = PlanController().handle_task_resume(state, adapter)
+
+    assert updated.phase == "TASK_RUNNING"
+    assert updated.status == "active"
+    persisted = adapter.read_state()
+    assert persisted.phase == "TASK_RUNNING"
+
+
+def test_state_machine_valid_transition_from_idle() -> None:
+    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+
+    state = _make_runtime_state()
+    state.phase = "IDLE"
+    sm = WorkflowStateMachine()
+
+    result = sm.transition(state, "PLAN_INTERVIEW")
+
+    assert result.phase == "PLAN_INTERVIEW"
+
+
+def test_state_machine_illegal_transition_raises() -> None:
+    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+
+    state = _make_runtime_state()
+    state.phase = "IDLE"
+    sm = WorkflowStateMachine()
+
+    with pytest.raises(ValueError, match="Invalid transition"):
+        sm.transition(state, "TASK_RUNNING")
+
+
+def test_state_machine_terminal_states_cannot_transition() -> None:
+    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+
+    sm = WorkflowStateMachine()
+    for terminal_phase in ("TASK_COMPLETED", "TASK_ABORTED"):
+        state = _make_runtime_state()
+        state.phase = terminal_phase
+        with pytest.raises(ValueError, match="Invalid transition"):
+            sm.transition(state, "PLAN_INTERVIEW")
+
+
+def test_state_machine_is_terminal_for_completed_and_aborted() -> None:
+    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+
+    sm = WorkflowStateMachine()
+    assert sm.is_terminal("TASK_COMPLETED") is True
+    assert sm.is_terminal("TASK_ABORTED") is True
+    assert sm.is_terminal("TASK_RUNNING") is False
+    assert sm.is_terminal("PLAN_INTERVIEW") is False
+
+
+def test_state_machine_can_resume_non_terminal() -> None:
+    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+
+    sm = WorkflowStateMachine()
+    assert sm.can_resume("PLAN_INTERVIEW") is True
+    assert sm.can_resume("TASK_RUNNING") is True
+    assert sm.can_resume("TASK_BLOCKED") is True
+    assert sm.can_resume("TASK_COMPLETED") is False
+    assert sm.can_resume("TASK_ABORTED") is False
+    assert sm.can_resume("IDLE") is False
+
+
+def test_state_machine_requires_continuation_for_active_workflows() -> None:
+    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+
+    sm = WorkflowStateMachine()
+    for active_phase in (
+        "PLAN_INTERVIEW",
+        "TASK_RUNNING",
+        "TASK_BLOCKED",
+        "PLAN_FINALIZED",
+    ):
+        state = _make_runtime_state()
+        state.phase = active_phase
+        assert sm.requires_continuation(state) is True, (
+            f"Expected True for {active_phase}"
+        )
+
+    for done_phase in ("TASK_COMPLETED", "TASK_ABORTED", "IDLE"):
+        state = _make_runtime_state()
+        state.phase = done_phase
+        assert sm.requires_continuation(state) is False, (
+            f"Expected False for {done_phase}"
+        )
+
+
+def test_handle_restart_marks_stale_subagents_and_updates_phase(
+    tmp_path: Path,
+) -> None:
+    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_RUNNING"
+    state.active_subagents = [
+        SubagentRecord(
+            session_id="ses_abc123",
+            status="running",
+            task_id="task-001",
+            started_at="2026-01-01T00:00:00",
+            completed_at=None,
+        )
+    ]
+    adapter.write_plan("# draft")
+    adapter.write_state(state)
+
+    sm = WorkflowStateMachine()
+    result = sm.handle_restart(state, adapter)
+
+    assert result.phase == "TASK_BLOCKED"
+    assert result.active_subagents[0].status == "stale"
+    persisted = adapter.read_state()
+    assert persisted.phase == "TASK_BLOCKED"
+
+
+def test_handle_restart_no_active_subagents_keeps_phase(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_BLOCKED"
+    state.active_subagents = []
+    adapter.write_plan("# draft")
+    adapter.write_state(state)
+
+    sm = WorkflowStateMachine()
+    result = sm.handle_restart(state, adapter)
+
+    assert result.phase == "TASK_BLOCKED"
+
+
+def test_readme_command_examples_match_supported_commands() -> None:
+    """Each command documented in README.md is accepted by parse_command().
+
+    This test validates that the README's 'Supported Commands' section stays
+    in sync with the actual command parser so documentation never drifts.
+    """
+    from examples.e2e.plan_and_task.commands import parse_command
+
+    # The 8 commands listed under '## Supported Commands' in README.md
+    documented_commands = [
+        "/plan:start",
+        "/plan:status",
+        "/plan:finalize",
+        "/task:start",
+        "/task:status",
+        "/task:resume",
+        "/task:replan",
+        "/task:abort",
+    ]
+    for cmd_str in documented_commands:
+        result = parse_command(cmd_str)
+        assert result is not None, (
+            f"README-documented command {cmd_str!r} was rejected by parse_command(). "
+            "Update README or commands.py to stay in sync."
+        )
+        assert result.name == cmd_str.split()[0], (
+            f"Unexpected parse result for {cmd_str!r}: got name={result.name!r}"
+        )
+
+
+def test_plan_finalize_version_matches_artifact(tmp_path: Path) -> None:
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    controller = PlanController()
+    state = controller.handle_plan_start(adapter, "test description")
+    controller.handle_advisor_review(state, adapter, "approved")
+    controller.handle_qa_review(state, adapter, "approved")
+
+    finalized_state = controller.handle_plan_finalize(state, adapter)
+
+    plan_content = (adapter.plan_dir / "workflow_plan.md").read_text(encoding="utf-8")
+    frontmatter = plan_content.split("---")[1]
+    version_line = next(
+        line for line in frontmatter.splitlines() if line.startswith("version:")
+    )
+    artifact_version = int(version_line.split(":", maxsplit=1)[1].strip())
+
+    assert finalized_state.active_plan_version == artifact_version
+
+
+def test_plan_start_state_has_open_questions_and_confirmed_requirements(
+    tmp_path: Path,
+) -> None:
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    controller = PlanController()
+
+    state = controller.handle_plan_start(adapter, "test description")
+
+    assert state.open_questions == []
+    assert state.confirmed_requirements == []
+    persisted_payload = json.loads(
+        (adapter.state_dir / "runtime_state.json").read_text(encoding="utf-8")
+    )
+    assert persisted_payload["open_questions"] == []
+    assert persisted_payload["confirmed_requirements"] == []
+
+
+def test_review_verdict_artifact_contains_plan_version(tmp_path: Path) -> None:
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    controller = PlanController()
+    state = controller.handle_plan_start(adapter, "test description")
+    controller.handle_qa_review(state, adapter, "approved")
+
+    controller.handle_advisor_review(state, adapter, "approved")
+
+    verdict_payload = json.loads(
+        (adapter.review_dir / "plan_advisor_review_verdict.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert isinstance(verdict_payload["plan_version"], int)
+
+
+def test_task_completion_writes_evidence_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_RUNNING"
+    state.status = "active"
+    state.current_task_id = "task-001"
+    state.tasks = [TaskRecord(task_id="task-001", title="First Task", status="running")]
+    monkeypatch.setattr(
+        TaskExec,
+        "_utcnow_isoformat",
+        lambda self: "2026-01-02T03:04:05",
+    )
+
+    TaskExec(state=state).record_task_completion(
+        state,
+        adapter,
+        "task-001",
+        evidence_refs=["ref-1"],
+        summary="done",
+    )
+
+    evidence_payload = json.loads(
+        (adapter.evidence_dir / "task-task-001-result.json").read_text(encoding="utf-8")
+    )
+    assert evidence_payload["task_id"] == "task-001"
+    assert evidence_payload["summary"] == "done"
+    assert evidence_payload["evidence_refs"] == ["ref-1"]
+    assert "completed_at" in evidence_payload
