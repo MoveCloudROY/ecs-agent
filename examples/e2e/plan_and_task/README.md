@@ -1,0 +1,118 @@
+# Plan and Task E2E Example
+
+This example demonstrates an interactive plan→review→execute workflow using the ECS-based LLM Agent framework. It features a robust state machine, review-gated planning, artifact persistence, and recovery semantics.
+
+## Overview
+
+The workflow follows a structured lifecycle:
+1. **Planning**: The agent interviews the user to build a draft plan.
+2. **Review**: The plan must be approved by both an Advisor and a QA subagent.
+3. **Execution**: Once finalized, the plan is decomposed into a task queue and executed.
+
+## Architecture
+
+- **ECS Core**: Uses `ReasoningSystem`, `ToolExecutionSystem`, and `MemorySystem`.
+- **State Machine**: Explicit phase transitions managed by `WorkflowStateMachine`.
+- **Artifacts**: Durable persistence of plans, state, and execution evidence via `ArtifactAdapter`.
+- **Controller**: `PlanController` manages the high-level workflow logic and review gates.
+- **Task Execution**: `TaskExec` handles plan loading, dependency resolution, and subagent dispatch.
+
+## Supported Commands
+
+The interactive runtime supports exactly eight slash commands:
+
+- `/plan:start <description>`: Initialize a new workflow with a draft description.
+- `/plan:status`: Show the current workflow phase, status, and review verdicts.
+- `/plan:finalize`: Finalize the plan and transition to task execution (requires approved reviews).
+- `/task:start <task_id>`: Start execution of a specific task.
+- `/task:status`: Show the status of the current task and subagent sessions.
+- `/task:resume`: Resume a blocked or replanned task.
+- `/task:replan <reason>`: Request a replan for the current task.
+- `/task:abort`: Abort the current task and transition to a terminal state.
+
+## Artifact Layout
+
+All workflow data is persisted in `.artifacts/workflows/<workflow_id>/`:
+
+- `plan/`: Contains `draft.md`, `workflow_plan.md`, and versioned history in `plan_versions/`.
+- `state/`: Contains `runtime_state.json`, `events.jsonl`, and `task_queue.json`.
+- `memory/`: Contains `knowledge.jsonl` for cross-task context.
+- `evidence/`: Directory for task execution artifacts.
+- `review/`: Contains JSON verdicts from Advisor and QA reviews.
+
+## Usage
+
+### Interactive Mode
+
+Run the entry point to start an interactive session.
+
+```bash
+# Using FakeProvider (No API key needed)
+uv run python examples/e2e/plan_and_task/main.py
+
+# Using Real LLM
+LLM_API_KEY=your-api-key uv run python examples/e2e/plan_and_task/main.py
+```
+
+### FakeProvider Mode (no API key)
+
+If `LLM_API_KEY` is not set, the example automatically falls back to `FakeProvider`, allowing you to test the command grammar and state transitions without incurring API costs.
+
+### Automation Mode (piped input)
+
+Automate interactions by piping commands:
+
+```bash
+printf '/plan:start Build demo\n/plan:status\nexit\n' | uv run python examples/e2e/plan_and_task/main.py
+```
+
+## Recovery / Restart
+
+The workflow can be restarted at any time. On startup, the system:
+1. Resolves the workflow ID (via `PLAN_TASK_WORKFLOW_ID` or default).
+2. Restores state from `state/runtime_state.json`.
+3. Marks any in-flight subagents as `stale` and transitions to `TASK_BLOCKED` if necessary to allow safe resumption.
+
+## Testing
+
+### Deterministic tests (no credentials)
+
+Run the integration suite to verify command parsing, state machine logic, and artifact persistence:
+
+```bash
+uv run pytest tests/integration/test_plan_and_task_flow.py -v
+```
+
+### Specific test filters
+
+```bash
+uv run pytest tests/integration/test_plan_and_task_flow.py -k "commands"
+uv run pytest tests/integration/test_plan_and_task_flow.py -k "artifacts"
+```
+
+### Real-LLM acceptance tests
+
+Requires `LLM_API_KEY`. Verifies the controller and task execution with a real provider:
+
+```bash
+LLM_API_KEY="$LLM_API_KEY" \
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
+LLM_MODEL=qwen3.5-flash \
+uv run pytest tests/live/test_plan_and_task_flow_live.py -v
+```
+
+## Environment Variables
+
+- `LLM_API_KEY`: OpenAI-compatible API key.
+- `LLM_BASE_URL`: API base URL (defaults to DashScope).
+- `LLM_MODEL`: Model ID (defaults to `qwen3.5-flash`).
+- `PLAN_TASK_WORKFLOW_ID`: Override the default workflow ID.
+- `PLAN_TASK_INTERACTIVE`: Set to `0` to disable interactive stdin.
+- `DEBUG`: Set to `1` to enable debug logging.
+
+## Implementation Details
+
+- **Atomic Writes**: All artifact updates use atomic file operations to prevent corruption.
+- **Circuit Breaker**: `TaskExec` implements a retry budget to prevent infinite loops on failing tasks.
+- **Review Gating**: Finalization is strictly blocked until both `PLAN_ADVISOR_REVIEW` and `PLAN_QA_REVIEW` have `approved` verdicts.
+- **Dependency Resolution**: Tasks are executed in topological order based on their `dependencies` list.
