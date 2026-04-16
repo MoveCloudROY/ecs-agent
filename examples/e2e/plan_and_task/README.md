@@ -14,10 +14,11 @@ The workflow follows a structured lifecycle:
 - **ECS Core**: Uses `SystemPromptRenderSystem`, `UserPromptNormalizationSystem`, `ReasoningSystem`, `ToolExecutionSystem`, and `MemorySystem`.
 - **Prompt Configuration**: The planner entity declares `SystemPromptConfigSpec` with `PLAN_INTERVIEW_SYSTEM_PROMPT`, and `SystemPromptRenderSystem` bridges the rendered value into `LLMComponent.system_prompt` before reasoning.
 - **State Machine**: Explicit phase transitions managed by `WorkflowStateMachine`.
-- **Artifacts**: Durable persistence of plans, state, and execution evidence via `ArtifactAdapter`.
+- **Artifacts**: Durable persistence of plans, state, and execution evidence via `PlanTaskScratchbookAdapter`.
 - **Controller**: `PlanController` manages the high-level workflow logic and review gates.
-- **Subagent Reviews**: Advisor and QA review steps are wired as ECS subagents via `SubagentRegistryComponent`. The planner invokes them with `subagent(category="advisor", ...)` and records verdicts via `record_advisor_verdict` / `record_qa_verdict` tool calls.
+- **Subagent Reviews**: Advisor and QA review steps are wired as ECS subagents via `SubagentRegistryComponent`. The planner invokes them with `subagent(category="advisor", ...)` and verdicts are automatically extracted from subagent results via `DelegationCompletedEvent` subscription.
 - **Task Execution**: `TaskExec` handles plan loading, dependency resolution, and subagent dispatch.
+- **Slash Commands**: Dispatched via ECS `TriggerSpec` script handlers on `UserPromptConfigComponent`. Commands appear as transformed messages in conversation history.
 
 ## Supported Commands
 
@@ -34,7 +35,7 @@ The interactive runtime supports exactly eight slash commands:
 
 ## Artifact Layout
 
-All workflow data is persisted in `.artifacts/workflows/<workflow_id>/`:
+All workflow data is persisted in `scratchbook/<workflow_id>/`:
 
 - `plan/`: Contains `draft.md`, `workflow_plan.md`, and versioned history in `plan_versions/`.
 - `state/`: Contains `runtime_state.json`, `events.jsonl`, and `task_queue.json`.
