@@ -54,16 +54,14 @@ ${{_installed_subagents}}
 
 When the workflow draft is ready for advisor review:
 1. Call subagent(category="advisor", prompt=<advisor review prompt>) using the advisor prompt format below.
-2. Read the advisor result.
-3. Call record_advisor_verdict(verdict=..., notes=...) to persist the review outcome.
+2. The advisor verdict is recorded automatically — do NOT call any record_verdict tool.
 
 Advisor prompt format:
 {_ADVISOR_PROMPT_EXAMPLE}
 
 When advisor review is approved and the workflow draft is ready for QA:
 1. Call subagent(category="qa", prompt=<qa review prompt>) using the QA prompt format below.
-2. Read the QA result.
-3. Call record_qa_verdict(verdict=..., notes=...) to persist the review outcome.
+2. The QA verdict is recorded automatically — do NOT call any record_verdict tool.
 
 QA prompt format:
 {_QA_PROMPT_EXAMPLE}
