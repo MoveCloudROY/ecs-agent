@@ -11,7 +11,9 @@ from typing import Any
 
 from ecs_agent.logging import get_logger
 
-from examples.e2e.plan_and_task.artifacts import ArtifactAdapter
+from examples.e2e.plan_and_task.scratchbook_adapter import (
+    PlanTaskScratchbookAdapter as ArtifactAdapter,
+)
 from examples.e2e.plan_and_task.state_models import RuntimeState, ReviewVerdict
 from examples.e2e.plan_and_task.state_machine import (
     VALID_TRANSITIONS,

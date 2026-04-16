@@ -12,7 +12,9 @@ import pytest
 from ecs_agent.components.definitions import TerminalComponent
 from ecs_agent.core import World
 from ecs_agent.systems import TerminalCleanupSystem
-from examples.e2e.plan_and_task.artifacts import ArtifactAdapter
+from examples.e2e.plan_and_task.scratchbook_adapter import (
+    PlanTaskScratchbookAdapter as ArtifactAdapter,
+)
 from examples.e2e.plan_and_task.commands import (
     Command,
     parse_command,
@@ -249,10 +251,125 @@ def test_resolve_workflow_id_falls_back_to_default(
     assert resolve_workflow_id() == "plan-task-workflow"
 
 
+def test_scratchbook_adapter_writes_plan_under_scratchbook_root(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter,
+    )
+
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id="wf-001")
+    adapter.write_plan("# Plan\n")
+
+    plan_file = adapter.plan_dir / "workflow_plan.md"
+    assert plan_file.exists()
+    assert plan_file.read_text(encoding="utf-8") == "# Plan\n"
+    assert "scratchbook" in str(plan_file)
+    assert ".artifacts" not in str(plan_file)
+
+
+def test_scratchbook_adapter_versions_existing_plan(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter,
+    )
+
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id="wf-001")
+    adapter.write_plan("# Plan v1\n")
+    adapter.write_plan("# Plan v2\n")
+
+    versions = list(adapter.plan_versions_dir.glob("v*_workflow_plan.md"))
+    assert len(versions) == 1
+    assert "v1" in versions[0].name
+    assert versions[0].read_text(encoding="utf-8") == "# Plan v1\n"
+
+
+def test_scratchbook_adapter_write_and_read_state_roundtrip(tmp_path: Path) -> None:
+    import datetime
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter,
+    )
+    from examples.e2e.plan_and_task.state_models import RuntimeState
+
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id="wf-rt")
+    now = datetime.datetime.utcnow().isoformat()
+    state = RuntimeState(
+        workflow_id="wf-rt",
+        phase="PLAN_INTERVIEW",
+        status="active",
+        active_plan_file="plan/workflow_plan.md",
+        active_plan_version=1,
+        current_task_id=None,
+        completed_task_ids=[],
+        retry_budget={},
+        review_verdicts=[],
+        active_subagents=[],
+        memory_refs=[],
+        last_checkpoint=None,
+        created_at=now,
+        updated_at=now,
+    )
+    adapter.write_state(state)
+    restored = adapter.read_state()
+    assert restored.workflow_id == "wf-rt"
+    assert restored.phase == "PLAN_INTERVIEW"
+
+
+def test_scratchbook_adapter_write_review_verdict_creates_file(tmp_path: Path) -> None:
+    import datetime
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter,
+    )
+    from examples.e2e.plan_and_task.state_models import ReviewVerdict
+
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id="wf-rv")
+    verdict = ReviewVerdict(
+        phase="PLAN_ADVISOR_REVIEW",
+        verdict="approved",
+        decided_at=datetime.datetime.utcnow().isoformat(),
+    )
+    path_str = adapter.write_review_verdict("PLAN_ADVISOR_REVIEW", verdict)
+    assert path_str
+    review_files = list(adapter.review_dir.iterdir())
+    assert len(review_files) == 1
+
+
+def test_scratchbook_adapter_append_event_and_memory(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter,
+    )
+
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id="wf-ev")
+    adapter.append_event({"type": "test_event", "value": 1})
+    adapter.append_event({"type": "test_event", "value": 2})
+    adapter.append_memory({"key": "fact"})
+
+    events_file = adapter.state_dir / "events.jsonl"
+    assert events_file.exists()
+    lines = events_file.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 2
+
+    memory_file = adapter.memory_dir / "knowledge.jsonl"
+    assert memory_file.exists()
+
+
+def test_scratchbook_adapter_exposes_same_path_attributes(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter,
+    )
+
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id="wf-paths")
+    assert hasattr(adapter, "workflow_root")
+    assert hasattr(adapter, "plan_dir")
+    assert hasattr(adapter, "plan_versions_dir")
+    assert hasattr(adapter, "state_dir")
+    assert hasattr(adapter, "memory_dir")
+    assert hasattr(adapter, "evidence_dir")
+    assert hasattr(adapter, "review_dir")
+    assert hasattr(adapter, "workflow_id")
+
+
 def test_artifacts_create_canonical_workflow_layout(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
 
-    root = tmp_path / ".artifacts" / "workflows" / "test-workflow-001"
+    root = tmp_path / "scratchbook" / "test-workflow-001"
 
     assert adapter.workflow_root == root
     assert (root / "plan").is_dir()
@@ -323,7 +440,7 @@ def test_state_schema_round_trip_and_versioned_plan_history(tmp_path: Path) -> N
     )
 
     reloaded = adapter.read_state()
-    root = tmp_path / ".artifacts" / "workflows" / "test-workflow-001"
+    root = tmp_path / "scratchbook" / "test-workflow-001"
 
     assert reloaded == state
     assert (root / "plan" / "workflow_plan.md").read_text(
@@ -902,12 +1019,7 @@ def test_task_queue_persisted_to_state(tmp_path: Path) -> None:
     updated_state = TaskExec(state=state).initialize_task_queue(state, adapter)
     persisted_state = adapter.read_state()
     task_queue_path = (
-        tmp_path
-        / ".artifacts"
-        / "workflows"
-        / "test-workflow-001"
-        / "state"
-        / "task_queue.json"
+        tmp_path / "scratchbook" / "test-workflow-001" / "state" / "task_queue.json"
     )
 
     assert [task.task_id for task in updated_state.tasks] == ["task-001", "task-002"]
@@ -1231,8 +1343,7 @@ def test_advisor_review_creates_verdict_artifact(tmp_path: Path) -> None:
 
     artifact = (
         tmp_path
-        / ".artifacts"
-        / "workflows"
+        / "scratchbook"
         / "test-workflow-001"
         / "review"
         / "plan_advisor_review_verdict.json"
