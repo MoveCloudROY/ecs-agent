@@ -20,9 +20,14 @@ from ecs_agent.components import (
     ToolRegistryComponent,
     UserPromptConfigComponent,
 )
+from ecs_agent.components.definitions import ScriptHandler
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import configure_logging, get_logger
-from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
+from ecs_agent.prompts.contracts import (
+    PromptTemplateSource,
+    SystemPromptConfigSpec,
+    TriggerSpec,
+)
 from ecs_agent.providers import OpenAIProvider
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.protocol import LLMProvider
@@ -43,7 +48,6 @@ from examples.e2e.plan_and_task.artifacts import (
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
 )
-from examples.e2e.plan_and_task.commands import parse_command
 from examples.e2e.plan_and_task.controller import PlanController
 from examples.e2e.plan_and_task.prompts import (
     PLAN_INTERVIEW_SYSTEM_PROMPT,
@@ -56,7 +60,6 @@ from examples.e2e.plan_and_task.runtime import (
 )
 from examples.e2e.plan_and_task.state_models import RuntimeState
 from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
-from examples.e2e.plan_and_task.task_exec import TaskExec
 
 logger = get_logger(__name__)
 
@@ -73,114 +76,6 @@ def _require_state(state: RuntimeState | None) -> RuntimeState:
             "No active workflow state. Start with /plan:start <description>."
         )
     return state
-
-
-def _handle_command(
-    command_text: str,
-    state: RuntimeState | None,
-    controller: PlanController,
-    adapter: ArtifactAdapter,
-) -> RuntimeState | None:
-    command = parse_command(command_text.strip())
-
-    if command.name == "/plan:start":
-        description = " ".join(command.args).strip()
-        if not description:
-            raise ValueError("/plan:start requires a non-empty description")
-        next_state = controller.handle_plan_start(adapter, description)
-        print(
-            "Plan started:\n" + _format_status(controller.get_plan_status(next_state))
-        )
-        return next_state
-
-    current_state = _require_state(state)
-
-    if command.name == "/plan:status":
-        print(_format_status(controller.get_plan_status(current_state)))
-        return current_state
-
-    if command.name == "/plan:finalize":
-        next_state = controller.handle_plan_finalize(current_state, adapter)
-        print(
-            "Plan finalized:\n" + _format_status(controller.get_plan_status(next_state))
-        )
-        return next_state
-
-    if command.name == "/task:start":
-        task_exec = TaskExec(state=current_state)
-        next_state = task_exec.initialize_task_queue(current_state, adapter)
-        print(
-            "Task queue initialized:\n"
-            + _format_status(
-                {
-                    "workflow_id": next_state.workflow_id,
-                    "phase": next_state.phase,
-                    "status": next_state.status,
-                    "current_task_id": next_state.current_task_id,
-                    "task_count": len(next_state.tasks),
-                }
-            )
-        )
-        return next_state
-
-    if command.name == "/task:status":
-        print(
-            _format_status(
-                {
-                    "workflow_id": current_state.workflow_id,
-                    "phase": current_state.phase,
-                    "status": current_state.status,
-                    "current_task_id": current_state.current_task_id,
-                    "tasks": [
-                        {
-                            "task_id": task.task_id,
-                            "status": task.status,
-                            "retry_count": task.retry_count,
-                        }
-                        for task in current_state.tasks
-                    ],
-                    "active_subagents": [
-                        {
-                            "session_id": record.session_id,
-                            "task_id": record.task_id,
-                            "status": record.status,
-                        }
-                        for record in current_state.active_subagents
-                    ],
-                }
-            )
-        )
-        return current_state
-
-    if command.name == "/task:resume":
-        next_state = controller.handle_task_resume(current_state, adapter)
-        print(
-            "Task resumed:\n" + _format_status(controller.get_plan_status(next_state))
-        )
-        return next_state
-
-    if command.name == "/task:replan":
-        reason = " ".join(command.args).strip()
-        if not reason:
-            raise ValueError("/task:replan requires a non-empty reason")
-        next_state = controller.handle_task_replan(current_state, adapter, reason)
-        print(
-            "Task replanned:\n" + _format_status(controller.get_plan_status(next_state))
-        )
-        return next_state
-
-    if command.name == "/task:abort":
-        next_state = controller.handle_task_abort(
-            current_state,
-            adapter,
-            reason="user abort",
-        )
-        print(
-            "Task aborted:\n" + _format_status(controller.get_plan_status(next_state))
-        )
-        return next_state
-
-    raise ValueError(f"Unsupported command: {command.name}")
 
 
 def build_plan_task_world(
@@ -203,7 +98,6 @@ def build_plan_task_world(
             template_source=PromptTemplateSource(inline=PLAN_INTERVIEW_SYSTEM_PROMPT)
         ),
     )
-    world.add_component(agent_id, UserPromptConfigComponent(triggers=[]))
     world.add_component(agent_id, ToolRegistryComponent(tools={}, handlers={}))
     world.add_component(agent_id, SubagentSessionTableComponent(sessions={}))
     world.add_component(
@@ -306,6 +200,187 @@ def build_plan_task_world(
 
     tool_registry.handlers["record_qa_verdict"] = record_qa_verdict
 
+    async def _handle_plan_start(
+        _world: World, _entity_id: EntityId, user_text: str
+    ) -> str | None:
+        parts = user_text.strip().split(None, 1)
+        description = parts[1].strip() if len(parts) > 1 else ""
+        if not description:
+            return "Error: /plan:start requires a non-empty description."
+        try:
+            runtime_state[0] = controller.handle_plan_start(adapter, description)
+            status = controller.get_plan_status(_require_state(runtime_state[0]))
+            return f"Plan started:\n{_format_status(status)}"
+        except ValueError as exc:
+            return f"Error: {exc}"
+
+    async def _handle_plan_status(
+        _world: World, _entity_id: EntityId, _user_text: str
+    ) -> str | None:
+        if runtime_state[0] is None:
+            return "No active workflow. Use /plan:start <description> to begin."
+        return _format_status(
+            controller.get_plan_status(_require_state(runtime_state[0]))
+        )
+
+    async def _handle_plan_finalize(
+        _world: World, _entity_id: EntityId, _user_text: str
+    ) -> str | None:
+        try:
+            runtime_state[0] = controller.handle_plan_finalize(
+                _require_state(runtime_state[0]), adapter
+            )
+            return f"Plan finalized:\n{_format_status(controller.get_plan_status(_require_state(runtime_state[0])))}"
+        except ValueError as exc:
+            return f"Error: {exc}"
+
+    async def _handle_task_start(
+        _world: World, _entity_id: EntityId, _user_text: str
+    ) -> str | None:
+        try:
+            from examples.e2e.plan_and_task.task_exec import TaskExec
+
+            current = _require_state(runtime_state[0])
+            task_exec = TaskExec(state=current)
+            runtime_state[0] = task_exec.initialize_task_queue(current, adapter)
+            s = _require_state(runtime_state[0])
+            return _format_status(
+                {
+                    "workflow_id": s.workflow_id,
+                    "phase": s.phase,
+                    "status": s.status,
+                    "current_task_id": s.current_task_id,
+                    "task_count": len(s.tasks),
+                }
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
+
+    async def _handle_task_status(
+        _world: World, _entity_id: EntityId, _user_text: str
+    ) -> str | None:
+        if runtime_state[0] is None:
+            return "No active workflow."
+        s = runtime_state[0]
+        return _format_status(
+            {
+                "workflow_id": s.workflow_id,
+                "phase": s.phase,
+                "status": s.status,
+                "current_task_id": s.current_task_id,
+                "tasks": [
+                    {
+                        "task_id": t.task_id,
+                        "status": t.status,
+                        "retry_count": t.retry_count,
+                    }
+                    for t in s.tasks
+                ],
+            }
+        )
+
+    async def _handle_task_resume(
+        _world: World, _entity_id: EntityId, _user_text: str
+    ) -> str | None:
+        try:
+            runtime_state[0] = controller.handle_task_resume(
+                _require_state(runtime_state[0]), adapter
+            )
+            return f"Task resumed:\n{_format_status(controller.get_plan_status(_require_state(runtime_state[0])))}"
+        except ValueError as exc:
+            return f"Error: {exc}"
+
+    async def _handle_task_replan(
+        _world: World, _entity_id: EntityId, user_text: str
+    ) -> str | None:
+        parts = user_text.strip().split(None, 1)
+        reason = parts[1].strip() if len(parts) > 1 else ""
+        if not reason:
+            return "Error: /task:replan requires a non-empty reason."
+        try:
+            runtime_state[0] = controller.handle_task_replan(
+                _require_state(runtime_state[0]), adapter, reason
+            )
+            return f"Task replanned:\n{_format_status(controller.get_plan_status(_require_state(runtime_state[0])))}"
+        except ValueError as exc:
+            return f"Error: {exc}"
+
+    async def _handle_task_abort(
+        _world: World, _entity_id: EntityId, _user_text: str
+    ) -> str | None:
+        try:
+            runtime_state[0] = controller.handle_task_abort(
+                _require_state(runtime_state[0]), adapter, reason="user abort"
+            )
+            return f"Task aborted:\n{_format_status(controller.get_plan_status(_require_state(runtime_state[0])))}"
+        except ValueError as exc:
+            return f"Error: {exc}"
+
+    script_handlers: dict[str, ScriptHandler] = {
+        "plan_start": _handle_plan_start,
+        "plan_status": _handle_plan_status,
+        "plan_finalize": _handle_plan_finalize,
+        "task_start": _handle_task_start,
+        "task_status": _handle_task_status,
+        "task_resume": _handle_task_resume,
+        "task_replan": _handle_task_replan,
+        "task_abort": _handle_task_abort,
+    }
+    triggers = [
+        TriggerSpec(
+            pattern="/plan:start",
+            match_mode="prefix",
+            action="script",
+            content="plan_start",
+        ),
+        TriggerSpec(
+            pattern="/plan:status",
+            match_mode="prefix",
+            action="script",
+            content="plan_status",
+        ),
+        TriggerSpec(
+            pattern="/plan:finalize",
+            match_mode="prefix",
+            action="script",
+            content="plan_finalize",
+        ),
+        TriggerSpec(
+            pattern="/task:start",
+            match_mode="prefix",
+            action="script",
+            content="task_start",
+        ),
+        TriggerSpec(
+            pattern="/task:status",
+            match_mode="prefix",
+            action="script",
+            content="task_status",
+        ),
+        TriggerSpec(
+            pattern="/task:resume",
+            match_mode="prefix",
+            action="script",
+            content="task_resume",
+        ),
+        TriggerSpec(
+            pattern="/task:replan",
+            match_mode="prefix",
+            action="script",
+            content="task_replan",
+        ),
+        TriggerSpec(
+            pattern="/task:abort",
+            match_mode="prefix",
+            action="script",
+            content="task_abort",
+        ),
+    ]
+    world.add_component(
+        agent_id,
+        UserPromptConfigComponent(triggers=triggers, script_handlers=script_handlers),
+    )
+
     world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
     world.register_system(UserPromptNormalizationSystem(priority=-10), priority=-10)
     subagent_system = SubagentSystem(priority=-1)
@@ -384,19 +459,6 @@ async def main() -> None:
                 + _format_status(controller.get_plan_status(restored_runtime_state))
             )
 
-    def handle_command(text: str) -> bool:
-        try:
-            runtime_state[0] = _handle_command(
-                text,
-                runtime_state[0],
-                controller,
-                adapter,
-            )
-            return True
-        except ValueError as exc:
-            print(f"Error: {exc}")
-            return True
-
     interactive_mode_str = os.environ.get("PLAN_TASK_INTERACTIVE", "1")
     if interactive_mode_str.lower() in ("0", "false"):
         if debug_mode:
@@ -408,7 +470,6 @@ async def main() -> None:
             world,
             agent_id,
             workflow_id=runtime_config.workflow_id,
-            command_handler=handle_command,
         )
 
     runner = Runner()

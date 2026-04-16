@@ -1818,6 +1818,84 @@ def test_task_completion_writes_evidence_artifact(
     assert "completed_at" in evidence_payload
 
 
+def test_main_world_registers_trigger_script_handlers(tmp_path: Path) -> None:
+    from ecs_agent.components import UserPromptConfigComponent
+
+    world, agent_id, _, _ = _build_test_world(tmp_path)
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+
+    trigger_patterns = {t.pattern for t in config.triggers}
+    expected_patterns = {
+        "/plan:start",
+        "/plan:status",
+        "/plan:finalize",
+        "/task:start",
+        "/task:status",
+        "/task:resume",
+        "/task:replan",
+        "/task:abort",
+    }
+    assert expected_patterns.issubset(trigger_patterns)
+
+    for trigger in config.triggers:
+        if trigger.pattern in expected_patterns:
+            assert trigger.action == "script"
+            assert trigger.content in config.script_handlers
+
+
+@pytest.mark.asyncio
+async def test_trigger_plan_start_handler_creates_state(tmp_path: Path) -> None:
+    from ecs_agent.components import UserPromptConfigComponent
+
+    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+
+    handler_key = next(t.content for t in config.triggers if t.pattern == "/plan:start")
+    handler = config.script_handlers[handler_key]
+
+    result = await handler(world, agent_id, "/plan:start Build demo")
+
+    assert runtime_state[0] is not None
+    assert runtime_state[0].phase == "PLAN_INTERVIEW"
+    assert isinstance(result, str)
+
+
+@pytest.mark.asyncio
+async def test_trigger_plan_status_handler_returns_status_string(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent.components import UserPromptConfigComponent
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    controller = PlanController()
+    runtime_state[0] = controller.handle_plan_start(adapter, "Test plan")
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+
+    handler_key = next(
+        t.content for t in config.triggers if t.pattern == "/plan:status"
+    )
+    handler = config.script_handlers[handler_key]
+    result = await handler(world, agent_id, "/plan:status")
+
+    assert result is not None
+    assert "PLAN_INTERVIEW" in result
+
+
+def test_runtime_setup_does_not_intercept_slash_commands(tmp_path: Path) -> None:
+    import inspect
+
+    from examples.e2e.plan_and_task.runtime import setup_interactive_input
+
+    sig = inspect.signature(setup_interactive_input)
+    assert "command_handler" not in sig.parameters
+
+
 def _build_test_world(
     tmp_path: Path,
 ) -> tuple[World, object, ArtifactAdapter, list[RuntimeState | None]]:

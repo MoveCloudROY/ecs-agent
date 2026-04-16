@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 from ecs_agent.components import UserInputComponent
 from ecs_agent.components.definitions import ConversationComponent, TerminalComponent
@@ -49,7 +49,6 @@ async def setup_interactive_input(
     world: World,
     agent_id: EntityId,
     workflow_id: str | None = None,
-    command_handler: Callable[[str], bool] | None = None,
 ) -> RuntimeConfig:
     last_printed_index: list[int] = [0]
     runtime_config = build_runtime_config(workflow_id)
@@ -84,10 +83,6 @@ async def setup_interactive_input(
                 if not event.input_future.done():
                     event.input_future.set_result(user_text)
                 return
-
-            if user_text.startswith("/") and command_handler is not None:
-                if command_handler(user_text):
-                    continue
 
             if not event.input_future.done():
                 event.input_future.set_result(user_text)
