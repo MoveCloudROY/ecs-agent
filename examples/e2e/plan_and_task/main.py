@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import cast
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -36,7 +37,12 @@ from ecs_agent.systems.user_prompt_normalization_system import (
 )
 from ecs_agent.types import EntityId, InheritancePolicy, SubagentConfig, ToolSchema
 
-from examples.e2e.plan_and_task.artifacts import ArtifactAdapter
+from examples.e2e.plan_and_task.artifacts import (
+    ArtifactAdapter as LegacyArtifactAdapter,
+)
+from examples.e2e.plan_and_task.scratchbook_adapter import (
+    PlanTaskScratchbookAdapter as ArtifactAdapter,
+)
 from examples.e2e.plan_and_task.commands import parse_command
 from examples.e2e.plan_and_task.controller import PlanController
 from examples.e2e.plan_and_task.prompts import (
@@ -360,7 +366,10 @@ async def main() -> None:
     if state_path.exists():
         try:
             restored_state = adapter.read_state()
-            runtime_state[0] = state_machine.handle_restart(restored_state, adapter)
+            runtime_state[0] = state_machine.handle_restart(
+                restored_state,
+                cast(LegacyArtifactAdapter, adapter),
+            )
         except ValueError as exc:
             logger.warning(
                 "plan_task_restore_failed",
