@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re as _re
 import sys
 from pathlib import Path
 from typing import cast
@@ -40,7 +41,12 @@ from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.systems.user_prompt_normalization_system import (
     UserPromptNormalizationSystem,
 )
-from ecs_agent.types import EntityId, InheritancePolicy, SubagentConfig, ToolSchema
+from ecs_agent.types import (
+    DelegationCompletedEvent,
+    EntityId,
+    InheritancePolicy,
+    SubagentConfig,
+)
 
 from examples.e2e.plan_and_task.artifacts import (
     ArtifactAdapter as LegacyArtifactAdapter,
@@ -63,7 +69,20 @@ from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
 
 logger = get_logger(__name__)
 
+_VERDICT_PATTERN = _re.compile(r"\b(approved|revise|blocked)\b", _re.IGNORECASE)
+
 _WORKFLOW_BASE_DIR = Path(__file__).parent
+
+
+def _extract_verdict_from_result(result: str) -> str:
+    """Extract verdict from subagent result text. Defaults to 'revise' on no match."""
+    match = _VERDICT_PATTERN.search(result)
+    if match is None:
+        logger.warning(
+            "plan_task_verdict_extraction_failed", result_preview=result[:120]
+        )
+        return "revise"
+    return match.group(1).lower()
 
 
 def _format_status(payload: dict[str, object]) -> str:
@@ -142,63 +161,45 @@ def build_plan_task_world(
     controller = PlanController()
     runtime_state: list[RuntimeState | None] = [None]
 
+    async def _on_delegation_completed(event: DelegationCompletedEvent) -> None:
+        if event.entity_id != agent_id:
+            return
+        if not event.success:
+            logger.warning(
+                "plan_task_subagent_failed",
+                subagent_name=event.subagent_name,
+                error=getattr(event, "error", None),
+            )
+            return
+        verdict_str = _extract_verdict_from_result(event.result)
+        current = runtime_state[0]
+        if current is None:
+            logger.warning(
+                "plan_task_delegation_completed_no_state",
+                subagent_name=event.subagent_name,
+            )
+            return
+        try:
+            if event.subagent_name == "advisor":
+                runtime_state[0] = controller.handle_advisor_review(
+                    current, adapter, verdict_str, notes=event.result[:500]
+                )
+            elif event.subagent_name == "qa":
+                runtime_state[0] = controller.handle_qa_review(
+                    current, adapter, verdict_str, notes=event.result[:500]
+                )
+        except ValueError as exc:
+            logger.error(
+                "plan_task_verdict_recording_failed",
+                subagent_name=event.subagent_name,
+                exception=str(exc),
+            )
+
+    world.event_bus.subscribe(DelegationCompletedEvent, _on_delegation_completed)
+
     tool_registry = world.get_component(agent_id, ToolRegistryComponent)
     if tool_registry is None:
         raise ValueError("ToolRegistryComponent is required for plan-and-task world")
-
-    tool_registry.tools["record_advisor_verdict"] = ToolSchema(
-        name="record_advisor_verdict",
-        description="Record the advisor review verdict for the current workflow draft.",
-        parameters={
-            "verdict": {
-                "type": "string",
-                "description": "Advisor verdict: approved, revise, or blocked.",
-            },
-            "notes": {
-                "type": "string",
-                "description": "Optional notes from the advisor review.",
-                "required": False,
-            },
-        },
-    )
-
-    async def record_advisor_verdict(verdict: str, notes: str = "") -> str:
-        runtime_state[0] = controller.handle_advisor_review(
-            _require_state(runtime_state[0]),
-            adapter,
-            verdict,
-            notes=notes or None,
-        )
-        return f"Advisor verdict '{verdict}' recorded."
-
-    tool_registry.handlers["record_advisor_verdict"] = record_advisor_verdict
-
-    tool_registry.tools["record_qa_verdict"] = ToolSchema(
-        name="record_qa_verdict",
-        description="Record the QA review verdict for the current workflow draft.",
-        parameters={
-            "verdict": {
-                "type": "string",
-                "description": "QA verdict: approved, revise, or blocked.",
-            },
-            "notes": {
-                "type": "string",
-                "description": "Optional notes from the QA review.",
-                "required": False,
-            },
-        },
-    )
-
-    async def record_qa_verdict(verdict: str, notes: str = "") -> str:
-        runtime_state[0] = controller.handle_qa_review(
-            _require_state(runtime_state[0]),
-            adapter,
-            verdict,
-            notes=notes or None,
-        )
-        return f"QA verdict '{verdict}' recorded."
-
-    tool_registry.handlers["record_qa_verdict"] = record_qa_verdict
 
     async def _handle_plan_start(
         _world: World, _entity_id: EntityId, user_text: str
