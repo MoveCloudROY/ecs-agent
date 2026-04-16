@@ -1936,10 +1936,10 @@ async def test_main_world_setup_installs_subagent_infrastructure(
     assert registry is not None
     assert set(registry.subagents) >= {"advisor", "qa"}
     assert tool_registry is not None
-    assert "record_advisor_verdict" in tool_registry.tools
-    assert "record_advisor_verdict" in tool_registry.handlers
-    assert "record_qa_verdict" in tool_registry.tools
-    assert "record_qa_verdict" in tool_registry.handlers
+    assert "record_advisor_verdict" not in tool_registry.tools
+    assert "record_advisor_verdict" not in tool_registry.handlers
+    assert "record_qa_verdict" not in tool_registry.tools
+    assert "record_qa_verdict" not in tool_registry.handlers
     assert session_table is not None
     assert any(
         isinstance(entry.system, SubagentSystem) and entry.priority == -1
@@ -1947,34 +1947,120 @@ async def test_main_world_setup_installs_subagent_infrastructure(
     )
 
 
-@pytest.mark.asyncio
-async def test_verdict_tool_handlers_update_runtime_state(tmp_path: Path) -> None:
+# ── DelegationCompletedEvent verdict tests ─────────────────────────────────────
+
+
+def test_main_world_does_not_register_record_verdict_tools(tmp_path: Path) -> None:
+    """record_advisor_verdict and record_qa_verdict tools must NOT be registered."""
     from ecs_agent.components import ToolRegistryComponent
+
+    world, agent_id, _, _ = _build_test_world(tmp_path)
+    tool_registry = world.get_component(agent_id, ToolRegistryComponent)
+    assert tool_registry is not None
+    assert "record_advisor_verdict" not in tool_registry.tools
+    assert "record_qa_verdict" not in tool_registry.tools
+    assert "record_advisor_verdict" not in tool_registry.handlers
+    assert "record_qa_verdict" not in tool_registry.handlers
+
+
+def test_extract_verdict_parses_all_three_values() -> None:
+    from examples.e2e.plan_and_task.main import _extract_verdict_from_result
+
+    assert _extract_verdict_from_result("The plan looks good. APPROVED.") == "approved"
+    assert _extract_verdict_from_result("I recommend revise the scope.") == "revise"
+    assert (
+        _extract_verdict_from_result("This is BLOCKED by missing requirements.")
+        == "blocked"
+    )
+    assert (
+        _extract_verdict_from_result("Looks great overall, approved by reviewer.")
+        == "approved"
+    )
+
+
+def test_extract_verdict_defaults_to_revise_on_no_match() -> None:
+    from examples.e2e.plan_and_task.main import _extract_verdict_from_result
+
+    result = _extract_verdict_from_result("The analysis is complete.")
+    assert result == "revise"
+
+
+@pytest.mark.asyncio
+async def test_delegation_completed_event_records_advisor_verdict(
+    tmp_path: Path,
+) -> None:
+    """Publishing DelegationCompletedEvent for 'advisor' updates runtime state."""
+    from ecs_agent.types import DelegationCompletedEvent
     from examples.e2e.plan_and_task.controller import PlanController
 
     world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
     controller = PlanController()
-    runtime_state[0] = controller.handle_plan_start(adapter, "Build a workflow")
+    runtime_state[0] = controller.handle_plan_start(adapter, "Test workflow")
 
-    tool_registry = world.get_component(agent_id, ToolRegistryComponent)
-    assert tool_registry is not None
-
-    advisor_result = await tool_registry.handlers["record_advisor_verdict"](
-        verdict="approved",
-        notes="looks good",
-    )
-    qa_result = await tool_registry.handlers["record_qa_verdict"](
-        verdict="approved",
-        notes="ship it",
+    await world.event_bus.publish(
+        DelegationCompletedEvent(
+            entity_id=agent_id,
+            subagent_name="advisor",
+            result="The plan looks solid. Approved.",
+            success=True,
+        )
     )
 
-    assert advisor_result == "Advisor verdict 'approved' recorded."
-    assert qa_result == "QA verdict 'approved' recorded."
     assert runtime_state[0] is not None
-    assert [verdict.phase for verdict in runtime_state[0].review_verdicts] == [
-        "PLAN_ADVISOR_REVIEW",
-        "PLAN_QA_REVIEW",
-    ]
+    verdicts = runtime_state[0].review_verdicts
+    assert len(verdicts) == 1
+    assert verdicts[0].phase == "PLAN_ADVISOR_REVIEW"
+    assert verdicts[0].verdict == "approved"
+
+
+@pytest.mark.asyncio
+async def test_delegation_completed_event_records_qa_verdict(tmp_path: Path) -> None:
+    """Publishing DelegationCompletedEvent for 'qa' updates runtime state."""
+    from ecs_agent.types import DelegationCompletedEvent
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    controller = PlanController()
+    runtime_state[0] = controller.handle_plan_start(adapter, "Test workflow")
+
+    await world.event_bus.publish(
+        DelegationCompletedEvent(
+            entity_id=agent_id,
+            subagent_name="qa",
+            result="QA review complete. Revise the acceptance criteria.",
+            success=True,
+        )
+    )
+
+    assert runtime_state[0] is not None
+    verdicts = runtime_state[0].review_verdicts
+    assert len(verdicts) == 1
+    assert verdicts[0].phase == "PLAN_QA_REVIEW"
+    assert verdicts[0].verdict == "revise"
+
+
+@pytest.mark.asyncio
+async def test_delegation_completed_event_ignores_other_entity(tmp_path: Path) -> None:
+    """Events for a different entity_id must not update state."""
+    from ecs_agent.types import DelegationCompletedEvent, EntityId
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    controller = PlanController()
+    runtime_state[0] = controller.handle_plan_start(adapter, "Test workflow")
+
+    other_entity = EntityId(agent_id + 999)
+    await world.event_bus.publish(
+        DelegationCompletedEvent(
+            entity_id=other_entity,
+            subagent_name="advisor",
+            result="approved",
+            success=True,
+        )
+    )
+
+    assert runtime_state[0] is not None
+    assert len(runtime_state[0].review_verdicts) == 0
 
 
 def test_prompt_builders_return_non_empty_strings() -> None:
