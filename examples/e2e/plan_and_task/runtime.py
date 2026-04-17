@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import os
-from dataclasses import dataclass
+import re
+import unicodedata
 from typing import TYPE_CHECKING
 
 from ecs_agent.components import UserInputComponent
@@ -20,38 +20,49 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_DEFAULT_WORKFLOW_ID = "plan-task-workflow"
+_MAX_SLUG_LENGTH = 50
+_SLUG_SEPARATOR = "-"
 
 
-@dataclass(slots=True)
-class RuntimeConfig:
-    """Configuration resolved from environment variables for the interactive runtime."""
+def slug_from_description(description: str) -> str:
+    """Derive a URL-safe workflow ID slug from a natural language task description.
 
-    workflow_id: str
+    Returns an empty string if the description yields no usable tokens,
+    leaving the caller to decide the fallback.
+    """
+    text = description.strip()
+    if not text:
+        return ""
 
+    normalized = unicodedata.normalize("NFKC", text)
 
-def resolve_workflow_id(workflow_id: str | None = None) -> str:
-    if workflow_id:
-        return workflow_id
+    cjk_range = re.compile(
+        r"[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]"
+    )
+    has_cjk = bool(cjk_range.search(normalized))
 
-    env_workflow_id = os.environ.get("PLAN_TASK_WORKFLOW_ID", "").strip()
-    if env_workflow_id:
-        return env_workflow_id
+    if has_cjk:
+        allowed = re.sub(
+            r"[^\u4e00-\u9fff\u3400-\u4dbf\u3040-\u309f\u30a0-\u30ff\uac00-\ud7afa-z0-9\s]",
+            "",
+            normalized.lower(),
+        )
+        slug = re.sub(r"\s+", _SLUG_SEPARATOR, allowed).strip(_SLUG_SEPARATOR)
+    else:
+        lower = normalized.lower()
+        allowed = re.sub(r"[^a-z0-9\s]", " ", lower)
+        tokens = allowed.split()
+        slug = _SLUG_SEPARATOR.join(tokens[:6])
 
-    return _DEFAULT_WORKFLOW_ID
-
-
-def build_runtime_config(workflow_id: str | None = None) -> RuntimeConfig:
-    return RuntimeConfig(workflow_id=resolve_workflow_id(workflow_id))
+    return slug[:_MAX_SLUG_LENGTH].rstrip(_SLUG_SEPARATOR)
 
 
 async def setup_interactive_input(
     world: World,
     agent_id: EntityId,
-    workflow_id: str | None = None,
-) -> RuntimeConfig:
+) -> None:
+    """Wire interactive stdin into the ECS world for the plan-and-task example."""
     last_printed_index: list[int] = [0]
-    runtime_config = build_runtime_config(workflow_id)
 
     async def provide_input(event: UserInputRequestedEvent) -> None:
         loop = asyncio.get_running_loop()
@@ -73,7 +84,6 @@ async def setup_interactive_input(
                         logger.info(
                             "plan_task_user_exit",
                             entity_id=int(event.entity_id),
-                            workflow_id=runtime_config.workflow_id,
                         )
                         world.add_component(
                             event.entity_id,
@@ -105,7 +115,6 @@ async def setup_interactive_input(
         logger.info(
             "plan_task_reasoning_complete",
             entity_id=int(agent_id),
-            workflow_id=runtime_config.workflow_id,
         )
         world.add_component(agent_id, UserInputComponent(prompt="You> "))
 
@@ -119,5 +128,3 @@ async def setup_interactive_input(
 
     if world.get_component(agent_id, UserInputComponent) is None:
         world.add_component(agent_id, UserInputComponent(prompt="You> "))
-
-    return runtime_config

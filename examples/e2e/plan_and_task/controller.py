@@ -322,10 +322,18 @@ class PlanController:
             f"Created: {timestamp}\n\n"
             "## Description\n"
             f"{description}\n\n"
-            "## Open Questions\n"
-            "(to be filled during interview)\n\n"
+            "## Scope\n"
+            "(to be filled during interview — what is in and out of scope)\n\n"
             "## Confirmed Requirements\n"
-            "(to be filled during interview)\n"
+            "(to be filled during interview — list each confirmed requirement)\n\n"
+            "## Constraints\n"
+            "(to be filled during interview — technical, budget, time constraints)\n\n"
+            "## Risks\n"
+            "(to be filled during interview — known risks and mitigations)\n\n"
+            "## Acceptance Criteria\n"
+            "(to be filled during interview — how will success be measured)\n\n"
+            "## Open Questions\n"
+            "(to be filled during interview — unresolved questions that need answers)\n"
         )
 
     def _build_final_plan_markdown(

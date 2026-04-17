@@ -85,10 +85,12 @@ printf '/plan:start Build demo\n\n/plan:status\n\nexit\n\n' | uv run python exam
 
 ## Recovery / Restart
 
-The workflow can be restarted at any time. On startup, the system:
-1. Resolves the workflow ID (via `PLAN_TASK_WORKFLOW_ID` or default).
-2. Restores state from `state/runtime_state.json`.
-3. Marks any in-flight subagents as `stale` and transitions to `TASK_BLOCKED` if necessary to allow safe resumption.
+The workflow can be restarted at any time. On startup, no workflow ID is resolved and no scratchbook folder is created. Instead:
+1. Call `/plan:start <original description>` — `slug_from_description()` re-derives the same ID from the same description.
+2. State is restored from `scratchbook/<workflow_id>/state/runtime_state.json`.
+3. Any in-flight subagents are marked `stale` and the machine transitions to `TASK_BLOCKED` for safe resumption.
+
+> **Note**: Use the same description text (or the same slug) as the original `/plan:start` call so the derived workflow ID matches the existing scratchbook directory.
 
 ## Testing
 
@@ -125,13 +127,14 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py -v
 - `LLM_API_KEY`: OpenAI-compatible API key.
 - `LLM_BASE_URL`: API base URL (defaults to DashScope).
 - `LLM_MODEL`: Model ID (defaults to `qwen3.5-flash`).
-- `PLAN_TASK_WORKFLOW_ID`: Override the default workflow ID.
 - `PLAN_TASK_INTERACTIVE`: Set to `0` to disable interactive stdin.
 - `DEBUG`: Set to `1` to enable debug logging.
 
 ## Implementation Details
 
-- **Testable World Factory**: `build_plan_task_world(provider, model, workflow_id, base_dir)` is a public function that returns `(world, agent_id, adapter, runtime_state)`, enabling direct world setup in tests without running the CLI.
+- **Testable World Factory**: `build_plan_task_world(provider, model, base_dir)` is a public function that returns `(world, agent_id, adapter_ref, runtime_state)`, enabling direct world setup in tests without running the CLI. `adapter_ref` is a `list[ArtifactAdapter | None]` — starts as `[None]` and is populated in-place by the `/plan:start` handler after the workflow ID is derived.
+- **workflow_id Auto-Derivation**: `/plan:start <description>` calls `slug_from_description()` to convert the natural language description into a URL-safe workflow ID. For example, `"Build a task manager"` becomes `"build-a-task-manager"`. CJK text is normalized and joined with hyphens. The derived ID controls the scratchbook directory for all subsequent operations in that session.
+- **Progressive Draft Editing**: The planning interview fills `draft.md` one section at a time using `read_file` + `edit_file`. The LLM asks one question per turn and edits the corresponding section's placeholder text. Full-file rewrites via `write_file` are explicitly prohibited by the system prompt.
 - **Atomic Writes**: All artifact updates use atomic file operations to prevent corruption.
 - **Circuit Breaker**: `TaskExec` implements a retry budget to prevent infinite loops on failing tasks.
 - **Review Gating**: Finalization is strictly blocked until both `PLAN_ADVISOR_REVIEW` and `PLAN_QA_REVIEW` have `approved` verdicts.

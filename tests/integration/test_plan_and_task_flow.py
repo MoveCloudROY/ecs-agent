@@ -27,7 +27,7 @@ from examples.e2e.plan_and_task.plan_schema import (
     parse_plan,
     validate_plan,
 )
-from examples.e2e.plan_and_task.runtime import resolve_workflow_id
+from examples.e2e.plan_and_task.runtime import slug_from_description
 from examples.e2e.plan_and_task.state_models import (
     ReviewVerdict,
     RuntimeState,
@@ -227,26 +227,17 @@ def test_parse_command_ignores_outer_whitespace() -> None:
     assert command == Command(name="/plan:status", raw="/plan:status", args=[])
 
 
-def test_resolve_workflow_id_prefers_explicit_override(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("PLAN_TASK_WORKFLOW_ID", "env-workflow")
-
-    assert resolve_workflow_id("explicit-workflow") == "explicit-workflow"
+def test_slug_from_description_returns_empty_on_blank() -> None:
+    assert slug_from_description("") == ""
+    assert slug_from_description("   ") == ""
 
 
-def test_resolve_workflow_id_uses_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PLAN_TASK_WORKFLOW_ID", "env-workflow")
-
-    assert resolve_workflow_id() == "env-workflow"
+def test_slug_from_description_explicit_id() -> None:
+    assert slug_from_description("explicit-workflow") == "explicit-workflow"
 
 
-def test_resolve_workflow_id_falls_back_to_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("PLAN_TASK_WORKFLOW_ID", raising=False)
-
-    assert resolve_workflow_id() == "plan-task-workflow"
+def test_slug_from_description_ascii_slug() -> None:
+    assert slug_from_description("Build a task manager") == "build-a-task-manager"
 
 
 def test_scratchbook_adapter_writes_plan_under_scratchbook_root(tmp_path: Path) -> None:
@@ -1818,17 +1809,24 @@ def _build_test_world(
     from ecs_agent.providers import FakeProvider
     from ecs_agent.types import CompletionResult, Message
     from examples.e2e.plan_and_task.main import build_plan_task_world
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter,
+    )
 
     provider = FakeProvider(
         responses=[CompletionResult(message=Message(role="assistant", content="ready"))]
     )
 
-    return build_plan_task_world(
+    world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
         provider=provider,
         model="fake-plan-task",
-        workflow_id="test-workflow-001",
         base_dir=tmp_path,
     )
+    test_adapter = PlanTaskScratchbookAdapter(
+        base_dir=tmp_path, workflow_id="test-workflow-001"
+    )
+    adapter_ref[0] = test_adapter
+    return world, agent_id, test_adapter, runtime_state
 
 
 @pytest.mark.asyncio
@@ -1999,7 +1997,7 @@ def test_build_scratchbook_prompt_config_returns_valid_config() -> None:
 
     config = build_scratchbook_prompt_config("wf-001")
     assert isinstance(config, ScratchbookPromptConfig)
-    assert config.scratchbook_root_path == ".artifacts/wf-001"
+    assert config.scratchbook_root_path == "scratchbook/wf-001"
     assert len(config.artifacts) == 6
     artifact_ids = {a.artifact_type_id for a in config.artifacts}
     assert "draft_plan" in artifact_ids
@@ -2013,17 +2011,26 @@ def test_build_scratchbook_prompt_config_returns_valid_config() -> None:
 def test_build_scratchbook_prompt_config_artifacts_have_valid_paths() -> None:
     config = build_scratchbook_prompt_config("my-workflow")
     for artifact in config.artifacts:
-        assert artifact.path.startswith(".artifacts/my-workflow/")
+        assert artifact.path.startswith("scratchbook/my-workflow/")
         assert not artifact.path.startswith("/")
 
 
-def test_main_world_adds_scratchbook_prompt_config_component(tmp_path: Path) -> None:
+def test_main_world_does_not_add_scratchbook_prompt_config_at_init(
+    tmp_path: Path,
+) -> None:
+    """ScratchbookPromptConfig is NOT added at world init.
+
+    It is added lazily inside _handle_plan_start after the workflow_id is
+    derived from the user's task description.
+    """
     from ecs_agent.scratchbook.prompt_definition import ScratchbookPromptConfig
 
     world, agent_id, _, _ = _build_test_world(tmp_path)
     config = world.get_component(agent_id, ScratchbookPromptConfig)
-    assert config is not None
-    assert config.scratchbook_root_path.startswith(".artifacts/")
+    assert config is None, (
+        "ScratchbookPromptConfig must NOT be present at world init; "
+        "it is added lazily when /plan:start is called"
+    )
 
 
 def test_build_scratchbook_prompt_config_includes_draft_md() -> None:
@@ -2036,7 +2043,7 @@ def test_build_scratchbook_prompt_config_includes_draft_md() -> None:
     assert "draft_plan" in artifact_ids
 
     draft = next(a for a in config.artifacts if a.artifact_type_id == "draft_plan")
-    assert draft.path == ".artifacts/wf-test/plan/draft.md"
+    assert draft.path == "scratchbook/wf-test/plan/draft.md"
     assert draft.readonly is False
 
 
@@ -2051,3 +2058,162 @@ def test_main_world_installs_builtin_tools(tmp_path: Path) -> None:
         assert expected_tool in tool_registry.handlers, (
             f"missing handler: {expected_tool}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue fix tests: progressive draft editing and edit_file guidance
+# ---------------------------------------------------------------------------
+
+
+def test_plan_interview_system_prompt_instructs_edit_file_usage() -> None:
+    """The system prompt must instruct the LLM to use edit_file for targeted edits.
+
+    Verifies fix for: Plan always reads entire file and outputs full content
+    instead of using edit_file for incremental changes.
+    """
+    from examples.e2e.plan_and_task.prompts import PLAN_INTERVIEW_SYSTEM_PROMPT
+
+    prompt_lower = PLAN_INTERVIEW_SYSTEM_PROMPT.lower()
+    # Must mention edit_file as the preferred tool for updating the draft
+    assert "edit_file" in prompt_lower, (
+        "System prompt must instruct LLM to use edit_file for plan updates"
+    )
+    # Must discourage full rewrites via write_file
+    assert (
+        "write_file" not in prompt_lower
+        or "do not" in prompt_lower
+        or "never" in prompt_lower
+        or "avoid" in prompt_lower
+    ), "System prompt should not encourage write_file for plan updates"
+
+
+def test_plan_interview_system_prompt_instructs_read_before_edit() -> None:
+    """The system prompt must instruct read_file before editing.
+
+    Ensures the LLM reads current content before making edits.
+    """
+    from examples.e2e.plan_and_task.prompts import PLAN_INTERVIEW_SYSTEM_PROMPT
+
+    prompt_lower = PLAN_INTERVIEW_SYSTEM_PROMPT.lower()
+    assert "read_file" in prompt_lower, (
+        "System prompt must instruct LLM to read draft.md before editing"
+    )
+
+
+def test_plan_interview_system_prompt_defines_interview_flow() -> None:
+    """The system prompt must define a structured interview → section-update flow.
+
+    Verifies fix for: draft not being guided as progressive editing.
+    """
+    from examples.e2e.plan_and_task.prompts import PLAN_INTERVIEW_SYSTEM_PROMPT
+
+    # Must mention asking one question at a time
+    assert (
+        "one question" in PLAN_INTERVIEW_SYSTEM_PROMPT.lower()
+        or "per turn" in PLAN_INTERVIEW_SYSTEM_PROMPT.lower()
+        or "single question" in PLAN_INTERVIEW_SYSTEM_PROMPT.lower()
+    ), "System prompt must guide LLM to ask one question at a time"
+    # Must reference the draft.md file specifically
+    assert "draft.md" in PLAN_INTERVIEW_SYSTEM_PROMPT, (
+        "System prompt must reference draft.md as the file to edit progressively"
+    )
+
+
+def test_draft_template_has_structured_sections(tmp_path: Path) -> None:
+    """The initial draft template must have structured fillable sections.
+
+    Verifies fix for: draft has no clear sections to progressively fill in.
+    """
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-draft-sections")
+    controller = PlanController()
+
+    state = controller.handle_plan_start(adapter, "Test description")
+    draft_content = (adapter.plan_dir / "draft.md").read_text(encoding="utf-8")
+
+    # Must have dedicated sections that the LLM can fill in via edit_file
+    required_sections = [
+        "## Open Questions",
+        "## Confirmed Requirements",
+        "## Scope",
+    ]
+    for section in required_sections:
+        assert section in draft_content, f"Draft template missing section: {section!r}"
+    _ = state  # used
+
+
+def test_draft_template_has_placeholder_content(tmp_path: Path) -> None:
+    """Draft sections should have placeholder content (not empty) so edit_file can target them."""
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-draft-placeholders")
+    controller = PlanController()
+
+    controller.handle_plan_start(adapter, "Some description")
+    draft_content = (adapter.plan_dir / "draft.md").read_text(encoding="utf-8")
+
+    # Each section should have placeholder text the LLM can replace
+    assert (
+        "(to be filled" in draft_content.lower()
+        or "tbd" in draft_content.lower()
+        or "<!-- " in draft_content
+    ), "Draft sections should have placeholder text for edit_file targets"
+
+
+def test_slug_from_description_english() -> None:
+    from examples.e2e.plan_and_task.runtime import slug_from_description
+
+    slug = slug_from_description("Build a writing assistant software")
+    assert slug
+    assert slug == slug.lower() or any("\u4e00" <= c <= "\u9fff" for c in slug)
+    assert len(slug) <= 60
+    assert " " not in slug
+
+
+def test_slug_from_description_chinese() -> None:
+    from examples.e2e.plan_and_task.runtime import slug_from_description
+
+    slug = slug_from_description("开发辅助写作软件，支持长篇小说")
+    assert slug
+    assert len(slug) <= 60
+    assert "\n" not in slug
+
+
+def test_slug_from_description_empty_falls_back() -> None:
+    from examples.e2e.plan_and_task.runtime import slug_from_description
+
+    assert slug_from_description("") == ""
+    assert slug_from_description("   ") == ""
+
+
+def test_slug_from_description_special_chars_stripped() -> None:
+    from examples.e2e.plan_and_task.runtime import slug_from_description
+
+    slug = slug_from_description("Hello! @World? #Test...")
+    assert slug
+    assert "!" not in slug
+    assert "@" not in slug
+    assert "?" not in slug
+    assert "#" not in slug
+
+
+def test_plan_start_handler_sets_workflow_id_from_description(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent.providers.fake_provider import FakeProvider
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter,
+    )
+
+    provider = FakeProvider(responses=["ok"])
+    world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
+        provider=provider,
+        model="fake",
+        base_dir=tmp_path,
+    )
+
+    controller = PlanController()
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id="initial-id")
+    state = controller.handle_plan_start(adapter, "Build a task management app")
+    assert state.workflow_id == "initial-id"
+    assert (adapter.plan_dir / "draft.md").exists()
+    draft = (adapter.plan_dir / "draft.md").read_text(encoding="utf-8")
+    assert "Build a task management app" in draft

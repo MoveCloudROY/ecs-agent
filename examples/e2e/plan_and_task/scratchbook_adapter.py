@@ -182,7 +182,7 @@ class PlanTaskScratchbookAdapter:
         if start == -1:
             return None
         start += len(marker)
-        end = raw.find("\n\n## Open Questions", start)
+        end = raw.find("\n\n##", start)
         description = raw[start:end].strip() if end != -1 else raw[start:].strip()
         return description or None
 

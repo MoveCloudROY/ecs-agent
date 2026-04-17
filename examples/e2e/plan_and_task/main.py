@@ -8,7 +8,6 @@ import os
 import re as _re
 import sys
 from pathlib import Path
-from typing import Any
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -61,11 +60,10 @@ from examples.e2e.plan_and_task.prompts import (
     build_qa_prompt,
 )
 from examples.e2e.plan_and_task.runtime import (
-    build_runtime_config,
     setup_interactive_input,
+    slug_from_description,
 )
 from examples.e2e.plan_and_task.state_models import RuntimeState
-from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
 
 logger = get_logger(__name__)
 
@@ -75,7 +73,6 @@ _WORKFLOW_BASE_DIR = Path(__file__).parent
 
 
 def _extract_verdict_from_result(result: str) -> str:
-    """Extract verdict from subagent result text. Defaults to 'revise' on no match."""
     match = _VERDICT_PATTERN.search(result)
     if match is None:
         logger.warning(
@@ -97,12 +94,19 @@ def _require_state(state: RuntimeState | None) -> RuntimeState:
     return state
 
 
+def _require_adapter(adapter: ArtifactAdapter | None) -> ArtifactAdapter:
+    if adapter is None:
+        raise ValueError(
+            "No active workflow adapter. Start with /plan:start <description>."
+        )
+    return adapter
+
+
 def build_plan_task_world(
     provider: LLMProvider,
     model: str,
-    workflow_id: str,
     base_dir: Path | None = None,
-) -> tuple[World, EntityId, ArtifactAdapter, list[RuntimeState | None]]:
+) -> tuple[World, EntityId, list[ArtifactAdapter | None], list[RuntimeState | None]]:
     world = World()
 
     agent_id = world.create_entity()
@@ -117,7 +121,6 @@ def build_plan_task_world(
             template_source=PromptTemplateSource(inline=PLAN_INTERVIEW_SYSTEM_PROMPT)
         ),
     )
-    world.add_component(agent_id, build_scratchbook_prompt_config(workflow_id))
     world.add_component(agent_id, ToolRegistryComponent(tools={}, handlers={}))
 
     _builtin_skill = BuiltinToolsSkill().bind_workspace(
@@ -161,12 +164,10 @@ def build_plan_task_world(
         ),
     )
 
-    adapter = ArtifactAdapter(
-        base_dir=base_dir or _WORKFLOW_BASE_DIR,
-        workflow_id=workflow_id,
-    )
+    adapter_ref: list[ArtifactAdapter | None] = [None]
     controller = PlanController()
     runtime_state: list[RuntimeState | None] = [None]
+    _base_dir = base_dir or _WORKFLOW_BASE_DIR
 
     async def _on_delegation_completed(event: DelegationCompletedEvent) -> None:
         if event.entity_id != agent_id:
@@ -183,6 +184,13 @@ def build_plan_task_world(
         if current is None:
             logger.warning(
                 "plan_task_delegation_completed_no_state",
+                subagent_name=event.subagent_name,
+            )
+            return
+        adapter = adapter_ref[0]
+        if adapter is None:
+            logger.warning(
+                "plan_task_delegation_completed_no_adapter",
                 subagent_name=event.subagent_name,
             )
             return
@@ -216,9 +224,19 @@ def build_plan_task_world(
         if not description:
             return "Error: /plan:start requires a non-empty description."
         try:
-            runtime_state[0] = controller.handle_plan_start(adapter, description)
+            derived_id = slug_from_description(description) or description[:40].strip()
+            adapter_ref[0] = ArtifactAdapter(
+                base_dir=_base_dir,
+                workflow_id=derived_id,
+            )
+            _world.add_component(
+                _entity_id, build_scratchbook_prompt_config(derived_id)
+            )
+            runtime_state[0] = controller.handle_plan_start(adapter_ref[0], description)
             status = controller.get_plan_status(_require_state(runtime_state[0]))
-            return f"Plan started:\n{_format_status(status)}"
+            return (
+                f"Plan started (workflow_id={derived_id!r}):\n{_format_status(status)}"
+            )
         except ValueError as exc:
             return f"Error: {exc}"
 
@@ -236,7 +254,7 @@ def build_plan_task_world(
     ) -> str | None:
         try:
             runtime_state[0] = controller.handle_plan_finalize(
-                _require_state(runtime_state[0]), adapter
+                _require_state(runtime_state[0]), _require_adapter(adapter_ref[0])
             )
             return f"Plan finalized:\n{_format_status(controller.get_plan_status(_require_state(runtime_state[0])))}"
         except ValueError as exc:
@@ -250,7 +268,9 @@ def build_plan_task_world(
 
             current = _require_state(runtime_state[0])
             task_exec = TaskExec(state=current)
-            runtime_state[0] = task_exec.initialize_task_queue(current, adapter)
+            runtime_state[0] = task_exec.initialize_task_queue(
+                current, _require_adapter(adapter_ref[0])
+            )
             s = _require_state(runtime_state[0])
             return _format_status(
                 {
@@ -292,7 +312,7 @@ def build_plan_task_world(
     ) -> str | None:
         try:
             runtime_state[0] = controller.handle_task_resume(
-                _require_state(runtime_state[0]), adapter
+                _require_state(runtime_state[0]), _require_adapter(adapter_ref[0])
             )
             return f"Task resumed:\n{_format_status(controller.get_plan_status(_require_state(runtime_state[0])))}"
         except ValueError as exc:
@@ -307,7 +327,9 @@ def build_plan_task_world(
             return "Error: /task:replan requires a non-empty reason."
         try:
             runtime_state[0] = controller.handle_task_replan(
-                _require_state(runtime_state[0]), adapter, reason
+                _require_state(runtime_state[0]),
+                _require_adapter(adapter_ref[0]),
+                reason,
             )
             return f"Task replanned:\n{_format_status(controller.get_plan_status(_require_state(runtime_state[0])))}"
         except ValueError as exc:
@@ -318,7 +340,9 @@ def build_plan_task_world(
     ) -> str | None:
         try:
             runtime_state[0] = controller.handle_task_abort(
-                _require_state(runtime_state[0]), adapter, reason="user abort"
+                _require_state(runtime_state[0]),
+                _require_adapter(adapter_ref[0]),
+                reason="user abort",
             )
             return f"Task aborted:\n{_format_status(controller.get_plan_status(_require_state(runtime_state[0])))}"
         except ValueError as exc:
@@ -400,7 +424,7 @@ def build_plan_task_world(
     world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
-    return world, agent_id, adapter, runtime_state
+    return world, agent_id, adapter_ref, runtime_state
 
 
 async def main() -> None:
@@ -435,37 +459,11 @@ async def main() -> None:
         model=model,
     )
 
-    runtime_config = build_runtime_config()
-    world, agent_id, adapter, runtime_state = build_plan_task_world(
+    world, agent_id, _, _ = build_plan_task_world(
         provider=provider,
         model=model,
-        workflow_id=runtime_config.workflow_id,
         base_dir=_WORKFLOW_BASE_DIR,
     )
-    controller = PlanController()
-    state_machine = WorkflowStateMachine()
-
-    state_path = adapter.state_dir / "runtime_state.json"
-    if state_path.exists():
-        try:
-            restored_state = adapter.read_state()
-            runtime_state[0] = state_machine.handle_restart(
-                restored_state,
-                adapter,
-            )
-        except ValueError as exc:
-            logger.warning(
-                "plan_task_restore_failed",
-                workflow_id=runtime_config.workflow_id,
-                exception=str(exc),
-            )
-            print(f"Error: {exc}")
-        else:
-            restored_runtime_state = _require_state(runtime_state[0])
-            print(
-                "Restored workflow state:\n"
-                + _format_status(controller.get_plan_status(restored_runtime_state))
-            )
 
     interactive_mode_str = os.environ.get("PLAN_TASK_INTERACTIVE", "1")
     if interactive_mode_str.lower() in ("0", "false"):
@@ -474,11 +472,7 @@ async def main() -> None:
     else:
         if debug_mode:
             logger.info("interactive_input_enabled", reason="default_or_env_var_set")
-        await setup_interactive_input(
-            world,
-            agent_id,
-            workflow_id=runtime_config.workflow_id,
-        )
+        await setup_interactive_input(world, agent_id)
 
     runner = Runner()
     await runner.run(world, max_ticks=None)
