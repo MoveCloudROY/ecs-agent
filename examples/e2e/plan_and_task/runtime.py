@@ -64,25 +64,35 @@ async def setup_interactive_input(
             last_printed_index[0] = len(conv.messages)
 
         while True:
+            lines: list[str] = []
+            prompt = event.prompt
             try:
-                user_text = await loop.run_in_executor(None, input, event.prompt)
+                while True:
+                    line = await loop.run_in_executor(None, input, prompt)
+                    if not lines and line.lower().strip() in ("exit", "quit"):
+                        logger.info(
+                            "plan_task_user_exit",
+                            entity_id=int(event.entity_id),
+                            workflow_id=runtime_config.workflow_id,
+                        )
+                        world.add_component(
+                            event.entity_id,
+                            TerminalComponent(reason="user_exit_command"),
+                        )
+                        if not event.input_future.done():
+                            event.input_future.set_result(line)
+                        return
+                    if line == "":
+                        break
+                    lines.append(line)
+                    prompt = "... "
             except EOFError:
-                user_text = "exit"
+                if not lines:
+                    lines = ["exit"]
 
-            normalized = user_text.lower().strip()
-            if normalized in ("exit", "quit"):
-                logger.info(
-                    "plan_task_user_exit",
-                    entity_id=int(event.entity_id),
-                    workflow_id=runtime_config.workflow_id,
-                )
-                world.add_component(
-                    event.entity_id,
-                    TerminalComponent(reason="user_exit_command"),
-                )
-                if not event.input_future.done():
-                    event.input_future.set_result(user_text)
-                return
+            user_text = "\n".join(lines).strip()
+            if not user_text:
+                continue
 
             if not event.input_future.done():
                 event.input_future.set_result(user_text)

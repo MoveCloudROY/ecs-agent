@@ -12,7 +12,9 @@ import pytest
 from ecs_agent.providers import OpenAIProvider
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.types import CompletionResult, Message
-from examples.e2e.plan_and_task.artifacts import ArtifactAdapter
+from examples.e2e.plan_and_task.scratchbook_adapter import (
+    PlanTaskScratchbookAdapter as ArtifactAdapter,
+)
 from examples.e2e.plan_and_task.controller import PlanController
 from examples.e2e.plan_and_task.task_exec import TaskExec
 

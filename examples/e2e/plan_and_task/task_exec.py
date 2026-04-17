@@ -60,18 +60,9 @@ class TaskExec:
         if plan.workflow_id != self.state.workflow_id:
             raise ValueError("Workflow plan workflow_id does not match runtime state")
 
-        if plan.version != self.state.active_plan_version:
-            raise ValueError(
-                f"Plan version mismatch: workflow_plan.md has version={plan.version}, "
-                f"but runtime_state.json records active_plan_version={self.state.active_plan_version} "
-                f"(workflow_id={self.state.workflow_id!r}). "
-                "Execution must consume the frozen active version."
-            )
-
         logger.info(
             "plan_task_plan_loaded",
             workflow_id=plan.workflow_id,
-            version=plan.version,
             task_count=len(plan.tasks),
         )
         return plan

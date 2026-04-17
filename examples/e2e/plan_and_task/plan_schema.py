@@ -1,9 +1,8 @@
-"""Workflow plan parsing, validation, and version-history helpers."""
+"""Workflow plan parsing and validation."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Literal, cast
 
 import yaml
@@ -40,7 +39,6 @@ class WorkflowPlan:
     workflow_id: str
     title: str
     description: str
-    version: int
     status: PlanStatus
     tasks: list[PlanTask]
     created_at: str
@@ -62,7 +60,6 @@ def parse_plan(content: str) -> WorkflowPlan:
         workflow_id=_require_string(frontmatter, "workflow_id"),
         title=_require_string(frontmatter, "title"),
         description=_require_string(frontmatter, "description"),
-        version=_require_positive_int(frontmatter, "version"),
         status=plan_status,
         tasks=tasks,
         created_at=_require_string(frontmatter, "created_at"),
@@ -71,7 +68,6 @@ def parse_plan(content: str) -> WorkflowPlan:
     logger.info(
         "workflow_plan_parsed",
         workflow_id=plan.workflow_id,
-        version=plan.version,
         task_count=len(plan.tasks),
     )
     return plan
@@ -80,29 +76,6 @@ def parse_plan(content: str) -> WorkflowPlan:
 def validate_plan(plan: WorkflowPlan) -> None:
     if plan.status != "finalized":
         raise ValueError("Workflow plan must be finalized before execution.")
-
-
-def make_version_filename(version: int) -> str:
-    if version <= 0:
-        raise ValueError("Workflow plan version must be a positive integer.")
-    return f"v{version:03d}_workflow_plan.md"
-
-
-def plan_versions_dir(plan_directory: Path) -> Path:
-    return plan_directory / "plan_versions"
-
-
-def store_plan_version(plan_directory: Path, content: str, version: int) -> Path:
-    versions_dir = plan_versions_dir(plan_directory)
-    versions_dir.mkdir(parents=True, exist_ok=True)
-    version_path = versions_dir / make_version_filename(version)
-    version_path.write_text(content, encoding="utf-8")
-    logger.info(
-        "workflow_plan_version_stored",
-        version=version,
-        path=str(version_path),
-    )
-    return version_path
 
 
 def _extract_frontmatter(content: str) -> tuple[dict[str, Any], list[str]]:
@@ -233,13 +206,6 @@ def _find_tasks_heading(lines: list[str]) -> int | None:
         if line.strip() == _TASKS_HEADING:
             return idx
     return None
-
-
-def _require_positive_int(data: dict[str, Any], key: str) -> int:
-    value = data.get(key)
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        raise ValueError(f"Workflow plan field '{key}' must be a positive integer.")
-    return value
 
 
 def _require_string(data: dict[str, Any], key: str) -> str:

@@ -11,6 +11,7 @@ The workflow follows a structured lifecycle:
 
 ## Architecture
 
+- **Built-in Tools** — The main agent has `read_file`, `write_file`, `edit_file`, `bash`, and `glob` tools pre-installed via `BuiltinToolsSkill`, workspace-bound to the example directory.
 - **ECS Core**: Uses `SystemPromptRenderSystem`, `UserPromptNormalizationSystem`, `ReasoningSystem`, `ToolExecutionSystem`, and `MemorySystem`.
 - **Prompt Configuration**: The planner entity declares `SystemPromptConfigSpec` with `PLAN_INTERVIEW_SYSTEM_PROMPT`, and `SystemPromptRenderSystem` bridges the rendered value into `LLMComponent.system_prompt` before reasoning.
 - **State Machine**: Explicit phase transitions managed by `WorkflowStateMachine`.
@@ -37,7 +38,7 @@ The interactive runtime supports exactly eight slash commands:
 
 All workflow data is persisted in `scratchbook/<workflow_id>/`:
 
-- `plan/`: Contains `draft.md`, `workflow_plan.md`, and versioned history in `plan_versions/`.
+- `plan/`: Contains `draft.md` (working draft, included as `draft_plan` artifact) and `workflow_plan.md` (the single living plan file, edited in-place).
 - `state/`: Contains `runtime_state.json`, `events.jsonl`, and `task_queue.json`.
 - `memory/`: Contains `knowledge.jsonl` for cross-task context.
 - `evidence/`: Directory for task execution artifacts.
@@ -53,12 +54,33 @@ Run the entry point to start an interactive session.
 LLM_API_KEY=your-api-key uv run python examples/e2e/plan_and_task/main.py
 ```
 
+#### Multi-line input
+
+The prompt supports multi-line messages. Press **Enter** to start a new line; submit with a **blank line** (press Enter on an empty line):
+
+```
+You> /plan:start 我想开发一个辅助写作软件，
+... 支持长篇小说和剧本创作，
+... 需要多 Agent 协作完成各章节生成。
+...
+         ↑ blank line submits
+```
+
+Single-line commands work as before — just type and press Enter, then Enter again on the empty continuation line:
+
+```
+You> /plan:status
+...
+```
+
+`exit` or `quit` typed as the **first line** (followed by Enter + blank line) terminates the session. `Ctrl+D` (EOF) also exits cleanly.
+
 ### Automation Mode (piped input)
 
-Automate interactions by piping commands:
+Automate interactions by piping commands. In pipe mode each `\n\n` (double newline) acts as a submit boundary:
 
 ```bash
-printf '/plan:start Build demo\n/plan:status\nexit\n' | uv run python examples/e2e/plan_and_task/main.py
+printf '/plan:start Build demo\n\n/plan:status\n\nexit\n\n' | uv run python examples/e2e/plan_and_task/main.py
 ```
 
 ## Recovery / Restart

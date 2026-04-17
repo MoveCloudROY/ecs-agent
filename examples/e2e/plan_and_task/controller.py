@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import datetime
-import os
-import tempfile
 import warnings
 from pathlib import Path
 from typing import Any
@@ -39,14 +37,12 @@ class PlanController:
             workflow_id=adapter.workflow_id,
             timestamp=timestamp,
         )
-        self._write_text_atomic(adapter.plan_dir / "draft.md", draft_content)
-
+        adapter.write_draft(draft_content)
         state = RuntimeState(
             workflow_id=adapter.workflow_id,
             phase="PLAN_INTERVIEW",
             status="active",
             active_plan_file="plan/workflow_plan.md",
-            active_plan_version=1,
             current_task_id=None,
             completed_task_ids=[],
             retry_budget={},
@@ -81,12 +77,11 @@ class PlanController:
             )
 
         timestamp = self._utcnow_isoformat()
-        description = self._read_draft_description(adapter) or "Finalized workflow plan"
+        description = adapter.read_draft_description() or "Finalized workflow plan"
         plan_content = self._build_final_plan_markdown(
             workflow_id=adapter.workflow_id,
             description=description,
             timestamp=timestamp,
-            version=state.active_plan_version,
         )
         adapter.write_plan(plan_content)
 
@@ -105,7 +100,6 @@ class PlanController:
             "plan_task_plan_finalized",
             workflow_id=state.workflow_id,
             phase=state.phase,
-            active_plan_version=state.active_plan_version,
         )
         return state
 
@@ -116,7 +110,6 @@ class PlanController:
             "phase": state.phase,
             "status": state.status,
             "active_plan_file": state.active_plan_file,
-            "active_plan_version": state.active_plan_version,
             "current_task_id": state.current_task_id,
             "completed_task_ids": list(state.completed_task_ids),
             "review_verdicts": [
@@ -155,7 +148,6 @@ class PlanController:
             notes=notes,
             citations=citations or [],
             evidence_refs=evidence_refs or [],
-            plan_version=state.active_plan_version,
         )
         adapter.write_review_verdict("PLAN_ADVISOR_REVIEW", verdict)
         state.review_verdicts.append(verdict)
@@ -190,7 +182,6 @@ class PlanController:
             notes=notes,
             citations=citations or [],
             evidence_refs=evidence_refs or [],
-            plan_version=state.active_plan_version,
         )
         adapter.write_review_verdict("PLAN_QA_REVIEW", verdict)
         state.review_verdicts.append(verdict)
@@ -338,13 +329,12 @@ class PlanController:
         )
 
     def _build_final_plan_markdown(
-        self, *, workflow_id: str, description: str, timestamp: str, version: int = 1
+        self, *, workflow_id: str, description: str, timestamp: str
     ) -> str:
         return f"""---
 workflow_id: {workflow_id}
 title: Finalized Plan
 description: {description}
-version: {version}
 status: finalized
 created_at: \"{timestamp}\"
 finalized_at: \"{timestamp}\"
@@ -365,25 +355,6 @@ acceptance_criteria:
 execution_hints: []
 ```
 """
-
-    def _read_draft_description(self, adapter: ArtifactAdapter) -> str | None:
-        draft_path = adapter.plan_dir / "draft.md"
-        if not draft_path.exists():
-            return None
-
-        content = draft_path.read_text(encoding="utf-8")
-        marker = "## Description\n"
-        start_index = content.find(marker)
-        if start_index == -1:
-            return None
-
-        start_index += len(marker)
-        end_index = content.find("\n\n## Open Questions", start_index)
-        if end_index == -1:
-            description = content[start_index:].strip()
-        else:
-            description = content[start_index:end_index].strip()
-        return description or None
 
     def _require_plan_artifact(
         self, adapter: ArtifactAdapter, state: RuntimeState
@@ -420,26 +391,6 @@ execution_hints: []
 
     def _allowed_transitions(self, state: RuntimeState) -> set[str]:
         return VALID_TRANSITIONS.get(state.phase, set())
-
-    def _write_text_atomic(self, path: Path, content: str) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path: str | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=path.parent,
-                delete=False,
-                prefix=f".{path.name}.",
-                suffix=".tmp",
-            ) as handle:
-                handle.write(content)
-                temp_path = handle.name
-
-            os.replace(temp_path, path)
-        finally:
-            if temp_path is not None and os.path.exists(temp_path):
-                os.unlink(temp_path)
 
     def _utcnow_isoformat(self) -> str:
         with warnings.catch_warnings():
