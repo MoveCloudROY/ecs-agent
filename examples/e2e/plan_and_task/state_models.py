@@ -97,7 +97,6 @@ class RuntimeState:
     phase: str
     status: str
     active_plan_file: str
-    active_plan_version: int
     current_task_id: str | None
     completed_task_ids: list[str]
     retry_budget: dict[str, int]
@@ -118,8 +117,6 @@ class RuntimeState:
             raise ValueError(f"Invalid runtime phase: {self.phase}")
         _require_non_empty(self.status, field_name="status")
         _require_non_empty(self.active_plan_file, field_name="active_plan_file")
-        if self.active_plan_version < 1:
-            raise ValueError("active_plan_version must be >= 1")
         _require_non_empty(self.created_at, field_name="created_at")
         _require_non_empty(self.updated_at, field_name="updated_at")
         for task_id, budget in self.retry_budget.items():
@@ -151,7 +148,6 @@ class RuntimeState:
                 phase=payload["phase"],
                 status=payload["status"],
                 active_plan_file=payload["active_plan_file"],
-                active_plan_version=payload["active_plan_version"],
                 current_task_id=payload["current_task_id"],
                 completed_task_ids=list(payload["completed_task_ids"]),
                 retry_budget=dict(payload["retry_budget"]),

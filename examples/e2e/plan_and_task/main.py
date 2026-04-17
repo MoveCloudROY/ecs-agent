@@ -8,7 +8,7 @@ import os
 import re as _re
 import sys
 from pathlib import Path
-from typing import cast
+from typing import Any
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -33,6 +33,8 @@ from ecs_agent.providers import OpenAIProvider
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
+from ecs_agent.tools import BuiltinToolsSkill
+from ecs_agent.skills.manager import SkillManager
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.subagent import SubagentSystem
@@ -48,11 +50,9 @@ from ecs_agent.types import (
     SubagentConfig,
 )
 
-from examples.e2e.plan_and_task.artifacts import (
-    ArtifactAdapter as LegacyArtifactAdapter,
-)
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
+    build_scratchbook_prompt_config,
 )
 from examples.e2e.plan_and_task.controller import PlanController
 from examples.e2e.plan_and_task.prompts import (
@@ -117,7 +117,14 @@ def build_plan_task_world(
             template_source=PromptTemplateSource(inline=PLAN_INTERVIEW_SYSTEM_PROMPT)
         ),
     )
+    world.add_component(agent_id, build_scratchbook_prompt_config(workflow_id))
     world.add_component(agent_id, ToolRegistryComponent(tools={}, handlers={}))
+
+    _builtin_skill = BuiltinToolsSkill().bind_workspace(
+        str(base_dir or _WORKFLOW_BASE_DIR)
+    )
+    SkillManager().install(world, agent_id, _builtin_skill)
+
     world.add_component(agent_id, SubagentSessionTableComponent(sessions={}))
     world.add_component(
         agent_id,
@@ -407,7 +414,7 @@ async def main() -> None:
     base_url: str = os.environ.get(
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
-    model: str = os.environ.get("LLM_MODEL", "qwen3.5-flash")
+    model: str = os.environ.get("LLM_MODEL", "kimi-k2.5")
 
     if not api_key:
         print("Error: LLM_API_KEY environment variable is required.")
@@ -444,7 +451,7 @@ async def main() -> None:
             restored_state = adapter.read_state()
             runtime_state[0] = state_machine.handle_restart(
                 restored_state,
-                cast(LegacyArtifactAdapter, adapter),
+                adapter,
             )
         except ValueError as exc:
             logger.warning(

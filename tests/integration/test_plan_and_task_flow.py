@@ -14,6 +14,7 @@ from ecs_agent.core import World
 from ecs_agent.systems import TerminalCleanupSystem
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
+    build_scratchbook_prompt_config,
 )
 from examples.e2e.plan_and_task.commands import (
     Command,
@@ -23,9 +24,7 @@ from examples.e2e.plan_and_task.controller import PlanController
 from examples.e2e.plan_and_task.plan_schema import (
     PlanTask,
     WorkflowPlan,
-    make_version_filename,
     parse_plan,
-    store_plan_version,
     validate_plan,
 )
 from examples.e2e.plan_and_task.runtime import resolve_workflow_id
@@ -121,7 +120,6 @@ def _make_runtime_state() -> RuntimeState:
         phase="PLAN_FINALIZED",
         status="ready",
         active_plan_file="plan/workflow_plan.md",
-        active_plan_version=1,
         current_task_id=None,
         completed_task_ids=[],
         retry_budget={},
@@ -266,21 +264,6 @@ def test_scratchbook_adapter_writes_plan_under_scratchbook_root(tmp_path: Path) 
     assert ".artifacts" not in str(plan_file)
 
 
-def test_scratchbook_adapter_versions_existing_plan(tmp_path: Path) -> None:
-    from examples.e2e.plan_and_task.scratchbook_adapter import (
-        PlanTaskScratchbookAdapter,
-    )
-
-    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id="wf-001")
-    adapter.write_plan("# Plan v1\n")
-    adapter.write_plan("# Plan v2\n")
-
-    versions = list(adapter.plan_versions_dir.glob("v*_workflow_plan.md"))
-    assert len(versions) == 1
-    assert "v1" in versions[0].name
-    assert versions[0].read_text(encoding="utf-8") == "# Plan v1\n"
-
-
 def test_scratchbook_adapter_write_and_read_state_roundtrip(tmp_path: Path) -> None:
     import datetime
     from examples.e2e.plan_and_task.scratchbook_adapter import (
@@ -295,7 +278,6 @@ def test_scratchbook_adapter_write_and_read_state_roundtrip(tmp_path: Path) -> N
         phase="PLAN_INTERVIEW",
         status="active",
         active_plan_file="plan/workflow_plan.md",
-        active_plan_version=1,
         current_task_id=None,
         completed_task_ids=[],
         retry_budget={},
@@ -358,7 +340,6 @@ def test_scratchbook_adapter_exposes_same_path_attributes(tmp_path: Path) -> Non
     adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id="wf-paths")
     assert hasattr(adapter, "workflow_root")
     assert hasattr(adapter, "plan_dir")
-    assert hasattr(adapter, "plan_versions_dir")
     assert hasattr(adapter, "state_dir")
     assert hasattr(adapter, "memory_dir")
     assert hasattr(adapter, "evidence_dir")
@@ -373,14 +354,13 @@ def test_artifacts_create_canonical_workflow_layout(tmp_path: Path) -> None:
 
     assert adapter.workflow_root == root
     assert (root / "plan").is_dir()
-    assert (root / "plan" / "plan_versions").is_dir()
     assert (root / "state").is_dir()
     assert (root / "memory").is_dir()
     assert (root / "evidence").is_dir()
     assert (root / "review").is_dir()
 
 
-def test_state_schema_round_trip_and_versioned_plan_history(tmp_path: Path) -> None:
+def test_state_schema_round_trip_and_plan_artifact(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     adapter.write_plan("first plan\n")
     adapter.write_plan("second plan\n")
@@ -390,7 +370,6 @@ def test_state_schema_round_trip_and_versioned_plan_history(tmp_path: Path) -> N
         phase="TASK_RUNNING",
         status="active",
         active_plan_file="plan/workflow_plan.md",
-        active_plan_version=2,
         current_task_id="task-1",
         completed_task_ids=["task-0"],
         retry_budget={"task-1": 1},
@@ -446,9 +425,6 @@ def test_state_schema_round_trip_and_versioned_plan_history(tmp_path: Path) -> N
     assert (root / "plan" / "workflow_plan.md").read_text(
         encoding="utf-8"
     ) == "second plan\n"
-    assert (root / "plan" / "plan_versions" / "v1_workflow_plan.md").read_text(
-        encoding="utf-8"
-    ) == "first plan\n"
     assert (root / "state" / "events.jsonl").read_text(encoding="utf-8") == (
         '{"type": "task_started", "task_id": "task-1"}\n'
     )
@@ -467,7 +443,6 @@ def test_recovery_files_mark_stale_subagents_and_requeue_tasks(tmp_path: Path) -
         phase="TASK_RUNNING",
         status="recovering",
         active_plan_file="plan/workflow_plan.md",
-        active_plan_version=1,
         current_task_id="task-2",
         completed_task_ids=["task-1"],
         retry_budget={"task-2": 0, "task-3": 2},
@@ -545,7 +520,6 @@ def test_missing_plan_reference_raises_explicit_value_error(tmp_path: Path) -> N
         phase="PLAN_FINALIZED",
         status="idle",
         active_plan_file="plan/workflow_plan.md",
-        active_plan_version=1,
         current_task_id=None,
         completed_task_ids=[],
         retry_budget={},
@@ -669,7 +643,6 @@ def test_plan_schema_parse_plan_extracts_strict_task_blocks() -> None:
     assert plan.workflow_id == "demo-workflow"
     assert plan.title == "Demo Workflow Plan"
     assert plan.description == "A demonstration workflow plan."
-    assert plan.version == 1
     assert plan.status == "finalized"
     assert plan.created_at == "2026-04-14T00:00:00Z"
     assert plan.finalized_at == "2026-04-14T01:00:00Z"
@@ -692,31 +665,6 @@ def test_plan_schema_parse_plan_extracts_strict_task_blocks() -> None:
     assert second_task.dependencies == ["task-001"]
     assert second_task.acceptance_criteria == ["README.md updated with X section"]
     assert second_task.execution_hints == []
-
-
-def test_plan_schema_store_plan_version_uses_canonical_history_directory(
-    tmp_path: Path,
-) -> None:
-    plan_directory = tmp_path / "plan"
-
-    version_path = store_plan_version(plan_directory, _VALID_WORKFLOW_PLAN, version=2)
-
-    assert version_path == plan_directory / "plan_versions" / "v002_workflow_plan.md"
-    assert version_path.read_text(encoding="utf-8") == _VALID_WORKFLOW_PLAN
-
-
-@pytest.mark.parametrize(
-    ("version", "expected"),
-    [
-        (1, "v001_workflow_plan.md"),
-        (12, "v012_workflow_plan.md"),
-        (123, "v123_workflow_plan.md"),
-    ],
-)
-def test_plan_schema_make_version_filename_is_zero_padded(
-    version: int, expected: str
-) -> None:
-    assert make_version_filename(version) == expected
 
 
 def test_plan_finalize_validate_plan_accepts_finalized_status() -> None:
@@ -912,20 +860,6 @@ def test_task_exec_initialize_task_queue_raises_from_wrong_phase(
     task_exec = TaskExec(state=state)
     with pytest.raises(ValueError, match="Cannot initialize task queue from phase"):
         task_exec.initialize_task_queue(state, adapter)
-
-
-def test_load_plan_raises_on_version_mismatch(tmp_path: Path) -> None:
-    from examples.e2e.plan_and_task.task_exec import TaskExec
-
-    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
-    (adapter.plan_dir / "workflow_plan.md").write_text(
-        _VALID_FINALIZED_TASK_PLAN, encoding="utf-8"
-    )
-    state = _make_runtime_state()
-    state.active_plan_version = 99
-    state.review_verdicts = _make_approved_verdicts()
-    with pytest.raises(ValueError, match="version mismatch"):
-        TaskExec(state=state).load_plan(adapter)
 
 
 def test_missing_acceptance_criteria_blocks_task_start() -> None:
@@ -1732,25 +1666,6 @@ def test_readme_command_examples_match_supported_commands() -> None:
         )
 
 
-def test_plan_finalize_version_matches_artifact(tmp_path: Path) -> None:
-    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
-    controller = PlanController()
-    state = controller.handle_plan_start(adapter, "test description")
-    controller.handle_advisor_review(state, adapter, "approved")
-    controller.handle_qa_review(state, adapter, "approved")
-
-    finalized_state = controller.handle_plan_finalize(state, adapter)
-
-    plan_content = (adapter.plan_dir / "workflow_plan.md").read_text(encoding="utf-8")
-    frontmatter = plan_content.split("---")[1]
-    version_line = next(
-        line for line in frontmatter.splitlines() if line.startswith("version:")
-    )
-    artifact_version = int(version_line.split(":", maxsplit=1)[1].strip())
-
-    assert finalized_state.active_plan_version == artifact_version
-
-
 def test_plan_start_state_has_open_questions_and_confirmed_requirements(
     tmp_path: Path,
 ) -> None:
@@ -1768,7 +1683,7 @@ def test_plan_start_state_has_open_questions_and_confirmed_requirements(
     assert persisted_payload["confirmed_requirements"] == []
 
 
-def test_review_verdict_artifact_contains_plan_version(tmp_path: Path) -> None:
+def test_review_verdict_artifact_has_phase_and_verdict(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     controller = PlanController()
     state = controller.handle_plan_start(adapter, "test description")
@@ -1781,7 +1696,8 @@ def test_review_verdict_artifact_contains_plan_version(tmp_path: Path) -> None:
             encoding="utf-8"
         )
     )
-    assert isinstance(verdict_payload["plan_version"], int)
+    assert verdict_payload["phase"] == "PLAN_ADVISOR_REVIEW"
+    assert verdict_payload["verdict"] == "approved"
 
 
 def test_task_completion_writes_evidence_artifact(
@@ -2073,3 +1989,65 @@ def test_prompt_builders_return_non_empty_strings() -> None:
     assert build_advisor_prompt("some draft").strip()
     assert build_qa_prompt("some draft", "approved").strip()
     assert build_draft_prompt("a description", []).strip()
+
+
+# ── ScratchbookPromptConfig tests ──────────────────────────────────────────────
+
+
+def test_build_scratchbook_prompt_config_returns_valid_config() -> None:
+    from ecs_agent.scratchbook.prompt_definition import ScratchbookPromptConfig
+
+    config = build_scratchbook_prompt_config("wf-001")
+    assert isinstance(config, ScratchbookPromptConfig)
+    assert config.scratchbook_root_path == ".artifacts/wf-001"
+    assert len(config.artifacts) == 6
+    artifact_ids = {a.artifact_type_id for a in config.artifacts}
+    assert "draft_plan" in artifact_ids
+    assert "workflow_plan" in artifact_ids
+    assert "runtime_state" in artifact_ids
+    assert "events_journal" in artifact_ids
+    assert "knowledge_memory" in artifact_ids
+    assert "review_verdict" in artifact_ids
+
+
+def test_build_scratchbook_prompt_config_artifacts_have_valid_paths() -> None:
+    config = build_scratchbook_prompt_config("my-workflow")
+    for artifact in config.artifacts:
+        assert artifact.path.startswith(".artifacts/my-workflow/")
+        assert not artifact.path.startswith("/")
+
+
+def test_main_world_adds_scratchbook_prompt_config_component(tmp_path: Path) -> None:
+    from ecs_agent.scratchbook.prompt_definition import ScratchbookPromptConfig
+
+    world, agent_id, _, _ = _build_test_world(tmp_path)
+    config = world.get_component(agent_id, ScratchbookPromptConfig)
+    assert config is not None
+    assert config.scratchbook_root_path.startswith(".artifacts/")
+
+
+def test_build_scratchbook_prompt_config_includes_draft_md() -> None:
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        build_scratchbook_prompt_config,
+    )
+
+    config = build_scratchbook_prompt_config("wf-test")
+    artifact_ids = {a.artifact_type_id for a in config.artifacts}
+    assert "draft_plan" in artifact_ids
+
+    draft = next(a for a in config.artifacts if a.artifact_type_id == "draft_plan")
+    assert draft.path == ".artifacts/wf-test/plan/draft.md"
+    assert draft.readonly is False
+
+
+def test_main_world_installs_builtin_tools(tmp_path: Path) -> None:
+    from ecs_agent.components import ToolRegistryComponent
+
+    world, agent_id, _, _ = _build_test_world(tmp_path)
+    tool_registry = world.get_component(agent_id, ToolRegistryComponent)
+    assert tool_registry is not None
+    for expected_tool in ("read_file", "write_file", "edit_file", "bash", "glob"):
+        assert expected_tool in tool_registry.tools, f"missing tool: {expected_tool}"
+        assert expected_tool in tool_registry.handlers, (
+            f"missing handler: {expected_tool}"
+        )

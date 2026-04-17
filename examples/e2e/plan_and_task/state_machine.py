@@ -7,7 +7,9 @@ import warnings
 
 from ecs_agent.logging import get_logger
 
-from examples.e2e.plan_and_task.artifacts import ArtifactAdapter
+from examples.e2e.plan_and_task.scratchbook_adapter import (
+    PlanTaskScratchbookAdapter as ArtifactAdapter,
+)
 from examples.e2e.plan_and_task.state_models import RuntimeState
 
 logger = get_logger(__name__)
