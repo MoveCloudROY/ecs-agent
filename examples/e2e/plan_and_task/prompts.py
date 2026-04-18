@@ -122,4 +122,13 @@ When advisor review is approved:
 
 QA prompt format:
 {_QA_PROMPT_EXAMPLE}
+
+When advisor verdict is "revise" or "blocked":
+1. Read the advisor's feedback carefully from the tool result.
+2. Call read_file on draft.md to get the current LINE#HASH annotated content.
+3. Apply every suggested change using edit_file.
+4. Re-read draft.md to confirm the edits landed correctly.
+5. Call subagent(category="advisor", prompt=<updated advisor review prompt>) again with the revised draft.
+
+Do NOT call the QA subagent until the advisor returns "approved". Only an "approved" advisor verdict unlocks the QA step.
 """

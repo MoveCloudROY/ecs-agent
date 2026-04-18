@@ -138,4 +138,5 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py -v
 - **Atomic Writes**: All artifact updates use atomic file operations to prevent corruption.
 - **Circuit Breaker**: `TaskExec` implements a retry budget to prevent infinite loops on failing tasks.
 - **Review Gating**: Finalization is strictly blocked until both `PLAN_ADVISOR_REVIEW` and `PLAN_QA_REVIEW` have `approved` verdicts.
+- **Advisor Retry Loop**: When the advisor returns `revise` or `blocked`, the system prompt instructs the planner LLM to apply the feedback to `draft.md` via `edit_file` and re-call the advisor. Only an `approved` advisor verdict unlocks the QA step. All advisor verdicts are appended to `review_verdicts` and the last verdict per phase is used for gating.
 - **Dependency Resolution**: Tasks are executed in topological order based on their `dependencies` list.
