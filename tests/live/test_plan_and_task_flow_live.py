@@ -5,6 +5,7 @@ They use the DashScope-compatible provider configuration.
 """
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
 )
 from examples.e2e.plan_and_task.controller import PlanController
+from examples.e2e.plan_and_task.runtime import derive_workflow_id_from_llm
 from examples.e2e.plan_and_task.task_exec import TaskExec
 
 
@@ -160,3 +162,18 @@ async def test_live_task_exec_loads_finalized_plan(
     )
     assert completed_state.phase == "TASK_COMPLETED"
     assert "task-001" in completed_state.completed_task_ids
+
+
+@pytest.mark.asyncio
+async def test_live_derive_workflow_id_from_llm_returns_valid_slug(
+    live_provider: OpenAIProvider,
+) -> None:
+    slug = await derive_workflow_id_from_llm(
+        _WRITING_SOFTWARE_DESCRIPTION, live_provider
+    )
+
+    assert re.match(r"^[a-z][a-z0-9-]*$", slug), (
+        f"Expected a valid slug (lowercase letters, digits, hyphens), got: {slug!r}"
+    )
+    assert len(slug) <= 50, f"Slug too long: {slug!r}"
+    assert len(slug) >= 3, f"Slug too short: {slug!r}"

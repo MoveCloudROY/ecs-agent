@@ -4,15 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import re
+import re as _re
 import unicodedata
 from typing import TYPE_CHECKING
 
 from ecs_agent.components import UserInputComponent
 from ecs_agent.components.definitions import ConversationComponent, TerminalComponent
 from ecs_agent.logging import get_logger
+from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.systems import TerminalCleanupSystem
 from ecs_agent.systems.user_input import UserInputSystem
-from ecs_agent.types import ReasoningCompleteEvent, UserInputRequestedEvent
+from ecs_agent.types import (
+    CompletionResult,
+    Message,
+    ReasoningCompleteEvent,
+    UserInputRequestedEvent,
+)
 
 if TYPE_CHECKING:
     from ecs_agent.core import World
@@ -55,6 +62,34 @@ def slug_from_description(description: str) -> str:
         slug = _SLUG_SEPARATOR.join(tokens[:6])
 
     return slug[:_MAX_SLUG_LENGTH].rstrip(_SLUG_SEPARATOR)
+
+
+_VALID_SLUG = _re.compile(r"^[a-z][a-z0-9-]*$")
+
+
+async def derive_workflow_id_from_llm(description: str, provider: LLMProvider) -> str:
+    prompt = (
+        "Convert the following task description into a short, meaningful English "
+        "workflow identifier. Rules: lowercase letters, digits, and hyphens only; "
+        "2-6 words; max 50 characters; no spaces, no punctuation, no explanation. "
+        "Return ONLY the identifier, nothing else.\n\n"
+        f"Description: {description}"
+    )
+    try:
+        result = await provider.complete(
+            [Message(role="user", content=prompt)],
+            stream=False,
+        )
+        if not isinstance(result, CompletionResult):
+            return slug_from_description(description)
+        raw = (result.message.content or "").strip().splitlines()[0].strip().lower()
+        normalized = _re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+        normalized = normalized[:_MAX_SLUG_LENGTH].rstrip("-")
+        if normalized and _VALID_SLUG.match(normalized):
+            return normalized
+    except Exception:
+        pass
+    return slug_from_description(description)
 
 
 async def setup_interactive_input(

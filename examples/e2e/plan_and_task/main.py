@@ -61,7 +61,7 @@ from examples.e2e.plan_and_task.prompts import (
 )
 from examples.e2e.plan_and_task.runtime import (
     setup_interactive_input,
-    slug_from_description,
+    derive_workflow_id_from_llm,
 )
 from examples.e2e.plan_and_task.state_models import RuntimeState
 
@@ -224,7 +224,10 @@ def build_plan_task_world(
         if not description:
             return "Error: /plan:start requires a non-empty description."
         try:
-            derived_id = slug_from_description(description) or description[:40].strip()
+            derived_id = (
+                await derive_workflow_id_from_llm(description, provider)
+                or description[:40].strip()
+            )
             adapter_ref[0] = ArtifactAdapter(
                 base_dir=_base_dir,
                 workflow_id=derived_id,
