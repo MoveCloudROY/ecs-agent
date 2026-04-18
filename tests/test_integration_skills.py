@@ -143,12 +143,13 @@ def test_full_skill_lifecycle() -> None:
     # Verify tools are registered
     registry = world.get_component(entity, ToolRegistryComponent)
     assert registry is not None
-    assert len(registry.tools) == 6  # 5 builtin tools + 1 meta-tool
+    assert len(registry.tools) == 7
     tool_names = set(registry.tools.keys())
     assert "read_file" in tool_names
     assert "write_file" in tool_names
     assert "edit_file" in tool_names
     assert "bash" in tool_names
+    assert "interactive_bash" in tool_names
     assert "load_skill_details" in tool_names
 
     # BuiltinToolsSkill is a pure tool-bundle: it must NOT appear in SkillComponent.
@@ -183,7 +184,7 @@ def test_multiple_skills_on_same_entity() -> None:
     # Verify both skills' tools are present
     registry = world.get_component(entity, ToolRegistryComponent)
     assert registry is not None
-    assert len(registry.tools) == 7  # 5 builtin + 1 test + 1 meta-tool
+    assert len(registry.tools) == 8
     tool_names = set(registry.tools.keys())
     assert "read_file" in tool_names
     assert "write_file" in tool_names
@@ -217,7 +218,9 @@ async def test_load_skill_details_meta_tool() -> None:
     assert registry is not None
     details_tool = registry.tools.get("load_skill_details")
     assert details_tool is not None
-    assert "load_skill_details" in details_tool.description  # Check description references the tool
+    assert (
+        "load_skill_details" in details_tool.description
+    )  # Check description references the tool
 
     # Call load_skill_details for builtin-tools
     handler = registry.handlers.get("load_skill_details")
@@ -358,6 +361,7 @@ async def test_load_skill_details_context_delivered_via_return_value() -> None:
 
     assert "Skill: builtin-tools" in result
 
+
 def test_skill_uninstall_removes_only_owned_tools() -> None:
     """Test that uninstalling a skill only removes tools it owns."""
     from ecs_agent import BuiltinToolsSkill, SkillManager
@@ -409,7 +413,7 @@ def test_skill_manager_duplicate_installation_raises_error() -> None:
     # Verify tools are not duplicated
     registry = world.get_component(entity, ToolRegistryComponent)
     assert registry is not None
-    assert len(registry.tools) == 6  # 5 builtin + 1 meta-tool
+    assert len(registry.tools) == 7
 
 
 def _write_markdown_skill_fixture(base_dir: Path) -> str:

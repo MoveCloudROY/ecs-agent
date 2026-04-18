@@ -129,7 +129,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 ### Two-Tier Skill System
 - **Markdown Skills** — Define agent capabilities via `SKILL.md` files with YAML frontmatter. System prompts are injected automatically, and `@`-prefixed relative paths are resolved to workspace-safe paths at load time.
 - **Script Skills** — Extend markdown skills with Python tool handlers in a `scripts/` directory, executed as sandboxed subprocesses.
-- **Built-in Tools** — `BuiltinToolsSkill` provides `read_file`, `write_file`, `edit_file`, `bash`, and `glob` with workspace binding, path traversal protection, and hash-anchored editing.
+- **Built-in Tools** — `BuiltinToolsSkill` provides `read_file`, `write_file`, `edit_file`, `bash`, `glob`, and `interactive_bash` with workspace binding, path traversal protection, hash-anchored editing, and persistent tmux session support.
 - **Skill Discovery** — File-based skill loading from directories with metadata-first activation and staged full-context injection via `load_skill_details`.
 
 ### Production Infrastructure

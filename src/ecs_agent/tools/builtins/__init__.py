@@ -16,10 +16,10 @@ logger = get_logger(__name__)
 
 
 class BuiltinToolsSkill(ScriptSkill):
-    """Skill providing read_file, write_file, edit_file, bash."""
-
     name = "builtin-tools"
-    description = "Basic file manipulation and bash execution tools."
+    description = (
+        "Basic file manipulation, bash execution, and tmux interactive session tools."
+    )
     is_tool_bundle = True
 
     def __init__(self) -> None:

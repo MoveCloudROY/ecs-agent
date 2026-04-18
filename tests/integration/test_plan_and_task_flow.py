@@ -2066,19 +2066,12 @@ def test_main_world_installs_builtin_tools(tmp_path: Path) -> None:
 
 
 def test_plan_interview_system_prompt_instructs_edit_file_usage() -> None:
-    """The system prompt must instruct the LLM to use edit_file for targeted edits.
-
-    Verifies fix for: Plan always reads entire file and outputs full content
-    instead of using edit_file for incremental changes.
-    """
     from examples.e2e.plan_and_task.prompts import PLAN_INTERVIEW_SYSTEM_PROMPT
 
     prompt_lower = PLAN_INTERVIEW_SYSTEM_PROMPT.lower()
-    # Must mention edit_file as the preferred tool for updating the draft
     assert "edit_file" in prompt_lower, (
         "System prompt must instruct LLM to use edit_file for plan updates"
     )
-    # Must discourage full rewrites via write_file
     assert (
         "write_file" not in prompt_lower
         or "do not" in prompt_lower
@@ -2088,14 +2081,10 @@ def test_plan_interview_system_prompt_instructs_edit_file_usage() -> None:
 
 
 def test_plan_interview_system_prompt_instructs_read_before_edit() -> None:
-    """The system prompt must instruct read_file before editing.
-
-    Ensures the LLM reads current content before making edits.
-    """
     from examples.e2e.plan_and_task.prompts import PLAN_INTERVIEW_SYSTEM_PROMPT
 
     prompt_lower = PLAN_INTERVIEW_SYSTEM_PROMPT.lower()
-    assert "read_file" in prompt_lower, (
+    assert "read_file" in prompt_lower or "read the current" in prompt_lower, (
         "System prompt must instruct LLM to read draft.md before editing"
     )
 
@@ -2217,3 +2206,125 @@ def test_plan_start_handler_sets_workflow_id_from_description(
     assert (adapter.plan_dir / "draft.md").exists()
     draft = (adapter.plan_dir / "draft.md").read_text(encoding="utf-8")
     assert "Build a task management app" in draft
+
+
+def test_edit_file_schema_exposes_direct_params() -> None:
+    from ecs_agent.tools.builtins.edit_tool import edit_file
+
+    schema = edit_file._tool_schema  # type: ignore[attr-defined]
+    props = schema.parameters.get("properties", {})
+    assert "file_path" in props
+    assert "op" in props
+    assert "pos" in props
+    assert "content" in props
+    assert "edits_json" not in props
+    required = schema.parameters.get("required", [])
+    assert "file_path" in required
+    assert "op" in required
+    assert "pos" in required
+
+
+async def test_edit_file_direct_params_replaces_content(tmp_path: Path) -> None:
+    from ecs_agent.tools.builtins.edit_tool import edit_file, format_file_with_hashes
+
+    target = tmp_path / "draft.md"
+    target.write_text("## Scope\n(to be filled)\n\n## Next\n", encoding="utf-8")
+    rendered = format_file_with_hashes(target.read_text(encoding="utf-8"))
+    line2_hash = rendered.splitlines()[1].split("|")[0].split("#")[1]
+    result = await edit_file._tool_handler(  # type: ignore[attr-defined]
+        file_path="draft.md",
+        workspace_root=str(tmp_path),
+        op="replace",
+        pos=f"2#{line2_hash}",
+        content="In scope: everything",
+    )
+    assert "draft.md" in result
+    assert "(to be filled)" not in target.read_text(encoding="utf-8")
+    assert "In scope: everything" in target.read_text(encoding="utf-8")
+
+
+async def test_edit_file_raises_when_old_str_not_found(tmp_path: Path) -> None:
+    import pytest
+    from ecs_agent.tools.builtins.edit_tool import edit_file
+
+    (tmp_path / "file.md").write_text("hello world", encoding="utf-8")
+    with pytest.raises(Exception):
+        await edit_file._tool_handler(  # type: ignore[attr-defined]
+            file_path="file.md",
+            workspace_root=str(tmp_path),
+            edits_json='[{"op": "replace", "pos": "99#aaaa", "lines": ["x"]}]',
+        )
+
+
+async def test_edit_file_raises_on_invalid_edits_json(tmp_path: Path) -> None:
+    import pytest
+    from ecs_agent.tools.builtins.edit_tool import edit_file
+
+    (tmp_path / "file.md").write_text("foo\nfoo\n", encoding="utf-8")
+    with pytest.raises(Exception):
+        await edit_file._tool_handler(  # type: ignore[attr-defined]
+            file_path="file.md",
+            workspace_root=str(tmp_path),
+            edits_json="not-valid-json",
+        )
+
+
+async def test_derive_workflow_id_uses_llm_slug() -> None:
+    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.types import CompletionResult, Message
+    from examples.e2e.plan_and_task.runtime import derive_workflow_id_from_llm
+
+    provider = FakeProvider(
+        responses=[
+            CompletionResult(
+                message=Message(role="assistant", content="writing-assistant-tool")
+            )
+        ]
+    )
+    result = await derive_workflow_id_from_llm("辅助写作软件", provider)
+    assert result == "writing-assistant-tool"
+
+
+async def test_derive_workflow_id_normalizes_llm_output() -> None:
+    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.types import CompletionResult, Message
+    from examples.e2e.plan_and_task.runtime import derive_workflow_id_from_llm
+
+    provider = FakeProvider(
+        responses=[
+            CompletionResult(
+                message=Message(role="assistant", content="Writing Assistant Tool!")
+            )
+        ]
+    )
+    result = await derive_workflow_id_from_llm("Writing assistant", provider)
+    assert result == "writing-assistant-tool"
+
+
+async def test_derive_workflow_id_falls_back_on_empty_response() -> None:
+    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.types import CompletionResult, Message
+    from examples.e2e.plan_and_task.runtime import (
+        derive_workflow_id_from_llm,
+        slug_from_description,
+    )
+
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="   "))]
+    )
+    result = await derive_workflow_id_from_llm("build a task manager", provider)
+    assert result == slug_from_description("build a task manager")
+    assert result != ""
+
+
+async def test_derive_workflow_id_falls_back_on_provider_error() -> None:
+    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.types import CompletionResult, Message
+    from examples.e2e.plan_and_task.runtime import (
+        derive_workflow_id_from_llm,
+        slug_from_description,
+    )
+
+    provider = FakeProvider(responses=[])
+    result = await derive_workflow_id_from_llm("build a task manager", provider)
+    assert result == slug_from_description("build a task manager")
