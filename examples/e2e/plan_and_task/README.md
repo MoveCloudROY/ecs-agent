@@ -11,7 +11,7 @@ The workflow follows a structured lifecycle:
 
 ## Architecture
 
-- **Built-in Tools** — The main agent has `read_file`, `write_file`, `edit_file`, `bash`, and `glob` tools pre-installed via `BuiltinToolsSkill`, workspace-bound to the example directory.
+- **Built-in Tools** — The main agent has `read_file`, `write_file`, `edit_file`, `bash`, and `glob` tools pre-installed via `BuiltinToolsSkill`, workspace-bound to the example directory. `edit_file` uses hash-anchored `edits_json` only: supply a `pos` of `"N#HASH"` obtained from a prior `read_file` call.
 - **ECS Core**: Uses `SystemPromptRenderSystem`, `UserPromptNormalizationSystem`, `ReasoningSystem`, `ToolExecutionSystem`, and `MemorySystem`.
 - **Prompt Configuration**: The planner entity declares `SystemPromptConfigSpec` with `PLAN_INTERVIEW_SYSTEM_PROMPT`, and `SystemPromptRenderSystem` bridges the rendered value into `LLMComponent.system_prompt` before reasoning.
 - **State Machine**: Explicit phase transitions managed by `WorkflowStateMachine`.
@@ -86,7 +86,7 @@ printf '/plan:start Build demo\n\n/plan:status\n\nexit\n\n' | uv run python exam
 ## Recovery / Restart
 
 The workflow can be restarted at any time. On startup, no workflow ID is resolved and no scratchbook folder is created. Instead:
-1. Call `/plan:start <original description>` — `slug_from_description()` re-derives the same ID from the same description.
+1. Call `/plan:start <original description>` — the LLM re-derives the same slug from the same description (or uses `slug_from_description()` as fallback).
 2. State is restored from `scratchbook/<workflow_id>/state/runtime_state.json`.
 3. Any in-flight subagents are marked `stale` and the machine transitions to `TASK_BLOCKED` for safe resumption.
 
@@ -133,8 +133,8 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py -v
 ## Implementation Details
 
 - **Testable World Factory**: `build_plan_task_world(provider, model, base_dir)` is a public function that returns `(world, agent_id, adapter_ref, runtime_state)`, enabling direct world setup in tests without running the CLI. `adapter_ref` is a `list[ArtifactAdapter | None]` — starts as `[None]` and is populated in-place by the `/plan:start` handler after the workflow ID is derived.
-- **workflow_id Auto-Derivation**: `/plan:start <description>` calls `slug_from_description()` to convert the natural language description into a URL-safe workflow ID. For example, `"Build a task manager"` becomes `"build-a-task-manager"`. CJK text is normalized and joined with hyphens. The derived ID controls the scratchbook directory for all subsequent operations in that session.
-- **Progressive Draft Editing**: The planning interview fills `draft.md` one section at a time using `read_file` + `edit_file`. The LLM asks one question per turn and edits the corresponding section's placeholder text. Full-file rewrites via `write_file` are explicitly prohibited by the system prompt.
+- **workflow_id Auto-Derivation**: `/plan:start <description>` calls `derive_workflow_id_from_llm()` to ask the LLM to generate a short, meaningful English slug from the description (e.g., `"writing-assistant-multi-agent"`). Falls back to `slug_from_description()` on provider error or invalid output. The derived ID controls the scratchbook directory for all subsequent operations in that session.
+- **Progressive Draft Editing**: The planning interview fills `draft.md` one section at a time using `read_file` (to get LINE#HASH annotated content) + `edit_file(edits_json=...)` (hash-anchored). The LLM reads the file first to capture `N#HASH` references, then replaces exactly the placeholder line. Full-file rewrites via `write_file` are explicitly prohibited by the system prompt.
 - **Atomic Writes**: All artifact updates use atomic file operations to prevent corruption.
 - **Circuit Breaker**: `TaskExec` implements a retry budget to prevent infinite loops on failing tasks.
 - **Review Gating**: Finalization is strictly blocked until both `PLAN_ADVISOR_REVIEW` and `PLAN_QA_REVIEW` have `approved` verdicts.
