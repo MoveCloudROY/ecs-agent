@@ -2328,3 +2328,268 @@ async def test_derive_workflow_id_falls_back_on_provider_error() -> None:
     provider = FakeProvider(responses=[])
     result = await derive_workflow_id_from_llm("build a task manager", provider)
     assert result == slug_from_description("build a task manager")
+
+
+def test_plan_interview_system_prompt_contains_revise_instruction() -> None:
+    from examples.e2e.plan_and_task.prompts import PLAN_INTERVIEW_SYSTEM_PROMPT
+
+    prompt_lower = PLAN_INTERVIEW_SYSTEM_PROMPT.lower()
+    assert "revise" in prompt_lower, (
+        "PLAN_INTERVIEW_SYSTEM_PROMPT must mention the 'revise' verdict"
+    )
+    assert "edit_file" in PLAN_INTERVIEW_SYSTEM_PROMPT, (
+        "PLAN_INTERVIEW_SYSTEM_PROMPT must instruct to call edit_file after revise"
+    )
+    assert "advisor" in prompt_lower, "Prompt must mention calling advisor again"
+
+
+def test_plan_interview_system_prompt_contains_blocked_instruction() -> None:
+    from examples.e2e.plan_and_task.prompts import PLAN_INTERVIEW_SYSTEM_PROMPT
+
+    assert "blocked" in PLAN_INTERVIEW_SYSTEM_PROMPT.lower(), (
+        "PLAN_INTERVIEW_SYSTEM_PROMPT must mention the 'blocked' verdict"
+    )
+
+
+def test_plan_interview_system_prompt_gates_qa_on_advisor_approval() -> None:
+    from examples.e2e.plan_and_task.prompts import PLAN_INTERVIEW_SYSTEM_PROMPT
+
+    prompt_lower = PLAN_INTERVIEW_SYSTEM_PROMPT.lower()
+    assert "approved" in prompt_lower, (
+        "PLAN_INTERVIEW_SYSTEM_PROMPT must gate QA call on advisor 'approved' verdict"
+    )
+    assert "do not" in prompt_lower or "only" in prompt_lower, (
+        "PLAN_INTERVIEW_SYSTEM_PROMPT must make the QA gating condition explicit"
+    )
+
+
+def test_controller_advisor_revise_state_stays_in_advisor_review(
+    tmp_path: Path,
+) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter as ArtifactAdapter,
+    )
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="revise-test")
+    controller = PlanController()
+    state = controller.handle_plan_start(adapter, "revise test workflow")
+    state = controller.handle_advisor_review(
+        state, adapter, "revise", notes="Needs more detail"
+    )
+
+    assert state.phase == "PLAN_ADVISOR_REVIEW", (
+        f"Expected PLAN_ADVISOR_REVIEW after revise, got {state.phase}"
+    )
+    assert state.phase != "PLAN_QA_REVIEW"
+
+
+def test_controller_advisor_revise_followed_by_approved_allows_qa(
+    tmp_path: Path,
+) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter as ArtifactAdapter,
+    )
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="revise-then-approve-test")
+    controller = PlanController()
+    state = controller.handle_plan_start(adapter, "revise then approve workflow")
+
+    state = controller.handle_advisor_review(
+        state, adapter, "revise", notes="Needs scope"
+    )
+    assert state.phase == "PLAN_ADVISOR_REVIEW"
+
+    state = controller.handle_advisor_review(state, adapter, "approved", notes="LGTM")
+    assert state.phase == "PLAN_ADVISOR_REVIEW"
+
+    missing = controller._missing_approved_reviews(state.review_verdicts)
+    assert "PLAN_ADVISOR_REVIEW" not in missing, (
+        f"Expected PLAN_ADVISOR_REVIEW to be approved in missing list: {missing}"
+    )
+
+
+def test_controller_advisor_multiple_verdicts_all_recorded(
+    tmp_path: Path,
+) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter as ArtifactAdapter,
+    )
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="multi-verdict-test")
+    controller = PlanController()
+    state = controller.handle_plan_start(adapter, "multi-verdict workflow")
+
+    state = controller.handle_advisor_review(state, adapter, "revise")
+    state = controller.handle_advisor_review(state, adapter, "blocked")
+    state = controller.handle_advisor_review(state, adapter, "approved")
+
+    advisor_verdicts = [
+        v for v in state.review_verdicts if v.phase == "PLAN_ADVISOR_REVIEW"
+    ]
+    assert len(advisor_verdicts) == 3, (
+        f"Expected 3 advisor verdicts recorded, got {len(advisor_verdicts)}"
+    )
+    assert advisor_verdicts[0].verdict == "revise"
+    assert advisor_verdicts[1].verdict == "blocked"
+    assert advisor_verdicts[2].verdict == "approved"
+
+
+def test_controller_missing_approved_reviews_uses_last_verdict(
+    tmp_path: Path,
+) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter as ArtifactAdapter,
+    )
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="last-verdict-test")
+    controller = PlanController()
+    state = controller.handle_plan_start(adapter, "last verdict test workflow")
+
+    state = controller.handle_advisor_review(state, adapter, "revise")
+    state = controller.handle_advisor_review(state, adapter, "approved")
+
+    missing = controller._missing_approved_reviews(state.review_verdicts)
+    assert "PLAN_ADVISOR_REVIEW" not in missing, (
+        "After revise→approved, PLAN_ADVISOR_REVIEW should be satisfied"
+    )
+    # Must instruct to update/edit draft in response
+    assert "edit_file" in PLAN_INTERVIEW_SYSTEM_PROMPT, (
+        "PLAN_INTERVIEW_SYSTEM_PROMPT must instruct to call edit_file after revise"
+    )
+    # Must instruct to re-call the advisor after updating
+    assert "advisor" in prompt_lower, "Prompt must mention calling advisor again"
+
+
+def test_plan_interview_system_prompt_contains_blocked_instruction() -> None:
+    """System prompt must instruct the LLM what to do when advisor returns 'blocked'."""
+    from examples.e2e.plan_and_task.prompts import PLAN_INTERVIEW_SYSTEM_PROMPT
+
+    prompt_lower = PLAN_INTERVIEW_SYSTEM_PROMPT.lower()
+    assert "blocked" in prompt_lower, (
+        "PLAN_INTERVIEW_SYSTEM_PROMPT must mention the 'blocked' verdict"
+    )
+
+
+def test_plan_interview_system_prompt_gates_qa_on_advisor_approval() -> None:
+    """System prompt must say QA is only called after advisor *approved*, not before."""
+    from examples.e2e.plan_and_task.prompts import PLAN_INTERVIEW_SYSTEM_PROMPT
+
+    prompt_lower = PLAN_INTERVIEW_SYSTEM_PROMPT.lower()
+    # The word "approved" must appear — the gating logic
+    assert "approved" in prompt_lower, (
+        "PLAN_INTERVIEW_SYSTEM_PROMPT must gate QA call on advisor 'approved' verdict"
+    )
+    # Must explicitly mention NOT calling QA before approval
+    assert "do not" in prompt_lower or "only" in prompt_lower, (
+        "PLAN_INTERVIEW_SYSTEM_PROMPT must make the QA gating condition explicit"
+    )
+
+
+def test_controller_advisor_revise_state_stays_in_advisor_review(
+    tmp_path: Path,
+) -> None:
+    """After a 'revise' verdict, phase must remain PLAN_ADVISOR_REVIEW (not advance to QA)."""
+    from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter as ArtifactAdapter,
+    )
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="revise-test")
+    controller = PlanController()
+    state = controller.handle_plan_start(adapter, "revise test workflow")
+
+    # First advisor call → state transitions to PLAN_ADVISOR_REVIEW
+    state = controller.handle_advisor_review(
+        state, adapter, "revise", notes="Needs more detail"
+    )
+
+    assert state.phase == "PLAN_ADVISOR_REVIEW", (
+        f"Expected PLAN_ADVISOR_REVIEW after revise, got {state.phase}"
+    )
+    # Phase must NOT advance to QA
+    assert state.phase != "PLAN_QA_REVIEW"
+
+
+def test_controller_advisor_revise_followed_by_approved_allows_qa(
+    tmp_path: Path,
+) -> None:
+    """After revise then approved, the advisor verdict is approved and QA can be called."""
+    from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter as ArtifactAdapter,
+    )
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="revise-then-approve-test")
+    controller = PlanController()
+    state = controller.handle_plan_start(adapter, "revise then approve workflow")
+
+    # Round 1: revise
+    state = controller.handle_advisor_review(
+        state, adapter, "revise", notes="Needs scope"
+    )
+    assert state.phase == "PLAN_ADVISOR_REVIEW"
+
+    # Round 2: approved (LLM revised draft and re-called advisor)
+    state = controller.handle_advisor_review(state, adapter, "approved", notes="LGTM")
+    assert state.phase == "PLAN_ADVISOR_REVIEW"
+
+    # Now the latest advisor verdict is "approved" — _missing_approved_reviews should pass advisor
+    missing = controller._missing_approved_reviews(state.review_verdicts)
+    assert "PLAN_ADVISOR_REVIEW" not in missing, (
+        f"Expected PLAN_ADVISOR_REVIEW to be approved in missing list: {missing}"
+    )
+
+
+def test_controller_advisor_multiple_verdicts_all_recorded(
+    tmp_path: Path,
+) -> None:
+    """All advisor verdicts (revise, blocked, approved) must be appended, not overwritten."""
+    from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter as ArtifactAdapter,
+    )
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="multi-verdict-test")
+    controller = PlanController()
+    state = controller.handle_plan_start(adapter, "multi-verdict workflow")
+
+    state = controller.handle_advisor_review(state, adapter, "revise")
+    state = controller.handle_advisor_review(state, adapter, "blocked")
+    state = controller.handle_advisor_review(state, adapter, "approved")
+
+    advisor_verdicts = [
+        v for v in state.review_verdicts if v.phase == "PLAN_ADVISOR_REVIEW"
+    ]
+    assert len(advisor_verdicts) == 3, (
+        f"Expected 3 advisor verdicts recorded, got {len(advisor_verdicts)}"
+    )
+    assert advisor_verdicts[0].verdict == "revise"
+    assert advisor_verdicts[1].verdict == "blocked"
+    assert advisor_verdicts[2].verdict == "approved"
+
+
+def test_controller_missing_approved_reviews_uses_last_verdict(
+    tmp_path: Path,
+) -> None:
+    """_missing_approved_reviews must check the LAST verdict per phase, not the first."""
+    from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter as ArtifactAdapter,
+    )
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="last-verdict-test")
+    controller = PlanController()
+    state = controller.handle_plan_start(adapter, "last verdict test workflow")
+
+    # revise followed by approved — only last (approved) should count
+    state = controller.handle_advisor_review(state, adapter, "revise")
+    state = controller.handle_advisor_review(state, adapter, "approved")
+
+    missing = controller._missing_approved_reviews(state.review_verdicts)
+    assert "PLAN_ADVISOR_REVIEW" not in missing, (
+        "After revise→approved, PLAN_ADVISOR_REVIEW should be satisfied"
+    )

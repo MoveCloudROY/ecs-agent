@@ -28,6 +28,7 @@
 
 - **Subagent-Driven Reviews**: Advisor and QA reviews are implemented as ECS subagents registered in `SubagentRegistryComponent`. The planner LLM calls `subagent(category="advisor", ...)` with the draft content.
 - **Verdict Recording via DelegationCompletedEvent**: An event bus subscription automatically extracts verdicts (`approved`, `revise`, or `blocked`) from subagent result text using the regex `\b(approved|revise|blocked)\b` (case-insensitive). It defaults to `revise` if no match is found.
+- **Advisor Retry Loop**: When the advisor returns `revise` or `blocked`, `PLAN_INTERVIEW_SYSTEM_PROMPT` instructs the planner LLM to read the feedback, apply edits to `draft.md` via `edit_file`, and re-call the advisor subagent. The QA subagent is only called once the advisor returns `approved`. All advisor verdicts are appended to `review_verdicts`; `_missing_approved_reviews` uses the last verdict per phase to determine gating.
 - **Trigger Dispatch**: Eight `TriggerSpec(action='script')` entries handle all slash commands inside the ECS pipeline, transforming them into workflow actions.
 - **Circuit-Breaker for Delegation**: `TaskExec` tracks retry counts for each task and blocks execution if a task fails repeatedly.
 

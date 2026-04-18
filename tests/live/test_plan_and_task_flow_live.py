@@ -177,3 +177,46 @@ async def test_live_derive_workflow_id_from_llm_returns_valid_slug(
     )
     assert len(slug) <= 50, f"Slug too long: {slug!r}"
     assert len(slug) >= 3, f"Slug too short: {slug!r}"
+
+
+@pytest.mark.asyncio
+async def test_live_controller_advisor_retry_loop_revise_then_approved(
+    live_provider: OpenAIProvider, tmp_path: Path
+) -> None:
+    workflow_id = "live-test-advisor-retry"
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id=workflow_id)
+    controller = PlanController()
+
+    state = controller.handle_plan_start(adapter, "Advisor retry loop test")
+
+    state = controller.handle_advisor_review(
+        state, adapter, "revise", notes="Draft needs more detail in scope section."
+    )
+    assert state.phase == "PLAN_ADVISOR_REVIEW"
+    assert state.phase != "PLAN_QA_REVIEW"
+
+    state = controller.handle_advisor_review(
+        state, adapter, "approved", notes="Looks good now."
+    )
+    assert state.phase == "PLAN_ADVISOR_REVIEW"
+
+    missing = controller._missing_approved_reviews(state.review_verdicts)
+    assert "PLAN_ADVISOR_REVIEW" not in missing
+
+    advisor_verdicts = [
+        v for v in state.review_verdicts if v.phase == "PLAN_ADVISOR_REVIEW"
+    ]
+    assert len(advisor_verdicts) == 2
+    assert advisor_verdicts[0].verdict == "revise"
+    assert advisor_verdicts[1].verdict == "approved"
+
+    result = await live_provider.complete(
+        [
+            Message(
+                role="user",
+                content="Confirm: advisor retry loop (revise → approved) is correctly handled.",
+            )
+        ]
+    )
+    assert isinstance(result, CompletionResult)
+    assert result.message.content.strip()
