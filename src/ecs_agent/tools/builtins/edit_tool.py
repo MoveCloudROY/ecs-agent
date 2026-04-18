@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import dataclass
-from typing import Literal
+from typing import Annotated, Literal
 
 from ecs_agent.logging import get_logger
 from ecs_agent.tools.discovery import tool
@@ -86,8 +85,7 @@ def apply_edits(original_content: str, edits: list[EditOperation]) -> str:
         edit_lines = edit.lines or []
         if edit.op == "replace":
             if edit.end is None:
-                replacement = edit_lines[0] if edit_lines else ""
-                lines[start_line - 1] = replacement
+                lines[start_line - 1 : start_line] = edit_lines
                 continue
 
             end_line, end_hash = parse_edit_instruction(edit.end)
@@ -122,21 +120,35 @@ def apply_edits(original_content: str, edits: list[EditOperation]) -> str:
     return "\n".join(lines)
 
 
-@tool(description="Apply hash-anchored edits to a workspace file.")
-async def edit_file(file_path: str, edits_json: str, workspace_root: str) -> str:
-    """Apply hash-anchored edits to a workspace file."""
+@tool(description="Apply a single hash-anchored edit to a workspace file.")
+async def edit_file(
+    file_path: Annotated[str, "Workspace-relative path to the target file."],
+    op: Annotated[
+        Literal["replace", "append", "prepend"],
+        "Edit operation: 'replace' overwrites lines, 'append' inserts after, 'prepend' inserts before.",
+    ],
+    pos: Annotated[
+        str,
+        "Start position in LINE#HASH format (e.g. '10#a1b2'). Obtain from read_file output.",
+    ],
+    end: Annotated[
+        str | None,
+        "End position in LINE#HASH format for range replace. Omit for single-line operations.",
+    ] = None,
+    content: Annotated[
+        str,
+        "New content to insert or replace. Use \\n to separate multiple lines.",
+    ] = "",
+    workspace_root: str = "",
+) -> str:
     from ecs_agent.tools.builtins.file_tools import _validate_path
 
     target = _validate_path(file_path, workspace_root)
     original = target.read_text(encoding="utf-8")
-    _ = format_file_with_hashes(original)
 
-    edits_data = json.loads(edits_json)
-    if not isinstance(edits_data, list):
-        raise ValueError("edits_json must be a JSON array")
-
-    edits = [EditOperation(**edit) for edit in edits_data]
-    updated = apply_edits(original, edits)
+    new_lines = content.split("\n") if content else []
+    edit = EditOperation(op=op, pos=pos, end=end, lines=new_lines)
+    updated = apply_edits(original, [edit])
     target.write_text(updated, encoding="utf-8")
-    logger.info("edit_file", file_path=file_path, edit_count=len(edits))
-    return f"Applied {len(edits)} edits to {file_path}"
+    logger.info("edit_file", file_path=file_path, op=op, pos=pos)
+    return f"Applied edit to {file_path}"
