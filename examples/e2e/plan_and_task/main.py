@@ -237,10 +237,16 @@ def build_plan_task_world(
             )
             runtime_state[0] = controller.handle_plan_start(adapter_ref[0], description)
             status = controller.get_plan_status(_require_state(runtime_state[0]))
+            logger.info(
+                "plan_task_command_plan_start",
+                workflow_id=derived_id,
+                description_len=len(description),
+            )
             return (
                 f"Plan started (workflow_id={derived_id!r}):\n{_format_status(status)}"
             )
         except ValueError as exc:
+            logger.warning("plan_task_command_error", command="plan_start", exception=str(exc))
             return f"Error: {exc}"
 
     async def _handle_plan_status(
@@ -248,6 +254,7 @@ def build_plan_task_world(
     ) -> str | None:
         if runtime_state[0] is None:
             return "No active workflow. Use /plan:start <description> to begin."
+        logger.debug("plan_task_command_plan_status", workflow_id=runtime_state[0].workflow_id)
         return _format_status(
             controller.get_plan_status(_require_state(runtime_state[0]))
         )
@@ -259,8 +266,13 @@ def build_plan_task_world(
             runtime_state[0] = controller.handle_plan_finalize(
                 _require_state(runtime_state[0]), _require_adapter(adapter_ref[0])
             )
+            logger.info(
+                "plan_task_command_plan_finalize",
+                workflow_id=_require_state(runtime_state[0]).workflow_id,
+            )
             return f"Plan finalized:\n{_format_status(controller.get_plan_status(_require_state(runtime_state[0])))}"
         except ValueError as exc:
+            logger.warning("plan_task_command_error", command="plan_finalize", exception=str(exc))
             return f"Error: {exc}"
 
     async def _handle_task_start(
@@ -275,6 +287,12 @@ def build_plan_task_world(
                 current, _require_adapter(adapter_ref[0])
             )
             s = _require_state(runtime_state[0])
+            logger.info(
+                "plan_task_command_task_start",
+                workflow_id=s.workflow_id,
+                task_count=len(s.tasks),
+                current_task_id=s.current_task_id,
+            )
             return _format_status(
                 {
                     "workflow_id": s.workflow_id,
@@ -285,6 +303,7 @@ def build_plan_task_world(
                 }
             )
         except ValueError as exc:
+            logger.warning("plan_task_command_error", command="task_start", exception=str(exc))
             return f"Error: {exc}"
 
     async def _handle_task_status(
@@ -293,6 +312,7 @@ def build_plan_task_world(
         if runtime_state[0] is None:
             return "No active workflow."
         s = runtime_state[0]
+        logger.debug("plan_task_command_task_status", workflow_id=s.workflow_id, phase=s.phase)
         return _format_status(
             {
                 "workflow_id": s.workflow_id,
@@ -317,8 +337,13 @@ def build_plan_task_world(
             runtime_state[0] = controller.handle_task_resume(
                 _require_state(runtime_state[0]), _require_adapter(adapter_ref[0])
             )
+            logger.info(
+                "plan_task_command_task_resume",
+                workflow_id=_require_state(runtime_state[0]).workflow_id,
+            )
             return f"Task resumed:\n{_format_status(controller.get_plan_status(_require_state(runtime_state[0])))}"
         except ValueError as exc:
+            logger.warning("plan_task_command_error", command="task_resume", exception=str(exc))
             return f"Error: {exc}"
 
     async def _handle_task_replan(
@@ -334,8 +359,15 @@ def build_plan_task_world(
                 _require_adapter(adapter_ref[0]),
                 reason,
             )
+            s = _require_state(runtime_state[0])
+            logger.info(
+                "plan_task_command_task_replan",
+                workflow_id=s.workflow_id,
+                task_id=s.current_task_id,
+            )
             return f"Task replanned:\n{_format_status(controller.get_plan_status(_require_state(runtime_state[0])))}"
         except ValueError as exc:
+            logger.warning("plan_task_command_error", command="task_replan", exception=str(exc))
             return f"Error: {exc}"
 
     async def _handle_task_abort(
@@ -347,12 +379,47 @@ def build_plan_task_world(
                 _require_adapter(adapter_ref[0]),
                 reason="user abort",
             )
+            s = _require_state(runtime_state[0])
+            logger.info(
+                "plan_task_command_task_abort",
+                workflow_id=s.workflow_id,
+                task_id=s.current_task_id,
+            )
             return f"Task aborted:\n{_format_status(controller.get_plan_status(_require_state(runtime_state[0])))}"
         except ValueError as exc:
+            logger.warning("plan_task_command_error", command="task_abort", exception=str(exc))
+            return f"Error: {exc}"
+
+    async def _handle_plan_resume(
+        _world: World, _entity_id: EntityId, user_text: str
+    ) -> str | None:
+        parts = user_text.strip().split(None, 1)
+        workflow_id = parts[1].strip() if len(parts) > 1 else ""
+        if not workflow_id:
+            return "Error: /plan:resume requires a non-empty workflow_id."
+        try:
+            new_adapter = ArtifactAdapter(base_dir=_base_dir, workflow_id=workflow_id)
+            state = new_adapter.read_state()
+            new_adapter.mark_stale_subagents(state)
+            adapter_ref[0] = new_adapter
+            runtime_state[0] = state
+            _world.add_component(_entity_id, build_scratchbook_prompt_config(workflow_id))
+            logger.info(
+                "plan_task_command_plan_resume",
+                workflow_id=workflow_id,
+                phase=state.phase,
+            )
+            return (
+                f"Workflow resumed (workflow_id={workflow_id!r}):\n"
+                f"{_format_status(controller.get_plan_status(state))}"
+            )
+        except ValueError as exc:
+            logger.warning("plan_task_command_error", command="plan_resume", exception=str(exc))
             return f"Error: {exc}"
 
     script_handlers: dict[str, ScriptHandler] = {
         "plan_start": _handle_plan_start,
+        "plan_resume": _handle_plan_resume,
         "plan_status": _handle_plan_status,
         "plan_finalize": _handle_plan_finalize,
         "task_start": _handle_task_start,
@@ -367,6 +434,12 @@ def build_plan_task_world(
             match_mode="prefix",
             action="script",
             content="plan_start",
+        ),
+        TriggerSpec(
+            pattern="/plan:resume",
+            match_mode="prefix",
+            action="script",
+            content="plan_resume",
         ),
         TriggerSpec(
             pattern="/plan:status",
@@ -441,7 +514,7 @@ async def main() -> None:
     base_url: str = os.environ.get(
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
-    model: str = os.environ.get("LLM_MODEL", "kimi-k2.5")
+    model: str = os.environ.get("LLM_MODEL", "qwen3.6-plus")
 
     if not api_key:
         print("Error: LLM_API_KEY environment variable is required.")

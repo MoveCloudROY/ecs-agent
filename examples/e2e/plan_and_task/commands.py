@@ -14,6 +14,7 @@ class Command:
 
 _COMMANDS_WITH_ARGS = {
     "/plan:start",
+    "/plan:resume",
     "/task:start",
     "/task:resume",
     "/task:replan",
