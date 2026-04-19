@@ -136,7 +136,12 @@ def _make_runtime_state() -> RuntimeState:
 def _make_approved_verdicts() -> list[ReviewVerdict]:
     return [
         ReviewVerdict(
-            phase="PLAN_ADVISOR_REVIEW",
+            phase="DRAFT_ADVISOR_REVIEW",
+            verdict="approved",
+            decided_at="2026-01-01T00:00:00",
+        ),
+        ReviewVerdict(
+            phase="DRAFT_QA_REVIEW",
             verdict="approved",
             decided_at="2026-01-01T00:00:00",
         ),
@@ -266,7 +271,7 @@ def test_scratchbook_adapter_write_and_read_state_roundtrip(tmp_path: Path) -> N
     now = datetime.datetime.utcnow().isoformat()
     state = RuntimeState(
         workflow_id="wf-rt",
-        phase="PLAN_INTERVIEW",
+        phase="DRAFT_INTERVIEW",
         status="active",
         active_plan_file="plan/workflow_plan.md",
         current_task_id=None,
@@ -284,7 +289,7 @@ def test_scratchbook_adapter_write_and_read_state_roundtrip(tmp_path: Path) -> N
     (adapter.plan_dir / "draft.md").write_text("# Draft\n", encoding="utf-8")
     restored = adapter.read_state()
     assert restored.workflow_id == "wf-rt"
-    assert restored.phase == "PLAN_INTERVIEW"
+    assert restored.phase == "DRAFT_INTERVIEW"
 
 
 def test_scratchbook_adapter_write_review_verdict_creates_file(tmp_path: Path) -> None:
@@ -296,11 +301,11 @@ def test_scratchbook_adapter_write_review_verdict_creates_file(tmp_path: Path) -
 
     adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id="wf-rv")
     verdict = ReviewVerdict(
-        phase="PLAN_ADVISOR_REVIEW",
+        phase="DRAFT_ADVISOR_REVIEW",
         verdict="approved",
         decided_at=datetime.datetime.utcnow().isoformat(),
     )
-    path_str = adapter.write_review_verdict("PLAN_ADVISOR_REVIEW", verdict)
+    path_str = adapter.write_review_verdict("DRAFT_ADVISOR_REVIEW", verdict)
     assert path_str
     review_files = list(adapter.review_dir.iterdir())
     assert len(review_files) == 1
@@ -368,7 +373,7 @@ def test_state_schema_round_trip_and_plan_artifact(tmp_path: Path) -> None:
         retry_budget={"task-1": 1},
         review_verdicts=[
             ReviewVerdict(
-                phase="PLAN_QA_REVIEW",
+                phase="DRAFT_QA_REVIEW",
                 verdict="approved",
                 decided_at="2026-04-14T00:00:00Z",
                 notes="ready",
@@ -402,9 +407,9 @@ def test_state_schema_round_trip_and_plan_artifact(tmp_path: Path) -> None:
     adapter.append_event({"type": "task_started", "task_id": "task-1"})
     adapter.append_memory({"fact": "retry once"})
     adapter.write_review_verdict(
-        "PLAN_QA_REVIEW",
+        "DRAFT_QA_REVIEW",
         ReviewVerdict(
-            phase="PLAN_QA_REVIEW",
+            phase="DRAFT_QA_REVIEW",
             verdict="approved",
             decided_at="2026-04-14T00:04:00Z",
             notes="looks good",
@@ -424,7 +429,7 @@ def test_state_schema_round_trip_and_plan_artifact(tmp_path: Path) -> None:
     assert (root / "memory" / "knowledge.jsonl").read_text(encoding="utf-8") == (
         '{"fact": "retry once"}\n'
     )
-    assert (root / "review" / "plan_qa_review_verdict.json").is_file()
+    assert (root / "review" / "draft_qa_review_verdict.json").is_file()
     assert not list(root.rglob("*.tmp"))
 
 
@@ -623,7 +628,7 @@ async def test_cli_slash_command_plan_start_and_status() -> None:
     )
 
     output = result.stdout.decode("utf-8", errors="replace")
-    assert "PLAN_INTERVIEW" in output, (
+    assert "DRAFT_INTERVIEW" in output, (
         f"Expected 'PLAN_INTERVIEW' phase in output. Got:\n{output}"
     )
     assert "workflow_id" in output, f"Expected 'workflow_id' in output. Got:\n{output}"
@@ -671,12 +676,12 @@ def test_plan_interview_creates_draft(tmp_path: Path) -> None:
 
     state = PlanController().handle_plan_start(adapter, "Build a demo")
 
-    assert state.phase == "PLAN_INTERVIEW"
+    assert state.phase == "DRAFT_INTERVIEW"
     assert (adapter.plan_dir / "draft.md").exists()
     assert (adapter.state_dir / "runtime_state.json").exists()
 
     loaded_state = adapter.read_state()
-    assert loaded_state.phase == "PLAN_INTERVIEW"
+    assert loaded_state.phase == "DRAFT_INTERVIEW"
 
 
 def test_plan_start_does_not_write_workflow_plan(tmp_path: Path) -> None:
@@ -690,7 +695,7 @@ def test_plan_finalize_rejects_without_verdicts(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
     state = _make_runtime_state()
-    state.phase = "PLAN_INTERVIEW"
+    state.phase = "DRAFT_INTERVIEW"
     state.status = "active"
     state.review_verdicts = []
 
@@ -702,24 +707,24 @@ def test_plan_finalize_rejects_with_only_advisor_approved(tmp_path: Path) -> Non
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
     state = _make_runtime_state()
-    state.phase = "PLAN_INTERVIEW"
+    state.phase = "DRAFT_INTERVIEW"
     state.status = "active"
     state.review_verdicts = [
         ReviewVerdict(
-            phase="PLAN_ADVISOR_REVIEW",
+            phase="DRAFT_ADVISOR_REVIEW",
             verdict="approved",
             decided_at="2026-01-01T00:00:00",
         )
     ]
 
-    with pytest.raises(ValueError, match="PLAN_QA_REVIEW"):
+    with pytest.raises(ValueError, match="DRAFT_QA_REVIEW"):
         PlanController().handle_plan_finalize(state, adapter)
 
 
 def test_plan_finalize_succeeds_when_both_approved(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
-    state.phase = "PLAN_INTERVIEW"
+    state.phase = "DRAFT_INTERVIEW"
     state.status = "active"
     state.review_verdicts = _make_approved_verdicts()
 
@@ -849,7 +854,7 @@ def test_task_exec_initialize_task_queue_raises_from_wrong_phase(
     state = controller.handle_plan_start(adapter, "Phase gate test")
     state.review_verdicts = _make_approved_verdicts()
     adapter.write_state(state)
-    assert state.phase == "PLAN_INTERVIEW"
+    assert state.phase == "DRAFT_INTERVIEW"
     task_exec = TaskExec(state=state)
     with pytest.raises(ValueError, match="Cannot initialize task queue from phase"):
         task_exec.initialize_task_queue(state, adapter)
@@ -1273,7 +1278,7 @@ def test_advisor_review_creates_verdict_artifact(tmp_path: Path) -> None:
         / "scratchbook"
         / "test-workflow-001"
         / "review"
-        / "plan_advisor_review_verdict.json"
+        / "draft_advisor_review_verdict.json"
     )
     assert artifact.is_file()
 
@@ -1292,7 +1297,7 @@ def test_advisor_review_appends_to_state_review_verdicts(tmp_path: Path) -> None
 
     assert len(updated.review_verdicts) == 1
     v = updated.review_verdicts[0]
-    assert v.phase == "PLAN_ADVISOR_REVIEW"
+    assert v.phase == "DRAFT_ADVISOR_REVIEW"
     assert v.verdict == "approved"
     assert v.notes == "LGTM"
 
@@ -1307,6 +1312,7 @@ def test_qa_review_approved_allows_finalization(tmp_path: Path) -> None:
     ctrl = PlanController()
     ctrl.handle_advisor_review(state, adapter, "approved")
     ctrl.handle_qa_review(state, adapter, "approved")
+    ctrl.handle_plan_qa_review(state, adapter, "approved")
 
     result = ctrl.handle_plan_finalize(state, adapter)
 
@@ -1325,7 +1331,7 @@ def test_qa_review_revise_blocks_finalization(tmp_path: Path) -> None:
     ctrl.handle_advisor_review(state, adapter, "approved")
     ctrl.handle_qa_review(state, adapter, "revise", notes="needs more detail")
 
-    with pytest.raises(ValueError, match="PLAN_QA_REVIEW"):
+    with pytest.raises(ValueError, match="DRAFT_QA_REVIEW"):
         ctrl.handle_plan_finalize(state, adapter)
 
 
@@ -1340,7 +1346,7 @@ def test_qa_review_blocked_blocks_finalization(tmp_path: Path) -> None:
     ctrl.handle_advisor_review(state, adapter, "approved")
     ctrl.handle_qa_review(state, adapter, "blocked", notes="out of scope")
 
-    with pytest.raises(ValueError, match="PLAN_QA_REVIEW"):
+    with pytest.raises(ValueError, match="DRAFT_QA_REVIEW"):
         ctrl.handle_plan_finalize(state, adapter)
 
 
@@ -1359,8 +1365,8 @@ def test_review_verdicts_persisted_in_state(tmp_path: Path) -> None:
 
     assert len(persisted.review_verdicts) == 2
     phases = {v.phase for v in persisted.review_verdicts}
-    assert "PLAN_ADVISOR_REVIEW" in phases
-    assert "PLAN_QA_REVIEW" in phases
+    assert "DRAFT_ADVISOR_REVIEW" in phases
+    assert "DRAFT_QA_REVIEW" in phases
 
 
 def test_replan_governance_scope_change_forces_review(
@@ -1389,14 +1395,14 @@ def test_replan_governance_scope_change_forces_review(
         scope_changed=True,
     )
 
-    assert updated.phase == "PLAN_ADVISOR_REVIEW"
+    assert updated.phase == "DRAFT_ADVISOR_REVIEW"
     assert updated.status == "needs_review"
     assert updated.current_task_id == "task-001"
     assert updated.last_checkpoint == "dependency changed"
     adapter.plan_dir.mkdir(parents=True, exist_ok=True)
     (adapter.plan_dir / "draft.md").write_text("# Draft\n", encoding="utf-8")
     persisted = adapter.read_state()
-    assert persisted.phase == "PLAN_ADVISOR_REVIEW"
+    assert persisted.phase == "DRAFT_ADVISOR_REVIEW"
     assert persisted.status == "needs_review"
 
 
@@ -1513,9 +1519,9 @@ def test_state_machine_valid_transition_from_idle() -> None:
     state.phase = "IDLE"
     sm = WorkflowStateMachine()
 
-    result = sm.transition(state, "PLAN_INTERVIEW")
+    result = sm.transition(state, "DRAFT_INTERVIEW")
 
-    assert result.phase == "PLAN_INTERVIEW"
+    assert result.phase == "DRAFT_INTERVIEW"
 
 
 def test_state_machine_illegal_transition_raises() -> None:
@@ -1537,7 +1543,7 @@ def test_state_machine_terminal_states_cannot_transition() -> None:
         state = _make_runtime_state()
         state.phase = terminal_phase
         with pytest.raises(ValueError, match="Invalid transition"):
-            sm.transition(state, "PLAN_INTERVIEW")
+            sm.transition(state, "DRAFT_INTERVIEW")
 
 
 def test_state_machine_is_terminal_for_completed_and_aborted() -> None:
@@ -1547,14 +1553,14 @@ def test_state_machine_is_terminal_for_completed_and_aborted() -> None:
     assert sm.is_terminal("TASK_COMPLETED") is True
     assert sm.is_terminal("TASK_ABORTED") is True
     assert sm.is_terminal("TASK_RUNNING") is False
-    assert sm.is_terminal("PLAN_INTERVIEW") is False
+    assert sm.is_terminal("DRAFT_INTERVIEW") is False
 
 
 def test_state_machine_can_resume_non_terminal() -> None:
     from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
 
     sm = WorkflowStateMachine()
-    assert sm.can_resume("PLAN_INTERVIEW") is True
+    assert sm.can_resume("DRAFT_INTERVIEW") is True
     assert sm.can_resume("TASK_RUNNING") is True
     assert sm.can_resume("TASK_BLOCKED") is True
     assert sm.can_resume("TASK_COMPLETED") is False
@@ -1567,7 +1573,7 @@ def test_state_machine_requires_continuation_for_active_workflows() -> None:
 
     sm = WorkflowStateMachine()
     for active_phase in (
-        "PLAN_INTERVIEW",
+        "DRAFT_INTERVIEW",
         "TASK_RUNNING",
         "TASK_BLOCKED",
         "PLAN_FINALIZED",
@@ -1687,11 +1693,11 @@ def test_review_verdict_artifact_has_phase_and_verdict(tmp_path: Path) -> None:
     controller.handle_advisor_review(state, adapter, "approved")
 
     verdict_payload = json.loads(
-        (adapter.review_dir / "plan_advisor_review_verdict.json").read_text(
+        (adapter.review_dir / "draft_advisor_review_verdict.json").read_text(
             encoding="utf-8"
         )
     )
-    assert verdict_payload["phase"] == "PLAN_ADVISOR_REVIEW"
+    assert verdict_payload["phase"] == "DRAFT_ADVISOR_REVIEW"
     assert verdict_payload["verdict"] == "approved"
 
 
@@ -1770,7 +1776,7 @@ async def test_trigger_plan_start_handler_creates_state(tmp_path: Path) -> None:
     result = await handler(world, agent_id, "/plan:start Build demo")
 
     assert runtime_state[0] is not None
-    assert runtime_state[0].phase == "PLAN_INTERVIEW"
+    assert runtime_state[0].phase == "DRAFT_INTERVIEW"
     assert isinstance(result, str)
 
 
@@ -1795,7 +1801,7 @@ async def test_trigger_plan_status_handler_returns_status_string(
     result = await handler(world, agent_id, "/plan:status")
 
     assert result is not None
-    assert "PLAN_INTERVIEW" in result
+    assert "DRAFT_INTERVIEW" in result
 
 
 def test_runtime_setup_does_not_intercept_slash_commands(tmp_path: Path) -> None:
@@ -1927,7 +1933,7 @@ async def test_delegation_completed_event_records_advisor_verdict(
     assert runtime_state[0] is not None
     verdicts = runtime_state[0].review_verdicts
     assert len(verdicts) == 1
-    assert verdicts[0].phase == "PLAN_ADVISOR_REVIEW"
+    assert verdicts[0].phase == "DRAFT_ADVISOR_REVIEW"
     assert verdicts[0].verdict == "approved"
 
 
@@ -1953,7 +1959,7 @@ async def test_delegation_completed_event_records_qa_verdict(tmp_path: Path) -> 
     assert runtime_state[0] is not None
     verdicts = runtime_state[0].review_verdicts
     assert len(verdicts) == 1
-    assert verdicts[0].phase == "PLAN_QA_REVIEW"
+    assert verdicts[0].phase == "DRAFT_QA_REVIEW"
     assert verdicts[0].verdict == "revise"
 
 
@@ -2382,10 +2388,10 @@ def test_controller_advisor_revise_state_stays_in_advisor_review(
         state, adapter, "revise", notes="Needs more detail"
     )
 
-    assert state.phase == "PLAN_ADVISOR_REVIEW", (
+    assert state.phase == "DRAFT_ADVISOR_REVIEW", (
         f"Expected PLAN_ADVISOR_REVIEW after revise, got {state.phase}"
     )
-    assert state.phase != "PLAN_QA_REVIEW"
+    assert state.phase != "DRAFT_QA_REVIEW"
 
 
 def test_controller_advisor_revise_followed_by_approved_allows_qa(
@@ -2403,13 +2409,13 @@ def test_controller_advisor_revise_followed_by_approved_allows_qa(
     state = controller.handle_advisor_review(
         state, adapter, "revise", notes="Needs scope"
     )
-    assert state.phase == "PLAN_ADVISOR_REVIEW"
+    assert state.phase == "DRAFT_ADVISOR_REVIEW"
 
     state = controller.handle_advisor_review(state, adapter, "approved", notes="LGTM")
-    assert state.phase == "PLAN_ADVISOR_REVIEW"
+    assert state.phase == "DRAFT_ADVISOR_REVIEW"
 
     missing = controller._missing_approved_reviews(state.review_verdicts)
-    assert "PLAN_ADVISOR_REVIEW" not in missing, (
+    assert "DRAFT_ADVISOR_REVIEW" not in missing, (
         f"Expected PLAN_ADVISOR_REVIEW to be approved in missing list: {missing}"
     )
 
@@ -2431,7 +2437,7 @@ def test_controller_advisor_multiple_verdicts_all_recorded(
     state = controller.handle_advisor_review(state, adapter, "approved")
 
     advisor_verdicts = [
-        v for v in state.review_verdicts if v.phase == "PLAN_ADVISOR_REVIEW"
+        v for v in state.review_verdicts if v.phase == "DRAFT_ADVISOR_REVIEW"
     ]
     assert len(advisor_verdicts) == 3, (
         f"Expected 3 advisor verdicts recorded, got {len(advisor_verdicts)}"
@@ -2457,7 +2463,7 @@ def test_controller_missing_approved_reviews_uses_last_verdict(
     state = controller.handle_advisor_review(state, adapter, "approved")
 
     missing = controller._missing_approved_reviews(state.review_verdicts)
-    assert "PLAN_ADVISOR_REVIEW" not in missing, (
+    assert "DRAFT_ADVISOR_REVIEW" not in missing, (
         "After revise→approved, PLAN_ADVISOR_REVIEW should be satisfied"
     )
     # Must instruct to update/edit draft in response
@@ -2511,11 +2517,11 @@ def test_controller_advisor_revise_state_stays_in_advisor_review(
         state, adapter, "revise", notes="Needs more detail"
     )
 
-    assert state.phase == "PLAN_ADVISOR_REVIEW", (
+    assert state.phase == "DRAFT_ADVISOR_REVIEW", (
         f"Expected PLAN_ADVISOR_REVIEW after revise, got {state.phase}"
     )
     # Phase must NOT advance to QA
-    assert state.phase != "PLAN_QA_REVIEW"
+    assert state.phase != "DRAFT_QA_REVIEW"
 
 
 def test_controller_advisor_revise_followed_by_approved_allows_qa(
@@ -2535,15 +2541,15 @@ def test_controller_advisor_revise_followed_by_approved_allows_qa(
     state = controller.handle_advisor_review(
         state, adapter, "revise", notes="Needs scope"
     )
-    assert state.phase == "PLAN_ADVISOR_REVIEW"
+    assert state.phase == "DRAFT_ADVISOR_REVIEW"
 
     # Round 2: approved (LLM revised draft and re-called advisor)
     state = controller.handle_advisor_review(state, adapter, "approved", notes="LGTM")
-    assert state.phase == "PLAN_ADVISOR_REVIEW"
+    assert state.phase == "DRAFT_ADVISOR_REVIEW"
 
     # Now the latest advisor verdict is "approved" — _missing_approved_reviews should pass advisor
     missing = controller._missing_approved_reviews(state.review_verdicts)
-    assert "PLAN_ADVISOR_REVIEW" not in missing, (
+    assert "DRAFT_ADVISOR_REVIEW" not in missing, (
         f"Expected PLAN_ADVISOR_REVIEW to be approved in missing list: {missing}"
     )
 
@@ -2566,7 +2572,7 @@ def test_controller_advisor_multiple_verdicts_all_recorded(
     state = controller.handle_advisor_review(state, adapter, "approved")
 
     advisor_verdicts = [
-        v for v in state.review_verdicts if v.phase == "PLAN_ADVISOR_REVIEW"
+        v for v in state.review_verdicts if v.phase == "DRAFT_ADVISOR_REVIEW"
     ]
     assert len(advisor_verdicts) == 3, (
         f"Expected 3 advisor verdicts recorded, got {len(advisor_verdicts)}"
@@ -2594,7 +2600,7 @@ def test_controller_missing_approved_reviews_uses_last_verdict(
     state = controller.handle_advisor_review(state, adapter, "approved")
 
     missing = controller._missing_approved_reviews(state.review_verdicts)
-    assert "PLAN_ADVISOR_REVIEW" not in missing, (
+    assert "DRAFT_ADVISOR_REVIEW" not in missing, (
         "After revise→approved, PLAN_ADVISOR_REVIEW should be satisfied"
     )
 
@@ -2813,7 +2819,7 @@ async def test_plan_resume_handler_updates_scratchbook_prompt_config(
     now = datetime.datetime.utcnow().isoformat()
     persisted = RuntimeState(
         workflow_id=workflow_id,
-        phase="PLAN_INTERVIEW",
+        phase="DRAFT_INTERVIEW",
         status="active",
         active_plan_file="plan/workflow_plan.md",
         current_task_id=None,
@@ -2857,7 +2863,7 @@ def test_read_state_planning_phase_does_not_require_workflow_plan(
 
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
-    for phase in ("PLAN_INTERVIEW", "PLAN_ADVISOR_REVIEW", "PLAN_QA_REVIEW"):
+    for phase in ("DRAFT_INTERVIEW", "DRAFT_ADVISOR_REVIEW", "DRAFT_QA_REVIEW", "WRITE_PLAN", "PLAN_QA_REVIEW"):
         workflow_id = f"planning-phase-{phase.lower().replace('_', '-')}"
         adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
         # Write draft.md but NOT workflow_plan.md
@@ -2944,7 +2950,7 @@ async def test_plan_resume_handler_restores_planning_phase(tmp_path: Path) -> No
     now = datetime.datetime.utcnow().isoformat()
     persisted = RuntimeState(
         workflow_id=workflow_id,
-        phase="PLAN_ADVISOR_REVIEW",
+        phase="DRAFT_ADVISOR_REVIEW",
         status="active",
         active_plan_file="plan/workflow_plan.md",
         current_task_id=None,
@@ -2971,7 +2977,7 @@ async def test_plan_resume_handler_restores_planning_phase(tmp_path: Path) -> No
     assert result is not None
     assert "Error" not in result, f"Expected success but got: {result}"
     assert runtime_state[0] is not None
-    assert runtime_state[0].phase == "PLAN_ADVISOR_REVIEW"
+    assert runtime_state[0].phase == "DRAFT_ADVISOR_REVIEW"
 
 
 def test_require_plan_artifact_skipped_for_planning_phases(tmp_path: Path) -> None:
@@ -2982,7 +2988,7 @@ def test_require_plan_artifact_skipped_for_planning_phases(tmp_path: Path) -> No
 
     controller = PlanController()
 
-    for phase in ("PLAN_INTERVIEW", "PLAN_ADVISOR_REVIEW", "PLAN_QA_REVIEW"):
+    for phase in ("DRAFT_INTERVIEW", "DRAFT_ADVISOR_REVIEW", "DRAFT_QA_REVIEW", "WRITE_PLAN", "PLAN_QA_REVIEW"):
         workflow_id = f"require-artifact-{phase.lower().replace('_', '-')}"
         adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
         # Only draft.md — no workflow_plan.md
@@ -3008,3 +3014,226 @@ def test_require_plan_artifact_skipped_for_planning_phases(tmp_path: Path) -> No
 
         # Should NOT raise — planning phases don't require workflow_plan.md
         controller._require_plan_artifact(adapter, state)  # type: ignore[attr-defined]
+
+
+def test_handle_write_plan_transitions_to_write_plan(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "DRAFT_QA_REVIEW"
+    adapter.write_state(state)
+
+    result = ctrl.handle_write_plan(state, adapter)
+
+    assert result.phase == "WRITE_PLAN"
+
+
+def test_handle_write_plan_rejects_wrong_phase(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "DRAFT_INTERVIEW"
+    adapter.write_state(state)
+
+    with pytest.raises(ValueError, match="DRAFT_QA_REVIEW"):
+        ctrl.handle_write_plan(state, adapter)
+
+
+def test_handle_write_plan_persists_state(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "DRAFT_QA_REVIEW"
+    adapter.write_state(state)
+    adapter.plan_dir.mkdir(parents=True, exist_ok=True)
+    (adapter.plan_dir / "draft.md").write_text("# Draft\n", encoding="utf-8")
+
+    ctrl.handle_write_plan(state, adapter)
+
+    reloaded = adapter.read_state()
+    assert reloaded.phase == "WRITE_PLAN"
+
+
+def test_handle_plan_qa_review_revise_stays_in_write_plan(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "WRITE_PLAN"
+    adapter.write_state(state)
+
+    result = ctrl.handle_plan_qa_review(state, adapter, "revise", notes="needs more detail")
+
+    assert any(v.phase == "PLAN_QA_REVIEW" and v.verdict == "revise" for v in result.review_verdicts)
+
+
+def test_handle_plan_qa_review_creates_verdict_artifact(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "WRITE_PLAN"
+    adapter.write_state(state)
+
+    ctrl.handle_plan_qa_review(state, adapter, "approved")
+
+    assert (adapter.review_dir / "plan_qa_review_verdict.json").is_file()
+
+
+def test_handle_plan_qa_review_invalid_verdict_raises(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "WRITE_PLAN"
+    adapter.write_state(state)
+
+    with pytest.raises(ValueError, match="Invalid verdict"):
+        ctrl.handle_plan_qa_review(state, adapter, "maybe")
+
+
+def test_full_plan_flow_all_three_reviews(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    adapter.write_plan("# draft")
+    adapter.write_state(state)
+
+    ctrl.handle_advisor_review(state, adapter, "approved")
+    ctrl.handle_qa_review(state, adapter, "approved")
+    ctrl.handle_plan_qa_review(state, adapter, "approved")
+
+    result = ctrl.handle_plan_finalize(state, adapter)
+
+    assert result.phase == "TASK_READY"
+    assert result.status == "ready"
+
+
+def test_finalize_blocked_without_plan_qa_review(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    adapter.write_plan("# draft")
+    adapter.write_state(state)
+
+    ctrl.handle_advisor_review(state, adapter, "approved")
+    ctrl.handle_qa_review(state, adapter, "approved")
+
+    with pytest.raises(ValueError, match="PLAN_QA_REVIEW"):
+        ctrl.handle_plan_finalize(state, adapter)
+
+
+@pytest.mark.asyncio
+async def test_plan_write_command_transitions_phase(tmp_path: Path) -> None:
+    from ecs_agent.components import UserPromptConfigComponent
+    from ecs_agent.providers.fake_provider import FakeProvider
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+    from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
+
+    provider = FakeProvider(responses=["ok"])
+    world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
+        provider=provider, model="fake", base_dir=tmp_path
+    )
+
+    workflow_id = "write-plan-cmd-test"
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
+    adapter_ref[0] = adapter
+
+    state = _make_runtime_state()
+    state.workflow_id = workflow_id
+    state.phase = "DRAFT_QA_REVIEW"
+    adapter.write_state(state)
+    runtime_state[0] = state
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+    handler_key = next(t.content for t in config.triggers if t.pattern == "/plan:write")
+    handler = config.script_handlers[handler_key]
+
+    result = await handler(world, agent_id, "/plan:write")
+
+    assert result is not None
+    assert "Error" not in result
+    assert runtime_state[0] is not None
+    assert runtime_state[0].phase == "WRITE_PLAN"
+
+
+@pytest.mark.asyncio
+async def test_plan_qa_review_command_approved(tmp_path: Path) -> None:
+    from ecs_agent.components import UserPromptConfigComponent
+    from ecs_agent.providers.fake_provider import FakeProvider
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+    from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
+
+    provider = FakeProvider(responses=["ok"])
+    world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
+        provider=provider, model="fake", base_dir=tmp_path
+    )
+
+    workflow_id = "plan-qa-cmd-test"
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
+    adapter_ref[0] = adapter
+
+    state = _make_runtime_state()
+    state.workflow_id = workflow_id
+    state.phase = "WRITE_PLAN"
+    adapter.write_state(state)
+    runtime_state[0] = state
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+    handler_key = next(t.content for t in config.triggers if t.pattern == "/plan:qa_review")
+    handler = config.script_handlers[handler_key]
+
+    result = await handler(world, agent_id, "/plan:qa_review approved")
+
+    assert result is not None
+    assert "Error" not in result
+    assert runtime_state[0] is not None
+    assert runtime_state[0].phase == "PLAN_QA_REVIEW"
+
+
+@pytest.mark.asyncio
+async def test_plan_qa_review_command_invalid_verdict(tmp_path: Path) -> None:
+    from ecs_agent.components import UserPromptConfigComponent
+    from ecs_agent.providers.fake_provider import FakeProvider
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+    from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
+
+    provider = FakeProvider(responses=["ok"])
+    world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
+        provider=provider, model="fake", base_dir=tmp_path
+    )
+
+    workflow_id = "plan-qa-cmd-bad-verdict"
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
+    adapter_ref[0] = adapter
+
+    state = _make_runtime_state()
+    state.workflow_id = workflow_id
+    state.phase = "WRITE_PLAN"
+    adapter.write_state(state)
+    runtime_state[0] = state
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+    handler_key = next(t.content for t in config.triggers if t.pattern == "/plan:qa_review")
+    handler = config.script_handlers[handler_key]
+
+    result = await handler(world, agent_id, "/plan:qa_review maybe")
+
+    assert result is not None
+    assert "Error" in result
