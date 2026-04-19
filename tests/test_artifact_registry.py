@@ -133,12 +133,12 @@ def test_subagent_artifact_path_matches_records_subagent_subagent_uuid24(
     _assert_no_legacy_category_paths(result.record_path)
 
 
-def test_inline_threshold_keeps_8192_utf8_bytes_inline(tmp_path: Path) -> None:
+def test_inline_threshold_keeps_2048_utf8_bytes_inline(tmp_path: Path) -> None:
     artifact_kind = _require_registry_symbol("ArtifactKind")
     registry = _new_registry(tmp_path)
 
-    content = "a" * 8192
-    assert len(content.encode("utf-8")) == 8192
+    content = "a" * 2048
+    assert len(content.encode("utf-8")) == 2048
 
     result = registry.persist(kind=artifact_kind.TOOL, content=content)
 
@@ -146,12 +146,12 @@ def test_inline_threshold_keeps_8192_utf8_bytes_inline(tmp_path: Path) -> None:
     assert result.descriptor.inline_content == content
 
 
-def test_inline_threshold_spills_8193_utf8_bytes_to_file_only(tmp_path: Path) -> None:
+def test_inline_threshold_spills_2049_utf8_bytes_to_file_only(tmp_path: Path) -> None:
     artifact_kind = _require_registry_symbol("ArtifactKind")
     registry = _new_registry(tmp_path)
 
-    content = "a" * 8193
-    assert len(content.encode("utf-8")) == 8193
+    content = "a" * 2049
+    assert len(content.encode("utf-8")) == 2049
 
     result = registry.persist(kind=artifact_kind.TOOL, content=content)
 

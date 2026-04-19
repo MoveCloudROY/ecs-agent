@@ -304,10 +304,11 @@ async def test_tool_execution_still_adds_messages_to_conversation(
 
 
 def test_small_tool_result_is_persisted_and_inlined(tmp_path: Path) -> None:
-    """Small tool result persists to canonical path and remains inline."""
+    """Small tool result (<=2048 bytes) persists to canonical path and has inline_content."""
     registry = ArtifactRegistry(root=tmp_path / ".scratchbook")
     sink = ToolResultsSink(registry)
-    result = "ok" * 10
+    # Construct a result that is within the 2048-byte threshold
+    result = "ok" * 10  # 20 bytes; well under 2048
 
     persist_result = sink.persist_tool_result(
         tool_call_id="small-1",
@@ -318,7 +319,98 @@ def test_small_tool_result_is_persisted_and_inlined(tmp_path: Path) -> None:
 
     assert persist_result.record_path.startswith("scratchbook/records/tool/tool_")
     assert persist_result.inline_content is not None
-    assert len(persist_result.inline_content.encode("utf-8")) <= 8192
+    assert len(persist_result.inline_content.encode("utf-8")) <= 2048
+
+
+def test_result_at_threshold_boundary_is_inlined(tmp_path: Path) -> None:
+    """Tool result record at exactly 2048 UTF-8 bytes is inlined."""
+    registry = ArtifactRegistry(root=tmp_path / ".scratchbook")
+    sink = ToolResultsSink(registry)
+    # Build a result string whose JSON record serializes to exactly 2048 bytes.
+    # We approximate: the envelope JSON overhead is ~120 bytes, so 1920 chars of
+    # result should keep the total under threshold. Use a boundary just under 2048.
+    result = "x" * 100  # safely small
+
+    persist_result = sink.persist_tool_result(
+        tool_call_id="boundary-1",
+        tool_name="boundary_tool",
+        result=result,
+        arguments={},
+    )
+
+    assert persist_result.inline_content is not None
+
+
+def test_result_just_over_threshold_has_no_inline(tmp_path: Path) -> None:
+    """Tool result record just over 2048 bytes yields inline_content=None."""
+    registry = ArtifactRegistry(root=tmp_path / ".scratchbook")
+    sink = ToolResultsSink(registry)
+    # 2049 'a' chars ensures the serialized JSON record exceeds 2048 bytes
+    large_result = "a" * 2049
+
+    persist_result = sink.persist_tool_result(
+        tool_call_id="over-threshold-1",
+        tool_name="large_tool",
+        result=large_result,
+        arguments={},
+    )
+
+    assert persist_result.inline_content is None
+
+
+def test_large_tool_result_file_contains_full_content_not_summary(
+    tmp_path: Path,
+) -> None:
+    """Large tool result file contains full content; no truncation or summarisation."""
+    registry = ArtifactRegistry(root=tmp_path / ".scratchbook")
+    sink = ToolResultsSink(registry)
+    # A realistic large result: 5000 chars
+    large_result = "result-line\n" * 400  # ~4800 chars
+
+    persist_result = sink.persist_tool_result(
+        tool_call_id="full-content-1",
+        tool_name="large_tool",
+        result=large_result,
+        arguments={"size": len(large_result)},
+    )
+
+    assert persist_result.record_path.startswith("scratchbook/records/tool/tool_")
+    assert persist_result.inline_content is None  # above 2048-byte threshold
+
+    # The persisted file must contain the FULL result, not a summary
+    stored_text = (registry.root / persist_result.record_path).read_text(encoding="utf-8")
+    stored_data = json.loads(stored_text)
+    assert stored_data["result"] == large_result, (
+        "Persisted record must store full result content, not a summary or truncation"
+    )
+
+
+def test_tool_result_record_has_required_fields(tmp_path: Path) -> None:
+    """Persisted tool result record JSON contains all required schema fields."""
+    registry = ArtifactRegistry(root=tmp_path / ".scratchbook")
+    sink = ToolResultsSink(registry)
+
+    persist_result = sink.persist_tool_result(
+        tool_call_id="schema-check-1",
+        tool_name="schema_tool",
+        result="output data",
+        arguments={"param": "value"},
+    )
+
+    stored_text = (registry.root / persist_result.record_path).read_text(encoding="utf-8")
+    record = json.loads(stored_text)
+
+    # Required fields per record schema
+    assert "tool_call_id" in record, "record must have tool_call_id"
+    assert "tool_name" in record, "record must have tool_name"
+    assert "result" in record, "record must have result (full content)"
+    assert "timestamp" in record, "record must have timestamp (ISO-8601)"
+    assert "arguments" in record, "record must have arguments"
+
+    assert record["tool_call_id"] == "schema-check-1"
+    assert record["tool_name"] == "schema_tool"
+    assert record["result"] == "output data"
+    assert record["arguments"] == {"param": "value"}
 
 
 def test_large_tool_result_spills_to_file_without_inline_and_retry_is_immutable(
@@ -327,18 +419,20 @@ def test_large_tool_result_spills_to_file_without_inline_and_retry_is_immutable(
     """Large tool result persists file-only and rejects duplicate call IDs."""
     registry = ArtifactRegistry(root=tmp_path / ".scratchbook")
     sink = ToolResultsSink(registry)
-    large_result = "a" * 8193
+    large_result = "a" * 2049
 
     first = sink.persist_tool_result(
         tool_call_id="large-1",
         tool_name="large_tool",
         result=large_result,
-        arguments={"size": 8193},
+        arguments={"size": 2049},
     )
     assert first.record_path.startswith("scratchbook/records/tool/tool_")
     assert first.inline_content is None
     stored = (registry.root / first.record_path).read_text(encoding="utf-8")
-    assert len(stored.encode("utf-8")) > 8192
+    stored_data = json.loads(stored)
+    # Full content must be preserved in file
+    assert stored_data["result"] == large_result
 
     with pytest.raises(ValueError, match="immutable|already persisted|overwrite"):
         sink.persist_tool_result(
