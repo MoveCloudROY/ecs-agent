@@ -31,15 +31,20 @@ _PLAN_FILE_NAME = "workflow_plan.md"
 _RUNTIME_STATE_FILE_NAME = "runtime_state.json"
 _EVENTS_FILE_NAME = "events.jsonl"
 _MEMORY_FILE_NAME = "knowledge.jsonl"
-_TASK_EXECUTION_PHASES = {
-    "PLAN_FINALIZED",
-    "TASK_READY",
-    "TASK_RUNNING",
-    "TASK_BLOCKED",
-    "TASK_REPLAN",
-    "TASK_COMPLETED",
-    "TASK_ABORTED",
-}
+_PLANNING_PHASES = frozenset(
+    {"PLAN_INTERVIEW", "PLAN_ADVISOR_REVIEW", "PLAN_QA_REVIEW"}
+)
+_TASK_EXECUTION_PHASES = frozenset(
+    {
+        "PLAN_FINALIZED",
+        "TASK_READY",
+        "TASK_RUNNING",
+        "TASK_BLOCKED",
+        "TASK_REPLAN",
+        "TASK_COMPLETED",
+        "TASK_ABORTED",
+    }
+)
 
 
 def _write_text_atomic(path: Path, content: str) -> None:
@@ -126,12 +131,23 @@ class PlanTaskScratchbookAdapter:
         except (ValueError, KeyError, TypeError) as exc:
             raise ValueError(f"Failed to parse runtime state: {exc}") from exc
 
-        if state.phase in _TASK_EXECUTION_PHASES:
+        if state.phase in _PLANNING_PHASES:
+            draft_path = self.plan_dir / "draft.md"
+            if not draft_path.exists():
+                raise ValueError(
+                    f"Runtime state references missing draft file: plan/draft.md"
+                )
+        elif state.phase in _TASK_EXECUTION_PHASES:
             plan_path = self.workflow_root / state.active_plan_file
             if not plan_path.exists():
                 raise ValueError(
                     f"Runtime state references missing plan file: {state.active_plan_file}"
                 )
+        logger.debug(
+            "plan_task_state_loaded",
+            workflow_id=self.workflow_id,
+            phase=state.phase,
+        )
         return state
 
     def append_event(self, event: dict[str, Any]) -> str:
@@ -140,6 +156,11 @@ class PlanTaskScratchbookAdapter:
             f"{self.workflow_id}/state",
             json.dumps(event, ensure_ascii=False) + "\n",
         )
+        logger.debug(
+            "plan_task_event_appended",
+            workflow_id=self.workflow_id,
+            event_type=event.get("type"),
+        )
         return f"state/{_EVENTS_FILE_NAME}"
 
     def append_memory(self, entry: dict[str, Any]) -> str:
@@ -147,6 +168,11 @@ class PlanTaskScratchbookAdapter:
             _MEMORY_FILE_NAME,
             f"{self.workflow_id}/memory",
             json.dumps(entry, ensure_ascii=False) + "\n",
+        )
+        logger.debug(
+            "plan_task_memory_appended",
+            workflow_id=self.workflow_id,
+            task_id=entry.get("task_id"),
         )
         return f"memory/{_MEMORY_FILE_NAME}"
 
@@ -170,6 +196,11 @@ class PlanTaskScratchbookAdapter:
     def write_draft(self, content: str) -> str:
         draft_path = self.plan_dir / "draft.md"
         _write_text_atomic(draft_path, content)
+        logger.info(
+            "plan_task_draft_written",
+            workflow_id=self.workflow_id,
+            path=self._relative_path(draft_path),
+        )
         return self._relative_path(draft_path)
 
     def read_draft_description(self) -> str | None:
@@ -205,6 +236,13 @@ class PlanTaskScratchbookAdapter:
                 state.current_task_id = record.task_id
             if record.task_id not in requeue_task_ids:
                 requeue_task_ids.append(record.task_id)
+        if requeue_task_ids:
+            logger.info(
+                "plan_task_subagents_marked_stale",
+                workflow_id=state.workflow_id,
+                stale_count=len(requeue_task_ids),
+                task_ids=requeue_task_ids,
+            )
         return requeue_task_ids
 
     def _ensure_layout(self) -> None:
