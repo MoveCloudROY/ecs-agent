@@ -5,15 +5,17 @@ This example demonstrates an interactive plan→review→execute workflow using 
 ## Overview
 
 The workflow follows a structured lifecycle:
-1. **Planning**: The agent interviews the user to build a draft plan.
-2. **Review**: The plan must be approved by both an Advisor and a QA subagent.
-3. **Execution**: Once finalized, the plan is decomposed into a task queue and executed.
+1. **Draft Interview**: The agent interviews the user to build a draft plan (`DRAFT_INTERVIEW`).
+2. **Draft Reviews**: The draft must be approved by both an Advisor (`DRAFT_ADVISOR_REVIEW`) and a QA subagent (`DRAFT_QA_REVIEW`).
+3. **Write Plan**: The agent converts the approved draft into a structured `workflow_plan.md` (`WRITE_PLAN`).
+4. **Plan QA Review**: The final plan document is reviewed by QA (`PLAN_QA_REVIEW`).
+5. **Execution**: Once finalized, the plan is decomposed into a task queue and executed.
 
 ## Architecture
 
 - **Built-in Tools** — The main agent has `read_file`, `write_file`, `edit_file`, `bash`, and `glob` tools pre-installed via `BuiltinToolsSkill`, workspace-bound to the example directory. `edit_file` uses hash-anchored `edits_json` only: supply a `pos` of `"N#HASH"` obtained from a prior `read_file` call.
 - **ECS Core**: Uses `SystemPromptRenderSystem`, `UserPromptNormalizationSystem`, `ReasoningSystem`, `ToolExecutionSystem`, and `MemorySystem`.
-- **Prompt Configuration**: The planner entity declares `SystemPromptConfigSpec` with `PLAN_INTERVIEW_SYSTEM_PROMPT`, and `SystemPromptRenderSystem` bridges the rendered value into `LLMComponent.system_prompt` before reasoning.
+- **Prompt Configuration**: The planner entity declares `SystemPromptConfigSpec` with `DRAFT_INTERVIEW_SYSTEM_PROMPT`, and `SystemPromptRenderSystem` bridges the rendered value into `LLMComponent.system_prompt` before reasoning.
 - **State Machine**: Explicit phase transitions managed by `WorkflowStateMachine`.
 - **Artifacts**: Durable persistence of plans, state, and execution evidence via `PlanTaskScratchbookAdapter`.
 - **Controller**: `PlanController` manages the high-level workflow logic and review gates.
@@ -23,12 +25,14 @@ The workflow follows a structured lifecycle:
 
 ## Supported Commands
 
-The interactive runtime supports exactly nine slash commands:
+The interactive runtime supports eleven slash commands:
 
 - `/plan:start <description>`: Initialize a new workflow with a draft description.
 - `/plan:resume <workflow_id>`: Restore a previously-started workflow from disk by its workflow ID (e.g. `creative-writing-assistant-with-llm-workflow`). Marks any in-flight subagents as stale and resumes from the persisted phase.
 - `/plan:status`: Show the current workflow phase, status, and review verdicts.
-- `/plan:finalize`: Finalize the plan and transition to task execution (requires approved reviews).
+- `/plan:finalize`: Finalize the plan and transition to task execution (requires all three approved reviews).
+- `/plan:write`: Transition from `DRAFT_QA_REVIEW` to `WRITE_PLAN` phase to produce `workflow_plan.md`.
+- `/plan:qa_review <approved|revise|blocked> [notes]`: Record a QA verdict on the final plan document.
 - `/task:start <task_id>`: Start execution of a specific task.
 - `/task:status`: Show the status of the current task and subagent sessions.
 - `/task:resume`: Resume a blocked or replanned task.
