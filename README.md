@@ -110,7 +110,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **Canonical immutable records** — Tool and subagent outputs persist to `scratchbook/records/tool/tool_<uuid24>` and `scratchbook/records/subagent/subagent_<uuid24>`.
 - **Canonical mutable plan state** — Plan markdown and Boulder machine state live at `scratchbook/<plan_slug>/plan.md` and `scratchbook/<plan_slug>/executes/boulder.json`.
 - **Trigger-to-Boulder lifecycle** — Plan-type script triggers create Boulder; planning/replanning/tool systems update it throughout execution.
-- **Inline payload policy** — Artifact inline content is populated only when UTF-8 payload size is `<= 8192` bytes. For larger results, `inline_content` in the subagent result payload carries a hint string pointing to the artifact file path instead of being `null`.
+- **Inline payload policy** — Artifact inline content is populated only when UTF-8 payload size is `<= 2048` bytes. For larger results, `inline_content` is `None` and content is file-backed only. The persisted file always stores the full content — no truncation or summarisation.
 - **Prompt Provider** — Injects scratchbook context into system prompts via `ScratchbookPromptConfig` component.
 
 ### Prompt Normalization & Injection

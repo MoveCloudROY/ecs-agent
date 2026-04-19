@@ -24,14 +24,38 @@ The registry owns all canonical scratchbook paths:
 
 Legacy category examples (`tool_results/`, `planning/`, `replanning/`) are migration-only history and are not canonical runtime paths.
 
-## Inline Content Threshold (8 KB)
+## Inline Content Threshold (2 KB)
 
 When persisting immutable records (`persist()` or `capture_stream()`), `inline_content` follows a strict UTF-8 byte threshold:
 
-- Payload `<= 8192` bytes: `inline_content` is populated with full content
-- Payload `> 8192` bytes: `inline_content` is `None` (content remains file-backed)
+- Payload `<= 2048` bytes: `inline_content` is populated with full content
+- Payload `> 2048` bytes: `inline_content` is `None` (content remains file-backed only)
 
-This keeps small artifacts cheap to inline while keeping large payloads out of hot context paths.
+This keeps small artifacts cheap to inline while keeping larger payloads out of hot context paths. The persisted **file always contains the full content** regardless of size — no truncation or summarisation occurs.
+
+## Tool Result Record Format
+
+Every tool result is persisted as a JSON object. The canonical schema is:
+
+```json
+{
+  "tool_call_id": "call_abc123",
+  "tool_name": "get_weather",
+  "result": "<full tool output — never truncated>",
+  "timestamp": "2026-01-01T00:00:00.000000+00:00",
+  "arguments": {"city": "Paris"}
+}
+```
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `tool_call_id` | `string` | Unique ID for the tool call (immutable key — no overwrite) |
+| `tool_name` | `string` | Name of the tool that was called |
+| `result` | `string` | **Full** tool output — never summarised or truncated |
+| `timestamp` | `string` | ISO-8601 UTC timestamp of when the result was persisted |
+| `arguments` | `object \| null` | Tool arguments dict as passed to the handler |
+
+Records are written atomically (temp file + `os.replace`) and are immutable once written. Attempting to persist a second result for the same `tool_call_id` raises `ValueError`.
 
 ## Boulder Lifecycle (Trigger → Execution)
 
