@@ -211,6 +211,12 @@ class PlanTaskScratchbookAdapter:
         )
         return self._relative_path(draft_path)
 
+    def read_draft(self) -> str | None:
+        draft_path = self.plan_dir / "draft.md"
+        if not draft_path.exists():
+            return None
+        return draft_path.read_text(encoding="utf-8")
+
     def read_draft_description(self) -> str | None:
         draft_path = self.plan_dir / "draft.md"
         if not draft_path.exists():
