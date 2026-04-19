@@ -23,9 +23,10 @@ The workflow follows a structured lifecycle:
 
 ## Supported Commands
 
-The interactive runtime supports exactly eight slash commands:
+The interactive runtime supports exactly nine slash commands:
 
 - `/plan:start <description>`: Initialize a new workflow with a draft description.
+- `/plan:resume <workflow_id>`: Restore a previously-started workflow from disk by its workflow ID (e.g. `creative-writing-assistant-with-llm-workflow`). Marks any in-flight subagents as stale and resumes from the persisted phase.
 - `/plan:status`: Show the current workflow phase, status, and review verdicts.
 - `/plan:finalize`: Finalize the plan and transition to task execution (requires approved reviews).
 - `/task:start <task_id>`: Start execution of a specific task.
@@ -128,7 +129,38 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py -v
 - `LLM_BASE_URL`: API base URL (defaults to DashScope).
 - `LLM_MODEL`: Model ID (defaults to `qwen3.5-flash`).
 - `PLAN_TASK_INTERACTIVE`: Set to `0` to disable interactive stdin.
-- `DEBUG`: Set to `1` to enable debug logging.
+- `DEBUG`: Set to `1` to enable debug logging. All `plan_task_*` structured log events will appear on stderr via structlog.
+
+### Log Events (observable with `DEBUG=1`)
+
+| Event | Level | File | Description |
+|-------|-------|------|-------------|
+| `plan_task_workflow_id_derived` | info | `runtime.py` | Workflow ID derived from LLM or fallback; `method=llm\|fallback`, `slug=` |
+| `plan_task_workflow_id_llm_failed` | warning | `runtime.py` | LLM slug derivation failed; `exception=` |
+| `plan_task_draft_written` | info | `scratchbook_adapter.py` | Draft written to disk; `path=` |
+| `plan_task_state_loaded` | debug | `scratchbook_adapter.py` | Runtime state read from disk; `phase=` |
+| `plan_task_event_appended` | debug | `scratchbook_adapter.py` | Event appended to events.jsonl; `event_type=` |
+| `plan_task_memory_appended` | debug | `scratchbook_adapter.py` | Memory entry appended; `task_id=` |
+| `plan_task_subagents_marked_stale` | info | `scratchbook_adapter.py` | In-flight subagents staled on restart; `stale_count=`, `task_ids=` |
+| `plan_task_task_queue_initialized` | info | `task_exec.py` | Task queue built and state updated; `task_count=`, `current_task_id=`, `phase=` |
+| `plan_task_subagent_dispatched` | info | `task_exec.py` | Subagent session recorded for a task; `task_id=`, `session_id=` |
+| `plan_task_task_completed` | info | `task_exec.py` | Task completed; `next_task_id=`, `workflow_done=` |
+| `plan_task_circuit_breaker_triggered` | warning | `task_exec.py` | Task retry budget exhausted; `retry_count=`, `max_retries=` |
+| `plan_task_dependency_cycle_detected` | warning | `task_exec.py` | Cyclic dependency found before raise; `cycle_ids=` |
+| `plan_task_reviews_not_approved` | warning | `task_exec.py` | Task start blocked by missing reviews; `missing_phases=` |
+| `plan_task_finalize_blocked` | warning | `controller.py` | Plan finalization blocked by missing verdicts; `missing_phases=` |
+| `plan_task_plan_artifact_missing` | warning | `controller.py` | Plan artifact file not found before raise; `path=` |
+| `plan_task_plan_not_finalized` | warning | `plan_schema.py` | Plan status is not finalized before raise; `status=` |
+| `plan_task_command_plan_start` | info | `main.py` | `/plan:start` succeeded; `workflow_id=`, `description_len=` |
+| `plan_task_command_plan_resume` | info | `main.py` | `/plan:resume` succeeded; `workflow_id=`, `phase=` |
+| `plan_task_command_plan_finalize` | info | `main.py` | `/plan:finalize` succeeded; `workflow_id=` |
+| `plan_task_command_task_start` | info | `main.py` | `/task:start` succeeded; `task_count=`, `current_task_id=` |
+| `plan_task_command_task_resume` | info | `main.py` | `/task:resume` succeeded; `workflow_id=` |
+| `plan_task_command_task_replan` | info | `main.py` | `/task:replan` succeeded; `task_id=` |
+| `plan_task_command_task_abort` | info | `main.py` | `/task:abort` succeeded; `task_id=` |
+| `plan_task_command_plan_status` | debug | `main.py` | `/plan:status` invoked |
+| `plan_task_command_task_status` | debug | `main.py` | `/task:status` invoked; `phase=` |
+| `plan_task_command_error` | warning | `main.py` | A slash command raised ValueError; `command=`, `exception=` |
 
 ## Implementation Details
 

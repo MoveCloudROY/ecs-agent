@@ -280,6 +280,8 @@ def test_scratchbook_adapter_write_and_read_state_roundtrip(tmp_path: Path) -> N
         updated_at=now,
     )
     adapter.write_state(state)
+    adapter.plan_dir.mkdir(parents=True, exist_ok=True)
+    (adapter.plan_dir / "draft.md").write_text("# Draft\n", encoding="utf-8")
     restored = adapter.read_state()
     assert restored.workflow_id == "wf-rt"
     assert restored.phase == "PLAN_INTERVIEW"
@@ -1391,6 +1393,8 @@ def test_replan_governance_scope_change_forces_review(
     assert updated.status == "needs_review"
     assert updated.current_task_id == "task-001"
     assert updated.last_checkpoint == "dependency changed"
+    adapter.plan_dir.mkdir(parents=True, exist_ok=True)
+    (adapter.plan_dir / "draft.md").write_text("# Draft\n", encoding="utf-8")
     persisted = adapter.read_state()
     assert persisted.phase == "PLAN_ADVISOR_REVIEW"
     assert persisted.status == "needs_review"
@@ -2593,3 +2597,414 @@ def test_controller_missing_approved_reviews_uses_last_verdict(
     assert "PLAN_ADVISOR_REVIEW" not in missing, (
         "After revise→approved, PLAN_ADVISOR_REVIEW should be satisfied"
     )
+
+
+# ── /plan:resume command tests ─────────────────────────────────────────────────
+
+
+def test_parse_command_accepts_plan_resume_with_workflow_id() -> None:
+    from examples.e2e.plan_and_task.commands import Command, parse_command
+
+    cmd = parse_command("/plan:resume my-workflow-id")
+    assert cmd == Command(
+        name="/plan:resume",
+        raw="/plan:resume my-workflow-id",
+        args=["my-workflow-id"],
+    )
+
+
+def test_parse_command_plan_resume_without_args_parses_cleanly() -> None:
+    from examples.e2e.plan_and_task.commands import parse_command
+
+    # /plan:resume is in _COMMANDS_WITH_ARGS — missing args is still parseable;
+    # the handler is responsible for returning the "missing arg" error.
+    cmd = parse_command("/plan:resume")
+    assert cmd.name == "/plan:resume"
+    assert cmd.args == []
+
+
+def test_main_world_registers_plan_resume_trigger(tmp_path: Path) -> None:
+    from ecs_agent.components import UserPromptConfigComponent
+
+    world, agent_id, _, _ = _build_test_world(tmp_path)
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+
+    trigger_patterns = {t.pattern for t in config.triggers}
+    assert "/plan:resume" in trigger_patterns
+
+    resume_trigger = next(t for t in config.triggers if t.pattern == "/plan:resume")
+    assert resume_trigger.action == "script"
+    assert resume_trigger.match_mode == "prefix"
+    assert resume_trigger.content in config.script_handlers
+
+
+@pytest.mark.asyncio
+async def test_plan_resume_handler_restores_state_from_disk(tmp_path: Path) -> None:
+    """Handler must load persisted RuntimeState and set adapter_ref[0] / runtime_state[0]."""
+    import datetime
+
+    from ecs_agent.components import UserPromptConfigComponent
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter,
+    )
+
+    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+
+    workflow_id = "resume-test-workflow"
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
+    now = datetime.datetime.utcnow().isoformat()
+    persisted = RuntimeState(
+        workflow_id=workflow_id,
+        phase="TASK_BLOCKED",
+        status="blocked",
+        active_plan_file="plan/workflow_plan.md",
+        current_task_id="task-001",
+        completed_task_ids=[],
+        retry_budget={},
+        review_verdicts=[],
+        active_subagents=[],
+        memory_refs=[],
+        last_checkpoint=None,
+        created_at=now,
+        updated_at=now,
+    )
+    # The adapter requires the active_plan_file to exist for task-execution phases
+    (adapter.plan_dir / "workflow_plan.md").write_text("# Plan\n", encoding="utf-8")
+    adapter.write_state(persisted)
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+    handler_key = next(
+        t.content for t in config.triggers if t.pattern == "/plan:resume"
+    )
+    handler = config.script_handlers[handler_key]
+
+    result = await handler(world, agent_id, f"/plan:resume {workflow_id}")
+
+    assert runtime_state[0] is not None
+    assert runtime_state[0].workflow_id == workflow_id
+    assert runtime_state[0].phase == "TASK_BLOCKED"
+    assert isinstance(result, str)
+    assert workflow_id in result
+
+
+@pytest.mark.asyncio
+async def test_plan_resume_handler_missing_workflow_id_returns_error(
+    tmp_path: Path,
+) -> None:
+    """Handler must return an error string when no workflow_id argument is given."""
+    from ecs_agent.components import UserPromptConfigComponent
+
+    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+    handler_key = next(
+        t.content for t in config.triggers if t.pattern == "/plan:resume"
+    )
+    handler = config.script_handlers[handler_key]
+
+    result = await handler(world, agent_id, "/plan:resume")
+
+    assert result is not None
+    assert "Error" in result
+    assert runtime_state[0] is None  # must NOT have mutated state
+
+
+@pytest.mark.asyncio
+async def test_plan_resume_handler_unknown_workflow_id_returns_error(
+    tmp_path: Path,
+) -> None:
+    """Handler must return an error string when the scratchbook directory does not exist."""
+    from ecs_agent.components import UserPromptConfigComponent
+
+    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+    handler_key = next(
+        t.content for t in config.triggers if t.pattern == "/plan:resume"
+    )
+    handler = config.script_handlers[handler_key]
+
+    result = await handler(world, agent_id, "/plan:resume nonexistent-workflow-xyz")
+
+    assert result is not None
+    assert "Error" in result
+    assert runtime_state[0] is None  # must NOT have mutated state
+
+
+@pytest.mark.asyncio
+async def test_plan_resume_handler_marks_stale_subagents(tmp_path: Path) -> None:
+    """In-flight subagents in the persisted state must be marked stale on resume."""
+    import datetime
+
+    from ecs_agent.components import UserPromptConfigComponent
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter,
+    )
+    from examples.e2e.plan_and_task.state_models import SubagentRecord
+
+    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+
+    workflow_id = "stale-subagent-workflow"
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
+    now = datetime.datetime.utcnow().isoformat()
+    persisted = RuntimeState(
+        workflow_id=workflow_id,
+        phase="TASK_RUNNING",
+        status="active",
+        active_plan_file="plan/workflow_plan.md",
+        current_task_id="task-001",
+        completed_task_ids=[],
+        retry_budget={},
+        review_verdicts=[],
+        active_subagents=[
+            SubagentRecord(
+                session_id="ses_stale123",
+                task_id="task-001",
+                status="running",
+                started_at=now,
+                completed_at=None,
+            )
+        ],
+        memory_refs=[],
+        last_checkpoint=None,
+        created_at=now,
+        updated_at=now,
+    )
+    (adapter.plan_dir / "workflow_plan.md").write_text("# Plan\n", encoding="utf-8")
+    adapter.write_state(persisted)
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+    handler_key = next(
+        t.content for t in config.triggers if t.pattern == "/plan:resume"
+    )
+    handler = config.script_handlers[handler_key]
+
+    await handler(world, agent_id, f"/plan:resume {workflow_id}")
+
+    # After resume the active_subagents should all be marked stale
+    assert runtime_state[0] is not None
+    assert all(
+        s.status == "stale" for s in runtime_state[0].active_subagents
+    ), "All previously active subagents must be stale after resume"
+
+
+@pytest.mark.asyncio
+async def test_plan_resume_handler_updates_scratchbook_prompt_config(
+    tmp_path: Path,
+) -> None:
+    """The ECS ScratchbookPromptConfig component must be updated to the resumed workflow_id."""
+    import datetime
+
+    from ecs_agent.components import UserPromptConfigComponent
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter,
+        ScratchbookPromptConfig,
+    )
+
+    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+
+    workflow_id = "scratchbook-config-workflow"
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
+    now = datetime.datetime.utcnow().isoformat()
+    persisted = RuntimeState(
+        workflow_id=workflow_id,
+        phase="PLAN_INTERVIEW",
+        status="active",
+        active_plan_file="plan/workflow_plan.md",
+        current_task_id=None,
+        completed_task_ids=[],
+        retry_budget={},
+        review_verdicts=[],
+        active_subagents=[],
+        memory_refs=[],
+        last_checkpoint=None,
+        created_at=now,
+        updated_at=now,
+    )
+    adapter.write_state(persisted)
+    adapter.plan_dir.mkdir(parents=True, exist_ok=True)
+    (adapter.plan_dir / "draft.md").write_text("# Draft\n", encoding="utf-8")
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+    handler_key = next(
+        t.content for t in config.triggers if t.pattern == "/plan:resume"
+    )
+    handler = config.script_handlers[handler_key]
+
+    await handler(world, agent_id, f"/plan:resume {workflow_id}")
+
+    scratchbook_config = world.get_component(agent_id, ScratchbookPromptConfig)
+    assert scratchbook_config is not None
+    assert workflow_id in scratchbook_config.scratchbook_root_path
+
+
+# ---------------------------------------------------------------------------
+# Planning-phase file validation bug fix tests
+# ---------------------------------------------------------------------------
+
+
+def test_read_state_planning_phase_does_not_require_workflow_plan(
+    tmp_path: Path,
+) -> None:
+    """read_state() must succeed for planning phases even when workflow_plan.md is absent."""
+    import datetime
+
+    from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
+
+    for phase in ("PLAN_INTERVIEW", "PLAN_ADVISOR_REVIEW", "PLAN_QA_REVIEW"):
+        workflow_id = f"planning-phase-{phase.lower().replace('_', '-')}"
+        adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
+        # Write draft.md but NOT workflow_plan.md
+        adapter.plan_dir.mkdir(parents=True, exist_ok=True)
+        (adapter.plan_dir / "draft.md").write_text("# Draft\n", encoding="utf-8")
+
+        now = datetime.datetime.utcnow().isoformat()
+        state = RuntimeState(
+            workflow_id=workflow_id,
+            phase=phase,
+            status="active",
+            active_plan_file="plan/workflow_plan.md",
+            current_task_id=None,
+            completed_task_ids=[],
+            retry_budget={},
+            review_verdicts=[],
+            active_subagents=[],
+            memory_refs=[],
+            last_checkpoint=None,
+            created_at=now,
+            updated_at=now,
+        )
+        adapter.write_state(state)
+
+        # Must NOT raise even though workflow_plan.md is missing
+        loaded = adapter.read_state()
+        assert loaded.phase == phase, f"Expected phase {phase}, got {loaded.phase}"
+
+
+def test_read_state_task_execution_phase_requires_active_plan_file(
+    tmp_path: Path,
+) -> None:
+    """read_state() must raise ValueError in task execution phases when workflow_plan.md is absent."""
+    import datetime
+
+    from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
+
+    workflow_id = "task-phase-missing-plan"
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
+    # Do NOT write workflow_plan.md
+
+    now = datetime.datetime.utcnow().isoformat()
+    state = RuntimeState(
+        workflow_id=workflow_id,
+        phase="TASK_BLOCKED",
+        status="blocked",
+        active_plan_file="plan/workflow_plan.md",
+        current_task_id="task-001",
+        completed_task_ids=[],
+        retry_budget={},
+        review_verdicts=[],
+        active_subagents=[],
+        memory_refs=[],
+        last_checkpoint=None,
+        created_at=now,
+        updated_at=now,
+    )
+    adapter.write_state(state)
+
+    with pytest.raises(ValueError, match="missing plan file"):
+        adapter.read_state()
+
+
+@pytest.mark.asyncio
+async def test_plan_resume_handler_restores_planning_phase(tmp_path: Path) -> None:
+    """Resuming a workflow in a planning phase (PLAN_ADVISOR_REVIEW) must succeed.
+
+    Only draft.md exists; workflow_plan.md is absent. The handler must return a
+    success message and update runtime_state to the persisted phase.
+    """
+    import datetime
+
+    from ecs_agent.components import UserPromptConfigComponent
+    from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
+
+    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+
+    workflow_id = "resume-planning-phase-workflow"
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
+    adapter.plan_dir.mkdir(parents=True, exist_ok=True)
+    (adapter.plan_dir / "draft.md").write_text("# Draft\n", encoding="utf-8")
+    # Intentionally do NOT create workflow_plan.md
+
+    now = datetime.datetime.utcnow().isoformat()
+    persisted = RuntimeState(
+        workflow_id=workflow_id,
+        phase="PLAN_ADVISOR_REVIEW",
+        status="active",
+        active_plan_file="plan/workflow_plan.md",
+        current_task_id=None,
+        completed_task_ids=[],
+        retry_budget={},
+        review_verdicts=[],
+        active_subagents=[],
+        memory_refs=[],
+        last_checkpoint=None,
+        created_at=now,
+        updated_at=now,
+    )
+    adapter.write_state(persisted)
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+    handler_key = next(
+        t.content for t in config.triggers if t.pattern == "/plan:resume"
+    )
+    handler = config.script_handlers[handler_key]
+
+    result = await handler(world, agent_id, f"/plan:resume {workflow_id}")
+
+    assert result is not None
+    assert "Error" not in result, f"Expected success but got: {result}"
+    assert runtime_state[0] is not None
+    assert runtime_state[0].phase == "PLAN_ADVISOR_REVIEW"
+
+
+def test_require_plan_artifact_skipped_for_planning_phases(tmp_path: Path) -> None:
+    """_require_plan_artifact must not raise for planning phases even without workflow_plan.md."""
+    import datetime
+
+    from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
+
+    controller = PlanController()
+
+    for phase in ("PLAN_INTERVIEW", "PLAN_ADVISOR_REVIEW", "PLAN_QA_REVIEW"):
+        workflow_id = f"require-artifact-{phase.lower().replace('_', '-')}"
+        adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
+        # Only draft.md — no workflow_plan.md
+        adapter.plan_dir.mkdir(parents=True, exist_ok=True)
+        (adapter.plan_dir / "draft.md").write_text("# Draft\n", encoding="utf-8")
+
+        now = datetime.datetime.utcnow().isoformat()
+        state = RuntimeState(
+            workflow_id=workflow_id,
+            phase=phase,
+            status="active",
+            active_plan_file="plan/workflow_plan.md",
+            current_task_id=None,
+            completed_task_ids=[],
+            retry_budget={},
+            review_verdicts=[],
+            active_subagents=[],
+            memory_refs=[],
+            last_checkpoint=None,
+            created_at=now,
+            updated_at=now,
+        )
+
+        # Should NOT raise — planning phases don't require workflow_plan.md
+        controller._require_plan_artifact(adapter, state)  # type: ignore[attr-defined]
