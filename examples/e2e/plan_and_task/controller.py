@@ -71,6 +71,11 @@ class PlanController:
         missing_phases = self._missing_approved_reviews(state.review_verdicts)
         if missing_phases:
             formatted = ", ".join(missing_phases)
+            logger.warning(
+                "plan_task_finalize_blocked",
+                workflow_id=state.workflow_id,
+                missing_phases=missing_phases,
+            )
             raise ValueError(
                 "Cannot finalize: missing or unapproved review verdicts for: "
                 f"{formatted}"
@@ -364,11 +369,22 @@ execution_hints: []
 ```
 """
 
+    _PLANNING_PHASES = frozenset(
+        {"PLAN_INTERVIEW", "PLAN_ADVISOR_REVIEW", "PLAN_QA_REVIEW"}
+    )
+
     def _require_plan_artifact(
         self, adapter: ArtifactAdapter, state: RuntimeState
     ) -> None:
+        if state.phase in self._PLANNING_PHASES:
+            return
         plan_path = adapter.workflow_root / state.active_plan_file
         if not plan_path.exists():
+            logger.warning(
+                "plan_task_plan_artifact_missing",
+                workflow_id=state.workflow_id,
+                path=state.active_plan_file,
+            )
             raise ValueError(f"Missing plan artifact: {state.active_plan_file}")
 
     def _require_reason(self, reason: str) -> None:
