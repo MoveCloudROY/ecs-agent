@@ -75,6 +75,11 @@ def parse_plan(content: str) -> WorkflowPlan:
 
 def validate_plan(plan: WorkflowPlan) -> None:
     if plan.status != "finalized":
+        logger.warning(
+            "plan_task_plan_not_finalized",
+            workflow_id=plan.workflow_id,
+            status=plan.status,
+        )
         raise ValueError("Workflow plan must be finalized before execution.")
 
 

@@ -86,10 +86,24 @@ async def derive_workflow_id_from_llm(description: str, provider: LLMProvider) -
         normalized = _re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
         normalized = normalized[:_MAX_SLUG_LENGTH].rstrip("-")
         if normalized and _VALID_SLUG.match(normalized):
+            logger.info(
+                "plan_task_workflow_id_derived",
+                method="llm",
+                slug=normalized,
+            )
             return normalized
-    except Exception:
-        pass
-    return slug_from_description(description)
+    except Exception as exc:
+        logger.warning(
+            "plan_task_workflow_id_llm_failed",
+            exception=str(exc),
+        )
+    fallback = slug_from_description(description)
+    logger.info(
+        "plan_task_workflow_id_derived",
+        method="fallback",
+        slug=fallback,
+    )
+    return fallback
 
 
 async def setup_interactive_input(

@@ -91,6 +91,11 @@ class TaskExec:
             )
             if not ready_task_ids:
                 cycle = ", ".join(sorted(remaining_dependencies))
+                logger.warning(
+                    "plan_task_dependency_cycle_detected",
+                    workflow_id=self.state.workflow_id,
+                    cycle_ids=sorted(remaining_dependencies),
+                )
                 raise ValueError(f"Task queue contains cyclic dependencies: {cycle}")
 
             for task_id in ready_task_ids:
@@ -138,6 +143,13 @@ class TaskExec:
         adapter.write_state(state)
         self._write_task_queue_artifact(
             adapter.state_dir / _TASK_QUEUE_FILE_NAME, queue
+        )
+        logger.info(
+            "plan_task_task_queue_initialized",
+            workflow_id=state.workflow_id,
+            task_count=len(queue),
+            current_task_id=current_task_id,
+            phase=state.phase,
         )
         return state
 
@@ -193,6 +205,12 @@ class TaskExec:
         )
         state.updated_at = timestamp
         adapter.write_state(state)
+        logger.info(
+            "plan_task_subagent_dispatched",
+            workflow_id=state.workflow_id,
+            task_id=task_id,
+            session_id=session_id,
+        )
         return state
 
     def record_task_completion(
@@ -254,6 +272,13 @@ class TaskExec:
 
         state.updated_at = timestamp
         adapter.write_state(state)
+        logger.info(
+            "plan_task_task_completed",
+            workflow_id=state.workflow_id,
+            task_id=task_id,
+            next_task_id=next_task_id,
+            workflow_done=(next_task_id is None),
+        )
         return state
 
     def check_circuit_breaker(
@@ -263,7 +288,16 @@ class TaskExec:
         max_retries: int = 3,
     ) -> bool:
         """Return True if the task's retry budget has reached the maximum retries limit."""
-        return state.retry_budget.get(task_id, 0) >= max_retries
+        triggered = state.retry_budget.get(task_id, 0) >= max_retries
+        if triggered:
+            logger.warning(
+                "plan_task_circuit_breaker_triggered",
+                workflow_id=state.workflow_id,
+                task_id=task_id,
+                retry_count=state.retry_budget.get(task_id, 0),
+                max_retries=max_retries,
+            )
+        return triggered
 
     def check_retry_budget_exhausted(
         self,
@@ -286,6 +320,11 @@ class TaskExec:
         ]
         if missing:
             formatted = ", ".join(missing)
+            logger.warning(
+                "plan_task_reviews_not_approved",
+                workflow_id=self.state.workflow_id,
+                missing_phases=missing,
+            )
             raise ValueError(
                 f"Task start requires approved review verdicts for: {formatted}"
             )
