@@ -30,7 +30,7 @@ class PlanController:
     def handle_plan_start(
         self, adapter: ArtifactAdapter, description: str
     ) -> RuntimeState:
-        """Create workflow namespace, write draft.md, return PLAN_INTERVIEW state."""
+        """Create workflow namespace, write draft.md, return DRAFT_INTERVIEW state."""
         timestamp = self._utcnow_isoformat()
         draft_content = self._build_draft_markdown(
             description=description,
@@ -40,7 +40,7 @@ class PlanController:
         adapter.write_draft(draft_content)
         state = RuntimeState(
             workflow_id=adapter.workflow_id,
-            phase="PLAN_INTERVIEW",
+            phase="DRAFT_INTERVIEW",
             status="active",
             active_plan_file="plan/workflow_plan.md",
             current_task_id=None,
@@ -90,9 +90,13 @@ class PlanController:
         )
         adapter.write_plan(plan_content)
 
-        if state.phase == "PLAN_INTERVIEW":
-            state = self._state_machine.transition(state, "PLAN_QA_REVIEW")
-        if state.phase == "PLAN_ADVISOR_REVIEW":
+        if state.phase == "DRAFT_INTERVIEW":
+            state = self._state_machine.transition(state, "DRAFT_ADVISOR_REVIEW")
+        if state.phase == "DRAFT_ADVISOR_REVIEW":
+            state = self._state_machine.transition(state, "DRAFT_QA_REVIEW")
+        if state.phase == "DRAFT_QA_REVIEW":
+            state = self._state_machine.transition(state, "WRITE_PLAN")
+        if state.phase == "WRITE_PLAN":
             state = self._state_machine.transition(state, "PLAN_QA_REVIEW")
         if state.phase == "PLAN_QA_REVIEW":
             state = self._state_machine.transition(state, "PLAN_FINALIZED")
@@ -147,17 +151,17 @@ class PlanController:
             raise ValueError(f"Invalid verdict: {verdict_str!r}")
         timestamp = self._utcnow_isoformat()
         verdict = ReviewVerdict(
-            phase="PLAN_ADVISOR_REVIEW",
+            phase="DRAFT_ADVISOR_REVIEW",
             verdict=verdict_str,
             decided_at=timestamp,
             notes=notes,
             citations=citations or [],
             evidence_refs=evidence_refs or [],
         )
-        adapter.write_review_verdict("PLAN_ADVISOR_REVIEW", verdict)
+        adapter.write_review_verdict("DRAFT_ADVISOR_REVIEW", verdict)
         state.review_verdicts.append(verdict)
-        if "PLAN_ADVISOR_REVIEW" in self._allowed_transitions(state):
-            state = self._state_machine.transition(state, "PLAN_ADVISOR_REVIEW")
+        if "DRAFT_ADVISOR_REVIEW" in self._allowed_transitions(state):
+            state = self._state_machine.transition(state, "DRAFT_ADVISOR_REVIEW")
         state.updated_at = timestamp
         adapter.write_state(state)
         logger.info(
@@ -181,6 +185,60 @@ class PlanController:
             raise ValueError(f"Invalid verdict: {verdict_str!r}")
         timestamp = self._utcnow_isoformat()
         verdict = ReviewVerdict(
+            phase="DRAFT_QA_REVIEW",
+            verdict=verdict_str,
+            decided_at=timestamp,
+            notes=notes,
+            citations=citations or [],
+            evidence_refs=evidence_refs or [],
+        )
+        adapter.write_review_verdict("DRAFT_QA_REVIEW", verdict)
+        state.review_verdicts.append(verdict)
+        if "DRAFT_QA_REVIEW" in self._allowed_transitions(state):
+            state = self._state_machine.transition(state, "DRAFT_QA_REVIEW")
+        state.updated_at = timestamp
+        adapter.write_state(state)
+        logger.info(
+            "plan_task_qa_review_recorded",
+            workflow_id=state.workflow_id,
+            verdict=verdict_str,
+        )
+        return state
+
+    def handle_write_plan(
+        self,
+        state: RuntimeState,
+        adapter: ArtifactAdapter,
+    ) -> RuntimeState:
+        """Transition to WRITE_PLAN phase so the planner can produce workflow_plan.md."""
+        if state.phase != "DRAFT_QA_REVIEW":
+            raise ValueError(
+                f"handle_write_plan requires DRAFT_QA_REVIEW phase, got {state.phase}"
+            )
+        timestamp = self._utcnow_isoformat()
+        state = self._state_machine.transition(state, "WRITE_PLAN")
+        state.updated_at = timestamp
+        adapter.write_state(state)
+        logger.info(
+            "plan_task_write_plan_started",
+            workflow_id=state.workflow_id,
+        )
+        return state
+
+    def handle_plan_qa_review(
+        self,
+        state: RuntimeState,
+        adapter: ArtifactAdapter,
+        verdict_str: str,
+        notes: str | None = None,
+        citations: list[str] | None = None,
+        evidence_refs: list[str] | None = None,
+    ) -> RuntimeState:
+        """Record plan QA review verdict on the final workflow_plan.md, persist, update state."""
+        if verdict_str not in {"approved", "revise", "blocked"}:
+            raise ValueError(f"Invalid verdict: {verdict_str!r}")
+        timestamp = self._utcnow_isoformat()
+        verdict = ReviewVerdict(
             phase="PLAN_QA_REVIEW",
             verdict=verdict_str,
             decided_at=timestamp,
@@ -195,7 +253,7 @@ class PlanController:
         state.updated_at = timestamp
         adapter.write_state(state)
         logger.info(
-            "plan_task_qa_review_recorded",
+            "plan_task_plan_qa_review_recorded",
             workflow_id=state.workflow_id,
             verdict=verdict_str,
         )
@@ -256,7 +314,7 @@ class PlanController:
         if scope_changed:
             updated_state.review_verdicts = []
             updated_state = self._state_machine.transition(
-                updated_state, "PLAN_ADVISOR_REVIEW"
+                updated_state, "DRAFT_ADVISOR_REVIEW"
             )
             updated_state.status = "needs_review"
         else:
@@ -310,7 +368,7 @@ class PlanController:
 
     def _missing_approved_reviews(self, verdicts: list[ReviewVerdict]) -> list[str]:
         verdicts_by_phase = {verdict.phase: verdict.verdict for verdict in verdicts}
-        required_phases = ("PLAN_ADVISOR_REVIEW", "PLAN_QA_REVIEW")
+        required_phases = ("DRAFT_ADVISOR_REVIEW", "DRAFT_QA_REVIEW", "PLAN_QA_REVIEW")
         return [
             phase
             for phase in required_phases
@@ -370,7 +428,7 @@ execution_hints: []
 """
 
     _PLANNING_PHASES = frozenset(
-        {"PLAN_INTERVIEW", "PLAN_ADVISOR_REVIEW", "PLAN_QA_REVIEW"}
+        {"DRAFT_INTERVIEW", "DRAFT_ADVISOR_REVIEW", "DRAFT_QA_REVIEW", "WRITE_PLAN", "PLAN_QA_REVIEW"}
     )
 
     def _require_plan_artifact(
