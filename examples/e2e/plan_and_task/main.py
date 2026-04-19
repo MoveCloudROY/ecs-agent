@@ -58,6 +58,7 @@ from examples.e2e.plan_and_task.prompts import (
     DRAFT_INTERVIEW_SYSTEM_PROMPT,
     build_advisor_prompt,
     build_qa_prompt,
+    build_write_plan_prompt,
 )
 from examples.e2e.plan_and_task.runtime import (
     setup_interactive_input,
@@ -421,12 +422,14 @@ def build_plan_task_world(
         _world: World, _entity_id: EntityId, _user_text: str
     ) -> str | None:
         try:
+            adapter = _require_adapter(adapter_ref[0])
             runtime_state[0] = controller.handle_write_plan(
-                _require_state(runtime_state[0]), _require_adapter(adapter_ref[0])
+                _require_state(runtime_state[0]), adapter
             )
             s = _require_state(runtime_state[0])
             logger.info("plan_task_command_plan_write", workflow_id=s.workflow_id)
-            return f"Transitioned to WRITE_PLAN phase:\n{_format_status(controller.get_plan_status(s))}"
+            draft_content = adapter.read_draft() or ""
+            return build_write_plan_prompt(draft_content)
         except ValueError as exc:
             logger.warning("plan_task_command_error", command="plan_write", exception=str(exc))
             return f"Error: {exc}"
