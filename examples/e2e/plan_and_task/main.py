@@ -55,7 +55,7 @@ from examples.e2e.plan_and_task.scratchbook_adapter import (
 )
 from examples.e2e.plan_and_task.controller import PlanController
 from examples.e2e.plan_and_task.prompts import (
-    PLAN_INTERVIEW_SYSTEM_PROMPT,
+    DRAFT_INTERVIEW_SYSTEM_PROMPT,
     build_advisor_prompt,
     build_qa_prompt,
 )
@@ -118,7 +118,7 @@ def build_plan_task_world(
     world.add_component(
         agent_id,
         SystemPromptConfigSpec(
-            template_source=PromptTemplateSource(inline=PLAN_INTERVIEW_SYSTEM_PROMPT)
+            template_source=PromptTemplateSource(inline=DRAFT_INTERVIEW_SYSTEM_PROMPT)
         ),
     )
     world.add_component(agent_id, ToolRegistryComponent(tools={}, handlers={}))
@@ -417,11 +417,53 @@ def build_plan_task_world(
             logger.warning("plan_task_command_error", command="plan_resume", exception=str(exc))
             return f"Error: {exc}"
 
+    async def _handle_plan_write(
+        _world: World, _entity_id: EntityId, _user_text: str
+    ) -> str | None:
+        try:
+            runtime_state[0] = controller.handle_write_plan(
+                _require_state(runtime_state[0]), _require_adapter(adapter_ref[0])
+            )
+            s = _require_state(runtime_state[0])
+            logger.info("plan_task_command_plan_write", workflow_id=s.workflow_id)
+            return f"Transitioned to WRITE_PLAN phase:\n{_format_status(controller.get_plan_status(s))}"
+        except ValueError as exc:
+            logger.warning("plan_task_command_error", command="plan_write", exception=str(exc))
+            return f"Error: {exc}"
+
+    async def _handle_plan_qa_review(
+        _world: World, _entity_id: EntityId, user_text: str
+    ) -> str | None:
+        parts = user_text.strip().split(None, 2)
+        verdict = parts[1].strip() if len(parts) > 1 else ""
+        notes = parts[2].strip() if len(parts) > 2 else None
+        if verdict not in {"approved", "revise", "blocked"}:
+            return "Error: /plan:qa_review requires verdict: approved | revise | blocked"
+        try:
+            runtime_state[0] = controller.handle_plan_qa_review(
+                _require_state(runtime_state[0]),
+                _require_adapter(adapter_ref[0]),
+                verdict,
+                notes=notes,
+            )
+            s = _require_state(runtime_state[0])
+            logger.info(
+                "plan_task_command_plan_qa_review",
+                workflow_id=s.workflow_id,
+                verdict=verdict,
+            )
+            return f"Plan QA review recorded ({verdict}):\n{_format_status(controller.get_plan_status(s))}"
+        except ValueError as exc:
+            logger.warning("plan_task_command_error", command="plan_qa_review", exception=str(exc))
+            return f"Error: {exc}"
+
     script_handlers: dict[str, ScriptHandler] = {
         "plan_start": _handle_plan_start,
         "plan_resume": _handle_plan_resume,
         "plan_status": _handle_plan_status,
         "plan_finalize": _handle_plan_finalize,
+        "plan_write": _handle_plan_write,
+        "plan_qa_review": _handle_plan_qa_review,
         "task_start": _handle_task_start,
         "task_status": _handle_task_status,
         "task_resume": _handle_task_resume,
@@ -452,6 +494,18 @@ def build_plan_task_world(
             match_mode="prefix",
             action="script",
             content="plan_finalize",
+        ),
+        TriggerSpec(
+            pattern="/plan:write",
+            match_mode="prefix",
+            action="script",
+            content="plan_write",
+        ),
+        TriggerSpec(
+            pattern="/plan:qa_review",
+            match_mode="prefix",
+            action="script",
+            content="plan_qa_review",
         ),
         TriggerSpec(
             pattern="/task:start",
