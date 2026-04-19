@@ -31,9 +31,11 @@ _PLAN_FILE_NAME = "workflow_plan.md"
 _RUNTIME_STATE_FILE_NAME = "runtime_state.json"
 _EVENTS_FILE_NAME = "events.jsonl"
 _MEMORY_FILE_NAME = "knowledge.jsonl"
-_PLANNING_PHASES = frozenset(
-    {"PLAN_INTERVIEW", "PLAN_ADVISOR_REVIEW", "PLAN_QA_REVIEW"}
+_DRAFT_PHASES = frozenset(
+    {"DRAFT_INTERVIEW", "DRAFT_ADVISOR_REVIEW", "DRAFT_QA_REVIEW"}
 )
+_WRITE_PLAN_PHASES = frozenset({"WRITE_PLAN", "PLAN_QA_REVIEW"})
+_PLANNING_PHASES = _DRAFT_PHASES | _WRITE_PLAN_PHASES
 _TASK_EXECUTION_PHASES = frozenset(
     {
         "PLAN_FINALIZED",
@@ -131,7 +133,13 @@ class PlanTaskScratchbookAdapter:
         except (ValueError, KeyError, TypeError) as exc:
             raise ValueError(f"Failed to parse runtime state: {exc}") from exc
 
-        if state.phase in _PLANNING_PHASES:
+        if state.phase in _DRAFT_PHASES:
+            draft_path = self.plan_dir / "draft.md"
+            if not draft_path.exists():
+                raise ValueError(
+                    f"Runtime state references missing draft file: plan/draft.md"
+                )
+        elif state.phase in _WRITE_PLAN_PHASES:
             draft_path = self.plan_dir / "draft.md"
             if not draft_path.exists():
                 raise ValueError(

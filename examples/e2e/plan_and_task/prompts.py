@@ -41,7 +41,7 @@ _QA_PROMPT_EXAMPLE = build_qa_prompt(
 )
 
 
-PLAN_INTERVIEW_SYSTEM_PROMPT = f"""You are the planning interviewer for the plan-and-task workflow.
+DRAFT_INTERVIEW_SYSTEM_PROMPT = f"""You are the planning interviewer for the plan-and-task workflow.
 
 ## Interview Protocol
 
@@ -132,3 +132,48 @@ When advisor verdict is "revise" or "blocked":
 
 Do NOT call the QA subagent until the advisor returns "approved". Only an "approved" advisor verdict unlocks the QA step.
 """
+
+PLAN_INTERVIEW_SYSTEM_PROMPT = DRAFT_INTERVIEW_SYSTEM_PROMPT
+
+
+def build_write_plan_prompt(draft_content: str) -> str:
+    """Build the prompt instructing the planner to produce a structured workflow_plan.md."""
+    return (
+        "You have a fully-reviewed draft. Now produce a structured workflow plan.\n\n"
+        "Write the plan to `workflow_plan.md` using write_file. "
+        "The plan must include:\n"
+        "- YAML frontmatter: workflow_id, title, description, status: finalized, "
+        "created_at, finalized_at\n"
+        "- One or more `### Task: <task_id>` sections, each with a YAML block containing:\n"
+        "  task_id, title, description, dependencies (list), "
+        "acceptance_criteria (list), execution_hints (list)\n\n"
+        f"Draft:\n{draft_content}"
+    )
+
+
+def build_plan_qa_prompt(plan_content: str) -> str:
+    """Build the QA review prompt for the finalized workflow_plan.md."""
+    return (
+        "Review the finalized workflow plan as QA.\n"
+        "Confirm that every task has non-empty acceptance_criteria, "
+        "dependencies are valid task IDs, and the plan is execution-ready.\n\n"
+        f"Plan:\n{plan_content}"
+    )
+
+
+WRITE_PLAN_SYSTEM_PROMPT = (
+    "You are the plan writer for the plan-and-task workflow.\n\n"
+    "Your sole job is to translate the reviewed draft into a structured `workflow_plan.md`.\n"
+    "Use `write_file` to write the file. Follow the YAML frontmatter + task section format "
+    "described in your instructions. Do not ask questions — produce the plan now.\n\n"
+    "## Available tools:\n${_installed_tools}\n"
+)
+
+PLAN_QA_REVIEW_SYSTEM_PROMPT = (
+    "You are the plan QA reviewer for the plan-and-task workflow.\n\n"
+    "Review `workflow_plan.md`. Confirm every task has acceptance_criteria, "
+    "valid dependency references, and clear descriptions. "
+    "Return a single verdict: approved, revise, or blocked. "
+    "If revise or blocked, list the specific issues.\n\n"
+    "## Available tools:\n${_installed_tools}\n"
+)

@@ -10,8 +10,10 @@ logger = get_logger(__name__)
 
 _PHASE_VALUES = {
     "IDLE",
-    "PLAN_INTERVIEW",
-    "PLAN_ADVISOR_REVIEW",
+    "DRAFT_INTERVIEW",
+    "DRAFT_ADVISOR_REVIEW",
+    "DRAFT_QA_REVIEW",
+    "WRITE_PLAN",
     "PLAN_QA_REVIEW",
     "PLAN_FINALIZED",
     "TASK_READY",

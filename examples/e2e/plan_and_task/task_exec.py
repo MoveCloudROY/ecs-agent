@@ -312,7 +312,7 @@ class TaskExec:
         verdicts_by_phase = {
             verdict.phase: verdict.verdict for verdict in self.state.review_verdicts
         }
-        required_phases = ("PLAN_ADVISOR_REVIEW", "PLAN_QA_REVIEW")
+        required_phases = ("DRAFT_ADVISOR_REVIEW", "DRAFT_QA_REVIEW", "PLAN_QA_REVIEW")
         missing = [
             phase
             for phase in required_phases
