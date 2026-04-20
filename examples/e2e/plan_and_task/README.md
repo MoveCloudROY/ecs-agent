@@ -136,7 +136,7 @@ Requires `LLM_API_KEY`. Verifies the controller and task execution with a real p
 
 ```bash
 LLM_API_KEY="$LLM_API_KEY" \
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
+LLM_BASE_URL=https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1 \
 LLM_MODEL=qwen3.5-flash \
 uv run pytest tests/live/test_plan_and_task_flow_live.py -v
 ```
@@ -144,7 +144,7 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py -v
 ## Environment Variables
 
 - `LLM_API_KEY`: OpenAI-compatible API key.
-- `LLM_BASE_URL`: API base URL (defaults to DashScope).
+- `LLM_BASE_URL`: API base URL (defaults to DashScope Responses API: `https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1`).
 - `LLM_MODEL`: Model ID (defaults to `qwen3.5-flash`).
 - `PLAN_TASK_INTERACTIVE`: Set to `0` to disable interactive stdin.
 - `DEBUG`: Set to `1` to enable debug logging. All `plan_task_*` structured log events will appear on stderr via structlog.
@@ -180,7 +180,7 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py -v
 | `plan_task_command_task_status` | debug | `main.py` | `/task:status` invoked; `phase=` |
 | `plan_task_command_error` | warning | `main.py` | A slash command raised ValueError; `command=`, `exception=` |
 | `plan_task_llm_usage` | info | `billing.py` | Per-invocation token counts; `prompt_tokens=`, `completion_tokens=`, `total_tokens=`, `cached_input_tokens=`, `cache_creation_tokens=`, `cache_read_tokens=` |
-| `plan_task_llm_cache_stats` | info | `billing.py` | Per-invocation cache hit-rate; `cache_read_tokens=`, `total_prompt_tokens=`, `cache_hit_rate=`. **Not emitted with DashScope** — DashScope Chat Completions API does not return cached token counts, so this event is only triggered when using providers that expose `cached_tokens` (e.g. OpenAI) or `cache_read_input_tokens` (e.g. Anthropic). |
+| `plan_task_llm_cache_stats` | info | `billing.py` | Per-invocation cache hit-rate; `cache_read_tokens=`, `total_prompt_tokens=`, `cache_hit_rate=`. Emitted when using `ApiFormat.OPENAI_RESPONSES` with DashScope (returns `input_tokens_details.cached_tokens`), OpenAI (returns `prompt_tokens_details.cached_tokens`), or Anthropic (returns `cache_read_input_tokens`). Not emitted with DashScope Chat Completions API, which does not expose cached token counts. |
 | `plan_task_session_billing_summary` | info | `billing.py` | Cumulative token totals at end of session; `invocation_count=`, `total_prompt_tokens=`, `total_completion_tokens=`, `total_tokens=`, `total_cached_input_tokens=` |
 | `accounting_invocation_recorded` | info | `ecs_agent.accounting` | Per-invocation cost + cache hit-rate from `AccountingSubscriber`; `total_cost=`, `cache_hit_rate=` |
 | `plan_task_auto_transition_write_plan` | info | `controller.py` | QA review approved — auto-transitioned from `DRAFT_QA_REVIEW` to `WRITE_PLAN`; `workflow_id=` |
@@ -197,4 +197,4 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py -v
 - **Review Gating**: Finalization is strictly blocked until both `PLAN_ADVISOR_REVIEW` and `PLAN_QA_REVIEW` have `approved` verdicts.
 - **Advisor Retry Loop**: When the advisor returns `revise` or `blocked`, the system prompt instructs the planner LLM to apply the feedback to `draft.md` via `edit_file` and re-call the advisor. Only an `approved` advisor verdict unlocks the QA step. All advisor verdicts are appended to `review_verdicts` and the last verdict per phase is used for gating.
 - **Dependency Resolution**: Tasks are executed in topological order based on their `dependencies` list.
-- **Token Prefix Caching**: DashScope Chat Completions API enables server-side prefix caching automatically — no client-side configuration needed. For the Responses API (`ApiFormat.OPENAI_RESPONSES`), set `enable_store=True` in `ProviderConfig` to opt into server-side storage/caching. **However, DashScope Chat Completions API does not return cached token counts in its response** (`prompt_tokens_details` contains only `text_tokens`, no `cached_tokens` field). As a result, `normalize_openai_usage()` always returns `cached_input_tokens=None` for DashScope, `compute_cache_stats()` returns `None`, and the `plan_task_llm_cache_stats` log event is **never emitted** when using DashScope. Cache hit-rate is only observable via `plan_task_llm_cache_stats` when using providers that expose cached token counts in their response — e.g. OpenAI (returns `prompt_tokens_details.cached_tokens`) or Anthropic (returns `cache_read_input_tokens`).
+- **Token Prefix Caching**: This example uses `ApiFormat.OPENAI_RESPONSES` with `enable_store=True` (default config). The DashScope Responses API endpoint (`/api/v2/apps/protocols/compatible-mode/v1`) returns `usage.input_tokens_details.cached_tokens`, which `normalize_openai_usage()` maps to `cached_input_tokens`. On warm calls where the system prompt prefix is cached, `cached_input_tokens > 0` and `plan_task_llm_cache_stats` will be emitted with a non-zero `cache_hit_rate`. The DashScope Chat Completions API (`/compatible-mode/v1`) does not return cached token counts and does not support the Responses protocol — switching back to it would make cache observability unavailable.

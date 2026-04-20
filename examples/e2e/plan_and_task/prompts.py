@@ -46,11 +46,53 @@ def build_qa_prompt(draft_content: str, advisor_verdict: str) -> str:
     )
 
 
+def build_write_plan_prompt(draft_content: str) -> str:
+    return (
+        "You have a fully-reviewed draft. Now produce a structured workflow plan.\n\n"
+        "Write the plan to `workflow_plan.md` using write_file. "
+        "The plan must include:\n"
+        "- YAML frontmatter: workflow_id, title, description, status: finalized, "
+        "created_at, finalized_at\n"
+        "- One or more `### Task: <task_id>` sections, each with a YAML block containing:\n"
+        "  task_id, title, description, dependencies (list), "
+        "acceptance_criteria (list), execution_hints (list)\n\n"
+        f"Draft:\n{draft_content}"
+    )
+
+
+def build_plan_qa_prompt(plan_content: str) -> str:
+    return (
+        "You are performing QA review on the finalized workflow_plan.md.\n\n"
+        "Work through the following checklist. For each item, write PASS or FAIL with a one-line reason.\n\n"
+        "Checklist:\n"
+        "1. FRONTMATTER — Does the YAML frontmatter contain all required fields: "
+        "workflow_id, title, description, status (must be 'finalized'), created_at, finalized_at?\n"
+        "2. TASKS PRESENT — Does the plan contain at least one `### Task:` section?\n"
+        "3. TASK FIELDS — Does every task YAML block contain all required fields: "
+        "task_id, title, description, dependencies (list), acceptance_criteria (non-empty list), "
+        "execution_hints (list or null)?\n"
+        "4. ACCEPTANCE CRITERIA — Is every acceptance criterion concrete and verifiable by command "
+        "or file inspection (not subjective like 'code is clean')?\n"
+        "5. DEPENDENCIES — Do all dependency task IDs reference task IDs that exist in this plan? "
+        "No dangling references.\n"
+        "6. NO CYCLES — Can the tasks be executed in topological order with no circular dependencies?\n"
+        "7. DESCRIPTIONS — Does each task description clearly state what must be done and why "
+        "(no vague 'implement feature X' without context)?\n\n"
+        "After the checklist, output one of these exact verdicts on its own line:\n"
+        "  approved   — all items PASS\n"
+        "  revise     — one or more items FAIL but are fixable without redesign\n"
+        "  blocked    — a structural issue (e.g. dependency cycle, missing tasks) prevents execution\n\n"
+        "Then list every FAIL item with the task_id (if applicable) and specific fix instructions.\n\n"
+        f"Plan:\n{plan_content}"
+    )
+
+
 _ADVISOR_PROMPT_EXAMPLE = build_advisor_prompt("<current draft content>")
 _QA_PROMPT_EXAMPLE = build_qa_prompt(
     "<current draft content>",
     "<advisor verdict>",
 )
+_PLAN_QA_PROMPT_EXAMPLE = build_plan_qa_prompt("<current workflow_plan.md content>")
 
 
 DRAFT_INTERVIEW_SYSTEM_PROMPT = f"""You are the planning interviewer for the plan-and-task workflow.
@@ -159,58 +201,30 @@ When you receive that message:
 ## Plan QA Review (PLAN_QA_REVIEW phase)
 
 After the plan_writer subagent completes, the system automatically transitions to
-PLAN_QA_REVIEW and a QA subagent reviews `workflow_plan.md`.
+PLAN_QA_REVIEW. You must now invoke the QA subagent to review `workflow_plan.md`.
 
-- If QA approves the plan, the system automatically transitions to PLAN_FINALIZED.
-  You do not need to take any action.
-- If QA returns "revise" or "blocked", you will be notified. In that case:
-  1. Read `workflow_plan.md` to get the current content.
-  2. Apply the QA feedback using edit_file.
-  3. Call subagent(category="plan_writer", prompt=<updated write_plan prompt>) to regenerate.
+Steps:
+1. Call `read_file(file_path="workflow_plan.md")` to get the plan content.
+2. Call `subagent(category="qa", prompt=<plan qa review prompt>)` using the format below.
+3. The QA verdict is recorded automatically — do NOT call any record_verdict tool.
+4. The system extracts the verdict by scanning for one of these exact words: `approved`, `revise`, `blocked`.
+   Your prompt must ensure the QA subagent outputs exactly one of those tokens on its own line.
+
+Plan QA prompt format:
+{_PLAN_QA_PROMPT_EXAMPLE}
+
+When QA returns "approved":
+- The system automatically transitions to PLAN_FINALIZED. No further action needed.
+
+When QA returns "revise" or "blocked":
+1. Read the QA feedback from the tool result.
+2. Call `read_file(file_path="workflow_plan.md")` to get the current LINE#HASH annotated content.
+3. Apply every suggested fix using `edit_file`.
+4. Re-read `workflow_plan.md` to confirm edits landed correctly.
+5. Call `subagent(category="qa", prompt=<updated plan qa review prompt>)` with the revised plan content.
 """
 
 PLAN_INTERVIEW_SYSTEM_PROMPT = DRAFT_INTERVIEW_SYSTEM_PROMPT
-
-
-def build_write_plan_prompt(draft_content: str) -> str:
-    return (
-        "You have a fully-reviewed draft. Now produce a structured workflow plan.\n\n"
-        "Write the plan to `workflow_plan.md` using write_file. "
-        "The plan must include:\n"
-        "- YAML frontmatter: workflow_id, title, description, status: finalized, "
-        "created_at, finalized_at\n"
-        "- One or more `### Task: <task_id>` sections, each with a YAML block containing:\n"
-        "  task_id, title, description, dependencies (list), "
-        "acceptance_criteria (list), execution_hints (list)\n\n"
-        f"Draft:\n{draft_content}"
-    )
-
-
-def build_plan_qa_prompt(plan_content: str) -> str:
-    return (
-        "You are performing QA review on the finalized workflow_plan.md.\n\n"
-        "Work through the following checklist. For each item, write PASS or FAIL with a one-line reason.\n\n"
-        "Checklist:\n"
-        "1. FRONTMATTER — Does the YAML frontmatter contain all required fields: "
-        "workflow_id, title, description, status (must be 'finalized'), created_at, finalized_at?\n"
-        "2. TASKS PRESENT — Does the plan contain at least one `### Task:` section?\n"
-        "3. TASK FIELDS — Does every task YAML block contain all required fields: "
-        "task_id, title, description, dependencies (list), acceptance_criteria (non-empty list), "
-        "execution_hints (list or null)?\n"
-        "4. ACCEPTANCE CRITERIA — Is every acceptance criterion concrete and verifiable by command "
-        "or file inspection (not subjective like 'code is clean')?\n"
-        "5. DEPENDENCIES — Do all dependency task IDs reference task IDs that exist in this plan? "
-        "No dangling references.\n"
-        "6. NO CYCLES — Can the tasks be executed in topological order with no circular dependencies?\n"
-        "7. DESCRIPTIONS — Does each task description clearly state what must be done and why "
-        "(no vague 'implement feature X' without context)?\n\n"
-        "After the checklist, output one of these exact verdicts on its own line:\n"
-        "  approved   — all items PASS\n"
-        "  revise     — one or more items FAIL but are fixable without redesign\n"
-        "  blocked    — a structural issue (e.g. dependency cycle, missing tasks) prevents execution\n\n"
-        "Then list every FAIL item with the task_id (if applicable) and specific fix instructions.\n\n"
-        f"Plan:\n{plan_content}"
-    )
 
 
 WRITE_PLAN_SYSTEM_PROMPT = (
