@@ -98,6 +98,19 @@ The workflow can be restarted at any time. On startup, no workflow ID is resolve
 
 > **Note**: Use the same description text (or the same slug) as the original `/plan:start` call so the derived workflow ID matches the existing scratchbook directory.
 
+### Mid-flight State Reconciliation
+
+When `/plan:resume <workflow_id>` is called, the system reads the persisted state and automatically reconciles any in-progress phases so the workflow can continue without manual intervention:
+
+| Resumed phase | Condition | Automatic action |
+|---|---|---|
+| `DRAFT_QA_REVIEW` | `review_verdicts` contains an `approved` verdict for this phase | Transitions to `WRITE_PLAN`, injects a write-plan trigger message to start the `plan_writer` subagent |
+| `WRITE_PLAN` | (any — plan_writer was mid-flight) | Injects a write-plan trigger message to restart the `plan_writer` subagent |
+| `PLAN_QA_REVIEW` | `review_verdicts` contains an `approved` verdict for this phase | Transitions to `PLAN_FINALIZED` |
+| All other phases | — | No automatic action; resumes normally |
+
+This means after a process restart you can call `/plan:resume <workflow_id>` and, if QA had already approved the draft before the restart, the `plan_writer` will be triggered automatically — no need to manually issue `/plan:write`.
+
 ## Testing
 
 ### Integration tests
@@ -172,7 +185,7 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py -v
 | `accounting_invocation_recorded` | info | `ecs_agent.accounting` | Per-invocation cost + cache hit-rate from `AccountingSubscriber`; `total_cost=`, `cache_hit_rate=` |
 | `plan_task_auto_transition_write_plan` | info | `controller.py` | QA review approved — auto-transitioned from `DRAFT_QA_REVIEW` to `WRITE_PLAN`; `workflow_id=` |
 | `plan_task_auto_transition_plan_finalized` | info | `controller.py` | Plan QA review approved — auto-transitioned from `PLAN_QA_REVIEW` to `PLAN_FINALIZED`; `workflow_id=` |
-| `plan_task_auto_trigger_plan_writer` | info | `main.py` | QA approved — injected write-plan trigger message to start `plan_writer` subagent automatically; `workflow_id=` |
+| `plan_task_auto_trigger_plan_writer` | info | `main.py` | QA approved — injected write-plan trigger message to start `plan_writer` subagent automatically; `workflow_id=`, `source=` (omitted when triggered by live QA event; `source=reconcile_after_resume` when triggered on `/plan:resume`) |
 
 ## Implementation Details
 
