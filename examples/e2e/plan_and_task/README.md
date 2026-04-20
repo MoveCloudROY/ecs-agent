@@ -7,8 +7,8 @@ This example demonstrates an interactive plan→review→execute workflow using 
 The workflow follows a structured lifecycle:
 1. **Draft Interview**: The agent interviews the user to build a draft plan (`DRAFT_INTERVIEW`).
 2. **Draft Reviews**: The draft must be approved by both an Advisor (`DRAFT_ADVISOR_REVIEW`) and a QA subagent (`DRAFT_QA_REVIEW`).
-3. **Write Plan**: The agent converts the approved draft into a structured `workflow_plan.md` (`WRITE_PLAN`).
-4. **Plan QA Review**: The final plan document is reviewed by QA (`PLAN_QA_REVIEW`).
+3. **Write Plan**: Once QA approves the draft, the system **automatically** transitions to `WRITE_PLAN` and triggers a dedicated `plan_writer` subagent (equipped with the `writing-plans` skill) to convert the approved draft into a structured `workflow_plan.md`. No manual command is needed.
+4. **Plan QA Review**: When the plan writer finishes, the system **automatically** transitions to `PLAN_QA_REVIEW` where QA reviews the final plan document.
 5. **Execution**: Once finalized, the plan is decomposed into a task queue and executed.
 
 ## Architecture
@@ -20,6 +20,7 @@ The workflow follows a structured lifecycle:
 - **Artifacts**: Durable persistence of plans, state, and execution evidence via `PlanTaskScratchbookAdapter`.
 - **Controller**: `PlanController` manages the high-level workflow logic and review gates.
 - **Subagent Reviews**: Advisor and QA review steps are wired as ECS subagents via `SubagentRegistryComponent`. The planner invokes them with `subagent(category="advisor", ...)` and verdicts are automatically extracted from subagent results via `DelegationCompletedEvent` subscription.
+- **Plan Writer Subagent**: The `WRITE_PLAN` phase is executed by a dedicated `plan_writer` subagent registered in `SubagentRegistryComponent`. It is pre-loaded with the `writing-plans` skill (discovered from `.claude/skills/writing_plans/SKILL.md`) and inherits `read_file`, `write_file`, `edit_file`, and `glob` tools. When it completes, `handle_write_plan_completed()` transitions the state to `PLAN_QA_REVIEW`.
 - **Task Execution**: `TaskExec` handles plan loading, dependency resolution, and subagent dispatch.
 - **Slash Commands**: Dispatched via ECS `TriggerSpec` script handlers on `UserPromptConfigComponent`. Commands appear as transformed messages in conversation history.
 
@@ -31,7 +32,7 @@ The interactive runtime supports eleven slash commands:
 - `/plan:resume <workflow_id>`: Restore a previously-started workflow from disk by its workflow ID (e.g. `creative-writing-assistant-with-llm-workflow`). Marks any in-flight subagents as stale and resumes from the persisted phase.
 - `/plan:status`: Show the current workflow phase, status, and review verdicts.
 - `/plan:finalize`: Finalize the plan and transition to task execution (requires all three approved reviews).
-- `/plan:write`: Transition from `DRAFT_QA_REVIEW` to `WRITE_PLAN` phase to produce `workflow_plan.md`.
+- `/plan:write`: Transition from `DRAFT_QA_REVIEW` to `WRITE_PLAN` phase to produce `workflow_plan.md`. **Optional** — this transition now happens automatically when QA approves the draft, but can still be invoked manually.
 - `/plan:qa_review <approved|revise|blocked> [notes]`: Record a QA verdict on the final plan document.
 - `/task:start <task_id>`: Start execution of a specific task.
 - `/task:status`: Show the status of the current task and subagent sessions.
@@ -165,6 +166,13 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py -v
 | `plan_task_command_plan_status` | debug | `main.py` | `/plan:status` invoked |
 | `plan_task_command_task_status` | debug | `main.py` | `/task:status` invoked; `phase=` |
 | `plan_task_command_error` | warning | `main.py` | A slash command raised ValueError; `command=`, `exception=` |
+| `plan_task_llm_usage` | info | `billing.py` | Per-invocation token counts; `prompt_tokens=`, `completion_tokens=`, `total_tokens=`, `cached_input_tokens=`, `cache_creation_tokens=`, `cache_read_tokens=` |
+| `plan_task_llm_cache_stats` | info | `billing.py` | Per-invocation cache hit-rate (only when provider returns cache token data); `cache_read_tokens=`, `total_prompt_tokens=`, `cache_hit_rate=` |
+| `plan_task_session_billing_summary` | info | `billing.py` | Cumulative token totals at end of session; `invocation_count=`, `total_prompt_tokens=`, `total_completion_tokens=`, `total_tokens=`, `total_cached_input_tokens=` |
+| `accounting_invocation_recorded` | info | `ecs_agent.accounting` | Per-invocation cost + cache hit-rate from `AccountingSubscriber`; `total_cost=`, `cache_hit_rate=` |
+| `plan_task_auto_transition_write_plan` | info | `controller.py` | QA review approved — auto-transitioned from `DRAFT_QA_REVIEW` to `WRITE_PLAN`; `workflow_id=` |
+| `plan_task_auto_transition_plan_finalized` | info | `controller.py` | Plan QA review approved — auto-transitioned from `PLAN_QA_REVIEW` to `PLAN_FINALIZED`; `workflow_id=` |
+| `plan_task_auto_trigger_plan_writer` | info | `main.py` | QA approved — injected write-plan trigger message to start `plan_writer` subagent automatically; `workflow_id=` |
 
 ## Implementation Details
 
@@ -176,3 +184,4 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py -v
 - **Review Gating**: Finalization is strictly blocked until both `PLAN_ADVISOR_REVIEW` and `PLAN_QA_REVIEW` have `approved` verdicts.
 - **Advisor Retry Loop**: When the advisor returns `revise` or `blocked`, the system prompt instructs the planner LLM to apply the feedback to `draft.md` via `edit_file` and re-call the advisor. Only an `approved` advisor verdict unlocks the QA step. All advisor verdicts are appended to `review_verdicts` and the last verdict per phase is used for gating.
 - **Dependency Resolution**: Tasks are executed in topological order based on their `dependencies` list.
+- **Token Prefix Caching**: DashScope Chat Completions API enables server-side prefix caching automatically — no client-side configuration needed. For the Responses API (`ApiFormat.OPENAI_RESPONSES`), set `enable_store=True` in `ProviderConfig` to opt into server-side storage/caching. Cache hit-rate is observable via the `plan_task_llm_cache_stats` log event.

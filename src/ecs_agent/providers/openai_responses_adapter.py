@@ -9,6 +9,7 @@ from typing import Any, Protocol, cast
 
 import httpx
 
+from ecs_agent.providers.config import ProviderConfig
 from ecs_agent.types import (
     CompletionResult,
     FileRefPart,
@@ -29,6 +30,7 @@ class _OpenAIProviderFacade(Protocol):
     _client: httpx.AsyncClient
     _timeout: httpx.Timeout
     _responses_api_available: bool | None
+    _provider_config: ProviderConfig
 
     def _build_headers(self) -> dict[str, str]: ...
 
@@ -256,7 +258,7 @@ class OpenAIResponsesAdapter:
         request_body: dict[str, Any] = {
             "model": self._provider._model,
             "input": self._convert_messages_to_responses_input(messages),
-            "store": False,
+            "store": self._provider._provider_config.enable_store,
         }
 
         instructions = self._provider._extract_responses_instructions(messages)

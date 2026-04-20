@@ -21,6 +21,7 @@ class ProviderConfig:
     api_format: ApiFormat
     extra_headers: dict[str, str] = field(default_factory=dict)
     timeout: float | None = None
+    enable_store: bool = False
 
 
 @dataclass(slots=True)
