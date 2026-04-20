@@ -196,6 +196,12 @@ class PlanController:
         state.review_verdicts.append(verdict)
         if "DRAFT_QA_REVIEW" in self._allowed_transitions(state):
             state = self._state_machine.transition(state, "DRAFT_QA_REVIEW")
+        if verdict_str == "approved" and "WRITE_PLAN" in self._allowed_transitions(state):
+            state = self._state_machine.transition(state, "WRITE_PLAN")
+            logger.info(
+                "plan_task_auto_transition_write_plan",
+                workflow_id=state.workflow_id,
+            )
         state.updated_at = timestamp
         adapter.write_state(state)
         logger.info(
@@ -225,6 +231,25 @@ class PlanController:
         )
         return state
 
+    def handle_write_plan_completed(
+        self,
+        state: RuntimeState,
+        adapter: ArtifactAdapter,
+    ) -> RuntimeState:
+        if state.phase != "WRITE_PLAN":
+            raise ValueError(
+                f"handle_write_plan_completed requires WRITE_PLAN phase, got {state.phase}"
+            )
+        timestamp = self._utcnow_isoformat()
+        state = self._state_machine.transition(state, "PLAN_QA_REVIEW")
+        state.updated_at = timestamp
+        adapter.write_state(state)
+        logger.info(
+            "plan_task_write_plan_completed",
+            workflow_id=state.workflow_id,
+        )
+        return state
+
     def handle_plan_qa_review(
         self,
         state: RuntimeState,
@@ -250,6 +275,12 @@ class PlanController:
         state.review_verdicts.append(verdict)
         if "PLAN_QA_REVIEW" in self._allowed_transitions(state):
             state = self._state_machine.transition(state, "PLAN_QA_REVIEW")
+        if verdict_str == "approved" and "PLAN_FINALIZED" in self._allowed_transitions(state):
+            state = self._state_machine.transition(state, "PLAN_FINALIZED")
+            logger.info(
+                "plan_task_auto_transition_plan_finalized",
+                workflow_id=state.workflow_id,
+            )
         state.updated_at = timestamp
         adapter.write_state(state)
         logger.info(

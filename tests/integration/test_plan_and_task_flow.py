@@ -3203,7 +3203,7 @@ async def test_plan_qa_review_command_approved(tmp_path: Path) -> None:
     assert result is not None
     assert "Error" not in result
     assert runtime_state[0] is not None
-    assert runtime_state[0].phase == "PLAN_QA_REVIEW"
+    assert runtime_state[0].phase == "PLAN_FINALIZED"
 
 
 @pytest.mark.asyncio
@@ -3237,3 +3237,271 @@ async def test_plan_qa_review_command_invalid_verdict(tmp_path: Path) -> None:
 
     assert result is not None
     assert "Error" in result
+
+
+# ---------------------------------------------------------------------------
+# handle_write_plan_completed tests
+# ---------------------------------------------------------------------------
+
+def test_handle_write_plan_completed_transitions_to_plan_qa_review(tmp_path: Path) -> None:
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "WRITE_PLAN"
+    adapter.write_state(state)
+    adapter.plan_dir.mkdir(parents=True, exist_ok=True)
+    (adapter.plan_dir / "draft.md").write_text("# Draft\n", encoding="utf-8")
+
+    result = ctrl.handle_write_plan_completed(state, adapter)
+
+    assert result.phase == "PLAN_QA_REVIEW"
+
+
+def test_handle_write_plan_completed_persists_state(tmp_path: Path) -> None:
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "WRITE_PLAN"
+    adapter.write_state(state)
+    adapter.plan_dir.mkdir(parents=True, exist_ok=True)
+    (adapter.plan_dir / "draft.md").write_text("# Draft\n", encoding="utf-8")
+
+    ctrl.handle_write_plan_completed(state, adapter)
+
+    reloaded = adapter.read_state()
+    assert reloaded.phase == "PLAN_QA_REVIEW"
+
+
+def test_handle_write_plan_completed_rejects_wrong_phase(tmp_path: Path) -> None:
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "DRAFT_QA_REVIEW"
+    adapter.write_state(state)
+
+    with pytest.raises(ValueError, match="WRITE_PLAN"):
+        ctrl.handle_write_plan_completed(state, adapter)
+
+
+def test_plan_writer_subagent_registered(tmp_path: Path) -> None:
+    from ecs_agent.components.definitions import SubagentRegistryComponent
+    from ecs_agent.providers.fake_provider import FakeProvider
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    provider = FakeProvider(responses=["ok"])
+    world, agent_id, _, _ = build_plan_task_world(
+        provider=provider, model="fake", base_dir=tmp_path
+    )
+
+    registry = world.get_component(agent_id, SubagentRegistryComponent)
+    assert registry is not None
+    assert "plan_writer" in registry.subagents
+    cfg = registry.subagents["plan_writer"]
+    assert "writing-plans" in cfg.skills
+
+
+def test_writing_plans_skill_registered_in_catalog(tmp_path: Path) -> None:
+    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.skills import catalog as _catalog
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    provider = FakeProvider(responses=["ok"])
+    build_plan_task_world(provider=provider, model="fake", base_dir=tmp_path)
+
+    descriptor = _catalog.lookup("writing-plans")
+    assert descriptor is not None
+    assert descriptor.name == "writing-plans"
+
+
+# ---------------------------------------------------------------------------
+# BillingSubscriber tests
+# ---------------------------------------------------------------------------
+
+def test_billing_subscriber_accumulates_token_counts() -> None:
+    import asyncio
+    from ecs_agent.accounting.models import LLMInvocationEvent, UsageRecord
+    from ecs_agent.types import EntityId
+    from examples.e2e.plan_and_task.billing import BillingSubscriber
+
+    sub = BillingSubscriber()
+
+    async def _run() -> None:
+        usage = UsageRecord(
+            prompt_tokens=100,
+            completion_tokens=40,
+            total_tokens=140,
+            cached_input_tokens=10,
+        )
+        event = LLMInvocationEvent(
+            entity_id=EntityId(1),
+            provider_id="test",
+            model="m",
+            usage=usage,
+        )
+        await sub._handle_llm_invocation(event)
+        await sub._handle_llm_invocation(event)
+
+    asyncio.run(_run())
+
+    assert sub._invocation_count == 2
+    assert sub._total_prompt_tokens == 200
+    assert sub._total_completion_tokens == 80
+    assert sub._total_tokens == 280
+    assert sub._total_cached_input_tokens == 20
+
+
+def test_billing_subscriber_handles_zero_usage() -> None:
+    import asyncio
+    from ecs_agent.accounting.models import LLMInvocationEvent, UsageRecord
+    from ecs_agent.types import EntityId
+    from examples.e2e.plan_and_task.billing import BillingSubscriber
+
+    sub = BillingSubscriber()
+
+    async def _run() -> None:
+        usage = UsageRecord()  # all None
+        event = LLMInvocationEvent(
+            entity_id=EntityId(1),
+            provider_id="test",
+            model="m",
+            usage=usage,
+        )
+        await sub._handle_llm_invocation(event)
+
+    asyncio.run(_run())
+
+    assert sub._invocation_count == 1
+    assert sub._total_prompt_tokens == 0
+    assert sub._total_completion_tokens == 0
+    assert sub._total_tokens == 0
+
+
+def test_billing_subscriber_subscribe_wires_event_bus(tmp_path: Path) -> None:
+    from ecs_agent.core.event_bus import EventBus
+    from ecs_agent.accounting.models import LLMInvocationEvent
+    from examples.e2e.plan_and_task.billing import BillingSubscriber
+
+    bus = EventBus()
+    sub = BillingSubscriber()
+    sub.subscribe(bus)
+
+    assert LLMInvocationEvent in bus._handlers  # type: ignore[attr-defined]
+
+
+def test_billing_subscriber_wired_in_build_plan_task_world(tmp_path: Path) -> None:
+    """build_plan_task_world + wiring billing subscriber does not raise."""
+    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.accounting.models import LLMInvocationEvent
+    from examples.e2e.plan_and_task.billing import BillingSubscriber
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    provider = FakeProvider(responses=["ok"])
+    world, _, _, _ = build_plan_task_world(provider=provider, model="fake", base_dir=tmp_path)
+
+    sub = BillingSubscriber()
+    sub.subscribe(world.event_bus)
+
+    assert LLMInvocationEvent in world.event_bus._handlers  # type: ignore[attr-defined]
+
+
+def test_accounting_subscriber_wired_in_main(tmp_path: Path) -> None:
+    """AccountingSubscriber can be subscribed to the world event_bus without error."""
+    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.accounting import AccountingSubscriber
+    from ecs_agent.accounting.models import LLMInvocationEvent
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    provider = FakeProvider(responses=["ok"])
+    world, _, _, _ = build_plan_task_world(provider=provider, model="fake", base_dir=tmp_path)
+
+    acc = AccountingSubscriber()
+    acc.subscribe(world.event_bus)
+
+    assert LLMInvocationEvent in world.event_bus._handlers  # type: ignore[attr-defined]
+
+
+def test_qa_review_approved_auto_transitions_to_write_plan(tmp_path: Path) -> None:
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "DRAFT_QA_REVIEW"
+    adapter.write_state(state)
+
+    result = ctrl.handle_qa_review(state, adapter, "approved")
+
+    assert result.phase == "WRITE_PLAN"
+
+
+def test_qa_review_revise_stays_in_draft_qa_review(tmp_path: Path) -> None:
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "DRAFT_QA_REVIEW"
+    adapter.write_state(state)
+
+    result = ctrl.handle_qa_review(state, adapter, "revise")
+
+    assert result.phase == "DRAFT_QA_REVIEW"
+
+
+def test_plan_qa_review_approved_auto_transitions_to_plan_finalized(tmp_path: Path) -> None:
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "PLAN_QA_REVIEW"
+    adapter.write_state(state)
+
+    result = ctrl.handle_plan_qa_review(state, adapter, "approved")
+
+    assert result.phase == "PLAN_FINALIZED"
+
+
+def test_plan_qa_review_revise_stays_in_plan_qa_review(tmp_path: Path) -> None:
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "PLAN_QA_REVIEW"
+    adapter.write_state(state)
+
+    result = ctrl.handle_plan_qa_review(state, adapter, "revise")
+
+    assert result.phase == "PLAN_QA_REVIEW"
+
+
+def test_handle_write_plan_completed_transitions_write_plan_to_plan_qa_review(tmp_path: Path) -> None:
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "WRITE_PLAN"
+    adapter.write_state(state)
+
+    result = ctrl.handle_write_plan_completed(state, adapter)
+
+    assert result.phase == "PLAN_QA_REVIEW"
+
+
+def test_provider_config_enable_store_defaults_false() -> None:
+    from ecs_agent.providers.config import ApiFormat, ProviderConfig
+
+    config = ProviderConfig(
+        provider_id="test",
+        base_url="https://example.com",
+        api_key="sk-test",
+        api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+    )
+
+    assert config.enable_store is False
+
+
+def test_provider_config_enable_store_can_be_set_true() -> None:
+    from ecs_agent.providers.config import ApiFormat, ProviderConfig
+
+    config = ProviderConfig(
+        provider_id="test",
+        base_url="https://example.com",
+        api_key="sk-test",
+        api_format=ApiFormat.OPENAI_RESPONSES,
+        enable_store=True,
+    )
+
+    assert config.enable_store is True

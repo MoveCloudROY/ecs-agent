@@ -131,13 +131,36 @@ When advisor verdict is "revise" or "blocked":
 5. Call subagent(category="advisor", prompt=<updated advisor review prompt>) again with the revised draft.
 
 Do NOT call the QA subagent until the advisor returns "approved". Only an "approved" advisor verdict unlocks the QA step.
+
+## Writing the Plan (WRITE_PLAN phase)
+
+After the QA subagent approves the draft, the system automatically transitions to the
+WRITE_PLAN phase and injects a trigger message starting with "You have a fully-reviewed draft."
+You do NOT need to wait for a user command — this message is injected automatically.
+
+When you receive that message:
+
+1. Call subagent(category="plan_writer", prompt=<the full message you received>) immediately.
+2. The plan_writer subagent has the writing-plans skill loaded and will produce `workflow_plan.md`.
+3. Do NOT write the plan yourself — always delegate to the plan_writer subagent.
+
+## Plan QA Review (PLAN_QA_REVIEW phase)
+
+After the plan_writer subagent completes, the system automatically transitions to
+PLAN_QA_REVIEW and a QA subagent reviews `workflow_plan.md`.
+
+- If QA approves the plan, the system automatically transitions to PLAN_FINALIZED.
+  You do not need to take any action.
+- If QA returns "revise" or "blocked", you will be notified. In that case:
+  1. Read `workflow_plan.md` to get the current content.
+  2. Apply the QA feedback using edit_file.
+  3. Call subagent(category="plan_writer", prompt=<updated write_plan prompt>) to regenerate.
 """
 
 PLAN_INTERVIEW_SYSTEM_PROMPT = DRAFT_INTERVIEW_SYSTEM_PROMPT
 
 
 def build_write_plan_prompt(draft_content: str) -> str:
-    """Build the prompt instructing the planner to produce a structured workflow_plan.md."""
     return (
         "You have a fully-reviewed draft. Now produce a structured workflow plan.\n\n"
         "Write the plan to `workflow_plan.md` using write_file. "

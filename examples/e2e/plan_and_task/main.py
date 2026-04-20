@@ -34,6 +34,7 @@ from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.tools import BuiltinToolsSkill
 from ecs_agent.skills.manager import SkillManager
+from ecs_agent.skills.discovery import discover_skills
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.subagent import SubagentSystem
@@ -46,9 +47,12 @@ from ecs_agent.types import (
     DelegationCompletedEvent,
     EntityId,
     InheritancePolicy,
+    Message,
     SubagentConfig,
 )
 
+from ecs_agent.accounting import AccountingSubscriber
+from examples.e2e.plan_and_task.billing import BillingSubscriber
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
     build_scratchbook_prompt_config,
@@ -56,6 +60,7 @@ from examples.e2e.plan_and_task.scratchbook_adapter import (
 from examples.e2e.plan_and_task.controller import PlanController
 from examples.e2e.plan_and_task.prompts import (
     DRAFT_INTERVIEW_SYSTEM_PROMPT,
+    WRITE_PLAN_SYSTEM_PROMPT,
     build_advisor_prompt,
     build_qa_prompt,
     build_write_plan_prompt,
@@ -71,6 +76,7 @@ logger = get_logger(__name__)
 _VERDICT_PATTERN = _re.compile(r"\b(approved|revise|blocked)\b", _re.IGNORECASE)
 
 _WORKFLOW_BASE_DIR = Path(__file__).parent
+_SKILLS_DIR = Path(__file__).parent / ".claude" / "skills"
 
 
 def _extract_verdict_from_result(result: str) -> str:
@@ -108,6 +114,8 @@ def build_plan_task_world(
     model: str,
     base_dir: Path | None = None,
 ) -> tuple[World, EntityId, list[ArtifactAdapter | None], list[RuntimeState | None]]:
+    discover_skills([_SKILLS_DIR])
+
     world = World()
 
     agent_id = world.create_entity()
@@ -161,6 +169,19 @@ def build_plan_task_world(
                         inherit_tools=[],
                     ),
                 ),
+                "plan_writer": SubagentConfig(
+                    name="plan_writer",
+                    provider=provider,
+                    model=model,
+                    description="Converts an approved draft into a structured workflow_plan.md using the writing-plans skill.",
+                    system_prompt=WRITE_PLAN_SYSTEM_PROMPT,
+                    skills=["writing-plans"],
+                    max_ticks=10,
+                    inheritance_policy=InheritancePolicy(
+                        inherit_system_prompt=False,
+                        inherit_tools=["read_file", "write_file", "edit_file", "glob"],
+                    ),
+                ),
             }
         ),
     )
@@ -201,8 +222,25 @@ def build_plan_task_world(
                     current, adapter, verdict_str, notes=event.result[:500]
                 )
             elif event.subagent_name == "qa":
-                runtime_state[0] = controller.handle_qa_review(
+                new_state = controller.handle_qa_review(
                     current, adapter, verdict_str, notes=event.result[:500]
+                )
+                runtime_state[0] = new_state
+                if new_state.phase == "WRITE_PLAN":
+                    conv = world.get_component(agent_id, ConversationComponent)
+                    if conv is not None:
+                        draft_content = adapter.read_draft() or ""
+                        trigger_msg = build_write_plan_prompt(draft_content)
+                        conv.messages.append(
+                            Message(role="user", content=trigger_msg)
+                        )
+                        logger.info(
+                            "plan_task_auto_trigger_plan_writer",
+                            workflow_id=new_state.workflow_id,
+                        )
+            elif event.subagent_name == "plan_writer":
+                runtime_state[0] = controller.handle_write_plan_completed(
+                    current, adapter
                 )
         except ValueError as exc:
             logger.error(
@@ -571,7 +609,7 @@ async def main() -> None:
     base_url: str = os.environ.get(
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
-    model: str = os.environ.get("LLM_MODEL", "qwen3.6-plus")
+    model: str = os.environ.get("LLM_MODEL", "qwen3.6-flash")
 
     if not api_key:
         print("Error: LLM_API_KEY environment variable is required.")
@@ -598,6 +636,12 @@ async def main() -> None:
         base_dir=_WORKFLOW_BASE_DIR,
     )
 
+    billing = BillingSubscriber()
+    billing.subscribe(world.event_bus)
+
+    accounting = AccountingSubscriber()
+    accounting.subscribe(world.event_bus)
+
     interactive_mode_str = os.environ.get("PLAN_TASK_INTERACTIVE", "1")
     if interactive_mode_str.lower() in ("0", "false"):
         if debug_mode:
@@ -609,6 +653,7 @@ async def main() -> None:
 
     runner = Runner()
     await runner.run(world, max_ticks=None)
+    billing.log_session_summary()
 
     conv = world.get_component(agent_id, ConversationComponent)
     if conv is not None:
