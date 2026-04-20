@@ -42,6 +42,10 @@ class _OpenAIProviderFacade(Protocol):
         self, tools: list[ToolSchema]
     ) -> list[dict[str, Any]]: ...
 
+    def _convert_tools_to_responses(
+        self, tools: list[ToolSchema]
+    ) -> list[dict[str, Any]]: ...
+
     def _usage_from_raw(self, usage_data: Any) -> Usage | None: ...
 
     def _extract_responses_instructions(
@@ -265,7 +269,7 @@ class OpenAIResponsesAdapter:
         if instructions:
             request_body["instructions"] = instructions
         if tools is not None:
-            request_body["tools"] = self._provider._convert_tools_to_openai(tools)
+            request_body["tools"] = self._provider._convert_tools_to_responses(tools)
         if response_format is not None:
             request_body["response_format"] = response_format
         if previous_response_id is not None:
