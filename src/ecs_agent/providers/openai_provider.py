@@ -146,6 +146,17 @@ class OpenAIProvider:
             for tool in tools
         ]
 
+    def _convert_tools_to_responses(self, tools: list[ToolSchema]) -> list[dict[str, Any]]:
+        return [
+            {
+                "type": "function",
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters,
+            }
+            for tool in tools
+        ]
+
     def _extract_responses_instructions(self, messages: list[Message]) -> str | None:
         system_instructions = [
             message.content.strip()
