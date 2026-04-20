@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import warnings
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,10 @@ from examples.e2e.plan_and_task.state_machine import (
 )
 
 logger = get_logger(__name__)
+
+
+class ResumeAction(Enum):
+    TRIGGER_PLAN_WRITER = "trigger_plan_writer"
 
 
 class PlanController:
@@ -289,6 +294,38 @@ class PlanController:
             verdict=verdict_str,
         )
         return state
+
+    def reconcile_after_resume(
+        self, state: RuntimeState, adapter: ArtifactAdapter
+    ) -> list[ResumeAction]:
+        verdicts_by_phase = {v.phase: v.verdict for v in state.review_verdicts}
+        actions: list[ResumeAction] = []
+
+        if state.phase == "DRAFT_QA_REVIEW":
+            if verdicts_by_phase.get("DRAFT_QA_REVIEW") == "approved":
+                state = self._state_machine.transition(state, "WRITE_PLAN")
+                adapter.write_state(state)
+                logger.info(
+                    "plan_task_auto_transition_write_plan",
+                    workflow_id=state.workflow_id,
+                    source="reconcile_after_resume",
+                )
+                actions.append(ResumeAction.TRIGGER_PLAN_WRITER)
+
+        elif state.phase == "WRITE_PLAN":
+            actions.append(ResumeAction.TRIGGER_PLAN_WRITER)
+
+        elif state.phase == "PLAN_QA_REVIEW":
+            if verdicts_by_phase.get("PLAN_QA_REVIEW") == "approved":
+                state = self._state_machine.transition(state, "PLAN_FINALIZED")
+                adapter.write_state(state)
+                logger.info(
+                    "plan_task_auto_transition_plan_finalized",
+                    workflow_id=state.workflow_id,
+                    source="reconcile_after_resume",
+                )
+
+        return actions
 
     def handle_task_abort(
         self, state: RuntimeState, adapter: ArtifactAdapter, reason: str
