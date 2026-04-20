@@ -22,7 +22,9 @@ def normalize_openai_usage(raw: dict[str, Any]) -> UsageRecord:
     )
     total_tokens = _extract_int(raw.get("total_tokens"))
 
-    prompt_details = raw.get("prompt_tokens_details")
+    # OpenAI Chat Completions uses "prompt_tokens_details"; Responses API (and
+    # DashScope Responses-compatible) uses "input_tokens_details".
+    prompt_details = raw.get("prompt_tokens_details") or raw.get("input_tokens_details")
     cached_input_tokens: int | None = None
     if isinstance(prompt_details, dict):
         cached_input_tokens = _extract_int(prompt_details.get("cached_tokens"))

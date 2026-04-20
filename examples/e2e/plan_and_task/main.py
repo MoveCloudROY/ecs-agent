@@ -622,7 +622,8 @@ async def main() -> None:
 
     api_key: str = os.environ.get("LLM_API_KEY", "")
     base_url: str = os.environ.get(
-        "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        "LLM_BASE_URL",
+        "https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
     )
     model: str = os.environ.get("LLM_MODEL", "qwen3.6-flash")
 
@@ -640,7 +641,8 @@ async def main() -> None:
             provider_id="openai",
             base_url=base_url,
             api_key=api_key,
-            api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+            api_format=ApiFormat.OPENAI_RESPONSES,
+            enable_store=True,
         ),
         model=model,
     )
