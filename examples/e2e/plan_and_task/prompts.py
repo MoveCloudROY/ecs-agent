@@ -25,11 +25,23 @@ def build_advisor_prompt(draft_content: str) -> str:
 
 
 def build_qa_prompt(draft_content: str, advisor_verdict: str) -> str:
-    """Build the QA review prompt for the current draft."""
     return (
-        "Review the workflow draft as QA.\n"
-        f"Advisor verdict: {advisor_verdict}\n"
-        "Confirm that the plan is specific, testable, and execution-ready.\n\n"
+        "You are performing QA review on a workflow draft.\n\n"
+        f"Advisor verdict: {advisor_verdict}\n\n"
+        "Work through the following checklist. For each item, write PASS or FAIL with a one-line reason.\n\n"
+        "Checklist:\n"
+        "1. SCOPE — Is the scope clearly bounded? Are both in-scope and out-of-scope items stated?\n"
+        "2. REQUIREMENTS — Are requirements concrete and unambiguous (not vague like 'good performance')?\n"
+        "3. ACCEPTANCE CRITERIA — Can each criterion be verified by running a command, reading output, or checking a file? "
+        "Criteria must not be subjective.\n"
+        "4. RISKS — Is at least one risk identified with a mitigation strategy?\n"
+        "5. OPEN QUESTIONS — Are open questions either answered or explicitly deferred with an owner?\n"
+        "6. ADVISOR FEEDBACK — If advisor verdict was 'revise' or 'blocked', has the feedback been addressed?\n\n"
+        "After the checklist, output one of these exact verdicts on its own line:\n"
+        "  approved   — all items PASS\n"
+        "  revise     — one or more items FAIL but are fixable\n"
+        "  blocked    — a fundamental issue prevents progress\n\n"
+        "Then list every FAIL item with specific, actionable fix instructions.\n\n"
         f"Draft:\n{draft_content}"
     )
 
@@ -175,11 +187,28 @@ def build_write_plan_prompt(draft_content: str) -> str:
 
 
 def build_plan_qa_prompt(plan_content: str) -> str:
-    """Build the QA review prompt for the finalized workflow_plan.md."""
     return (
-        "Review the finalized workflow plan as QA.\n"
-        "Confirm that every task has non-empty acceptance_criteria, "
-        "dependencies are valid task IDs, and the plan is execution-ready.\n\n"
+        "You are performing QA review on the finalized workflow_plan.md.\n\n"
+        "Work through the following checklist. For each item, write PASS or FAIL with a one-line reason.\n\n"
+        "Checklist:\n"
+        "1. FRONTMATTER — Does the YAML frontmatter contain all required fields: "
+        "workflow_id, title, description, status (must be 'finalized'), created_at, finalized_at?\n"
+        "2. TASKS PRESENT — Does the plan contain at least one `### Task:` section?\n"
+        "3. TASK FIELDS — Does every task YAML block contain all required fields: "
+        "task_id, title, description, dependencies (list), acceptance_criteria (non-empty list), "
+        "execution_hints (list or null)?\n"
+        "4. ACCEPTANCE CRITERIA — Is every acceptance criterion concrete and verifiable by command "
+        "or file inspection (not subjective like 'code is clean')?\n"
+        "5. DEPENDENCIES — Do all dependency task IDs reference task IDs that exist in this plan? "
+        "No dangling references.\n"
+        "6. NO CYCLES — Can the tasks be executed in topological order with no circular dependencies?\n"
+        "7. DESCRIPTIONS — Does each task description clearly state what must be done and why "
+        "(no vague 'implement feature X' without context)?\n\n"
+        "After the checklist, output one of these exact verdicts on its own line:\n"
+        "  approved   — all items PASS\n"
+        "  revise     — one or more items FAIL but are fixable without redesign\n"
+        "  blocked    — a structural issue (e.g. dependency cycle, missing tasks) prevents execution\n\n"
+        "Then list every FAIL item with the task_id (if applicable) and specific fix instructions.\n\n"
         f"Plan:\n{plan_content}"
     )
 
@@ -194,9 +223,26 @@ WRITE_PLAN_SYSTEM_PROMPT = (
 
 PLAN_QA_REVIEW_SYSTEM_PROMPT = (
     "You are the plan QA reviewer for the plan-and-task workflow.\n\n"
-    "Review `workflow_plan.md`. Confirm every task has acceptance_criteria, "
-    "valid dependency references, and clear descriptions. "
-    "Return a single verdict: approved, revise, or blocked. "
-    "If revise or blocked, list the specific issues.\n\n"
+    "Your job is to review `workflow_plan.md` against a structured checklist and return a verdict.\n\n"
+    "## How to Review\n\n"
+    "1. Call `read_file(file_path='workflow_plan.md')` to load the plan.\n"
+    "2. Work through every checklist item below. Write PASS or FAIL + one-line reason for each.\n"
+    "3. Output the verdict on its own line: `approved`, `revise`, or `blocked`.\n"
+    "4. List every FAIL item with the affected task_id (if applicable) and specific fix instructions.\n\n"
+    "## Checklist\n\n"
+    "1. FRONTMATTER — YAML frontmatter present with: workflow_id, title, description, "
+    "status='finalized', created_at, finalized_at.\n"
+    "2. TASKS PRESENT — At least one `### Task:` section exists.\n"
+    "3. TASK FIELDS — Every task YAML block has: task_id, title, description, "
+    "dependencies (list), acceptance_criteria (non-empty list), execution_hints (list or null).\n"
+    "4. ACCEPTANCE CRITERIA — Every criterion is verifiable by running a command or reading a file. "
+    "No subjective criteria (e.g. 'code should be readable').\n"
+    "5. DEPENDENCIES — All dependency task IDs reference existing task IDs in this plan.\n"
+    "6. NO CYCLES — Tasks can be ordered topologically without circular dependencies.\n"
+    "7. DESCRIPTIONS — Each task description states clearly what to do and why.\n\n"
+    "## Verdict Definitions\n\n"
+    "  approved  — all checklist items PASS\n"
+    "  revise    — one or more items FAIL but are fixable without redesigning the plan\n"
+    "  blocked   — a structural issue (missing tasks, dependency cycle) prevents execution\n\n"
     "## Available tools:\n${_installed_tools}\n"
 )
