@@ -3505,3 +3505,256 @@ def test_provider_config_enable_store_can_be_set_true() -> None:
     )
 
     assert config.enable_store is True
+
+
+def _make_state_at_phase(phase: str) -> RuntimeState:
+    return RuntimeState(
+        workflow_id="test-wf",
+        phase=phase,
+        status="active",
+        active_plan_file="plan/workflow_plan.md",
+        current_task_id=None,
+        completed_task_ids=[],
+        retry_budget={},
+        review_verdicts=[],
+        active_subagents=[],
+        memory_refs=[],
+        last_checkpoint=None,
+        created_at="2026-01-01T00:00:00",
+        updated_at="2026-01-01T00:00:00",
+        tasks=[],
+    )
+
+
+def _make_verdict(phase: str, verdict: str) -> ReviewVerdict:
+    return ReviewVerdict(phase=phase, verdict=verdict, decided_at="2026-01-01T00:00:00")
+
+
+def test_reconcile_draft_qa_approved_triggers_plan_writer(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import ResumeAction
+
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
+    state = _make_state_at_phase("DRAFT_QA_REVIEW")
+    state.review_verdicts.append(_make_verdict("DRAFT_QA_REVIEW", "approved"))
+
+    actions = ctrl.reconcile_after_resume(state, adapter)
+
+    assert ResumeAction.TRIGGER_PLAN_WRITER in actions
+    assert state.phase == "WRITE_PLAN"
+
+
+def test_reconcile_write_plan_triggers_plan_writer(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import ResumeAction
+
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
+    state = _make_state_at_phase("WRITE_PLAN")
+
+    actions = ctrl.reconcile_after_resume(state, adapter)
+
+    assert ResumeAction.TRIGGER_PLAN_WRITER in actions
+    assert state.phase == "WRITE_PLAN"
+
+
+def test_reconcile_plan_qa_approved_advances_to_finalized(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import ResumeAction
+
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
+    state = _make_state_at_phase("PLAN_QA_REVIEW")
+    state.review_verdicts.append(_make_verdict("PLAN_QA_REVIEW", "approved"))
+
+    actions = ctrl.reconcile_after_resume(state, adapter)
+
+    assert actions == []
+    assert state.phase == "PLAN_FINALIZED"
+
+
+def test_reconcile_draft_qa_revise_returns_no_triggers(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import ResumeAction
+
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
+    state = _make_state_at_phase("DRAFT_QA_REVIEW")
+    state.review_verdicts.append(_make_verdict("DRAFT_QA_REVIEW", "revise"))
+
+    actions = ctrl.reconcile_after_resume(state, adapter)
+
+    assert actions == []
+    assert state.phase == "DRAFT_QA_REVIEW"
+
+
+def test_reconcile_draft_interview_returns_no_triggers(tmp_path: Path) -> None:
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
+    state = _make_state_at_phase("DRAFT_INTERVIEW")
+
+    actions = ctrl.reconcile_after_resume(state, adapter)
+
+    assert actions == []
+    assert state.phase == "DRAFT_INTERVIEW"
+
+
+def test_reconcile_plan_qa_revise_returns_no_triggers(tmp_path: Path) -> None:
+    ctrl = PlanController()
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
+    state = _make_state_at_phase("PLAN_QA_REVIEW")
+    state.review_verdicts.append(_make_verdict("PLAN_QA_REVIEW", "revise"))
+
+    actions = ctrl.reconcile_after_resume(state, adapter)
+
+    assert actions == []
+    assert state.phase == "PLAN_QA_REVIEW"
+
+
+@pytest.mark.asyncio
+async def test_plan_resume_draft_qa_approved_injects_write_plan_message(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent.components import ConversationComponent, UserPromptConfigComponent
+    from ecs_agent.providers.fake_provider import FakeProvider
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+    from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
+
+    provider = FakeProvider(responses=["ok"])
+    world, agent_id, _adapter_ref, _runtime_state = build_plan_task_world(
+        provider=provider, model="fake", base_dir=tmp_path
+    )
+
+    workflow_id = "resume-draft-qa-approved"
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
+    adapter.write_draft("draft content")
+    state = _make_state_at_phase("DRAFT_QA_REVIEW")
+    state.workflow_id = workflow_id
+    state.review_verdicts.append(_make_verdict("DRAFT_QA_REVIEW", "approved"))
+    adapter.write_state(state)
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+    handler_key = next(t.content for t in config.triggers if t.pattern == "/plan:resume")
+    handler = config.script_handlers[handler_key]
+
+    result = await handler(world, agent_id, f"/plan:resume {workflow_id}")
+
+    assert result is not None
+    assert "Error" not in result
+    assert _runtime_state[0] is not None
+    assert _runtime_state[0].phase == "WRITE_PLAN"
+    conv = world.get_component(agent_id, ConversationComponent)
+    assert conv is not None
+    user_messages = [m for m in conv.messages if m.role == "user"]
+    assert any("draft" in m.content.lower() or "plan" in m.content.lower() for m in user_messages)
+
+
+@pytest.mark.asyncio
+async def test_plan_resume_write_plan_phase_injects_write_plan_message(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent.components import ConversationComponent, UserPromptConfigComponent
+    from ecs_agent.providers.fake_provider import FakeProvider
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+    from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
+
+    provider = FakeProvider(responses=["ok"])
+    world, agent_id, _adapter_ref, _runtime_state = build_plan_task_world(
+        provider=provider, model="fake", base_dir=tmp_path
+    )
+
+    workflow_id = "resume-write-plan"
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
+    adapter.write_draft("draft content")
+    state = _make_state_at_phase("WRITE_PLAN")
+    state.workflow_id = workflow_id
+    adapter.write_state(state)
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+    handler_key = next(t.content for t in config.triggers if t.pattern == "/plan:resume")
+    handler = config.script_handlers[handler_key]
+
+    result = await handler(world, agent_id, f"/plan:resume {workflow_id}")
+
+    assert result is not None
+    assert "Error" not in result
+    assert _runtime_state[0] is not None
+    assert _runtime_state[0].phase == "WRITE_PLAN"
+    conv = world.get_component(agent_id, ConversationComponent)
+    assert conv is not None
+    user_messages = [m for m in conv.messages if m.role == "user"]
+    assert any("draft" in m.content.lower() or "plan" in m.content.lower() for m in user_messages)
+
+
+@pytest.mark.asyncio
+async def test_plan_resume_plan_qa_approved_advances_to_finalized(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent.components import ConversationComponent, UserPromptConfigComponent
+    from ecs_agent.providers.fake_provider import FakeProvider
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+    from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
+
+    provider = FakeProvider(responses=["ok"])
+    world, agent_id, _adapter_ref, _runtime_state = build_plan_task_world(
+        provider=provider, model="fake", base_dir=tmp_path
+    )
+
+    workflow_id = "resume-plan-qa-approved"
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
+    adapter.write_draft("draft content")
+    state = _make_state_at_phase("PLAN_QA_REVIEW")
+    state.workflow_id = workflow_id
+    state.review_verdicts.append(_make_verdict("PLAN_QA_REVIEW", "approved"))
+    adapter.write_state(state)
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+    handler_key = next(t.content for t in config.triggers if t.pattern == "/plan:resume")
+    handler = config.script_handlers[handler_key]
+
+    result = await handler(world, agent_id, f"/plan:resume {workflow_id}")
+
+    assert result is not None
+    assert "Error" not in result
+    assert _runtime_state[0] is not None
+    assert _runtime_state[0].phase == "PLAN_FINALIZED"
+    conv = world.get_component(agent_id, ConversationComponent)
+    assert conv is not None
+    assert len([m for m in conv.messages if m.role == "user"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_plan_resume_draft_interview_no_message_injected(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent.components import ConversationComponent, UserPromptConfigComponent
+    from ecs_agent.providers.fake_provider import FakeProvider
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+    from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
+
+    provider = FakeProvider(responses=["ok"])
+    world, agent_id, _adapter_ref, _runtime_state = build_plan_task_world(
+        provider=provider, model="fake", base_dir=tmp_path
+    )
+
+    workflow_id = "resume-draft-interview"
+    adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
+    adapter.write_draft("draft content")
+    state = _make_state_at_phase("DRAFT_INTERVIEW")
+    state.workflow_id = workflow_id
+    adapter.write_state(state)
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+    handler_key = next(t.content for t in config.triggers if t.pattern == "/plan:resume")
+    handler = config.script_handlers[handler_key]
+
+    result = await handler(world, agent_id, f"/plan:resume {workflow_id}")
+
+    assert result is not None
+    assert "Error" not in result
+    assert _runtime_state[0] is not None
+    assert _runtime_state[0].phase == "DRAFT_INTERVIEW"
+    conv = world.get_component(agent_id, ConversationComponent)
+    assert conv is not None
+    assert len([m for m in conv.messages if m.role == "user"]) == 0

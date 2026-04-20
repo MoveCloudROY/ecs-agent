@@ -57,7 +57,7 @@ from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
     build_scratchbook_prompt_config,
 )
-from examples.e2e.plan_and_task.controller import PlanController
+from examples.e2e.plan_and_task.controller import PlanController, ResumeAction
 from examples.e2e.plan_and_task.prompts import (
     DRAFT_INTERVIEW_SYSTEM_PROMPT,
     WRITE_PLAN_SYSTEM_PROMPT,
@@ -443,6 +443,21 @@ def build_plan_task_world(
             adapter_ref[0] = new_adapter
             runtime_state[0] = state
             _world.add_component(_entity_id, build_scratchbook_prompt_config(workflow_id))
+            actions = controller.reconcile_after_resume(state, new_adapter)
+            runtime_state[0] = state
+            for action in actions:
+                if action == ResumeAction.TRIGGER_PLAN_WRITER:
+                    conv = _world.get_component(_entity_id, ConversationComponent)
+                    if conv is not None:
+                        draft_content = new_adapter.read_draft() or ""
+                        conv.messages.append(
+                            Message(role="user", content=build_write_plan_prompt(draft_content))
+                        )
+                        logger.info(
+                            "plan_task_auto_trigger_plan_writer",
+                            workflow_id=workflow_id,
+                            source="reconcile_after_resume",
+                        )
             logger.info(
                 "plan_task_command_plan_resume",
                 workflow_id=workflow_id,
