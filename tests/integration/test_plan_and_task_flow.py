@@ -1299,7 +1299,7 @@ def test_advisor_review_appends_to_state_review_verdicts(tmp_path: Path) -> None
     v = updated.review_verdicts[0]
     assert v.phase == "DRAFT_ADVISOR_REVIEW"
     assert v.verdict == "approved"
-    assert v.notes == "LGTM"
+    assert v.notes is None
 
 
 def test_qa_review_approved_allows_finalization(tmp_path: Path) -> None:
@@ -1994,8 +1994,8 @@ def test_prompt_builders_return_non_empty_strings() -> None:
         build_qa_prompt,
     )
 
-    assert build_advisor_prompt("some draft").strip()
-    assert build_qa_prompt("some draft", "approved").strip()
+    assert build_advisor_prompt("scratchbook/wf-001/plan/draft.md").strip()
+    assert build_qa_prompt("scratchbook/wf-001/plan/draft.md", "approved").strip()
     assert build_draft_prompt("a description", []).strip()
 
 
@@ -2420,9 +2420,10 @@ def test_controller_advisor_revise_followed_by_approved_allows_qa(
     )
 
 
-def test_controller_advisor_multiple_verdicts_all_recorded(
+def test_controller_advisor_multiple_verdicts_upsert_keeps_latest(
     tmp_path: Path,
 ) -> None:
+    """Same-phase verdicts are upserted: only the latest (approved) is kept per phase."""
     from examples.e2e.plan_and_task.controller import PlanController
     from examples.e2e.plan_and_task.scratchbook_adapter import (
         PlanTaskScratchbookAdapter as ArtifactAdapter,
@@ -2439,12 +2440,10 @@ def test_controller_advisor_multiple_verdicts_all_recorded(
     advisor_verdicts = [
         v for v in state.review_verdicts if v.phase == "DRAFT_ADVISOR_REVIEW"
     ]
-    assert len(advisor_verdicts) == 3, (
-        f"Expected 3 advisor verdicts recorded, got {len(advisor_verdicts)}"
+    assert len(advisor_verdicts) == 1, (
+        f"Expected 1 advisor verdict (upsert keeps latest), got {len(advisor_verdicts)}"
     )
-    assert advisor_verdicts[0].verdict == "revise"
-    assert advisor_verdicts[1].verdict == "blocked"
-    assert advisor_verdicts[2].verdict == "approved"
+    assert advisor_verdicts[0].verdict == "approved"
 
 
 def test_controller_missing_approved_reviews_uses_last_verdict(
@@ -2554,10 +2553,10 @@ def test_controller_advisor_revise_followed_by_approved_allows_qa(
     )
 
 
-def test_controller_advisor_multiple_verdicts_all_recorded(
+def test_controller_advisor_multiple_verdicts_upsert_keeps_latest_2(
     tmp_path: Path,
 ) -> None:
-    """All advisor verdicts (revise, blocked, approved) must be appended, not overwritten."""
+    """All advisor verdict calls upsert: final state has only 1 entry per phase (the latest)."""
     from examples.e2e.plan_and_task.controller import PlanController
     from examples.e2e.plan_and_task.scratchbook_adapter import (
         PlanTaskScratchbookAdapter as ArtifactAdapter,
@@ -2574,12 +2573,10 @@ def test_controller_advisor_multiple_verdicts_all_recorded(
     advisor_verdicts = [
         v for v in state.review_verdicts if v.phase == "DRAFT_ADVISOR_REVIEW"
     ]
-    assert len(advisor_verdicts) == 3, (
-        f"Expected 3 advisor verdicts recorded, got {len(advisor_verdicts)}"
+    assert len(advisor_verdicts) == 1, (
+        f"Expected 1 advisor verdict (upsert keeps latest), got {len(advisor_verdicts)}"
     )
-    assert advisor_verdicts[0].verdict == "revise"
-    assert advisor_verdicts[1].verdict == "blocked"
-    assert advisor_verdicts[2].verdict == "approved"
+    assert advisor_verdicts[0].verdict == "approved"
 
 
 def test_controller_missing_approved_reviews_uses_last_verdict(
@@ -3758,3 +3755,261 @@ async def test_plan_resume_draft_interview_no_message_injected(
     conv = world.get_component(agent_id, ConversationComponent)
     assert conv is not None
     assert len([m for m in conv.messages if m.role == "user"]) == 0
+
+
+def test_upsert_verdict_same_phase_keeps_latest(tmp_path: Path) -> None:
+    state = _make_runtime_state()
+    v1 = ReviewVerdict(phase="DRAFT_ADVISOR_REVIEW", verdict="revise", decided_at="2026-01-01T00:00:00")
+    v2 = ReviewVerdict(phase="DRAFT_ADVISOR_REVIEW", verdict="approved", decided_at="2026-01-01T00:01:00")
+    state.upsert_verdict(v1)
+    state.upsert_verdict(v2)
+    advisor_verdicts = [v for v in state.review_verdicts if v.phase == "DRAFT_ADVISOR_REVIEW"]
+    assert len(advisor_verdicts) == 1
+    assert advisor_verdicts[0].verdict == "approved"
+
+
+def test_upsert_verdict_approved_clears_notes(tmp_path: Path) -> None:
+    state = _make_runtime_state()
+    v = ReviewVerdict(
+        phase="DRAFT_ADVISOR_REVIEW",
+        verdict="approved",
+        decided_at="2026-01-01T00:00:00",
+        notes="looks good",
+    )
+    state.upsert_verdict(v)
+    assert state.review_verdicts[0].notes is None
+
+
+def test_upsert_verdict_non_approved_keeps_notes(tmp_path: Path) -> None:
+    state = _make_runtime_state()
+    v = ReviewVerdict(
+        phase="DRAFT_ADVISOR_REVIEW",
+        verdict="revise",
+        decided_at="2026-01-01T00:00:00",
+        notes="needs work",
+    )
+    state.upsert_verdict(v)
+    assert state.review_verdicts[0].notes == "needs work"
+
+
+def test_upsert_verdict_different_phases_both_kept(tmp_path: Path) -> None:
+    state = _make_runtime_state()
+    v1 = ReviewVerdict(phase="DRAFT_ADVISOR_REVIEW", verdict="approved", decided_at="2026-01-01T00:00:00")
+    v2 = ReviewVerdict(phase="DRAFT_QA_REVIEW", verdict="approved", decided_at="2026-01-01T00:01:00")
+    state.upsert_verdict(v1)
+    state.upsert_verdict(v2)
+    assert len(state.review_verdicts) == 2
+
+
+def test_upsert_verdict_approved_removes_prior_non_approved_for_same_phase() -> None:
+    state = _make_runtime_state()
+    v_revise = ReviewVerdict(phase="DRAFT_ADVISOR_REVIEW", verdict="revise", decided_at="2026-01-01T00:00:00", notes="needs work")
+    v_blocked = ReviewVerdict(phase="DRAFT_ADVISOR_REVIEW", verdict="blocked", decided_at="2026-01-01T00:00:30", notes="critical issue")
+    v_approved = ReviewVerdict(phase="DRAFT_ADVISOR_REVIEW", verdict="approved", decided_at="2026-01-01T00:01:00")
+    state.upsert_verdict(v_revise)
+    state.upsert_verdict(v_blocked)
+    state.upsert_verdict(v_approved)
+    phase_verdicts = [v for v in state.review_verdicts if v.phase == "DRAFT_ADVISOR_REVIEW"]
+    assert len(phase_verdicts) == 1
+    assert phase_verdicts[0].verdict == "approved"
+
+
+def test_upsert_verdict_approved_is_sticky_cannot_be_overwritten() -> None:
+    """Once a phase has an approved verdict, subsequent upserts for that phase are ignored."""
+    state = _make_runtime_state()
+    v_approved = ReviewVerdict(phase="DRAFT_ADVISOR_REVIEW", verdict="approved", decided_at="2026-01-01T00:00:00")
+    v_revise = ReviewVerdict(phase="DRAFT_ADVISOR_REVIEW", verdict="revise", decided_at="2026-01-01T00:01:00", notes="needs work")
+    state.upsert_verdict(v_approved)
+    state.upsert_verdict(v_revise)
+    advisor_verdicts = [v for v in state.review_verdicts if v.phase == "DRAFT_ADVISOR_REVIEW"]
+    assert len(advisor_verdicts) == 1
+    assert advisor_verdicts[0].verdict == "approved"
+    assert advisor_verdicts[0].notes is None
+
+
+def test_upsert_verdict_approved_sticky_across_all_phases() -> None:
+    """Stickiness applies to every review phase, not just DRAFT_ADVISOR_REVIEW."""
+    state = _make_runtime_state()
+    for phase in ("DRAFT_ADVISOR_REVIEW", "DRAFT_QA_REVIEW", "PLAN_QA_REVIEW"):
+        v_ok = ReviewVerdict(phase=phase, verdict="approved", decided_at="2026-01-01T00:00:00")
+        v_bad = ReviewVerdict(phase=phase, verdict="blocked", decided_at="2026-01-01T00:01:00", notes="blocked")
+        state.upsert_verdict(v_ok)
+        state.upsert_verdict(v_bad)
+    for v in state.review_verdicts:
+        assert v.verdict == "approved", f"Phase {v.phase} should remain approved, got {v.verdict!r}"
+
+
+def test_review_verdict_has_no_plan_version_field() -> None:
+    v = ReviewVerdict(phase="DRAFT_ADVISOR_REVIEW", verdict="approved", decided_at="2026-01-01T00:00:00")
+    assert not hasattr(v, "plan_version")
+
+
+def test_handle_advisor_review_sets_status_active_after_transition(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter as ArtifactAdapter,
+    )
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="status-lifecycle-test")
+    controller = PlanController()
+    state = controller.handle_plan_start(adapter, "status lifecycle workflow")
+    assert state.status == "active"
+
+    updated = controller.handle_advisor_review(state, adapter, "revise")
+    assert updated.status == "active"
+
+
+def test_handle_qa_review_approved_sets_status_active(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter as ArtifactAdapter,
+    )
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="status-qa-test")
+    controller = PlanController()
+    state = controller.handle_plan_start(adapter, "qa status workflow")
+    state = controller.handle_advisor_review(state, adapter, "approved")
+
+    updated = controller.handle_qa_review(state, adapter, "approved")
+    assert updated.status == "active"
+
+
+def test_state_machine_transition_sets_status_active(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+
+    sm = WorkflowStateMachine()
+    state = _make_runtime_state()
+    state.phase = "DRAFT_INTERVIEW"
+    state.status = "complete"
+
+    updated = sm.transition(state, "DRAFT_ADVISOR_REVIEW")
+    assert updated.status == "active"
+
+
+def test_controller_transition_sets_complete_then_active(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter as ArtifactAdapter,
+    )
+
+    statuses: list[str] = []
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="complete-active-test")
+    controller = PlanController()
+    state = controller.handle_plan_start(adapter, "complete active workflow")
+    statuses.append(state.status)
+
+    state = controller.handle_advisor_review(state, adapter, "approved")
+    statuses.append(state.status)
+
+    state = controller.handle_qa_review(state, adapter, "approved")
+    statuses.append(state.status)
+
+    assert "active" in statuses, f"Expected 'active' status at some point, got {statuses}"
+
+
+def test_advisor_qa_subagents_inherit_readonly_tools_only(tmp_path: Path) -> None:
+    from ecs_agent.components import SubagentRegistryComponent
+    from ecs_agent.providers import FakeProvider
+    from ecs_agent.types import CompletionResult, Message
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
+    )
+    world, agent_id, _, _ = build_plan_task_world(
+        provider=provider, model="fake", base_dir=tmp_path
+    )
+    registry = world.get_component(agent_id, SubagentRegistryComponent)
+    assert registry is not None, "SubagentRegistryComponent not found"
+
+    for name in ("advisor", "qa", "plan_qa"):
+        cfg = registry.subagents[name]
+        assert set(cfg.inheritance_policy.inherit_tools) == {
+            "read_file",
+            "glob",
+        }, f"{name} inherit_tools should be {{'read_file','glob'}}, got {cfg.inheritance_policy.inherit_tools}"
+        assert (
+            cfg.inheritance_policy.inherit_permissions is True
+        ), f"{name} inherit_permissions should be True"
+
+    plan_writer_cfg = registry.subagents["plan_writer"]
+    assert (
+        "write_file" in plan_writer_cfg.inheritance_policy.inherit_tools
+    ), "plan_writer should have write_file in inherit_tools"
+
+
+def test_advisor_prompt_contains_read_file_path_not_content() -> None:
+    from examples.e2e.plan_and_task.prompts import build_advisor_prompt
+
+    path = "scratchbook/wf-001/plan/draft.md"
+    prompt = build_advisor_prompt(path)
+    assert path in prompt, "prompt must contain the draft path"
+    assert "read_file" in prompt, "prompt must mention read_file tool"
+    assert "## Draft Content" not in prompt
+
+
+def test_qa_prompt_contains_read_file_path_not_content() -> None:
+    from examples.e2e.plan_and_task.prompts import build_qa_prompt
+
+    path = "scratchbook/wf-001/plan/draft.md"
+    prompt = build_qa_prompt(path, "approved")
+    assert path in prompt, "prompt must contain the draft path"
+    assert "read_file" in prompt, "prompt must mention read_file tool"
+    assert "## Draft Content" not in prompt
+
+
+def test_write_plan_prompt_contains_read_file_path_not_content() -> None:
+    from examples.e2e.plan_and_task.prompts import build_write_plan_prompt
+
+    path = "scratchbook/wf-001/plan/draft.md"
+    prompt = build_write_plan_prompt(path)
+    assert path in prompt, "prompt must contain the draft path"
+    assert "read_file" in prompt, "prompt must mention read_file tool"
+    assert "## Draft Content" not in prompt
+
+
+def test_plan_qa_prompt_contains_read_file_path_not_content() -> None:
+    from examples.e2e.plan_and_task.prompts import build_plan_qa_prompt
+
+    path = "scratchbook/wf-001/plan/workflow_plan.md"
+    prompt = build_plan_qa_prompt(path)
+    assert path in prompt, "prompt must contain the plan path"
+    assert "read_file" in prompt, "prompt must mention read_file tool"
+    assert "## Plan Content" not in prompt
+
+
+def test_plan_qa_subagent_registered_with_plan_qa_system_prompt(tmp_path: Path) -> None:
+    from ecs_agent.components import SubagentRegistryComponent
+    from ecs_agent.providers import FakeProvider
+    from ecs_agent.types import CompletionResult, Message
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+    from examples.e2e.plan_and_task.prompts import PLAN_QA_REVIEW_SYSTEM_PROMPT, QA_SYSTEM_PROMPT
+
+    provider = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
+    )
+    world, agent_id, _, _ = build_plan_task_world(
+        provider=provider, model="fake", base_dir=tmp_path
+    )
+    registry = world.get_component(agent_id, SubagentRegistryComponent)
+    assert registry is not None, "SubagentRegistryComponent not found"
+    assert "plan_qa" in registry.subagents, "plan_qa subagent must be registered"
+    assert "qa" in registry.subagents, "qa subagent must still be registered"
+    assert (
+        registry.subagents["plan_qa"].system_prompt == PLAN_QA_REVIEW_SYSTEM_PROMPT
+    ), "plan_qa must use PLAN_QA_REVIEW_SYSTEM_PROMPT"
+    assert (
+        registry.subagents["qa"].system_prompt == QA_SYSTEM_PROMPT
+    ), "qa must use QA_SYSTEM_PROMPT"
+
+
+def test_draft_interview_prompt_uses_separate_qa_categories() -> None:
+    from examples.e2e.plan_and_task.prompts import DRAFT_INTERVIEW_SYSTEM_PROMPT
+
+    assert (
+        'category="plan_qa"' in DRAFT_INTERVIEW_SYSTEM_PROMPT
+    ), "plan QA phase must call subagent with category='plan_qa'"
+    assert (
+        'category="qa"' in DRAFT_INTERVIEW_SYSTEM_PROMPT
+    ), "draft QA phase must still call subagent with category='qa'"
