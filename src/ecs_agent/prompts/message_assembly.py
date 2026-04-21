@@ -428,7 +428,7 @@ def prepare_outbound_messages(
         system_prompt_preview=f"{messages[0].content[:200]} ... (only the first 200)"
         if messages and messages[0].role == "system"
         else None,
-        last_user_prompt=messages[-1].content
+        last_user_prompt=messages[-1].content[:200]
         if messages and messages[-1].role == "user"
         else None,
     )
