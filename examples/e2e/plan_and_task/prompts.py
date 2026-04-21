@@ -15,16 +15,16 @@ def build_draft_prompt(description: str, questions: list[str]) -> str:
     )
 
 
-def build_advisor_prompt(draft_content: str) -> str:
+def build_advisor_prompt(draft_path: str) -> str:
     """Build the advisor review prompt for the current draft."""
     return (
-        "Review the following workflow draft as an advisor.\n"
+        "Review the workflow draft as an advisor.\n"
         "Decide whether it is ready for QA review, and explain any revisions still needed.\n\n"
-        f"Draft:\n{draft_content}"
+        f"Read the draft with: read_file(file_path=\"{draft_path}\")"
     )
 
 
-def build_qa_prompt(draft_content: str, advisor_verdict: str) -> str:
+def build_qa_prompt(draft_path: str, advisor_verdict: str) -> str:
     return (
         "You are performing QA review on a workflow draft.\n\n"
         f"Advisor verdict: {advisor_verdict}\n\n"
@@ -42,11 +42,11 @@ def build_qa_prompt(draft_content: str, advisor_verdict: str) -> str:
         "  revise     — one or more items FAIL but are fixable\n"
         "  blocked    — a fundamental issue prevents progress\n\n"
         "Then list every FAIL item with specific, actionable fix instructions.\n\n"
-        f"Draft:\n{draft_content}"
+        f"Read the draft with: read_file(file_path=\"{draft_path}\")"
     )
 
 
-def build_write_plan_prompt(draft_content: str) -> str:
+def build_write_plan_prompt(draft_path: str) -> str:
     return (
         "You have a fully-reviewed draft. Now produce a structured workflow plan.\n\n"
         "Write the plan to `workflow_plan.md` using write_file. "
@@ -56,11 +56,11 @@ def build_write_plan_prompt(draft_content: str) -> str:
         "- One or more `### Task: <task_id>` sections, each with a YAML block containing:\n"
         "  task_id, title, description, dependencies (list), "
         "acceptance_criteria (list), execution_hints (list)\n\n"
-        f"Draft:\n{draft_content}"
+        f"Read the draft with: read_file(file_path=\"{draft_path}\")"
     )
 
 
-def build_plan_qa_prompt(plan_content: str) -> str:
+def build_plan_qa_prompt(plan_path: str) -> str:
     return (
         "You are performing QA review on the finalized workflow_plan.md.\n\n"
         "Work through the following checklist. For each item, write PASS or FAIL with a one-line reason.\n\n"
@@ -83,16 +83,16 @@ def build_plan_qa_prompt(plan_content: str) -> str:
         "  revise     — one or more items FAIL but are fixable without redesign\n"
         "  blocked    — a structural issue (e.g. dependency cycle, missing tasks) prevents execution\n\n"
         "Then list every FAIL item with the task_id (if applicable) and specific fix instructions.\n\n"
-        f"Plan:\n{plan_content}"
+        f"Read the plan with: read_file(file_path=\"{plan_path}\")"
     )
 
 
-_ADVISOR_PROMPT_EXAMPLE = build_advisor_prompt("<current draft content>")
+_ADVISOR_PROMPT_EXAMPLE = build_advisor_prompt("scratchbook/<workflow_id>/plan/draft.md")
 _QA_PROMPT_EXAMPLE = build_qa_prompt(
-    "<current draft content>",
+    "scratchbook/<workflow_id>/plan/draft.md",
     "<advisor verdict>",
 )
-_PLAN_QA_PROMPT_EXAMPLE = build_plan_qa_prompt("<current workflow_plan.md content>")
+_PLAN_QA_PROMPT_EXAMPLE = build_plan_qa_prompt("scratchbook/<workflow_id>/plan/workflow_plan.md")
 
 
 DRAFT_INTERVIEW_SYSTEM_PROMPT = f"""You are the planning interviewer for the plan-and-task workflow.
@@ -205,7 +205,7 @@ PLAN_QA_REVIEW. You must now invoke the QA subagent to review `workflow_plan.md`
 
 Steps:
 1. Call `read_file(file_path="workflow_plan.md")` to get the plan content.
-2. Call `subagent(category="qa", prompt=<plan qa review prompt>)` using the format below.
+2. Call `subagent(category="plan_qa", prompt=<plan qa review prompt>)` using the format below.
 3. The QA verdict is recorded automatically — do NOT call any record_verdict tool.
 4. The system extracts the verdict by scanning for one of these exact words: `approved`, `revise`, `blocked`.
    Your prompt must ensure the QA subagent outputs exactly one of those tokens on its own line.
@@ -221,10 +221,25 @@ When QA returns "revise" or "blocked":
 2. Call `read_file(file_path="workflow_plan.md")` to get the current LINE#HASH annotated content.
 3. Apply every suggested fix using `edit_file`.
 4. Re-read `workflow_plan.md` to confirm edits landed correctly.
-5. Call `subagent(category="qa", prompt=<updated plan qa review prompt>)` with the revised plan content.
+5. Call `subagent(category="plan_qa", prompt=<updated plan qa review prompt>)` with the revised plan content.
 """
 
 PLAN_INTERVIEW_SYSTEM_PROMPT = DRAFT_INTERVIEW_SYSTEM_PROMPT
+
+
+ADVISOR_SYSTEM_PROMPT = (
+    "You are the advisor reviewer for the plan-and-task workflow.\n\n"
+    "Your job is to review a workflow draft and decide whether it is ready for QA review.\n"
+    "Use read_file to load the draft file when given a file path.\n\n"
+    "## Available tools:\n${_installed_tools}\n"
+)
+
+QA_SYSTEM_PROMPT = (
+    "You are the QA reviewer for the plan-and-task workflow.\n\n"
+    "Your job is to review a workflow draft or plan against a structured checklist and return a verdict.\n"
+    "Use read_file to load the artifact file when given a file path.\n\n"
+    "## Available tools:\n${_installed_tools}\n"
+)
 
 
 WRITE_PLAN_SYSTEM_PROMPT = (

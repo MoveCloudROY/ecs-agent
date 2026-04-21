@@ -60,10 +60,11 @@ from examples.e2e.plan_and_task.scratchbook_adapter import (
 )
 from examples.e2e.plan_and_task.controller import PlanController, ResumeAction
 from examples.e2e.plan_and_task.prompts import (
+    ADVISOR_SYSTEM_PROMPT,
     DRAFT_INTERVIEW_SYSTEM_PROMPT,
+    PLAN_QA_REVIEW_SYSTEM_PROMPT,
+    QA_SYSTEM_PROMPT,
     WRITE_PLAN_SYSTEM_PROMPT,
-    build_advisor_prompt,
-    build_qa_prompt,
     build_write_plan_prompt,
 )
 from examples.e2e.plan_and_task.runtime import (
@@ -148,11 +149,12 @@ def build_plan_task_world(
                     provider=provider,
                     model=model,
                     description="Reviews workflow drafts as an advisor.",
-                    system_prompt=build_advisor_prompt("<current draft content>"),
-                    max_ticks=5,
+                    system_prompt=ADVISOR_SYSTEM_PROMPT,
+                    max_ticks=30,
                     inheritance_policy=InheritancePolicy(
                         inherit_system_prompt=False,
-                        inherit_tools=[],
+                        inherit_tools=["read_file", "glob"],
+                        inherit_permissions=True,
                     ),
                 ),
                 "qa": SubagentConfig(
@@ -160,14 +162,25 @@ def build_plan_task_world(
                     provider=provider,
                     model=model,
                     description="Performs QA review of workflow drafts.",
-                    system_prompt=build_qa_prompt(
-                        "<current draft content>",
-                        "<advisor verdict>",
-                    ),
-                    max_ticks=5,
+                    system_prompt=QA_SYSTEM_PROMPT,
+                    max_ticks=30,
                     inheritance_policy=InheritancePolicy(
                         inherit_system_prompt=False,
-                        inherit_tools=[],
+                        inherit_tools=["read_file", "glob"],
+                        inherit_permissions=True,
+                    ),
+                ),
+                "plan_qa": SubagentConfig(
+                    name="plan_qa",
+                    provider=provider,
+                    model=model,
+                    description="Performs QA review of the finalized workflow_plan.md.",
+                    system_prompt=PLAN_QA_REVIEW_SYSTEM_PROMPT,
+                    max_ticks=30,
+                    inheritance_policy=InheritancePolicy(
+                        inherit_system_prompt=False,
+                        inherit_tools=["read_file", "glob"],
+                        inherit_permissions=True,
                     ),
                 ),
                 "plan_writer": SubagentConfig(
@@ -177,7 +190,7 @@ def build_plan_task_world(
                     description="Converts an approved draft into a structured workflow_plan.md using the writing-plans skill.",
                     system_prompt=WRITE_PLAN_SYSTEM_PROMPT,
                     skills=["writing-plans"],
-                    max_ticks=10,
+                    max_ticks=None,
                     inheritance_policy=InheritancePolicy(
                         inherit_system_prompt=False,
                         inherit_tools=["read_file", "write_file", "edit_file", "glob"],
@@ -230,8 +243,10 @@ def build_plan_task_world(
                 if new_state.phase == "WRITE_PLAN":
                     conv = world.get_component(agent_id, ConversationComponent)
                     if conv is not None:
-                        draft_content = adapter.read_draft() or ""
-                        trigger_msg = build_write_plan_prompt(draft_content)
+                        draft_path = str(
+                            (adapter.plan_dir / "draft.md").relative_to(adapter.base_dir)
+                        )
+                        trigger_msg = build_write_plan_prompt(draft_path)
                         conv.messages.append(
                             Message(role="user", content=trigger_msg)
                         )
@@ -239,6 +254,10 @@ def build_plan_task_world(
                             "plan_task_auto_trigger_plan_writer",
                             workflow_id=new_state.workflow_id,
                         )
+            elif event.subagent_name == "plan_qa":
+                runtime_state[0] = controller.handle_plan_qa_review(
+                    current, adapter, verdict_str, notes=event.result[:500]
+                )
             elif event.subagent_name == "plan_writer":
                 runtime_state[0] = controller.handle_write_plan_completed(
                     current, adapter
@@ -450,9 +469,11 @@ def build_plan_task_world(
                 if action == ResumeAction.TRIGGER_PLAN_WRITER:
                     conv = _world.get_component(_entity_id, ConversationComponent)
                     if conv is not None:
-                        draft_content = new_adapter.read_draft() or ""
+                        draft_path = str(
+                            (new_adapter.plan_dir / "draft.md").relative_to(new_adapter.base_dir)
+                        )
                         conv.messages.append(
-                            Message(role="user", content=build_write_plan_prompt(draft_content))
+                            Message(role="user", content=build_write_plan_prompt(draft_path))
                         )
                         logger.info(
                             "plan_task_auto_trigger_plan_writer",
@@ -482,8 +503,10 @@ def build_plan_task_world(
             )
             s = _require_state(runtime_state[0])
             logger.info("plan_task_command_plan_write", workflow_id=s.workflow_id)
-            draft_content = adapter.read_draft() or ""
-            return build_write_plan_prompt(draft_content)
+            draft_path = str(
+                (adapter.plan_dir / "draft.md").relative_to(adapter.base_dir)
+            )
+            return build_write_plan_prompt(draft_path)
         except ValueError as exc:
             logger.warning("plan_task_command_error", command="plan_write", exception=str(exc))
             return f"Error: {exc}"
