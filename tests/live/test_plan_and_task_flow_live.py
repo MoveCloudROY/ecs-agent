@@ -2,6 +2,9 @@
 
 These tests require LLM_API_KEY to be set and will skip otherwise.
 They use the DashScope-compatible provider configuration.
+
+Anthropic tests additionally require LLM_API_FORMAT=anthropic_messages plus
+compatible LLM_BASE_URL / LLM_MODEL (e.g. cc2.caaa.tech / kimi-for-coding).
 """
 
 import os
@@ -11,7 +14,9 @@ from pathlib import Path
 import pytest
 
 from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers.claude_provider import ClaudeProvider
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.types import CompletionResult, Message
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
@@ -217,6 +222,71 @@ async def test_live_controller_advisor_retry_loop_revise_then_approved(
                 content="Confirm: advisor retry loop (revise → approved) is correctly handled.",
             )
         ]
+    )
+    assert isinstance(result, CompletionResult)
+    assert result.message.content.strip()
+
+
+_ANTHROPIC_SKIP = pytest.mark.skipif(
+    os.getenv("LLM_API_FORMAT") != ApiFormat.ANTHROPIC_MESSAGES,
+    reason="Set LLM_API_FORMAT=anthropic_messages to run Anthropic live tests",
+)
+
+
+@pytest.fixture
+def anthropic_provider(live_api_key: str) -> ClaudeProvider:
+    base_url = os.getenv("LLM_BASE_URL", "https://api.anthropic.com")
+    model = os.getenv("LLM_MODEL", "claude-3-5-haiku-20241022")
+    config = ProviderConfig(
+        provider_id="anthropic",
+        base_url=base_url,
+        api_key=live_api_key,
+        api_format=ApiFormat.ANTHROPIC_MESSAGES,
+    )
+    return ClaudeProvider(config=config, model=model)
+
+
+@_ANTHROPIC_SKIP
+@pytest.mark.asyncio
+async def test_anthropic_provider_completes_simple_message(
+    anthropic_provider: ClaudeProvider,
+) -> None:
+    result = await anthropic_provider.complete(
+        [Message(role="user", content="Reply with exactly: pong")]
+    )
+    assert isinstance(result, CompletionResult)
+    assert result.message.content.strip()
+
+
+@_ANTHROPIC_SKIP
+@pytest.mark.asyncio
+async def test_anthropic_derive_workflow_id_returns_valid_slug(
+    anthropic_provider: ClaudeProvider,
+) -> None:
+    slug = await derive_workflow_id_from_llm("Build a simple todo list app", anthropic_provider)
+    assert re.match(r"^[a-z][a-z0-9-]*$", slug), (
+        f"Expected a valid slug, got: {slug!r}"
+    )
+    assert 3 <= len(slug) <= 50
+
+
+@_ANTHROPIC_SKIP
+@pytest.mark.asyncio
+async def test_anthropic_plan_controller_starts_plan_interview(
+    anthropic_provider: ClaudeProvider, tmp_path: Path
+) -> None:
+    workflow_id = "live-anthropic-test-start"
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id=workflow_id)
+    controller = PlanController()
+
+    state = controller.handle_plan_start(adapter, "Build a simple todo list app")
+
+    assert state.phase == "DRAFT_INTERVIEW"
+    assert state.workflow_id == workflow_id
+    assert (adapter.plan_dir / "draft.md").exists()
+
+    result = await anthropic_provider.complete(
+        [Message(role="user", content="Confirm: plan interview started correctly.")]
     )
     assert isinstance(result, CompletionResult)
     assert result.message.content.strip()
