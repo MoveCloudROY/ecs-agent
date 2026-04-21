@@ -29,6 +29,7 @@ from ecs_agent.prompts.contracts import (
     TriggerSpec,
 )
 from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers.claude_provider import ClaudeProvider
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.protocol import LLMProvider
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
@@ -626,6 +627,7 @@ async def main() -> None:
         "https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
     )
     model: str = os.environ.get("LLM_MODEL", "qwen3.6-flash")
+    api_format_str: str = os.environ.get("LLM_API_FORMAT", "openai_responses")
 
     if not api_key:
         print("Error: LLM_API_KEY environment variable is required.")
@@ -634,18 +636,35 @@ async def main() -> None:
         )
         sys.exit(1)
 
-    logger.info("using_provider", provider="OpenAIProvider", model=model)
-    print(f"Using OpenAIProvider with model: {model}")
-    provider = OpenAIProvider(
-        config=ProviderConfig(
-            provider_id="openai",
-            base_url=base_url,
-            api_key=api_key,
-            api_format=ApiFormat.OPENAI_RESPONSES,
-            enable_store=True,
-        ),
-        model=model,
-    )
+    provider: LLMProvider
+    if api_format_str == ApiFormat.ANTHROPIC_MESSAGES:
+        logger.info("using_provider", provider="ClaudeProvider", model=model)
+        print(f"Using ClaudeProvider (Anthropic Messages API) with model: {model}")
+        provider = ClaudeProvider(
+            config=ProviderConfig(
+                provider_id="anthropic",
+                base_url=base_url,
+                api_key=api_key,
+                api_format=ApiFormat.ANTHROPIC_MESSAGES,
+            ),
+            model=model,
+        )
+    else:
+        api_format = ApiFormat.OPENAI_RESPONSES
+        if api_format_str == ApiFormat.OPENAI_CHAT_COMPLETIONS:
+            api_format = ApiFormat.OPENAI_CHAT_COMPLETIONS
+        logger.info("using_provider", provider="OpenAIProvider", model=model)
+        print(f"Using OpenAIProvider with model: {model}")
+        provider = OpenAIProvider(
+            config=ProviderConfig(
+                provider_id="openai",
+                base_url=base_url,
+                api_key=api_key,
+                api_format=api_format,
+                enable_store=api_format == ApiFormat.OPENAI_RESPONSES,
+            ),
+            model=model,
+        )
 
     world, agent_id, _, _ = build_plan_task_world(
         provider=provider,
