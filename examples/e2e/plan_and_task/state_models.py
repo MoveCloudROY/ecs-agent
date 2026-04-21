@@ -59,7 +59,6 @@ class ReviewVerdict:
     notes: str | None = None
     citations: list[str] = field(default_factory=list)
     evidence_refs: list[str] = field(default_factory=list)
-    plan_version: int = 0
 
     def __post_init__(self) -> None:
         if self.phase not in _PHASE_VALUES:
@@ -125,6 +124,17 @@ class RuntimeState:
             _require_non_empty(task_id, field_name="retry_budget task_id")
             if budget < 0:
                 raise ValueError("retry_budget values must be >= 0")
+
+    def upsert_verdict(self, verdict: "ReviewVerdict") -> None:
+        if verdict.verdict == "approved":
+            object.__setattr__(verdict, "notes", None)
+        for i, existing in enumerate(self.review_verdicts):
+            if existing.phase == verdict.phase:
+                if existing.verdict == "approved":
+                    return
+                self.review_verdicts[i] = verdict
+                return
+        self.review_verdicts.append(verdict)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert the runtime state to a dictionary representation."""

@@ -164,7 +164,7 @@ class PlanController:
             evidence_refs=evidence_refs or [],
         )
         adapter.write_review_verdict("DRAFT_ADVISOR_REVIEW", verdict)
-        state.review_verdicts.append(verdict)
+        state.upsert_verdict(verdict)
         if "DRAFT_ADVISOR_REVIEW" in self._allowed_transitions(state):
             state = self._state_machine.transition(state, "DRAFT_ADVISOR_REVIEW")
         state.updated_at = timestamp
@@ -198,7 +198,7 @@ class PlanController:
             evidence_refs=evidence_refs or [],
         )
         adapter.write_review_verdict("DRAFT_QA_REVIEW", verdict)
-        state.review_verdicts.append(verdict)
+        state.upsert_verdict(verdict)
         if "DRAFT_QA_REVIEW" in self._allowed_transitions(state):
             state = self._state_machine.transition(state, "DRAFT_QA_REVIEW")
         if verdict_str == "approved" and "WRITE_PLAN" in self._allowed_transitions(state):
@@ -277,7 +277,7 @@ class PlanController:
             evidence_refs=evidence_refs or [],
         )
         adapter.write_review_verdict("PLAN_QA_REVIEW", verdict)
-        state.review_verdicts.append(verdict)
+        state.upsert_verdict(verdict)
         if "PLAN_QA_REVIEW" in self._allowed_transitions(state):
             state = self._state_machine.transition(state, "PLAN_QA_REVIEW")
         if verdict_str == "approved" and "PLAN_FINALIZED" in self._allowed_transitions(state):
