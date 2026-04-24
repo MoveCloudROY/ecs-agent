@@ -237,6 +237,5 @@ print(descriptor.record_path)  # scratchbook/records/subagent/subagent_<uuid24>
 
 ## See Also
 
-- [Task Orchestration System](task-system.md) — How tasks resolve canonical artifact references.
 - [Subagent Delegation](subagent.md) — Subagent output persistence and artifact metadata.
 - [API Reference](../api-reference.md) — Full signatures and module-level APIs.

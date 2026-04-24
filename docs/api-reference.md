@@ -21,12 +21,10 @@ The following types and classes are re-exported for convenience:
 - `MessageBusSystem`, `RAGSystem`, `TreeSearchSystem`, `ToolApprovalSystem`, `CheckpointSystem`, `CompactionSystem`, `UserInputSystem`, `TerminalCleanupSystem`, `SubagentSystem` from `ecs_agent.systems`
 - `StreamStartEvent`, `StreamReasoningDeltaEvent`, `StreamReasoningEndEvent`, `StreamContentStartEvent`, `StreamContentDeltaEvent`, `StreamEndEvent`, `CheckpointCreatedEvent`, `CheckpointRestoredEvent`, `CompactionCompleteEvent`, `ToolApprovalRequestedEvent`, `ToolApprovedEvent`, `ToolDeniedEvent`, `RAGRetrievalCompletedEvent`, `UserInputRequestedEvent`, `MCTSNodeScoredEvent`, `MessageBusPublishedEvent`, `MessageBusDeliveredEvent`, `MessageBusResponseEvent`, `MessageBusTimeoutEvent` from `ecs_agent.types`
 - `scan_module`, `sandboxed_execute`, `tool` from `ecs_agent.tools`
-- `TaskStatus`, `TaskComponent`, `ScratchbookRef`, `ScratchbookRefComponent`, `ScratchbookIndexComponent` from `ecs_agent.types` and `ecs_agent.components`
+- `ScratchbookRef`, `ScratchbookRefComponent`, `ScratchbookIndexComponent` from `ecs_agent.types` and `ecs_agent.components`
 - `SubagentConfig`, `SubagentLifecycleStatus`, `SubagentSessionRecord`, `InheritancePolicy` from `ecs_agent.types`
 - `ScratchbookService`, `ScratchbookIndexer`, `ToolResultsSink` from `ecs_agent.scratchbook`
-- `TaskExecutor`, `StateMachine`, `TaskPersistenceService`, `ContextResolver`, `DependencyAnalyzer`, `WavePlanner`, `TaskFetchingUnit` from `ecs_agent.task`
 - `AgentSpec`, `validate_agent_spec`, `discover_agent_sources`, `load_json_agents`, `load_markdown_agent`, `resolve_agent_specs`, `compile_agent_specs`, `resolve_prompt_file` from `ecs_agent.dsl`
-- `TaskCreatedEvent`, `TaskStatusChangedEvent`, `TaskBlockedEvent`, `TaskCompletedEvent`, `TaskFailedEvent` from `ecs_agent.types`
 
 
 ---
@@ -753,33 +751,6 @@ class ScratchbookIndexer:
     def lookup_by_task_id(self, task_id: str) -> list[dict[str, Any]]: ...
     def lookup_by_artifact_type(self, artifact_type: str) -> list[dict[str, Any]]: ...
     def lookup_by_category(self, category: str) -> list[dict[str, Any]]: ...
-```
-
----
-
-## ecs_agent.task
-
-### TaskExecutor
-```python
-class TaskExecutor(priority: int = 0):
-    async def execute_dispatch_request(self, world: World, entity_id: EntityId, request: DispatchRequest) -> ExecutionResult: ...
-```
-
-### TaskPersistenceService
-```python
-class TaskPersistenceService:
-    def __init__(self, scratchbook: ScratchbookService): ...
-    def persist_task_snapshot(self, task_id: str, task_component: TaskComponent) -> ScratchbookRef: ...
-    def read_task_snapshot(self, task_id: str) -> dict[str, Any] | None: ...
-    def append_task_event(self, task_id: str, event: TaskEvent) -> None: ...
-    def read_task_events(self, task_id: str) -> list[dict[str, Any]]: ...
-```
-
-### ContextResolver
-```python
-class ContextResolver:
-    def __init__(self, service: ScratchbookService): ...
-    def resolve_context(self, task: TaskComponent, running_task_ids: set[str] | None = None) -> ResolvedContext | ContextResolutionError: ...
 ```
 
 ---

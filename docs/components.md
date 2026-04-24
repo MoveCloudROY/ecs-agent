@@ -636,42 +636,6 @@ world.add_component(
 )
 ```
 
-### TaskComponent
-The primary component for task definition and tracking in the Task Orchestration System.
-
-| Name | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `task_id` | `str` | (none) | Stable identifier for the task |
-| `description` | `str` | (none) | What the task does (supports placeholder rendering) |
-| `expected_output` | `str` | (none) | What success looks like |
-| `assigned_agent` | `EntityId \| str \| None` | (none) | EntityId (local), str (subagent name), or None |
-| `tools` | `list[str]` | (none) | List of tool names available for the task |
-| `context_dependencies` | `list[str]` | (none) | List of scratchbook refs needed for execution |
-| `status` | `TaskStatus` | (none) | Current state machine status |
-| `priority` | `int` | `0` | Execution priority (higher = earlier) |
-| `output_schema` | `dict[str, Any] \| None` | `None` | Optional Pydantic-style schema for output validation |
-| `max_retries` | `int` | `0` | Maximum number of automatic retry attempts |
-
-**Used by:** `TaskFetchingUnit`, `TaskExecutor`, `WavePlanner`, `DependencyAnalyzer`
-
-**Usage:**
-```python
-from ecs_agent.components import TaskComponent
-from ecs_agent.types import TaskStatus
-
-task = TaskComponent(
-    task_id="analyze_report",
-    description="Analyze the report at {{tool_results/report_id}}",
-    expected_output="Summary of the report",
-    assigned_agent="analyst_agent",
-    tools=["read_file", "write_file"],
-    context_dependencies=["tool_results/report_id"],
-    status=TaskStatus.PENDING,
-    priority=10
-)
-world.add_component(agent, task)
-```
-
 ### ScratchbookRefComponent
 Stores a reference to a specific scratchbook artifact.
 
