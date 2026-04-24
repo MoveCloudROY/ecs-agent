@@ -2,6 +2,101 @@
 
 from __future__ import annotations
 
+# Canonical workflow_plan.md format spec — embedded verbatim into writer prompts
+# so the plan_writer subagent has an unambiguous reference.
+# Keep in sync with plan_schema.py validation logic and templates/workflow_plan_template.md.
+_WORKFLOW_PLAN_FORMAT = """\
+## workflow_plan.md Format
+
+### 1. YAML Frontmatter (required, between --- delimiters)
+
+  ---
+  workflow_id: <slug>           # lowercase letters, digits, hyphens only
+  title: "<Plan title>"
+  description: >
+    2-4 sentence scope summary: what is built, key features, tech stack.
+  status: finalized             # must be exactly this value
+  created_at: "<ISO-8601>"      # e.g. 2026-04-24T10:00:00.000000
+  finalized_at: "<ISO-8601>"
+  ---
+
+### 2. Overview section (recommended)
+
+  ## Overview
+
+  1-2 paragraphs: what the system is, architectural decisions, phase scope.
+
+  ### Dependency Graph
+
+  ```
+  T01 (Name)
+   ├── T02 (Name)
+   └── T03 (Name)
+        └── T04 (Name)
+  ```
+
+  ---
+
+### 3. Tasks section (required heading, then one block per task)
+
+  ## Tasks
+
+  ### Task: T01-<slug>         ← space after the colon; slug must match task_id
+
+  ```yaml
+  task_id: T01-<slug>          # must match the heading exactly
+  title: "Short imperative title — what this task builds"
+  description: >
+    Full description: what must be done, why, and how it relates to the plan.
+    Reference exact tables/files/APIs. Be specific enough for a zero-context agent.
+  dependencies: []             # list of task_id values in this plan; [] if none
+  acceptance_criteria:
+    - "AC-1.1: Run `<exact command>` and verify <exact expected output>"
+    - "AC-1.2: <File path> contains <field>=<value>"
+    - "AC-1.3: <API endpoint> with <body> returns <status> with <field>=<value>"
+  execution_hints:
+    - "Create <ClassName> in <path/to/file.py> responsible for <concern>"
+    - "Use <library> for <purpose>; example: `<exact command or snippet>`"
+    - "<Exact SQL / config / API contract detail the agent will need>"
+  ```
+
+  ---                          ← separator between tasks (recommended)
+
+  ### Task: T02-<slug>
+
+  ```yaml
+  task_id: T02-<slug>
+  title: "Short imperative title"
+  description: >
+    What this task does and why. Reference outputs from T01 explicitly.
+  dependencies:
+    - T01-<slug>
+  acceptance_criteria:
+    - "AC-2.1: <Verifiable criterion — no subjective language>"
+  execution_hints:
+    - "<Concrete hint with exact path, command, or code detail>"
+  ```
+
+### 4. Appendix (optional)
+
+  ## Appendix: Acceptance Criteria Cross-Reference
+
+  | AC ID  | Description                | Primary Task  |
+  |--------|----------------------------|---------------|
+  | AC-1.1 | <Brief description>        | T01-<slug>    |
+  | AC-2.1 | <Brief description>        | T02-<slug>    |
+
+### Validation rules enforced by plan_schema.py
+
+  - status must be exactly 'finalized'
+  - ## Tasks heading is required (exact text)
+  - Task headings: ### Task: <task_id> with one space after the colon
+  - task_id in YAML must match the heading slug exactly
+  - acceptance_criteria is a non-empty list; no subjective criteria
+  - dependencies lists only task_id values defined in this plan
+  - execution_hints must be present ([] is allowed but field must exist)
+"""
+
 
 def build_draft_prompt(description: str, questions: list[str]) -> str:
     """Build the planner prompt that turns interview notes into a draft."""
@@ -49,14 +144,12 @@ def build_qa_prompt(draft_path: str, advisor_verdict: str) -> str:
 def build_write_plan_prompt(draft_path: str) -> str:
     return (
         "You have a fully-reviewed draft. Now produce a structured workflow plan.\n\n"
-        "Write the plan to `workflow_plan.md` using write_file. "
-        "The plan must include:\n"
-        "- YAML frontmatter: workflow_id, title, description, status: finalized, "
-        "created_at, finalized_at\n"
-        "- One or more `### Task: <task_id>` sections, each with a YAML block containing:\n"
-        "  task_id, title, description, dependencies (list), "
-        "acceptance_criteria (list), execution_hints (list)\n\n"
-        f"Read the draft with: read_file(file_path=\"{draft_path}\")"
+        "Steps:\n"
+        f"1. Read the draft: read_file(file_path=\"{draft_path}\")\n"
+        "2. Decompose the draft into tasks following the format spec below.\n"
+        "3. Write the plan: write_file(file_path=\"workflow_plan.md\", content=<plan>)\n\n"
+        "Do not ask questions — produce the plan now.\n\n"
+        + _WORKFLOW_PLAN_FORMAT
     )
 
 
@@ -195,8 +288,13 @@ You do NOT need to wait for a user command — this message is injected automati
 When you receive that message:
 
 1. Call subagent(category="plan_writer", prompt=<the full message you received>) immediately.
-2. The plan_writer subagent has the writing-plans skill loaded and will produce `workflow_plan.md`.
+2. The plan_writer subagent will read the draft and produce `workflow_plan.md`.
 3. Do NOT write the plan yourself — always delegate to the plan_writer subagent.
+
+The plan_writer produces a file with YAML frontmatter (workflow_id, title, description,
+status: finalized, created_at, finalized_at) followed by a `## Tasks` section containing
+`### Task: <task_id>` blocks, each with a ```yaml``` block defining task_id, title,
+description, dependencies, acceptance_criteria, and execution_hints.
 
 ## Plan QA Review (PLAN_QA_REVIEW phase)
 
@@ -281,9 +379,10 @@ QA_SYSTEM_PROMPT = (
 WRITE_PLAN_SYSTEM_PROMPT = (
     "You are the plan writer for the plan-and-task workflow.\n\n"
     "Your sole job is to translate the reviewed draft into a structured `workflow_plan.md`.\n"
-    "Use `write_file` to write the file. Follow the YAML frontmatter + task section format "
-    "described in your instructions. Do not ask questions — produce the plan now.\n\n"
-    "## Available tools:\n${_installed_tools}\n"
+    "Read the draft first, then write the plan using `write_file`. "
+    "Do not ask questions — produce the plan now.\n\n"
+    + _WORKFLOW_PLAN_FORMAT
+    + "\n## Available tools:\n${_installed_tools}\n"
 )
 
 PLAN_QA_REVIEW_SYSTEM_PROMPT = (
