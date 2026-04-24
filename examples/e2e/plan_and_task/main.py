@@ -15,6 +15,7 @@ if __package__ in {None, ""}:
 from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
+    RenderedSystemPromptComponent,
     SubagentRegistryComponent,
     SubagentSessionTableComponent,
     ToolRegistryComponent,
@@ -39,7 +40,7 @@ from ecs_agent.skills.discovery import discover_skills
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.subagent import SubagentSystem
-from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
+from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem, render_prompt_template
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.systems.user_prompt_normalization_system import (
     UserPromptNormalizationSystem,
@@ -61,9 +62,10 @@ from examples.e2e.plan_and_task.scratchbook_adapter import (
 from examples.e2e.plan_and_task.controller import PlanController, ResumeAction
 from examples.e2e.plan_and_task.prompts import (
     ADVISOR_SYSTEM_PROMPT,
-    DRAFT_INTERVIEW_SYSTEM_PROMPT,
+    PLAN_MAIN_AGENT_SYSTEM_PROMPT,
     PLAN_QA_REVIEW_SYSTEM_PROMPT,
     QA_SYSTEM_PROMPT,
+    TASK_MAIN_AGENT_SYSTEM_PROMPT,
     WRITE_PLAN_SYSTEM_PROMPT,
     build_write_plan_prompt,
 )
@@ -129,7 +131,7 @@ def build_plan_task_world(
     world.add_component(
         agent_id,
         SystemPromptConfigSpec(
-            template_source=PromptTemplateSource(inline=DRAFT_INTERVIEW_SYSTEM_PROMPT)
+            template_source=PromptTemplateSource(inline=PLAN_MAIN_AGENT_SYSTEM_PROMPT)
         ),
     )
     world.add_component(agent_id, ToolRegistryComponent(tools={}, handlers={}))
@@ -204,6 +206,50 @@ def build_plan_task_world(
     controller = PlanController()
     runtime_state: list[RuntimeState | None] = [None]
     _base_dir = base_dir or _WORKFLOW_BASE_DIR
+
+    def _swap_to_task_prompt(w: World, eid: EntityId, trigger_text: str) -> None:
+        spec = w.get_component(eid, SystemPromptConfigSpec)
+        if spec is None:
+            return
+        if (spec.template_source.inline or "") == TASK_MAIN_AGENT_SYSTEM_PROMPT:
+            return
+        new_spec = SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline=TASK_MAIN_AGENT_SYSTEM_PROMPT)
+        )
+        w.add_component(eid, new_spec)
+        rendered_text, snapshot = render_prompt_template(
+            template=TASK_MAIN_AGENT_SYSTEM_PROMPT, world=w, entity=eid
+        )
+        w.add_component(
+            eid,
+            RenderedSystemPromptComponent(
+                text=rendered_text,
+                placeholder_snapshot=snapshot,
+            ),
+        )
+        llm = w.get_component(eid, LLMComponent)
+        if llm is not None:
+            llm.system_prompt = rendered_text
+        conv = w.get_component(eid, ConversationComponent)
+        if conv is not None:
+            conv.messages.clear()
+            conv.messages.append(Message(role="user", content=trigger_text))
+        logger.info(
+            "plan_task_system_prompt_switched",
+            entity_id=int(eid),
+            from_prompt="PLAN_MAIN_AGENT",
+            to_prompt="TASK_MAIN_AGENT",
+        )
+
+
+    def _load_workflow(w: World, eid: EntityId, workflow_id: str) -> RuntimeState:
+        new_adapter = ArtifactAdapter(base_dir=_base_dir, workflow_id=workflow_id)
+        state = new_adapter.read_state()
+        new_adapter.mark_stale_subagents(state)
+        adapter_ref[0] = new_adapter
+        runtime_state[0] = state
+        w.add_component(eid, build_scratchbook_prompt_config(workflow_id))
+        return state
 
     async def _on_delegation_completed(event: DelegationCompletedEvent) -> None:
         if event.entity_id != agent_id:
@@ -340,11 +386,36 @@ def build_plan_task_world(
         try:
             from examples.e2e.plan_and_task.task_exec import TaskExec
 
+            # Guard against re-triggering: after _swap_to_task_prompt the /task:start
+            # message stays as the last role="user" entry (tool results use role="tool"),
+            # so the trigger would fire on every subsequent tick. Skip re-initialization
+            # when we are already running in TASK mode.
+            spec = _world.get_component(_entity_id, SystemPromptConfigSpec)
+            if spec is not None and (spec.template_source.inline or "") == TASK_MAIN_AGENT_SYSTEM_PROMPT:
+                return None
+
+            if runtime_state[0] is None:
+                parts = _user_text.strip().split(None, 1)
+                workflow_id = parts[1].strip() if len(parts) > 1 else ""
+                if not workflow_id:
+                    raise ValueError(
+                        "No active workflow state. "
+                        "Provide a workflow_id: /task:start <workflow_id>, "
+                        "or start a new workflow with /plan:start <description>."
+                    )
+                _load_workflow(_world, _entity_id, workflow_id)
+                logger.info(
+                    "plan_task_task_start_auto_loaded_state",
+                    workflow_id=workflow_id,
+                    phase=_require_state(runtime_state[0]).phase,
+                )
+
             current = _require_state(runtime_state[0])
             task_exec = TaskExec(state=current)
             runtime_state[0] = task_exec.initialize_task_queue(
                 current, _require_adapter(adapter_ref[0])
             )
+            _swap_to_task_prompt(_world, _entity_id, _user_text)
             s = _require_state(runtime_state[0])
             logger.info(
                 "plan_task_command_task_start",
@@ -396,6 +467,7 @@ def build_plan_task_world(
             runtime_state[0] = controller.handle_task_resume(
                 _require_state(runtime_state[0]), _require_adapter(adapter_ref[0])
             )
+            _swap_to_task_prompt(_world, _entity_id, _user_text)
             logger.info(
                 "plan_task_command_task_resume",
                 workflow_id=_require_state(runtime_state[0]).workflow_id,
@@ -457,20 +529,15 @@ def build_plan_task_world(
         if not workflow_id:
             return "Error: /plan:resume requires a non-empty workflow_id."
         try:
-            new_adapter = ArtifactAdapter(base_dir=_base_dir, workflow_id=workflow_id)
-            state = new_adapter.read_state()
-            new_adapter.mark_stale_subagents(state)
-            adapter_ref[0] = new_adapter
-            runtime_state[0] = state
-            _world.add_component(_entity_id, build_scratchbook_prompt_config(workflow_id))
-            actions = controller.reconcile_after_resume(state, new_adapter)
-            runtime_state[0] = state
+            state = _load_workflow(_world, _entity_id, workflow_id)
+            actions = controller.reconcile_after_resume(state, _require_adapter(adapter_ref[0]))
             for action in actions:
                 if action == ResumeAction.TRIGGER_PLAN_WRITER:
                     conv = _world.get_component(_entity_id, ConversationComponent)
                     if conv is not None:
+                        loaded_adapter = _require_adapter(adapter_ref[0])
                         draft_path = str(
-                            (new_adapter.plan_dir / "draft.md").relative_to(new_adapter.base_dir)
+                            (loaded_adapter.plan_dir / "draft.md").relative_to(loaded_adapter.base_dir)
                         )
                         conv.messages.append(
                             Message(role="user", content=build_write_plan_prompt(draft_path))

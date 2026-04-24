@@ -126,7 +126,7 @@ class TaskExec:
         self, state: RuntimeState, adapter: ArtifactAdapter
     ) -> RuntimeState:
         """Load the plan and build the todo queue, then update state to TASK_RUNNING."""
-        _ALLOWED_PHASES = {"TASK_READY", "TASK_RUNNING", "TASK_BLOCKED"}
+        _ALLOWED_PHASES = {"PLAN_FINALIZED", "TASK_READY", "TASK_RUNNING", "TASK_BLOCKED"}
         if state.phase not in _ALLOWED_PHASES:
             raise ValueError(
                 f"Cannot initialize task queue from phase {state.phase!r}; "

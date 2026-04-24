@@ -173,7 +173,9 @@ async def setup_interactive_input(
         TerminalCleanupSystem(priority=1, clear_reasons=("reasoning_complete",)),
         priority=1,
     )
-    world.register_system(UserInputSystem(priority=-5), priority=-5)
+    # Priority -15: run BEFORE UserPromptNormalizationSystem (-10) so the user
+    # message is in ConversationComponent when normalization and script handlers run.
+    world.register_system(UserInputSystem(priority=-15), priority=-15)
 
     if world.get_component(agent_id, UserInputComponent) is None:
         world.add_component(agent_id, UserInputComponent(prompt="You> "))
