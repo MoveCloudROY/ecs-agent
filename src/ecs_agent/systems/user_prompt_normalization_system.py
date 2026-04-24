@@ -88,7 +88,7 @@ class UserPromptNormalizationSystem:
                 raw_length=len(raw_user_text),
                 normalized_length=len(normalized_text),
                 trigger_count=len(trigger_specs) if trigger_specs else 0,
-                prompt_text=normalized_text,
+                prompt_text=normalized_text[:200],
             )
 
             world.add_component(

@@ -28,12 +28,12 @@ class ClaudeProvider:
     def __init__(
         self,
         config: ProviderConfig,
-        model: str = "claude-3-5-haiku-latest",
-        max_tokens: int = 4096,
+        model: str = "glm-5.1",
+        max_tokens: int = 65535,
         connect_timeout: float = 10.0,
-        read_timeout: float = 120.0,
-        write_timeout: float = 10.0,
-        pool_timeout: float = 10.0,
+        read_timeout: float = 600.0,
+        write_timeout: float = 60.0,
+        pool_timeout: float = 60.0,
         supports_vision: bool = False,
     ) -> None:
         if config.api_format is not ApiFormat.ANTHROPIC_MESSAGES:

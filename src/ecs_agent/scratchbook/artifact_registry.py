@@ -18,7 +18,7 @@ from ecs_agent.logging import get_logger
 
 logger = get_logger(__name__)
 
-_INLINE_THRESHOLD_BYTES = 8192
+_INLINE_THRESHOLD_BYTES = 2048
 _ARTIFACT_ID_PATTERN = re.compile(r"^(tool|subagent)_[0-9a-f]{24}$")
 _NON_ALNUM_RUN_PATTERN = re.compile(r"[^a-z0-9]+")
 _boulder_locks: dict[str, asyncio.Lock] = {}

@@ -110,7 +110,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **Canonical immutable records** — Tool and subagent outputs persist to `scratchbook/records/tool/tool_<uuid24>` and `scratchbook/records/subagent/subagent_<uuid24>`.
 - **Canonical mutable plan state** — Plan markdown and Boulder machine state live at `scratchbook/<plan_slug>/plan.md` and `scratchbook/<plan_slug>/executes/boulder.json`.
 - **Trigger-to-Boulder lifecycle** — Plan-type script triggers create Boulder; planning/replanning/tool systems update it throughout execution.
-- **Inline payload policy** — Artifact inline content is populated only when UTF-8 payload size is `<= 8192` bytes. For larger results, `inline_content` in the subagent result payload carries a hint string pointing to the artifact file path instead of being `null`.
+- **Inline payload policy** — Artifact inline content is populated only when UTF-8 payload size is `<= 2048` bytes. For larger results, `inline_content` is `None` and content is file-backed only. The persisted file always stores the full content — no truncation or summarisation.
 - **Prompt Provider** — Injects scratchbook context into system prompts via `ScratchbookPromptConfig` component.
 
 ### Prompt Normalization & Injection
@@ -129,7 +129,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 ### Two-Tier Skill System
 - **Markdown Skills** — Define agent capabilities via `SKILL.md` files with YAML frontmatter. System prompts are injected automatically, and `@`-prefixed relative paths are resolved to workspace-safe paths at load time.
 - **Script Skills** — Extend markdown skills with Python tool handlers in a `scripts/` directory, executed as sandboxed subprocesses.
-- **Built-in Tools** — `BuiltinToolsSkill` provides `read_file`, `write_file`, `edit_file`, `bash`, and `glob` with workspace binding, path traversal protection, and hash-anchored editing.
+- **Built-in Tools** — `BuiltinToolsSkill` provides `read_file`, `write_file`, `edit_file`, `bash`, `glob`, and `interactive_bash` with workspace binding, path traversal protection, hash-anchored editing, and persistent tmux session support.
 - **Skill Discovery** — File-based skill loading from directories with metadata-first activation and staged full-context injection via `load_skill_details`.
 
 ### Production Infrastructure
@@ -259,6 +259,7 @@ The `examples/` directory contains runnable demos for the major patterns in the 
 | [`mcp_agent.py`](examples/mcp_agent.py) | MCP server integration and namespaced tool usage |
 | [`agent_dsl_json.py`](examples/agent_dsl_json.py) | Load multi-agent configuration from JSON file using Agent DSL (dual-mode) |
 | [`agent_dsl_markdown.py`](examples/agent_dsl_markdown.py) | Load primary agent + subagent from Markdown files using Agent DSL; demonstrates placeholders, triggers, skills, and subagent registry (dual-mode) |
+| [`examples/e2e/plan_and_task/`](examples/e2e/plan_and_task/) | Interactive plan→review→execute workflow; recoverable state machine, review-gated planning, artifact persistence, and slash-command dispatch |
 
 
 Run any example:
