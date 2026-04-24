@@ -43,7 +43,6 @@ from ecs_agent.components import (
     SubagentRegistryComponent,
     SubagentSessionTableComponent,
     SubagentWaitComponent,
-    TaskComponent,
     TerminalComponent,
     ToolApprovalComponent,
     ToolRegistryComponent,
@@ -113,7 +112,6 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     MessageBusConversationComponent.__name__: MessageBusConversationComponent,
     ScratchbookIndexComponent.__name__: ScratchbookIndexComponent,
     ScratchbookRefComponent.__name__: ScratchbookRefComponent,
-    TaskComponent.__name__: TaskComponent,
     UserPromptConfigComponent.__name__: UserPromptConfigComponent,
     SystemPromptConfigSpec.__name__: SystemPromptConfigSpec,
     RenderedSystemPromptComponent.__name__: RenderedSystemPromptComponent,
@@ -315,24 +313,6 @@ class WorldSerializer:
                 for message in component.messages
             ]
 
-        # TaskComponent: convert EntityId assigned_agent to int for JSON serialization
-        if isinstance(component, TaskComponent):
-            # Convert assigned_agent if it's an EntityId (which is an int at runtime)
-            assigned_agent = serialized.get("assigned_agent")
-            if (
-                assigned_agent is not None
-                and isinstance(assigned_agent, int)
-                and not isinstance(assigned_agent, bool)
-            ):
-                # It's an EntityId (NewType over int), keep as int for JSON
-                pass
-            # If string or None, leave as-is (JSON-serializable)
-
-            # Convert TaskStatus enum to string
-            status = serialized.get("status")
-            if status is not None and hasattr(status, "value"):  # Enum
-                serialized["status"] = status.value
-
         # ScratchbookIndexComponent: convert ScratchbookRef objects to dicts
         if isinstance(component, ScratchbookIndexComponent):
             artifacts_dict = {}
@@ -512,21 +492,6 @@ class WorldSerializer:
                 )
                 subagents_dict[name] = subagent_config
             normalized_data["subagents"] = subagents_dict
-
-        # TaskComponent: convert assigned_agent int to EntityId if needed
-        if component_name == TaskComponent.__name__:
-            assigned_agent_value = normalized_data.get("assigned_agent")
-            if isinstance(assigned_agent_value, int):
-                # EntityId stored as int, reconstruct it
-                normalized_data["assigned_agent"] = EntityId(assigned_agent_value)
-            # If string or None, leave as-is
-
-            # Convert status string to TaskStatus enum if needed
-            status_value = normalized_data.get("status")
-            if isinstance(status_value, str):
-                from ecs_agent.types import TaskStatus
-
-                normalized_data["status"] = TaskStatus(status_value)
 
         # ScratchbookRefComponent: no special handling needed (all fields are primitives)
         # ScratchbookRefComponent fields (artifact_id, category, content_hash, timestamp) are all strings

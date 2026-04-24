@@ -100,11 +100,6 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **Planning & ReAct** — Multi-step reasoning with dynamic replanning on errors or unexpected tool results.
 - **MCTS Optimization** *(experimental)* — Find optimal execution paths using Monte Carlo Tree Search for complex goals.
 
-### Task Orchestration
-- **TaskComponent** — Structured multi-step task definitions with description, expected output, agent assignment, tool lists, and context dependencies.
-- **Priority & Retries** — Priority-based ordering and configurable retry limits for robust execution.
-- **Output Schema** — Optional JSON schema validation for task outputs.
-
 ### Scratchbook Artifact Registry
 - **`ArtifactRegistry`** — Canonical persistence layer for durable scratchbook records and mutable plan execution state.
 - **Canonical immutable records** — Tool and subagent outputs persist to `scratchbook/records/tool/tool_<uuid24>` and `scratchbook/records/subagent/subagent_<uuid24>`.
@@ -246,7 +241,6 @@ The `examples/` directory contains runnable demos for the major patterns in the 
 | [`rag_agent.py`](examples/rag_agent.py) | Retrieval-Augmented Generation demo (dual-mode with real embeddings) |
 | [`subagent_delegation_basic.py`](examples/subagent_delegation_basic.py) | Subagent delegation — standard pattern: sync call, `SystemPromptRenderSystem`, placeholder resolution (dual-mode) |
 | [`subagent_delegation.py`](examples/subagent_delegation.py) | Subagent delegation — full feature demo: background queuing, FIFO scheduler, streaming telemetry, `queued→running→succeeded` lifecycle (dual-mode) |
-| [`task_orchestration_system.py`](examples/task_orchestration_system.py) | Dependency-aware task orchestration with wave planning, mixed local/subagent backends, scratchbook persistence, and serialization |
 | [`claude_agent.py`](examples/claude_agent.py) | Native Anthropic Claude provider usage |
 | [`litellm_agent.py`](examples/litellm_agent.py) | LiteLLM unified provider for 100+ models |
 | [`streaming_system_agent.py`](examples/streaming_system_agent.py) | System-level streaming with events |
@@ -371,7 +365,6 @@ See [`docs/`](docs/) for detailed guides:
 - [Runtime Control](docs/features/runtime-control.md), Entity registry, system lifecycle, model switching, interruption, revert
 - [Agent DSL](docs/features/agent-dsl.md), Declarative agent definition and loading
 - [Agent Scratchbook](docs/features/scratchbook.md), `ArtifactRegistry` canonical paths, Boulder lifecycle, persistence APIs, and prompt provider.
-- [Task Orchestration](docs/features/task-system.md), Multi-step task management and dependency resolution
 
 ### Tools & Integration
 - [Skills](docs/features/skills.md), Composable capabilities and progressive disclosure

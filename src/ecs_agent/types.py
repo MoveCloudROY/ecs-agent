@@ -230,17 +230,6 @@ class InterruptionReason(Enum):
     COMPLETION = "completion"
 
 
-class TaskStatus(Enum):
-    """Task execution status."""
-
-    PENDING = "pending"
-    READY = "ready"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    BLOCKED = "blocked"
-
-
 @dataclass(slots=True)
 class ScratchbookRef:
     """Reference to a scratchbook artifact."""
@@ -698,163 +687,6 @@ class DelegationCompletedEvent:
 
 
 @dataclass(slots=True)
-class TaskCreatedEvent:
-    """Event emitted when a task is created."""
-
-    entity_id: EntityId
-    task_id: str
-    description: str
-
-
-@dataclass(slots=True)
-class TaskStateChangedEvent:
-    """Event emitted when task status changes."""
-
-    entity_id: EntityId
-    task_id: str
-    old_status: "TaskStatus"
-    new_status: "TaskStatus"
-
-
-@dataclass(slots=True)
-class TaskBlockedEvent:
-    """Event emitted when a task becomes blocked."""
-
-    entity_id: EntityId
-    task_id: str
-    reason: str
-    blocked_on: list[str] = field(default_factory=list)
-
-
-@dataclass(slots=True)
-class TaskCompletedEvent:
-    """Event emitted when a task completes successfully."""
-
-    entity_id: EntityId
-    task_id: str
-    result: str
-
-
-@dataclass(slots=True)
-class TaskFailedEvent:
-    """Event emitted when a task fails."""
-
-    entity_id: EntityId
-    task_id: str
-    error: str
-    retry_count: int = 0
-
-
-@dataclass(slots=True, frozen=True)
-class TaskReadyEvent:
-    """Event emitted when a task becomes ready for execution.
-
-    Fired when all upstream dependencies are resolved and the task
-    transitions from PENDING to READY status.
-    """
-
-    entity_id: EntityId
-    task_id: str
-    dependencies_resolved: list[str] = field(default_factory=list)
-    timestamp: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
-    correlation_id: str = ""
-
-
-@dataclass(slots=True, frozen=True)
-class TaskRunningEvent:
-    """Event emitted when a task begins execution.
-
-    Fired when task transitions from READY/BLOCKED to RUNNING status.
-    Includes backend assignment and agent information.
-    """
-
-    entity_id: EntityId
-    task_id: str
-    backend: str  # e.g., 'fetch', 'dispatch', 'completion'
-    assigned_agent: str | None = None
-    timestamp: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
-    correlation_id: str = ""
-
-
-@dataclass(slots=True, frozen=True)
-class TaskBlockedUpdatedEvent:
-    """Event emitted when a task becomes or remains blocked.
-
-    Fired when task transitions to BLOCKED status due to upstream failures
-    or missing dependencies. Includes context about what is blocking it.
-    """
-
-    entity_id: EntityId
-    task_id: str
-    blocking_reasons: list[str] = field(default_factory=list)
-    upstream_failures: list[str] = field(
-        default_factory=list
-    )  # task_ids of failed dependencies
-    timestamp: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
-    correlation_id: str = ""
-
-
-@dataclass(slots=True, frozen=True)
-class TaskCompletedWithMetadataEvent:
-    """Event emitted when a task completes successfully with correlation metadata.
-
-    Fired when task transitions to COMPLETED status. Includes result references
-    and duration information for observability.
-    """
-
-    entity_id: EntityId
-    task_id: str
-    result_refs: list[str] = field(default_factory=list)  # ScratchbookRef artifact IDs
-    duration_ms: float = 0.0
-    timestamp: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
-    correlation_id: str = ""
-
-
-@dataclass(slots=True, frozen=True)
-class TaskFailedWithReasonEvent:
-    """Event emitted when a task fails with detailed reason.
-
-    Fired when task transitions to FAILED status. Includes error details
-    and exception information for debugging.
-    """
-
-    entity_id: EntityId
-    task_id: str
-    error_reason: str
-    exception_details: str = ""
-    timestamp: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
-    correlation_id: str = ""
-
-
-@dataclass(slots=True, frozen=True)
-class TaskUnblockedEvent:
-    """Event emitted when a task transitions from BLOCKED to ready state.
-
-    Fired when upstream dependencies are resolved or manual override is applied.
-    Enables tracking of task unblocking events in the execution pipeline.
-    """
-
-    entity_id: EntityId
-    task_id: str
-    unblock_reason: str  # e.g., 'dependency_resolved', 'manual_override'
-    manual_override: bool = False
-    timestamp: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
-    correlation_id: str = ""
-
-
-@dataclass(slots=True)
 class MessageBusEnvelope:
     """CloudEvents-aligned message bus envelope with correlation and tracing extensions.
 
@@ -1004,18 +836,6 @@ __all__ = [
     "SubagentStreamStartEvent",
     "SubagentSessionRecord",
     "SystemHandle",
-    "TaskBlockedEvent",
-    "TaskBlockedUpdatedEvent",
-    "TaskCompletedEvent",
-    "TaskCompletedWithMetadataEvent",
-    "TaskCreatedEvent",
-    "TaskFailedEvent",
-    "TaskFailedWithReasonEvent",
-    "TaskReadyEvent",
-    "TaskRunningEvent",
-    "TaskStateChangedEvent",
-    "TaskStatus",
-    "TaskUnblockedEvent",
     "ToolApprovalRequestedEvent",
     "ToolApprovedEvent",
     "ToolCall",

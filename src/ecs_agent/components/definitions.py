@@ -23,7 +23,6 @@ from ecs_agent.types import (
     SubagentSessionRecord,
     ToolCall,
     ToolSchema,
-    TaskStatus,
     ScratchbookRef,
 )
 
@@ -396,27 +395,6 @@ class InterruptionComponent:
     message: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)
-
-
-@dataclass(slots=True)
-class TaskComponent:
-    """Task orchestration component."""
-
-    # REQUIRED (user-confirmed mandatory fields)
-    description: str
-    expected_output: str
-    assigned_agent: EntityId | str | None
-    tools: list[str]
-    context_dependencies: list[str]
-
-    # RUNTIME (state machine metadata)
-    task_id: str
-    status: TaskStatus
-    priority: int = 0
-
-    # OPTIONAL (advanced features)
-    output_schema: dict[str, Any] | None = None
-    max_retries: int = 0
 
 
 @dataclass(slots=True)

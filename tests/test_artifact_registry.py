@@ -290,44 +290,6 @@ def test_background_subagent_completion_persists_full_output_to_records_subagent
     assert persisted_file.read_text(encoding="utf-8") == full_output
 
 
-def test_registry_descriptor_drives_context_resolution_without_legacy_categories(
-    tmp_path: Path,
-) -> None:
-    from ecs_agent.components import TaskComponent
-    from ecs_agent.scratchbook.service import ScratchbookService
-    from ecs_agent.task import ContextResolver, ResolvedContext
-    from ecs_agent.types import TaskStatus
-
-    artifact_kind = _require_registry_symbol("ArtifactKind")
-    registry = _new_registry(tmp_path)
-    service = ScratchbookService(tmp_path)
-    resolver = ContextResolver(service=service)
-
-    result = registry.persist(
-        kind=artifact_kind.TOOL,
-        content='{"tool_call_id": "call-001", "result": "ok"}',
-    )
-
-    task = TaskComponent(
-        task_id="task-registry-context-001",
-        description="resolve registry artifact",
-        expected_output="resolved",
-        assigned_agent=None,
-        tools=[],
-        context_dependencies=[result.record_path],
-        status=TaskStatus.READY,
-    )
-
-    resolved = resolver.resolve_context(task)
-
-    assert isinstance(resolved, ResolvedContext)
-    assert resolved.missing_refs == ()
-    assert resolved.resolved_data[result.record_path] == {
-        "tool_call_id": "call-001",
-        "result": "ok",
-    }
-
-
 def test_plan_md_is_human_readable_projection_not_runtime_state_parser(
     tmp_path: Path,
 ) -> None:
