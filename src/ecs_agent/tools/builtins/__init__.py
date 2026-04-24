@@ -10,7 +10,16 @@ from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.tools.discovery import scan_module
 from ecs_agent.types import EntityId, ToolSchema
 
-from ecs_agent.tools.builtins import bash_tool, edit_tool, file_tools, glob_tool
+from ecs_agent.tools.builtins import (
+    bash_tool,
+    code_execution_tool,
+    edit_tool,
+    explore_tool,
+    file_tools,
+    glob_tool,
+    grep_tool,
+    webfetch_tool,
+)
 
 logger = get_logger(__name__)
 
@@ -32,7 +41,16 @@ class BuiltinToolsSkill(ScriptSkill):
             return self._bound_tools
 
         discovered: dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]] = {}
-        for module in (file_tools, bash_tool, edit_tool, glob_tool):
+        for module in (
+            file_tools,
+            bash_tool,
+            edit_tool,
+            glob_tool,
+            grep_tool,
+            explore_tool,
+            webfetch_tool,
+            code_execution_tool,
+        ):
             discovered.update(scan_module(module))
         return discovered
 
@@ -47,6 +65,7 @@ class BuiltinToolsSkill(ScriptSkill):
         bound: dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]] = {}
         for tool_name, (schema, handler) in original_tools.items():
             params = schema.parameters
+            has_workspace_root = "workspace_root" in params.get("properties", {})
             filtered_props = {
                 k: v
                 for k, v in params.get("properties", {}).items()
@@ -66,12 +85,15 @@ class BuiltinToolsSkill(ScriptSkill):
                 sandbox_compatible=schema.sandbox_compatible,
             )
 
-            async def _bound(
-                _h: Callable[..., Awaitable[str]] = handler, **kwargs: object
-            ) -> str:
-                return await _h(workspace_root=workspace_root, **kwargs)
+            if has_workspace_root:
+                async def _bound(
+                    _h: Callable[..., Awaitable[str]] = handler, **kwargs: object
+                ) -> str:
+                    return await _h(workspace_root=workspace_root, **kwargs)
 
-            bound[tool_name] = (new_schema, _bound)
+                bound[tool_name] = (new_schema, _bound)
+            else:
+                bound[tool_name] = (new_schema, handler)
 
         self._bound_tools = bound
         return self
