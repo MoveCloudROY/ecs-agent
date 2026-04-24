@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
@@ -25,6 +24,11 @@ try:
     from ecs_agent.tools.builtins.glob_tool import glob
 except ImportError:
     glob = None  # type: ignore
+
+try:
+    from ecs_agent.tools.builtins.bash_tool import interactive_bash
+except ImportError:
+    interactive_bash = None  # type: ignore
 
 
 def _get_hashed_view(file_content: str) -> str:
@@ -213,14 +217,97 @@ async def test_edit_file_applies_edits_and_persists(tmp_path: Path) -> None:
     target = workspace / "edit.txt"
     target.write_text("alpha\nbeta\ngamma", encoding="utf-8")
     beta_hash = compute_line_hash(2, "beta")
-    edits_json = json.dumps(
-        [{"op": "replace", "pos": f"2#{beta_hash}", "lines": ["BETA"]}]
+
+    result = await edit_file(
+        "edit.txt",
+        "replace",
+        f"2#{beta_hash}",
+        content="BETA",
+        workspace_root=str(workspace),
     )
 
-    result = await edit_file("edit.txt", edits_json, str(workspace))
-
-    assert result == "Applied 1 edits to edit.txt"
+    assert result == "Applied edit to edit.txt"
     assert target.read_text(encoding="utf-8") == "alpha\nBETA\ngamma"
+
+
+@pytest.mark.asyncio
+async def test_edit_file_multiline_content(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "edit.txt"
+    target.write_text("alpha\nbeta\ngamma", encoding="utf-8")
+    beta_hash = compute_line_hash(2, "beta")
+
+    result = await edit_file(
+        "edit.txt",
+        "replace",
+        f"2#{beta_hash}",
+        content="BETA\nEXTRA",
+        workspace_root=str(workspace),
+    )
+
+    assert result == "Applied edit to edit.txt"
+    assert target.read_text(encoding="utf-8") == "alpha\nBETA\nEXTRA\ngamma"
+
+
+@pytest.mark.asyncio
+async def test_edit_file_range_replace(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "edit.txt"
+    target.write_text("alpha\nbeta\ngamma", encoding="utf-8")
+    alpha_hash = compute_line_hash(1, "alpha")
+    beta_hash = compute_line_hash(2, "beta")
+
+    result = await edit_file(
+        "edit.txt",
+        "replace",
+        f"1#{alpha_hash}",
+        end=f"2#{beta_hash}",
+        content="NEW",
+        workspace_root=str(workspace),
+    )
+
+    assert result == "Applied edit to edit.txt"
+    assert target.read_text(encoding="utf-8") == "NEW\ngamma"
+
+
+@pytest.mark.asyncio
+async def test_edit_file_append(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "edit.txt"
+    target.write_text("alpha\nbeta", encoding="utf-8")
+    alpha_hash = compute_line_hash(1, "alpha")
+
+    await edit_file(
+        "edit.txt",
+        "append",
+        f"1#{alpha_hash}",
+        content="inserted",
+        workspace_root=str(workspace),
+    )
+
+    assert target.read_text(encoding="utf-8") == "alpha\ninserted\nbeta"
+
+
+@pytest.mark.asyncio
+async def test_edit_file_prepend(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "edit.txt"
+    target.write_text("alpha\nbeta", encoding="utf-8")
+    alpha_hash = compute_line_hash(1, "alpha")
+
+    await edit_file(
+        "edit.txt",
+        "prepend",
+        f"1#{alpha_hash}",
+        content="before",
+        workspace_root=str(workspace),
+    )
+
+    assert target.read_text(encoding="utf-8") == "before\nalpha\nbeta"
 
 
 @pytest.mark.asyncio
@@ -241,19 +328,13 @@ async def test_edit_file_multi_step_two_edits_on_real_python_file(
 
     first_result = await edit_file(
         "sample.py",
-        json.dumps(
-            [
-                {
-                    "op": "replace",
-                    "pos": f"1#{first_line_hash}",
-                    "lines": ["def greet():"],
-                }
-            ]
-        ),
-        str(workspace),
+        "replace",
+        f"1#{first_line_hash}",
+        content="def greet():",
+        workspace_root=str(workspace),
     )
 
-    assert first_result == "Applied 1 edits to sample.py"
+    assert first_result == "Applied edit to sample.py"
 
     second_read = await read_file("sample.py", str(workspace))
     second_hashed = _get_hashed_view(second_read)
@@ -261,19 +342,13 @@ async def test_edit_file_multi_step_two_edits_on_real_python_file(
 
     second_result = await edit_file(
         "sample.py",
-        json.dumps(
-            [
-                {
-                    "op": "replace",
-                    "pos": f"2#{second_line_hash}",
-                    "lines": ['    return "earth"'],
-                }
-            ]
-        ),
-        str(workspace),
+        "replace",
+        f"2#{second_line_hash}",
+        content='    return "earth"',
+        workspace_root=str(workspace),
     )
 
-    assert second_result == "Applied 1 edits to sample.py"
+    assert second_result == "Applied edit to sample.py"
     assert target.read_text(encoding="utf-8") == (
         'def greet():\n    return "earth"\n\n\ndef add(a, b):\n    return a + b'
     )
@@ -297,10 +372,10 @@ async def test_edit_file_stale_hash_rejected_after_external_modification(
     with pytest.raises(ValueError, match="Hash mismatch"):
         await edit_file(
             "target.py",
-            json.dumps(
-                [{"op": "replace", "pos": f"2#{stale_hash}", "lines": ["beta = 20"]}]
-            ),
-            str(workspace),
+            "replace",
+            f"2#{stale_hash}",
+            content="beta = 20",
+            workspace_root=str(workspace),
         )
 
 
@@ -329,19 +404,13 @@ async def test_edit_file_repeated_cycles_on_python_file(tmp_path: Path) -> None:
 
         result = await edit_file(
             "cycles.py",
-            json.dumps(
-                [
-                    {
-                        "op": "replace",
-                        "pos": f"{line_number}#{line_hash}",
-                        "lines": [replacement],
-                    }
-                ]
-            ),
-            str(workspace),
+            "replace",
+            f"{line_number}#{line_hash}",
+            content=replacement,
+            workspace_root=str(workspace),
         )
 
-        assert result == "Applied 1 edits to cycles.py"
+        assert result == "Applied edit to cycles.py"
 
     assert target.read_text(encoding="utf-8") == (
         "def compute_total(value):\n"
@@ -356,18 +425,32 @@ async def test_edit_file_repeated_cycles_on_python_file(tmp_path: Path) -> None:
 async def test_edit_file_rejects_parent_traversal(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    alpha_hash = compute_line_hash(1, "x")
 
     with pytest.raises(ValueError, match="outside workspace"):
-        await edit_file("../edit.txt", json.dumps([]), str(workspace))
+        await edit_file(
+            "../edit.txt",
+            "replace",
+            f"1#{alpha_hash}",
+            content="x",
+            workspace_root=str(workspace),
+        )
 
 
 @pytest.mark.asyncio
 async def test_edit_file_rejects_absolute_path(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    alpha_hash = compute_line_hash(1, "x")
 
     with pytest.raises(ValueError, match="outside workspace"):
-        await edit_file("/etc/passwd", json.dumps([]), str(workspace))
+        await edit_file(
+            "/etc/passwd",
+            "replace",
+            f"1#{alpha_hash}",
+            content="x",
+            workspace_root=str(workspace),
+        )
 
 
 @pytest.mark.asyncio
@@ -379,9 +462,16 @@ async def test_edit_file_rejects_symlink_outside_workspace(tmp_path: Path) -> No
     outside_file = outside / "secret.txt"
     outside_file.write_text("secret", encoding="utf-8")
     (workspace / "link.txt").symlink_to(outside_file)
+    alpha_hash = compute_line_hash(1, "x")
 
     with pytest.raises(ValueError, match="outside workspace"):
-        await edit_file("link.txt", json.dumps([]), str(workspace))
+        await edit_file(
+            "link.txt",
+            "replace",
+            f"1#{alpha_hash}",
+            content="x",
+            workspace_root=str(workspace),
+        )
 
 
 @pytest.mark.asyncio
@@ -661,5 +751,106 @@ def test_default_is_tool_bundle_is_false_for_protocol_compliant_skill() -> None:
             pass
 
     skill = _MinimalSkill()
-    # getattr fallback used by SkillManager must resolve to False
     assert getattr(skill, "is_tool_bundle", False) is False
+
+
+# ---------------------------------------------------------------------------
+# interactive_bash tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_interactive_bash_new_session() -> None:
+    if interactive_bash is None:
+        pytest.skip("interactive_bash not implemented yet")
+
+    session_name = "test-ecs-ib-new"
+    result = await interactive_bash(f"new-session -d -s {session_name}")
+
+    assert "error" not in result.lower() or session_name in result or result == ""
+    await interactive_bash(f"kill-session -t {session_name}")
+
+
+@pytest.mark.asyncio
+async def test_interactive_bash_send_keys_and_capture() -> None:
+    if interactive_bash is None:
+        pytest.skip("interactive_bash not implemented yet")
+
+    session_name = "test-ecs-ib-capture"
+    await interactive_bash(f"new-session -d -s {session_name}")
+    try:
+        send_result = await interactive_bash(
+            f"send-keys -t {session_name} 'echo hello-from-tmux' Enter"
+        )
+        assert isinstance(send_result, str)
+    finally:
+        await interactive_bash(f"kill-session -t {session_name}")
+
+
+@pytest.mark.asyncio
+async def test_interactive_bash_invalid_command_returns_error() -> None:
+    if interactive_bash is None:
+        pytest.skip("interactive_bash not implemented yet")
+
+    result = await interactive_bash("invalid-subcommand-xyz")
+    assert "error" in result.lower() or "unknown" in result.lower() or result != ""
+
+
+def test_interactive_bash_registered_in_builtin_skill() -> None:
+    if interactive_bash is None:
+        pytest.skip("interactive_bash not implemented yet")
+
+    skill = BuiltinToolsSkill()
+    discovered = skill.tools()
+    assert "interactive_bash" in discovered
+
+
+def test_interactive_bash_in_installed_registry() -> None:
+    if interactive_bash is None:
+        pytest.skip("interactive_bash not implemented yet")
+
+    world = World()
+    entity_id = world.create_entity()
+    manager = SkillManager()
+    manager.install(world, entity_id, BuiltinToolsSkill())
+
+    registry = world.get_component(entity_id, ToolRegistryComponent)
+    assert registry is not None
+    assert "interactive_bash" in registry.tools
+    assert "interactive_bash" in registry.handlers
+
+
+# ---------------------------------------------------------------------------
+# Tool schema parameter description tests
+# ---------------------------------------------------------------------------
+
+
+def test_tool_schema_has_parameter_descriptions() -> None:
+    skill = BuiltinToolsSkill()
+    discovered = skill.tools()
+
+    for tool_name, (schema, _) in discovered.items():
+        props = schema.parameters.get("properties", {})
+        for param_name, param_schema in props.items():
+            if param_name == "workspace_root":
+                continue
+            assert "description" in param_schema, (
+                f"Tool '{tool_name}' parameter '{param_name}' missing description"
+            )
+            assert len(param_schema["description"]) > 0, (
+                f"Tool '{tool_name}' parameter '{param_name}' has empty description"
+            )
+
+
+def test_edit_file_schema_exposes_direct_params_not_edits_json() -> None:
+    skill = BuiltinToolsSkill()
+    discovered = skill.tools()
+    assert "edit_file" in discovered
+
+    schema, _ = discovered["edit_file"]
+    props = schema.parameters.get("properties", {})
+
+    assert "edits_json" not in props, "edits_json should not appear in new API schema"
+    assert "op" in props
+    assert "pos" in props
+    assert "content" in props

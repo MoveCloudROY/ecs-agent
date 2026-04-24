@@ -4,7 +4,7 @@ import asyncio
 import inspect
 from functools import partial
 from types import ModuleType
-from typing import Any, Awaitable, Callable, cast
+from typing import Annotated, Any, Awaitable, Callable, cast, get_args, get_origin
 
 from ecs_agent.types import ToolSchema
 
@@ -12,6 +12,9 @@ _TOOL_REGISTRY: dict[str, ToolSchema] = {}
 
 
 def _map_parameter_type(annotation: Any) -> str:
+    if get_origin(annotation) is Annotated:
+        annotation = get_args(annotation)[0]
+
     if annotation in ("str", "builtins.str"):
         return "string"
     if annotation in ("int", "builtins.int"):
@@ -32,7 +35,21 @@ def _map_parameter_type(annotation: Any) -> str:
     return "string"
 
 
+def _extract_param_description(annotation: Any) -> str | None:
+    if get_origin(annotation) is Annotated:
+        args = get_args(annotation)
+        for arg in args[1:]:
+            if isinstance(arg, str):
+                return arg
+    return None
+
+
 def _build_parameters_schema(fn: Callable[..., Any]) -> dict[str, Any]:
+    try:
+        hints = _get_type_hints_safe(fn)
+    except Exception:
+        hints = {}
+
     signature = inspect.signature(fn)
     properties: dict[str, dict[str, str]] = {}
     required: list[str] = []
@@ -44,7 +61,14 @@ def _build_parameters_schema(fn: Callable[..., Any]) -> dict[str, Any]:
         ):
             continue
 
-        properties[name] = {"type": _map_parameter_type(parameter.annotation)}
+        annotation = hints.get(name, parameter.annotation)
+        param_schema: dict[str, str] = {"type": _map_parameter_type(annotation)}
+
+        description = _extract_param_description(annotation)
+        if description:
+            param_schema["description"] = description
+
+        properties[name] = param_schema
         if parameter.default is inspect.Parameter.empty:
             required.append(name)
 
@@ -53,6 +77,12 @@ def _build_parameters_schema(fn: Callable[..., Any]) -> dict[str, Any]:
         "properties": properties,
         "required": required,
     }
+
+
+def _get_type_hints_safe(fn: Callable[..., Any]) -> dict[str, Any]:
+    import typing
+
+    return typing.get_type_hints(fn, include_extras=True)
 
 
 def _create_async_handler(fn: Callable[..., Any]) -> Callable[..., Awaitable[str]]:
@@ -76,8 +106,6 @@ def tool(
     name: str | None = None,
     description: str | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Decorator for marking functions as tools."""
-
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         tool_name = name or fn.__name__
         tool_description = (
@@ -101,8 +129,6 @@ def tool(
 def scan_module(
     module: ModuleType,
 ) -> dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]]:
-    """Scan a module for @tool-decorated functions."""
-
     discovered: dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]] = {}
 
     for attr_name in dir(module):

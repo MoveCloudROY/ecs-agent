@@ -9,6 +9,7 @@ from typing import Any, Protocol, cast
 
 import httpx
 
+from ecs_agent.providers.config import ProviderConfig
 from ecs_agent.types import (
     CompletionResult,
     FileRefPart,
@@ -29,6 +30,7 @@ class _OpenAIProviderFacade(Protocol):
     _client: httpx.AsyncClient
     _timeout: httpx.Timeout
     _responses_api_available: bool | None
+    _provider_config: ProviderConfig
 
     def _build_headers(self) -> dict[str, str]: ...
 
@@ -37,6 +39,10 @@ class _OpenAIProviderFacade(Protocol):
     def _handle_request_error(self, exc: httpx.RequestError) -> None: ...
 
     def _convert_tools_to_openai(
+        self, tools: list[ToolSchema]
+    ) -> list[dict[str, Any]]: ...
+
+    def _convert_tools_to_responses(
         self, tools: list[ToolSchema]
     ) -> list[dict[str, Any]]: ...
 
@@ -256,14 +262,14 @@ class OpenAIResponsesAdapter:
         request_body: dict[str, Any] = {
             "model": self._provider._model,
             "input": self._convert_messages_to_responses_input(messages),
-            "store": False,
+            "store": self._provider._provider_config.enable_store,
         }
 
         instructions = self._provider._extract_responses_instructions(messages)
         if instructions:
             request_body["instructions"] = instructions
         if tools is not None:
-            request_body["tools"] = self._provider._convert_tools_to_openai(tools)
+            request_body["tools"] = self._provider._convert_tools_to_responses(tools)
         if response_format is not None:
             request_body["response_format"] = response_format
         if previous_response_id is not None:

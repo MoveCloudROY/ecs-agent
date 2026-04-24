@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -35,10 +34,10 @@ async def test_hashline_rejects_stale_anchor_after_external_change(
     with pytest.raises(ValueError, match="Hash mismatch"):
         await edit_file(
             "target.py",
-            json.dumps(
-                [{"op": "replace", "pos": f"2#{stale_hash}", "lines": ["beta = 20"]}]
-            ),
-            str(workspace),
+            "replace",
+            f"2#{stale_hash}",
+            content="beta = 20",
+            workspace_root=str(workspace),
         )
 
 
@@ -59,16 +58,10 @@ async def test_hashline_line_shift_invalidation_after_external_insert(
     with pytest.raises(ValueError, match="Hash mismatch"):
         await edit_file(
             "shift.txt",
-            json.dumps(
-                [
-                    {
-                        "op": "replace",
-                        "pos": f"2#{stale_line2_hash}",
-                        "lines": ["updated-line2"],
-                    }
-                ]
-            ),
-            str(workspace),
+            "replace",
+            f"2#{stale_line2_hash}",
+            content="updated-line2",
+            workspace_root=str(workspace),
         )
 
 
@@ -84,8 +77,10 @@ async def test_hashline_crlf_file_edit_normalizes_and_updates(tmp_path: Path) ->
 
     await edit_file(
         "windows.txt",
-        json.dumps([{"op": "replace", "pos": f"1#{alpha_hash}", "lines": ["ALPHA"]}]),
-        str(workspace),
+        "replace",
+        f"1#{alpha_hash}",
+        content="ALPHA",
+        workspace_root=str(workspace),
     )
 
     assert target.read_text(encoding="utf-8") == "ALPHA\nbeta\ngamma"
@@ -103,8 +98,10 @@ async def test_hashline_preserves_no_trailing_newline_behavior(tmp_path: Path) -
 
     await edit_file(
         "no-trailing-newline.txt",
-        json.dumps([{"op": "replace", "pos": f"2#{second_hash}", "lines": ["SECOND"]}]),
-        str(workspace),
+        "replace",
+        f"2#{second_hash}",
+        content="SECOND",
+        workspace_root=str(workspace),
     )
 
     content = target.read_text(encoding="utf-8")
@@ -124,21 +121,15 @@ async def test_hashline_literal_backslash_n_content(tmp_path: Path) -> None:
 
     await edit_file(
         "literal-backslash-n.txt",
-        json.dumps(
-            [
-                {
-                    "op": "replace",
-                    "pos": f"1#{placeholder_hash}",
-                    "lines": ["line1\\nline2 (literal backslash-n)"],
-                }
-            ]
-        ),
-        str(workspace),
+        "replace",
+        f"1#{placeholder_hash}",
+        content="line1\\nline2 (literal backslash-n)",
+        workspace_root=str(workspace),
     )
 
     lines = target.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2
-    assert lines[0] == "line1\\nline2 (literal backslash-n)"
+    assert lines[0] == r"line1\nline2 (literal backslash-n)"
 
 
 @pytest.mark.asyncio
@@ -153,10 +144,10 @@ async def test_hashline_trailing_spaces_edit(tmp_path: Path) -> None:
 
     await edit_file(
         "trailing-whitespace.txt",
-        json.dumps(
-            [{"op": "replace", "pos": f"2#{line2_hash}", "lines": ["new_text   "]}]
-        ),
-        str(workspace),
+        "replace",
+        f"2#{line2_hash}",
+        content="new_text   ",
+        workspace_root=str(workspace),
     )
 
     lines = target.read_text(encoding="utf-8").splitlines()
