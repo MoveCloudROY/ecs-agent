@@ -53,7 +53,7 @@ class WorkflowStateMachine:
         if to_phase not in allowed:
             raise ValueError(f"Invalid transition: {state.phase} → {to_phase}")
         state.phase = to_phase
-        state.status = "active"
+        state.status = "active" if to_phase not in _TERMINAL_PHASES else "completed"
         state.updated_at = self._utcnow_isoformat()
         logger.info(
             "plan_task_state_transition",

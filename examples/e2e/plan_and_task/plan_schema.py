@@ -124,9 +124,12 @@ def _parse_tasks(body_lines: list[str]) -> list[PlanTask]:
     index = 0
     while index < len(tasks_lines):
         line = tasks_lines[index].strip()
-        if not line:
+        if not line or line == "---":
             index += 1
             continue
+        # A new top-level section (## heading) terminates the tasks block.
+        if line.startswith("## ") and not line.startswith(_TASK_HEADING_PREFIX):
+            break
         if not line.startswith(_TASK_HEADING_PREFIX):
             raise ValueError(
                 "Workflow plan tasks must use '### Task: <task_id>' headings."

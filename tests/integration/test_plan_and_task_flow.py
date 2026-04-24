@@ -2450,6 +2450,7 @@ def test_controller_missing_approved_reviews_uses_last_verdict(
     tmp_path: Path,
 ) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.prompts import PLAN_INTERVIEW_SYSTEM_PROMPT
     from examples.e2e.plan_and_task.scratchbook_adapter import (
         PlanTaskScratchbookAdapter as ArtifactAdapter,
     )
@@ -2462,6 +2463,7 @@ def test_controller_missing_approved_reviews_uses_last_verdict(
     state = controller.handle_advisor_review(state, adapter, "approved")
 
     missing = controller._missing_approved_reviews(state.review_verdicts)
+    prompt_lower = PLAN_INTERVIEW_SYSTEM_PROMPT.lower()
     assert "DRAFT_ADVISOR_REVIEW" not in missing, (
         "After revise→approved, PLAN_ADVISOR_REVIEW should be satisfied"
     )
@@ -4013,3 +4015,194 @@ def test_draft_interview_prompt_uses_separate_qa_categories() -> None:
     assert (
         'category="qa"' in DRAFT_INTERVIEW_SYSTEM_PROMPT
     ), "draft QA phase must still call subagent with category='qa'"
+
+
+def test_plan_main_agent_system_prompt_exists() -> None:
+    from examples.e2e.plan_and_task.prompts import PLAN_MAIN_AGENT_SYSTEM_PROMPT
+
+    assert isinstance(PLAN_MAIN_AGENT_SYSTEM_PROMPT, str)
+    assert PLAN_MAIN_AGENT_SYSTEM_PROMPT.strip()
+
+
+def test_draft_interview_system_prompt_is_alias() -> None:
+    from examples.e2e.plan_and_task.prompts import (
+        DRAFT_INTERVIEW_SYSTEM_PROMPT,
+        PLAN_MAIN_AGENT_SYSTEM_PROMPT,
+    )
+
+    assert DRAFT_INTERVIEW_SYSTEM_PROMPT is PLAN_MAIN_AGENT_SYSTEM_PROMPT
+
+
+def test_task_main_agent_system_prompt_exists() -> None:
+    from examples.e2e.plan_and_task.prompts import (
+        PLAN_MAIN_AGENT_SYSTEM_PROMPT,
+        TASK_MAIN_AGENT_SYSTEM_PROMPT,
+    )
+
+    assert isinstance(TASK_MAIN_AGENT_SYSTEM_PROMPT, str)
+    assert TASK_MAIN_AGENT_SYSTEM_PROMPT.strip()
+    assert TASK_MAIN_AGENT_SYSTEM_PROMPT != PLAN_MAIN_AGENT_SYSTEM_PROMPT
+
+
+def test_build_plan_task_world_uses_plan_main_agent_system_prompt(tmp_path: Path) -> None:
+    from ecs_agent.prompts.contracts import SystemPromptConfigSpec
+    from ecs_agent.providers.fake_provider import FakeProvider
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+    from examples.e2e.plan_and_task.prompts import PLAN_MAIN_AGENT_SYSTEM_PROMPT
+
+    provider = FakeProvider(responses=["ok"])
+    world, agent_id, _, _ = build_plan_task_world(
+        provider=provider, model="fake", base_dir=tmp_path
+    )
+
+    spec = world.get_component(agent_id, SystemPromptConfigSpec)
+    assert spec is not None
+    assert spec.template_source.inline == PLAN_MAIN_AGENT_SYSTEM_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_task_start_swaps_system_prompt(tmp_path: Path) -> None:
+    from ecs_agent.components import (
+        ConversationComponent,
+        RenderedSystemPromptComponent,
+    )
+    from ecs_agent.prompts.contracts import SystemPromptConfigSpec
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+    from ecs_agent.types import Message
+    from examples.e2e.plan_and_task.prompts import TASK_MAIN_AGENT_SYSTEM_PROMPT
+
+    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    state = _make_runtime_state()
+    state.phase = "TASK_READY"
+    state.review_verdicts = _make_approved_verdicts()
+    adapter.write_state(state)
+    runtime_state[0] = state
+    world.add_component(agent_id, RenderedSystemPromptComponent(text="stale"))
+
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.append(Message(role="user", content="/task:start"))
+
+    await UserPromptNormalizationSystem().process(world)
+
+    spec = world.get_component(agent_id, SystemPromptConfigSpec)
+    assert spec is not None
+    assert spec.template_source.inline == TASK_MAIN_AGENT_SYSTEM_PROMPT
+    rendered = world.get_component(agent_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert "task execution main agent" in rendered.text
+    assert runtime_state[0] is not None
+    assert runtime_state[0].phase == "TASK_RUNNING"
+    conv = world.get_component(agent_id, ConversationComponent)
+    assert conv is not None
+    assert len(conv.messages) == 1
+    assert conv.messages[0].role == "user"
+    assert conv.messages[0].content == "/task:start"
+
+@pytest.mark.asyncio
+async def test_task_resume_swaps_system_prompt(tmp_path: Path) -> None:
+    from ecs_agent.components import (
+        ConversationComponent,
+        RenderedSystemPromptComponent,
+    )
+    from ecs_agent.prompts.contracts import SystemPromptConfigSpec
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+    from ecs_agent.types import Message
+    from examples.e2e.plan_and_task.prompts import TASK_MAIN_AGENT_SYSTEM_PROMPT
+
+    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    state = _make_runtime_state()
+    state.phase = "TASK_BLOCKED"
+    state.status = "blocked"
+    state.current_task_id = "task-001"
+    state.tasks = [
+        TaskRecord(
+            task_id="task-001",
+            title="First Task",
+            status="blocked",
+            retry_count=1,
+            last_error="waiting on input",
+        )
+    ]
+    adapter.write_state(state)
+    runtime_state[0] = state
+    world.add_component(agent_id, RenderedSystemPromptComponent(text="stale"))
+
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.append(Message(role="user", content="/task:resume"))
+
+    await UserPromptNormalizationSystem().process(world)
+
+    spec = world.get_component(agent_id, SystemPromptConfigSpec)
+    assert spec is not None
+    assert spec.template_source.inline == TASK_MAIN_AGENT_SYSTEM_PROMPT
+    rendered = world.get_component(agent_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert "task execution main agent" in rendered.text
+    assert runtime_state[0] is not None
+    assert runtime_state[0].phase == "TASK_RUNNING"
+    conv = world.get_component(agent_id, ConversationComponent)
+    assert conv is not None
+    assert len(conv.messages) == 1
+    assert conv.messages[0].role == "user"
+    assert conv.messages[0].content == "/task:resume"
+
+
+@pytest.mark.asyncio
+async def test_task_start_auto_loads_state_from_workflow_id(tmp_path: Path) -> None:
+    from ecs_agent.components import ConversationComponent
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+    from ecs_agent.types import Message
+
+    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    state = _make_runtime_state()
+    state.phase = "PLAN_FINALIZED"
+    state.review_verdicts = _make_approved_verdicts()
+    adapter.write_state(state)
+
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.append(
+        Message(role="user", content=f"/task:start {state.workflow_id}")
+    )
+
+    await UserPromptNormalizationSystem().process(world)
+
+    assert runtime_state[0] is not None
+    assert runtime_state[0].workflow_id == state.workflow_id
+    assert runtime_state[0].phase == "TASK_RUNNING"
+
+
+@pytest.mark.asyncio
+async def test_task_start_without_state_and_no_workflow_id_returns_error(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent.components import ConversationComponent, RenderedUserPromptComponent
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+    from ecs_agent.types import Message
+
+    world, agent_id, _adapter, runtime_state = _build_test_world(tmp_path)
+    assert runtime_state[0] is None
+
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.append(Message(role="user", content="/task:start"))
+
+    await UserPromptNormalizationSystem().process(world)
+
+    assert runtime_state[0] is None
+    rendered = world.get_component(agent_id, RenderedUserPromptComponent)
+    assert rendered is not None
+    assert "workflow_id" in rendered.text.lower() or "Error" in rendered.text

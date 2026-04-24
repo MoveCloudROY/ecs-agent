@@ -30,6 +30,7 @@ The workflow follows a structured lifecycle:
 - **Plan Writer Subagent**: The `WRITE_PLAN` phase is executed by a dedicated `plan_writer` subagent registered in `SubagentRegistryComponent`. It is pre-loaded with the `writing-plans` skill (discovered from `.claude/skills/writing_plans/SKILL.md`) and inherits `read_file`, `write_file`, `edit_file`, and `glob` tools. When it completes, `handle_write_plan_completed()` transitions the state to `PLAN_QA_REVIEW`.
 - **Task Execution**: `TaskExec` handles plan loading, dependency resolution, and subagent dispatch.
 - **Slash Commands**: Dispatched via ECS `TriggerSpec` script handlers on `UserPromptConfigComponent`. Commands appear as transformed messages in conversation history.
+- **System Execution Order**: `UserInputSystem` runs at priority **-15** (before `UserPromptNormalizationSystem` at -10). This ensures the user's message is already in `ConversationComponent` when script handlers fire, so slash commands like `/task:start` are matched in the same tick they are entered.
 
 ## Supported Commands
 
@@ -41,7 +42,7 @@ The interactive runtime supports eleven slash commands:
 - `/plan:finalize`: Finalize the plan and transition to task execution (requires all three approved reviews).
 - `/plan:write`: Transition from `DRAFT_QA_REVIEW` to `WRITE_PLAN` phase to produce `workflow_plan.md`. **Optional** — this transition now happens automatically when QA approves the draft, but can still be invoked manually.
 - `/plan:qa_review <approved|revise|blocked> [notes]`: Record a QA verdict on the final plan document.
-- `/task:start <task_id>`: Start execution of a specific task.
+- `/task:start <workflow_id>`: Start execution of a specific task. If no workflow is active in the current session, providing a `workflow_id` auto-loads the persisted state from scratchbook (equivalent to `/plan:resume <workflow_id>` followed by starting task execution). Accepts phases `PLAN_FINALIZED`, `TASK_READY`, `TASK_RUNNING`, and `TASK_BLOCKED`.
 - `/task:status`: Show the status of the current task and subagent sessions.
 - `/task:resume`: Resume a blocked or replanned task.
 - `/task:replan <reason>`: Request a replan for the current task.
@@ -196,7 +197,9 @@ The `ClaudeProvider` appends `/v1/messages` to `LLM_BASE_URL`, so the actual end
 | `plan_task_command_plan_start` | info | `main.py` | `/plan:start` succeeded; `workflow_id=`, `description_len=` |
 | `plan_task_command_plan_resume` | info | `main.py` | `/plan:resume` succeeded; `workflow_id=`, `phase=` |
 | `plan_task_command_plan_finalize` | info | `main.py` | `/plan:finalize` succeeded; `workflow_id=` |
+| `plan_task_system_prompt_switched` | info | `main.py` | System prompt replaced from PLAN_MAIN_AGENT to TASK_MAIN_AGENT; `entity_id=`, `from_prompt=`, `to_prompt=` |
 | `plan_task_command_task_start` | info | `main.py` | `/task:start` succeeded; `task_count=`, `current_task_id=` |
+| `plan_task_task_start_auto_loaded_state` | info | `main.py` | `/task:start <workflow_id>` auto-loaded persisted state; `workflow_id=`, `phase=` |
 | `plan_task_command_task_resume` | info | `main.py` | `/task:resume` succeeded; `workflow_id=` |
 | `plan_task_command_task_replan` | info | `main.py` | `/task:replan` succeeded; `task_id=` |
 | `plan_task_command_task_abort` | info | `main.py` | `/task:abort` succeeded; `task_id=` |
@@ -220,6 +223,7 @@ The `ClaudeProvider` appends `/v1/messages` to `LLM_BASE_URL`, so the actual end
 - **Circuit Breaker**: `TaskExec` implements a retry budget to prevent infinite loops on failing tasks.
 - **Review Gating**: Finalization is strictly blocked until both `PLAN_ADVISOR_REVIEW` and `PLAN_QA_REVIEW` have `approved` verdicts.
 - **Advisor Retry Loop**: When the advisor returns `revise` or `blocked`, the system prompt instructs the planner LLM to apply the feedback to `draft.md` via `edit_file` and re-call the advisor. Only an `approved` advisor verdict unlocks the QA step. Non-approved verdicts for a phase replace any prior non-approved verdict (upsert semantics). Once a phase reaches `approved`, that verdict is **sticky** — any subsequent upsert attempt for the same phase is silently ignored. `approved` verdicts always have `notes=None`; non-approved verdicts retain their notes for debugging.
+- **Slash Command Re-trigger Guard**: After `/task:start` the command message stays as the last `role="user"` entry in the conversation (tool results use `role="tool"` and do not replace it). `_handle_task_start` therefore checks whether `SystemPromptConfigSpec` already contains `TASK_MAIN_AGENT_SYSTEM_PROMPT`; if so, it returns `None` immediately, letting the LLM continue task execution without re-initializing the task queue.
 - **Dependency Resolution**: Tasks are executed in topological order based on their `dependencies` list.
 - **Review Verdict Lifecycle**: Each phase holds at most one verdict in `review_verdicts`. Upsert semantics: non-approved verdicts replace earlier non-approved verdicts for the same phase; `approved` is terminal and cannot be overwritten. `approved` verdicts always have `notes=None`. The `plan_version` field has been removed from `ReviewVerdict`.
 - **Status Lifecycle**: Whenever the state machine transitions to a new phase, `status` is set to `"active"`. Terminal handlers (`handle_task_abort` → `"aborted"`, `handle_plan_finalize` → `"ready"`, `handle_task_replan` with scope change → `"needs_review"`) override `status` after the transition.
