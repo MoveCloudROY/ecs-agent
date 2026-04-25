@@ -73,21 +73,19 @@ def live_provider(live_api_key: str) -> OpenAIModel:
 async def test_live_plan_controller_starts_plan_interview(
     live_provider: OpenAIModel, tmp_path: Path
 ) -> None:
-    """Verify handle_plan_start creates artifacts and transitions to PLAN_INTERVIEW."""
+    """Verify handle_plan_start creates artifacts and transitions to DRAFT_INTERVIEW."""
     workflow_id = "live-test-workflow-start"
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id=workflow_id)
     controller = PlanController()
 
-    # The requirement says handle_plan_start(workflow_id, ...),
-    # but implementation takes adapter.
     state = controller.handle_plan_start(adapter, _WRITING_SOFTWARE_DESCRIPTION)
 
-    assert state.phase == "PLAN_INTERVIEW"
+    assert state.phase == "DRAFT_INTERVIEW"
     assert state.workflow_id == workflow_id
     assert (adapter.plan_dir / "draft.md").exists()
 
     reloaded = adapter.read_state()
-    assert reloaded.phase == "PLAN_INTERVIEW"
+    assert reloaded.phase == "DRAFT_INTERVIEW"
     assert reloaded.workflow_id == workflow_id
 
 
@@ -102,17 +100,17 @@ async def test_live_plan_controller_completes_review_cycle(
 
     state = controller.handle_plan_start(adapter, "Review cycle test")
 
-    # Inject fake verdicts (no real LLM for review subagents as per requirements)
+    # Full review cycle: advisor → qa → write_plan_completed → plan_qa
     state = controller.handle_advisor_review(
         state, adapter, "approved", notes="Advisor approved"
     )
     state = controller.handle_qa_review(state, adapter, "approved", notes="QA approved")
+    # handle_qa_review auto-transitions to WRITE_PLAN when approved
+    state = controller.handle_write_plan_completed(state, adapter)
+    state = controller.handle_plan_qa_review(state, adapter, "approved", notes="Plan QA approved")
 
-    # Finalize. Note: implementation transitions directly to TASK_READY.
     state = controller.handle_plan_finalize(state, adapter)
 
-    # The requirement says PLAN_FINALIZED, but implementation uses TASK_READY
-    # as the post-finalization phase.
     assert state.phase == "TASK_READY"
     assert (adapter.plan_dir / "workflow_plan.md").exists()
 
@@ -129,6 +127,8 @@ async def test_live_task_exec_loads_finalized_plan(
     state = controller.handle_plan_start(adapter, "Task exec test")
     state = controller.handle_advisor_review(state, adapter, "approved")
     state = controller.handle_qa_review(state, adapter, "approved")
+    state = controller.handle_write_plan_completed(state, adapter)
+    state = controller.handle_plan_qa_review(state, adapter, "approved")
     state = controller.handle_plan_finalize(state, adapter)
 
     task_exec = TaskExec(state=state)
@@ -197,23 +197,23 @@ async def test_live_controller_advisor_retry_loop_revise_then_approved(
     state = controller.handle_advisor_review(
         state, adapter, "revise", notes="Draft needs more detail in scope section."
     )
-    assert state.phase == "PLAN_ADVISOR_REVIEW"
-    assert state.phase != "PLAN_QA_REVIEW"
+    assert state.phase == "DRAFT_ADVISOR_REVIEW"
+    assert state.phase != "DRAFT_QA_REVIEW"
 
     state = controller.handle_advisor_review(
         state, adapter, "approved", notes="Looks good now."
     )
-    assert state.phase == "PLAN_ADVISOR_REVIEW"
+    assert state.phase == "DRAFT_ADVISOR_REVIEW"
 
     missing = controller._missing_approved_reviews(state.review_verdicts)
-    assert "PLAN_ADVISOR_REVIEW" not in missing
+    assert "DRAFT_ADVISOR_REVIEW" not in missing
 
+    # upsert_verdict replaces (not accumulates) — only the final "approved" verdict remains
     advisor_verdicts = [
-        v for v in state.review_verdicts if v.phase == "PLAN_ADVISOR_REVIEW"
+        v for v in state.review_verdicts if v.phase == "DRAFT_ADVISOR_REVIEW"
     ]
-    assert len(advisor_verdicts) == 2
-    assert advisor_verdicts[0].verdict == "revise"
-    assert advisor_verdicts[1].verdict == "approved"
+    assert len(advisor_verdicts) == 1
+    assert advisor_verdicts[0].verdict == "approved"
 
     result = await live_provider.complete(
         [

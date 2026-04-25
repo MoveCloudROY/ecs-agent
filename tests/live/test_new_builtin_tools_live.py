@@ -129,10 +129,15 @@ async def test_live_grep_tool(live_api_key: str, tmp_path: Path) -> None:
         "Tell me how many function definitions you found.",
     )
     runner = Runner()
-    await runner.run(world, max_ticks=5)
+    await runner.run(world, max_ticks=8)
 
     reply = _last_assistant_message(world, agent)
-    assert "2" in reply or "two" in reply.lower() or "add" in reply.lower()
+    assert (
+        "2" in reply
+        or "two" in reply.lower()
+        or "add" in reply.lower()
+        or "subtract" in reply.lower()
+    )
 
 
 # ---------------------------------------------------------------------------

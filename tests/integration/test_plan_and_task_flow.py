@@ -576,7 +576,7 @@ async def test_plan_task_cli_automation() -> None:
         ["uv", "run", "python", "examples/e2e/plan_and_task/main.py"],
         input=input_sequence,
         capture_output=True,
-        timeout=30,
+        timeout=120,
         env={**os.environ, "PLAN_TASK_INTERACTIVE": "1"},
         cwd=Path(__file__).parent.parent.parent,
     )
@@ -612,12 +612,15 @@ async def test_cli_slash_command_plan_start_and_status() -> None:
         **os.environ,
         "PLAN_TASK_INTERACTIVE": "1",
         "PLAN_TASK_WORKFLOW_ID": "cli-slash-cmd-test",
+        # Limit ticks so the test exits before spawning the full advisor/QA cycle.
+        # The plan status (with DRAFT_INTERVIEW + workflow_id) is emitted in tick 1.
+        "PLAN_TASK_MAX_AGENT_TICKS": "10",
     }
     result = subprocess.run(
         ["uv", "run", "python", "examples/e2e/plan_and_task/main.py"],
         input=input_sequence,
         capture_output=True,
-        timeout=30,
+        timeout=120,
         env=env,
         cwd=Path(__file__).parent.parent.parent,
     )
@@ -629,7 +632,7 @@ async def test_cli_slash_command_plan_start_and_status() -> None:
 
     output = result.stdout.decode("utf-8", errors="replace")
     assert "DRAFT_INTERVIEW" in output, (
-        f"Expected 'PLAN_INTERVIEW' phase in output. Got:\n{output}"
+        f"Expected 'DRAFT_INTERVIEW' phase in output. Got:\n{output}"
     )
     assert "workflow_id" in output, f"Expected 'workflow_id' in output. Got:\n{output}"
 

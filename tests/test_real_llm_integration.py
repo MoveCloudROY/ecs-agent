@@ -430,6 +430,10 @@ class RecordingProvider:
         self._provider = provider
         self.last_messages: list[Message] = []
 
+    @property
+    def model_id(self) -> str:
+        return self._provider.model_id
+
     async def complete(
         self,
         messages: list[Message],
@@ -662,8 +666,8 @@ async def test_real_llm_model_switching() -> None:
     assert conv is not None
     first_response = conv.messages[-1].content
 
-    alternative_model = os.getenv("LLM_MODEL_ALTERNATIVE", "qwen3.5-turbo")
-    llm.pending_model = alternative_model
+    alternative_model_name = os.getenv("LLM_MODEL_ALTERNATIVE", "qwen3.5-turbo")
+    llm.pending_model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=alternative_model_name)
 
     conv.messages.append(
         Message(role="user", content="Say 'model B' if you receive this.")
@@ -802,8 +806,8 @@ async def test_real_llm_complete_runtime_workflow() -> None:
     create_branch(conv_tree, "second", msg2.id)
     switch_branch(conv_tree, "second")
 
-    alternative_model = os.getenv("LLM_MODEL_ALTERNATIVE", "qwen3.5-turbo")
-    llm.pending_model = alternative_model
+    alternative_model_name = os.getenv("LLM_MODEL_ALTERNATIVE", "qwen3.5-turbo")
+    llm.pending_model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=alternative_model_name)
 
     world.remove_component(entity, TerminalComponent)
 
@@ -1103,6 +1107,10 @@ class _CapturingProvider:
     def __init__(self, inner: Any) -> None:
         self._inner = inner
         self.captured_messages: list[Message] = []
+
+    @property
+    def model_id(self) -> str:
+        return getattr(self._inner, "model_id", "capturing")
 
     async def complete(
         self,

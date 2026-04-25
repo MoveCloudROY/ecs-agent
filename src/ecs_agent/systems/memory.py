@@ -3,6 +3,7 @@ from __future__ import annotations
 from ecs_agent.components import (
     ConversationComponent,
 )
+from ecs_agent.components.definitions import CurrentCompactionSummaryComponent
 from ecs_agent.core import World
 from ecs_agent.types import ConversationTruncatedEvent
 
@@ -13,6 +14,11 @@ class MemorySystem:
             conversation = components[0]
             messages = conversation.messages
             max_messages = conversation.max_messages
+
+            # Skip truncation for post-compaction states — compaction already summarized
+            # old turns, so all remaining messages are "recent" and must be preserved.
+            if world.get_component(entity_id, CurrentCompactionSummaryComponent) is not None:
+                continue
 
             if len(messages) <= max_messages:
                 continue

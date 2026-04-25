@@ -59,6 +59,15 @@ root_logger.setLevel(logging.INFO)
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def reset_subagent_scheduler() -> None:
+    """Reset the global subagent scheduler singleton between tests to prevent state leakage."""
+    from ecs_agent.systems.subagent_runtime import reset_global_scheduler
+    reset_global_scheduler()
+    yield
+    reset_global_scheduler()
+
+
 @pytest.fixture
 def live_api_key() -> str:
     api_key = os.getenv("LLM_API_KEY")

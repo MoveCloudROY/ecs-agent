@@ -773,8 +773,11 @@ async def main() -> None:
             logger.info("interactive_input_enabled", reason="default_or_env_var_set")
         await setup_interactive_input(world, agent_id)
 
+    max_ticks_env = os.environ.get("PLAN_TASK_MAX_AGENT_TICKS")
+    max_ticks: int | None = int(max_ticks_env) if max_ticks_env else None
+
     runner = Runner()
-    await runner.run(world, max_ticks=None)
+    await runner.run(world, max_ticks=max_ticks)
     billing.log_session_summary()
 
     conv = world.get_component(agent_id, ConversationComponent)
