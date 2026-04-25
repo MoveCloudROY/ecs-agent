@@ -38,13 +38,13 @@ class RecordingFakeModel(FakeModel):
 
 
 def _make_world(
-    provider: RecordingFakeModel,
+    model: RecordingFakeModel,
     plan_search: PlanSearchComponent | None,
     include_plan: bool = False,
 ) -> tuple[World, int]:
     world = World()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Solve this")]),
@@ -78,7 +78,7 @@ def test_select_phase_chooses_highest_ucb1_child() -> None:
 
 @pytest.mark.asyncio
 async def test_expand_phase_limits_children_to_max_branching() -> None:
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -90,7 +90,7 @@ async def test_expand_phase_limits_children_to_max_branching() -> None:
         ]
     )
     world, entity_id = _make_world(
-        provider,
+        model,
         PlanSearchComponent(max_depth=3, max_branching=2, exploration_weight=1.414),
     )
     system = TreeSearchSystem()
@@ -104,13 +104,13 @@ async def test_expand_phase_limits_children_to_max_branching() -> None:
 
 @pytest.mark.asyncio
 async def test_simulate_phase_clamps_score_to_zero_one_range() -> None:
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="1.7")),
         ]
     )
     system = TreeSearchSystem()
-    world, entity_id = _make_world(provider, PlanSearchComponent())
+    world, entity_id = _make_world(model, PlanSearchComponent())
     nodes = {
         0: TreeNode(id=0, parent_id=None, action="root", visits=1, children=[1]),
         1: TreeNode(id=1, parent_id=0, action="candidate", visits=0),
@@ -147,7 +147,7 @@ def test_backpropagate_updates_scores_and_visits_to_root() -> None:
 
 @pytest.mark.asyncio
 async def test_depth_limit_stops_search_and_sets_best_plan() -> None:
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="first\nsecond")
@@ -156,7 +156,7 @@ async def test_depth_limit_stops_search_and_sets_best_plan() -> None:
         ]
     )
     world, entity_id = _make_world(
-        provider,
+        model,
         PlanSearchComponent(max_depth=1, max_branching=3, exploration_weight=1.414),
     )
     system = TreeSearchSystem()
@@ -171,7 +171,7 @@ async def test_depth_limit_stops_search_and_sets_best_plan() -> None:
 
 @pytest.mark.asyncio
 async def test_branching_limit_enforced_for_node_children() -> None:
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="a\nb\nc\nd\ne")
@@ -180,7 +180,7 @@ async def test_branching_limit_enforced_for_node_children() -> None:
         ]
     )
     world, entity_id = _make_world(
-        provider,
+        model,
         PlanSearchComponent(max_depth=2, max_branching=3, exploration_weight=1.414),
     )
     system = TreeSearchSystem()
@@ -193,7 +193,7 @@ async def test_branching_limit_enforced_for_node_children() -> None:
 
 @pytest.mark.asyncio
 async def test_mutual_exclusion_skips_entity_with_existing_plan_component() -> None:
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="should not be used")
@@ -201,7 +201,7 @@ async def test_mutual_exclusion_skips_entity_with_existing_plan_component() -> N
         ]
     )
     world, entity_id = _make_world(
-        provider,
+        model,
         PlanSearchComponent(max_depth=2, max_branching=2, exploration_weight=1.414),
         include_plan=True,
     )
@@ -212,22 +212,22 @@ async def test_mutual_exclusion_skips_entity_with_existing_plan_component() -> N
     plan_search = world.get_component(entity_id, PlanSearchComponent)
     assert plan_search is not None
     assert plan_search.best_plan == []
-    assert provider.calls == []
+    assert model.calls == []
 
 
 @pytest.mark.asyncio
 async def test_entity_without_plan_search_component_is_skipped() -> None:
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="unused")),
         ]
     )
-    world, _ = _make_world(provider, None)
+    world, _ = _make_world(model, None)
     system = TreeSearchSystem()
 
     await system.process(world)
 
-    assert provider.calls == []
+    assert model.calls == []
 
 
 def test_extract_best_path_returns_highest_scoring_leaf_path() -> None:
@@ -250,7 +250,7 @@ def test_extract_best_path_returns_highest_scoring_leaf_path() -> None:
 
 @pytest.mark.asyncio
 async def test_integration_populates_best_plan_and_publishes_scored_event() -> None:
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="collect data\nanswer")
@@ -259,7 +259,7 @@ async def test_integration_populates_best_plan_and_publishes_scored_event() -> N
         ]
     )
     world, entity_id = _make_world(
-        provider,
+        model,
         PlanSearchComponent(max_depth=1, max_branching=2, exploration_weight=1.414),
     )
     seen: list[MCTSNodeScoredEvent] = []

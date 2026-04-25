@@ -12,7 +12,7 @@ Usage:
   2. Run: uv run python examples/react_agent.py
 
 Environment variables:
-  LLM_API_KEY   — API key for the LLM provider (required)
+  LLM_API_KEY   — API key for the LLM model (required)
   LLM_BASE_URL  — Base URL for the API (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
   LLM_MODEL     — Model name (default: qwen3.5-plus)
 """
@@ -106,8 +106,8 @@ async def main() -> None:
     print(f"Base URL: {base_url}")
     print()
 
-    # --- Create LLM provider ---
-    provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+    # --- Create LLM model ---
+    model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
 
     # --- Define the plan (ReAct steps) ---
     plan_steps = [
@@ -159,7 +159,7 @@ async def main() -> None:
 
     # Attach components
     world.add_component(
-        main_agent, LLMComponent(model=provider)
+        main_agent, LLMComponent(model=model)
     )
     world.add_component(
         main_agent,

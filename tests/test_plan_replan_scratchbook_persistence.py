@@ -41,13 +41,13 @@ async def test_plan_persists_to_canonical_plan_md_path(
     registry: ArtifactRegistry,
 ) -> None:
     world = World()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="step 1 done"))
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="start")]),
@@ -75,7 +75,7 @@ async def test_replanning_updates_same_plan_md_without_legacy_category_writes(
     registry: ArtifactRegistry,
 ) -> None:
     world = World()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="step 1 done")),
             CompletionResult(
@@ -87,7 +87,7 @@ async def test_replanning_updates_same_plan_md_without_legacy_category_writes(
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -163,7 +163,7 @@ async def test_plan_and_tool_transitions_update_same_boulder_file(
     registry: ArtifactRegistry,
 ) -> None:
     world = World()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -182,7 +182,7 @@ async def test_plan_and_tool_transitions_update_same_boulder_file(
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Roadmap Q4")]),
@@ -235,7 +235,7 @@ async def test_replanning_updates_existing_boulder_without_recreation(
     registry: ArtifactRegistry,
 ) -> None:
     world = World()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="step 1 done")),
             CompletionResult(
@@ -247,7 +247,7 @@ async def test_replanning_updates_existing_boulder_without_recreation(
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Replan Goal")]),

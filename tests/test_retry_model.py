@@ -65,81 +65,81 @@ class SequencedProvider:
 
 @pytest.mark.asyncio
 async def test_successful_call_no_retry() -> None:
-    provider = SequencedProvider(outcomes=[_result("done")])
-    retry_provider = RetryModel(provider)
+    model = SequencedProvider(outcomes=[_result("done")])
+    retry_model = RetryModel(model)
 
-    result = await retry_provider.complete([Message(role="user", content="hello")])
+    result = await retry_model.complete([Message(role="user", content="hello")])
 
     assert result.message.content == "done"
-    assert provider.call_count == 1
+    assert model.call_count == 1
 
 
 @pytest.mark.asyncio
 async def test_retry_on_429_with_eventual_success() -> None:
-    provider = SequencedProvider(outcomes=[_http_status_error(429), _result("ok")])
-    retry_provider = RetryModel(
-        provider,
+    model = SequencedProvider(outcomes=[_http_status_error(429), _result("ok")])
+    retry_model = RetryModel(
+        model,
         RetryConfig(max_attempts=3, min_wait=0.0, max_wait=0.0),
     )
 
-    result = await retry_provider.complete([Message(role="user", content="rate limit")])
+    result = await retry_model.complete([Message(role="user", content="rate limit")])
 
     assert result.message.content == "ok"
-    assert provider.call_count == 2
+    assert model.call_count == 2
 
 
 @pytest.mark.asyncio
 async def test_retry_on_500_with_eventual_success() -> None:
-    provider = SequencedProvider(outcomes=[_http_status_error(500), _result("ok")])
-    retry_provider = RetryModel(
-        provider,
+    model = SequencedProvider(outcomes=[_http_status_error(500), _result("ok")])
+    retry_model = RetryModel(
+        model,
         RetryConfig(max_attempts=3, min_wait=0.0, max_wait=0.0),
     )
 
-    result = await retry_provider.complete(
+    result = await retry_model.complete(
         [Message(role="user", content="server error")]
     )
 
     assert result.message.content == "ok"
-    assert provider.call_count == 2
+    assert model.call_count == 2
 
 
 @pytest.mark.asyncio
 async def test_max_retries_exhausted_raises() -> None:
     request = httpx.Request("POST", "https://example.test/v1/chat/completions")
-    provider = SequencedProvider(
+    model = SequencedProvider(
         outcomes=[
             httpx.ConnectError("no route", request=request),
             httpx.ConnectError("no route", request=request),
             httpx.ConnectError("no route", request=request),
         ]
     )
-    retry_provider = RetryModel(
-        provider,
+    retry_model = RetryModel(
+        model,
         RetryConfig(max_attempts=3, min_wait=0.0, max_wait=0.0),
     )
 
     with pytest.raises(httpx.ConnectError):
-        await retry_provider.complete([Message(role="user", content="hello")])
+        await retry_model.complete([Message(role="user", content="hello")])
 
-    assert provider.call_count == 3
+    assert model.call_count == 3
 
 
 @pytest.mark.asyncio
 async def test_streaming_calls_bypass_retry() -> None:
     request = httpx.Request("POST", "https://example.test/v1/chat/completions")
     stream_error = httpx.ConnectError("stream dropped", request=request)
-    provider = SequencedProvider(outcomes=[], stream_response=stream_error)
-    retry_provider = RetryModel(provider, RetryConfig(max_attempts=5))
+    model = SequencedProvider(outcomes=[], stream_response=stream_error)
+    retry_model = RetryModel(model, RetryConfig(max_attempts=5))
 
     with pytest.raises(httpx.ConnectError):
-        await retry_provider.complete(
+        await retry_model.complete(
             [Message(role="user", content="stream")],
             stream=True,
         )
 
-    assert provider.call_count == 1
-    assert provider.stream_call_count == 1
+    assert model.call_count == 1
+    assert model.stream_call_count == 1
 
 
 @pytest.mark.asyncio
@@ -154,16 +154,16 @@ async def test_retry_config_custom_values_applied(
     monkeypatch.setattr(asyncio, "sleep", fake_sleep)
 
     request = httpx.Request("POST", "https://example.test/v1/chat/completions")
-    provider = SequencedProvider(
+    model = SequencedProvider(
         outcomes=[httpx.ConnectError("flaky", request=request), _result("ok")]
     )
     config = RetryConfig(max_attempts=2, multiplier=3.0, min_wait=5.0, max_wait=5.0)
-    retry_provider = RetryModel(provider, config)
+    retry_model = RetryModel(model, config)
 
-    result = await retry_provider.complete([Message(role="user", content="x")])
+    result = await retry_model.complete([Message(role="user", content="x")])
 
     assert result.message.content == "ok"
-    assert provider.call_count == 2
+    assert model.call_count == 2
     assert waits == [5.0]
 
 
@@ -177,7 +177,7 @@ async def test_exponential_backoff_timing(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(asyncio, "sleep", fake_sleep)
 
     request = httpx.Request("POST", "https://example.test/v1/chat/completions")
-    provider = SequencedProvider(
+    model = SequencedProvider(
         outcomes=[
             httpx.ConnectError("1", request=request),
             httpx.ConnectError("2", request=request),
@@ -186,9 +186,9 @@ async def test_exponential_backoff_timing(monkeypatch: pytest.MonkeyPatch) -> No
         ]
     )
     config = RetryConfig(max_attempts=4, multiplier=1.0, min_wait=0.0, max_wait=10.0)
-    retry_provider = RetryModel(provider, config)
+    retry_model = RetryModel(model, config)
 
-    result = await retry_provider.complete([Message(role="user", content="x")])
+    result = await retry_model.complete([Message(role="user", content="x")])
 
     assert result.message.content == "ok"
     assert waits == [1.0, 2.0, 4.0]

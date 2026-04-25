@@ -1,4 +1,4 @@
-"""Multi-agent collaboration example with dual-mode LLM provider selection.
+"""Multi-agent collaboration example with dual-mode LLM model selection.
 
 This example demonstrates:
 - Creating a World with ReasoningSystem, MessageBusSystem, MemorySystem, and ErrorHandlingSystem
@@ -9,7 +9,7 @@ This example demonstrates:
 - Running the agents to process collaboration messages
 - Printing both agents' conversations
 
-Dual-mode provider selection: uses FakeModel by default (no API key needed),
+Dual-mode model selection: uses FakeModel by default (no API key needed),
 or switches to OpenAIModel when LLM_API_KEY environment variable is set.
 Environment variables:
   LLM_API_KEY: Trigger for OpenAIModel mode (if set, uses real LLM)
@@ -49,20 +49,20 @@ async def main() -> None:
     model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
 
     # --- Create LLM providers (two separate instances) ---
-    provider_a: LLMModel
-    provider_b: LLMModel
+    model_a: LLMModel
+    model_b: LLMModel
     if api_key:
         print(f"Using OpenAIModel with model: {model}")
         print(f"Base URL: {base_url}")
-        provider_a = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
-        provider_b = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        model_a = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        model_b = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
         print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
         print()
 
         # Create FakeModel for Agent A (researcher)
-        provider_a = FakeModel(
+        model_a = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -74,7 +74,7 @@ async def main() -> None:
         )
 
         # Create FakeModel for Agent B (summarizer)
-        provider_b = FakeModel(
+        model_b = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -93,7 +93,7 @@ async def main() -> None:
     world.add_component(
         agent_a_id,
         LLMComponent(
-            model=provider_a,
+            model=model_a,
             
             system_prompt="You are a researcher agent.",
         ),
@@ -110,7 +110,7 @@ async def main() -> None:
     world.add_component(
         agent_b_id,
         LLMComponent(
-            model=provider_b,
+            model=model_b,
             
             system_prompt="You are a summarizer agent.",
         ),

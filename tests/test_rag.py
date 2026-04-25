@@ -30,13 +30,13 @@ class RecordingEmbeddingProvider(FakeEmbeddingProvider):
 async def test_rag_trigger_with_query_retrieves_and_injects_context() -> None:
     world = World()
     entity_id = world.create_entity()
-    provider = FakeEmbeddingProvider(dimension=8)
+    model = FakeEmbeddingProvider(dimension=8)
     store = InMemoryVectorStore(dimension=8)
-    vector = (await provider.embed(["Python is great"]))[0]
+    vector = (await model.embed(["Python is great"]))[0]
     await store.add("doc-1", vector, metadata={"text": "Python is great"})
 
     world.add_component(entity_id, RAGTriggerComponent(query="Python", top_k=1))
-    world.add_component(entity_id, EmbeddingComponent(provider=provider, dimension=8))
+    world.add_component(entity_id, EmbeddingComponent(provider=model, dimension=8))
     world.add_component(entity_id, VectorStoreComponent(store=store))
     world.add_component(
         entity_id,
@@ -66,10 +66,10 @@ async def test_rag_trigger_with_query_retrieves_and_injects_context() -> None:
 async def test_empty_query_skips_retrieval() -> None:
     world = World()
     entity_id = world.create_entity()
-    provider = RecordingEmbeddingProvider(dimension=8)
+    model = RecordingEmbeddingProvider(dimension=8)
 
     world.add_component(entity_id, RAGTriggerComponent(query=""))
-    world.add_component(entity_id, EmbeddingComponent(provider=provider, dimension=8))
+    world.add_component(entity_id, EmbeddingComponent(provider=model, dimension=8))
     world.add_component(
         entity_id,
         VectorStoreComponent(store=InMemoryVectorStore(dimension=8)),
@@ -85,7 +85,7 @@ async def test_empty_query_skips_retrieval() -> None:
     trigger = world.get_component(entity_id, RAGTriggerComponent)
     assert conversation is not None
     assert trigger is not None
-    assert provider.calls == []
+    assert model.calls == []
     assert conversation.messages == [Message(role="user", content="Hi")]
     assert trigger.retrieved_docs == []
 
@@ -107,16 +107,16 @@ async def test_entity_without_rag_trigger_component_is_skipped() -> None:
 async def test_retrieved_docs_are_formatted_as_system_messages_with_prefix() -> None:
     world = World()
     entity_id = world.create_entity()
-    provider = FakeEmbeddingProvider(dimension=8)
+    model = FakeEmbeddingProvider(dimension=8)
     store = InMemoryVectorStore(dimension=8)
 
-    vector_1 = (await provider.embed(["Doc one"]))[0]
-    vector_2 = (await provider.embed(["Doc two"]))[0]
+    vector_1 = (await model.embed(["Doc one"]))[0]
+    vector_2 = (await model.embed(["Doc two"]))[0]
     await store.add("doc-1", vector_1, metadata={"text": "Doc one"})
     await store.add("doc-2", vector_2, metadata={"text": "Doc two"})
 
     world.add_component(entity_id, RAGTriggerComponent(query="Doc", top_k=2))
-    world.add_component(entity_id, EmbeddingComponent(provider=provider, dimension=8))
+    world.add_component(entity_id, EmbeddingComponent(provider=model, dimension=8))
     world.add_component(entity_id, VectorStoreComponent(store=store))
     world.add_component(
         entity_id,
@@ -137,9 +137,9 @@ async def test_retrieved_docs_are_formatted_as_system_messages_with_prefix() -> 
 async def test_rag_messages_inserted_before_last_user_message() -> None:
     world = World()
     entity_id = world.create_entity()
-    provider = FakeEmbeddingProvider(dimension=8)
+    model = FakeEmbeddingProvider(dimension=8)
     store = InMemoryVectorStore(dimension=8)
-    vector = (await provider.embed(["Background fact"]))[0]
+    vector = (await model.embed(["Background fact"]))[0]
     await store.add("doc-1", vector, metadata={"text": "Background fact"})
 
     messages = [
@@ -148,7 +148,7 @@ async def test_rag_messages_inserted_before_last_user_message() -> None:
         Message(role="user", content="latest"),
     ]
     world.add_component(entity_id, RAGTriggerComponent(query="latest", top_k=1))
-    world.add_component(entity_id, EmbeddingComponent(provider=provider, dimension=8))
+    world.add_component(entity_id, EmbeddingComponent(provider=model, dimension=8))
     world.add_component(entity_id, VectorStoreComponent(store=store))
     world.add_component(entity_id, ConversationComponent(messages=list(messages)))
 
@@ -165,9 +165,9 @@ async def test_rag_messages_inserted_before_last_user_message() -> None:
 async def test_retrieval_publishes_rag_completed_event() -> None:
     world = World()
     entity_id = world.create_entity()
-    provider = FakeEmbeddingProvider(dimension=8)
+    model = FakeEmbeddingProvider(dimension=8)
     store = InMemoryVectorStore(dimension=8)
-    vector = (await provider.embed(["RAG event doc"]))[0]
+    vector = (await model.embed(["RAG event doc"]))[0]
     await store.add("doc-1", vector, metadata={"text": "RAG event doc"})
 
     seen: list[RAGRetrievalCompletedEvent] = []
@@ -177,7 +177,7 @@ async def test_retrieval_publishes_rag_completed_event() -> None:
 
     world.event_bus.subscribe(RAGRetrievalCompletedEvent, handler)
     world.add_component(entity_id, RAGTriggerComponent(query="RAG", top_k=1))
-    world.add_component(entity_id, EmbeddingComponent(provider=provider, dimension=8))
+    world.add_component(entity_id, EmbeddingComponent(provider=model, dimension=8))
     world.add_component(entity_id, VectorStoreComponent(store=store))
     world.add_component(
         entity_id,

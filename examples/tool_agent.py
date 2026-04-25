@@ -3,7 +3,7 @@
 This example demonstrates:
 - Creating a World with ReasoningSystem, ToolExecutionSystem, MemorySystem, and ErrorHandlingSystem
 - Defining async tool handlers (add, multiply)
-- Creating an Agent Entity with a real LLM provider (OpenAIModel + RetryModel)
+- Creating an Agent Entity with a real LLM model (OpenAIModel + RetryModel)
 - The LLM decides which tools to call and synthesizes the final answer
 - Running the agent to execute tools and print the result
 
@@ -12,7 +12,7 @@ Usage:
   2. Run: uv run python examples/tool_agent.py
 
 Environment variables:
-  LLM_API_KEY   — API key for the LLM provider (required)
+  LLM_API_KEY   — API key for the LLM model (required)
   LLM_BASE_URL  — Base URL for the API (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
   LLM_MODEL     — Model name (default: qwen3.5-plus)
 """
@@ -72,9 +72,9 @@ async def main() -> None:
     print(f"Base URL: {base_url}")
     print()
 
-    # --- Create LLM provider ---
+    # --- Create LLM model ---
     base_model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model, connect_timeout=connect_timeout, read_timeout=read_timeout, write_timeout=write_timeout, pool_timeout=pool_timeout)
-    provider = RetryModel(
+    model = RetryModel(
         base_model,
         retry_config=RetryConfig(
             max_attempts=max_retries,
@@ -92,7 +92,7 @@ async def main() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            model=provider,
+            model=model,
             
             system_prompt="You are a helpful calculator assistant. Use the provided tools to compute results.",
         ),

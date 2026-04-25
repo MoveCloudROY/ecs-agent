@@ -11,7 +11,7 @@ Supports dual-mode operation via environment variables:
 - With LLM_API_KEY: Uses OpenAIModel with real LLM
 
 Environment variables (optional, for OpenAI mode):
-    LLM_API_KEY       — API key for OpenAI-compatible provider
+    LLM_API_KEY       — API key for OpenAI-compatible model
     LLM_BASE_URL      — Base URL (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
     LLM_MODEL         — Model name (default: qwen3.5-flash)
 
@@ -47,7 +47,7 @@ from ecs_agent.types import CompletionResult, Message, Usage
 
 
 def create_provider() -> FakeModel | OpenAIModel:
-    """Create LLM provider based on environment variables.
+    """Create LLM model based on environment variables.
 
     Uses OpenAIModel if LLM_API_KEY is set, otherwise FakeModel.
     """
@@ -117,13 +117,13 @@ async def part_1_undo() -> None:
 
     # Create world and agent
     world = World()
-    provider = create_provider()
+    model = create_provider()
 
     agent_id = world.create_entity()
     world.add_component(
         agent_id,
         LLMComponent(
-            model=provider,
+            model=model,
             system_prompt="You are a helpful assistant.",
         ),
     )
@@ -157,7 +157,7 @@ async def part_1_undo() -> None:
 
     # Undo the last tick
     print("\nUndoing last tick...")
-    await CheckpointSystem.undo(world, {getattr(provider, "model_id", "default"): provider, "default": provider}, {})
+    await CheckpointSystem.undo(world, {getattr(model, "model_id", "default"): model, "default": model}, {})
 
     # Show conversation after undo
     conv = world.get_component(agent_id, ConversationComponent)
@@ -178,13 +178,13 @@ async def part_2_resume() -> None:
 
     # Create initial world and agent
     world = World()
-    provider = create_provider()
+    model = create_provider()
 
     agent_id = world.create_entity()
     world.add_component(
         agent_id,
         LLMComponent(
-            model=provider,
+            model=model,
             system_prompt="You are a helpful assistant.",
         ),
     )
@@ -224,7 +224,7 @@ async def part_2_resume() -> None:
 
         # Load checkpoint and resume
         loaded_world, current_tick = Runner.load_checkpoint(
-            checkpoint_path, {getattr(provider, "model_id", "default"): provider, "default": provider}, {}
+            checkpoint_path, {getattr(model, "model_id", "default"): model, "default": model}, {}
         )
         print(f"✓ Checkpoint loaded (current_tick={current_tick})")
 
@@ -259,7 +259,7 @@ async def part_3_compact() -> None:
 
     # Create world with many initial messages to trigger compaction
     world = World()
-    provider = create_provider()
+    model = create_provider()
 
     agent_id = world.create_entity()
 
@@ -295,7 +295,7 @@ async def part_3_compact() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            model=provider,
+            model=model,
             system_prompt="You are a helpful assistant.",
         ),
     )

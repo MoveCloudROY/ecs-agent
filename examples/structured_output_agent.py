@@ -6,7 +6,7 @@ to get structured JSON responses that validate against a Pydantic model schema.
 Key concepts:
 - Define a Pydantic BaseModel to specify the structure of the LLM response
 - Use pydantic_to_response_format() helper to convert the model to OpenAI-compatible format
-- Pass response_format to provider.complete() to enable JSON mode with schema validation
+- Pass response_format to model.complete() to enable JSON mode with schema validation
 - Parse the JSON response string and validate it against the Pydantic model
 
 Usage:
@@ -14,7 +14,7 @@ Usage:
    2. Run: uv run python examples/structured_output_agent.py
 
 Environment variables:
-   LLM_API_KEY   — API key for the LLM provider (required)
+   LLM_API_KEY   — API key for the LLM model (required)
    LLM_BASE_URL  — Base URL for the API (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
    LLM_MODEL     — Model name (default: qwen3.5-plus)
 
@@ -87,14 +87,14 @@ async def main() -> None:
     )
     model = os.environ.get("LLM_MODEL", "qwen3.5-plus")
 
-    # --- Create LLM provider ---
+    # --- Create LLM model ---
     if api_key:
         print(f"Using model: {model}")
         print(f"Base URL: {base_url}")
-        provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
         print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
-        # Create a fake provider with a pre-configured response matching the CityInfo schema
+        # Create a fake model with a pre-configured response matching the CityInfo schema
         fake_response = CompletionResult(
             message=Message(
                 role="assistant",
@@ -102,7 +102,7 @@ async def main() -> None:
             ),
             usage=Usage(prompt_tokens=50, completion_tokens=100, total_tokens=150),
         )
-        provider = FakeModel(responses=[fake_response])
+        model = FakeModel(responses=[fake_response])
 
     print()
 
@@ -128,7 +128,7 @@ async def main() -> None:
         model=model,
         response_format_type=response_format.get("type"),
     )
-    result = await provider.complete(messages, response_format=response_format)
+    result = await model.complete(messages, response_format=response_format)
 
     # --- Parse and validate the response ---
     print()

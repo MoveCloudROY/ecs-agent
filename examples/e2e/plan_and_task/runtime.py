@@ -67,7 +67,7 @@ def slug_from_description(description: str) -> str:
 _VALID_SLUG = _re.compile(r"^[a-z][a-z0-9-]*$")
 
 
-async def derive_workflow_id_from_llm(description: str, provider: LLMModel) -> str:
+async def derive_workflow_id_from_llm(description: str, model: LLMModel) -> str:
     prompt = (
         "Convert the following task description into a short, meaningful English "
         "workflow identifier. Rules: lowercase letters, digits, and hyphens only; "
@@ -76,7 +76,7 @@ async def derive_workflow_id_from_llm(description: str, provider: LLMModel) -> s
         f"Description: {description}"
     )
     try:
-        result = await provider.complete(
+        result = await model.complete(
             [Message(role="user", content=prompt)],
             stream=False,
         )

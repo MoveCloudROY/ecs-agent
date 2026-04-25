@@ -38,11 +38,11 @@ async def main() -> None:
     model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
 
     if api_key:
-        provider: OpenAIModel | FakeModel = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        model: OpenAIModel | FakeModel = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
         selected_model = model
         print(f"Using OpenAIModel with model: {model}")
     else:
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -74,7 +74,7 @@ async def main() -> None:
         selected_model = "fake"
         print("No LLM_API_KEY provided. Using FakeModel.")
 
-    world.add_component(agent, LLMComponent(model=provider))
+    world.add_component(agent, LLMComponent(model=model))
     world.add_component(
         agent,
         ConversationComponent(

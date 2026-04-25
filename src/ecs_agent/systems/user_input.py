@@ -122,7 +122,13 @@ class UserInputSystem:
             input_length=len(result),
         )
 
-        # Append user message to conversation if component exists
+        # Append user message to conversation, but skip if a terminal condition
+        # was already set this tick (e.g. user typed "exit" — the input handler
+        # sets TerminalComponent before resolving the future, so the text would
+        # only trigger a spurious LLM call).
+        if world.has_component(entity_id, TerminalComponent):
+            return
+
         conversation = world.get_component(entity_id, ConversationComponent)
         if conversation is not None:
             conversation.messages.append(

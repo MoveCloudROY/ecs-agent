@@ -641,9 +641,9 @@ def test_prepare_outbound_messages_uses_existing_stale_reservation_not_live_queu
 @pytest.mark.asyncio
 async def test_retry_uses_reserved_payload_then_commit_clears_once_on_success() -> None:
     world = World()
-    provider = FlakyRecordingProvider()
+    model = FlakyRecordingProvider()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -702,8 +702,8 @@ async def test_retry_uses_reserved_payload_then_commit_clears_once_on_success() 
 
     await ReasoningSystem().process(world)
 
-    first_user = provider.calls[0][-1].content
-    second_user = provider.calls[1][-1].content
+    first_user = model.calls[0][-1].content
+    second_user = model.calls[1][-1].content
     assert first_user == second_user
     assert first_user.startswith("[PROMPT_INJECT:@code]\nUse code-first reasoning")
     assert "[PROMPT_CONTEXT_POOL]" in first_user
@@ -718,9 +718,9 @@ async def test_retry_uses_reserved_payload_then_commit_clears_once_on_success() 
 @pytest.mark.asyncio
 async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() -> None:
     world = World()
-    provider = RecordingProvider()
+    model = RecordingProvider()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -781,7 +781,7 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
 
     await ReasoningSystem().process(world)
 
-    sent_user = provider.calls[0][-1].content
+    sent_user = model.calls[0][-1].content
     assert sent_user.startswith("[PROMPT_INJECT:@code]\nUse code-first reasoning")
     assert sent_user.index("Use code-first reasoning") < sent_user.index(
         "[PROMPT_CONTEXT_POOL]"
@@ -791,7 +791,7 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
     )
     assert sent_user.endswith("Please @code summarize findings")
 
-    sent_system = provider.calls[0][0]
+    sent_system = model.calls[0][0]
     assert sent_system.role == "system"
     assert sent_system.content == (
         "# Markdown System Prompt\n\n"
@@ -818,9 +818,9 @@ async def test_keyword_trigger_injection_with_context_pool_preserves_user_tail()
     None
 ):
     world = World()
-    provider = RecordingProvider()
+    model = RecordingProvider()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -866,7 +866,7 @@ async def test_keyword_trigger_injection_with_context_pool_preserves_user_tail()
 
     await ReasoningSystem().process(world)
 
-    sent_user = provider.calls[0][-1].content
+    sent_user = model.calls[0][-1].content
     assert sent_user.startswith(
         "[PROMPT_INJECT:summary]\nPrefer successful tool context"
     )
@@ -884,9 +884,9 @@ async def test_non_opt_in_reasoning_path_leaves_user_prompt_and_pool_unchanged()
     None
 ):
     world = World()
-    provider = RecordingProvider()
+    model = RecordingProvider()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -910,7 +910,7 @@ async def test_non_opt_in_reasoning_path_leaves_user_prompt_and_pool_unchanged()
 
     await ReasoningSystem().process(world)
 
-    sent_user = provider.calls[0][-1].content
+    sent_user = model.calls[0][-1].content
     assert sent_user == "Please @code summarize findings"
     assert "[PROMPT_INJECT:" not in sent_user
     assert "[PROMPT_CONTEXT_POOL]" not in sent_user
@@ -925,9 +925,9 @@ async def test_overflow_footer_is_injected_when_context_pool_entries_are_dropped
     None
 ):
     world = World()
-    provider = RecordingProvider()
+    model = RecordingProvider()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Need summary")]),
@@ -970,7 +970,7 @@ async def test_overflow_footer_is_injected_when_context_pool_entries_are_dropped
     await collector.process(world)
     await ReasoningSystem().process(world)
 
-    sent_user = provider.calls[0][-1].content
+    sent_user = model.calls[0][-1].content
     assert "[PROMPT_CONTEXT_POOL]" in sent_user
     assert "source: tool:keep" in sent_user
     assert "source: subagent:drop" not in sent_user
@@ -984,9 +984,9 @@ async def test_reasoning_uses_prepare_outbound_messages_shared_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     world = World()
-    provider = RecordingProvider()
+    model = RecordingProvider()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -1039,7 +1039,7 @@ async def test_reasoning_uses_prepare_outbound_messages_shared_path(
 
     await ReasoningSystem().process(world)
 
-    assert provider.calls[0][-1].content == "[shared-path] reasoning payload"
+    assert model.calls[0][-1].content == "[shared-path] reasoning payload"
     assert world.get_component(entity_id, PromptContextReservationComponent) is None
     assert queue.entries == []
 
@@ -1049,9 +1049,9 @@ async def test_planning_uses_prepare_outbound_messages_shared_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     world = World()
-    provider = RecordingProvider()
+    model = RecordingProvider()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Plan this")]),
@@ -1104,7 +1104,7 @@ async def test_planning_uses_prepare_outbound_messages_shared_path(
 
     await PlanningSystem().process(world)
 
-    assert provider.calls[0][-1].content == "[shared-path] planning payload"
+    assert model.calls[0][-1].content == "[shared-path] planning payload"
     assert world.get_component(entity_id, PromptContextReservationComponent) is None
     assert queue.entries == []
 

@@ -66,17 +66,17 @@ async def main() -> None:
     api_key = os.environ.get("LLM_API_KEY", "")
     model = os.environ.get("LLM_MODEL", "")
 
-    # Decide which provider to use
-    provider: LLMModel
+    # Decide which model to use
+    model: LLMModel
     if api_key and model:
         print(f"Using LiteLLMModel: {model}")
-        provider = LiteLLMModel(
+        model = LiteLLMModel(
             model=model,
             api_key=api_key,
         )
     else:
         print("No API key or model specified. Using FakeModel instead.")
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -95,7 +95,7 @@ async def main() -> None:
     # Add components
     world.add_component(
         agent_id,
-        LLMComponent(model=provider),
+        LLMComponent(model=model),
     )
     world.add_component(
         agent_id,

@@ -105,13 +105,13 @@ def test_get_model_explicit_api_key_returns_openai_provider() -> None:
         }
     )
 
-    provider = get_model(
+    model = get_model(
         "aliyun/qwen3.5-flash",
         registry=registry,
         api_key="explicit-key",
     )
 
-    assert isinstance(provider, OpenAIModel)
+    assert isinstance(model, OpenAIModel)
 
 
 def test_get_model_resolves_api_key_from_env(
@@ -128,9 +128,9 @@ def test_get_model_resolves_api_key_from_env(
         }
     )
 
-    provider = get_model("aliyun/qwen3.5-flash", registry=registry)
+    model = get_model("aliyun/qwen3.5-flash", registry=registry)
 
-    assert isinstance(provider, OpenAIModel)
+    assert isinstance(model, OpenAIModel)
 
 
 def test_get_model_openai_responses_returns_openai_provider() -> None:
@@ -144,9 +144,9 @@ def test_get_model_openai_responses_returns_openai_provider() -> None:
         }
     )
 
-    provider = get_model("aliyun-responses/qwen3.5-flash", registry=registry)
+    model = get_model("aliyun-responses/qwen3.5-flash", registry=registry)
 
-    assert isinstance(provider, OpenAIModel)
+    assert isinstance(model, OpenAIModel)
 
 
 def test_get_model_anthropic_messages_returns_claude_provider() -> None:
@@ -161,9 +161,9 @@ def test_get_model_anthropic_messages_returns_claude_provider() -> None:
         }
     )
 
-    provider = get_model("aliyun-anthropic/kimi-k2.5", registry=registry)
+    model = get_model("aliyun-anthropic/kimi-k2.5", registry=registry)
 
-    assert isinstance(provider, ClaudeModel)
+    assert isinstance(model, ClaudeModel)
 
 
 def test_get_model_embeddings_format_raises_value_error() -> None:

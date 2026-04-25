@@ -64,7 +64,7 @@ class FlakyRecordingProvider(FakeModel):
 
 def _create_entity(
     world: World,
-    provider: FakeModel,
+    model: FakeModel,
     *,
     steps: list[str],
     current_step: int,
@@ -72,7 +72,7 @@ def _create_entity(
     messages: list[Message] | None = None,
 ) -> int:
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -92,7 +92,7 @@ def _create_entity(
 
 async def test_replanning_skip_completed_plan() -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -103,7 +103,7 @@ async def test_replanning_skip_completed_plan() -> None:
     )
     entity_id = _create_entity(
         world,
-        provider,
+        model,
         steps=["step 1", "step 2"],
         current_step=1,
         completed=True,
@@ -114,12 +114,12 @@ async def test_replanning_skip_completed_plan() -> None:
     plan = world.get_component(entity_id, PlanComponent)
     assert plan is not None
     assert plan.steps == ["step 1", "step 2"]
-    assert provider.calls == []
+    assert model.calls == []
 
 
 async def test_replanning_skip_no_completed_steps() -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -130,7 +130,7 @@ async def test_replanning_skip_no_completed_steps() -> None:
     )
     entity_id = _create_entity(
         world,
-        provider,
+        model,
         steps=["step 1", "step 2"],
         current_step=0,
     )
@@ -140,12 +140,12 @@ async def test_replanning_skip_no_completed_steps() -> None:
     plan = world.get_component(entity_id, PlanComponent)
     assert plan is not None
     assert plan.steps == ["step 1", "step 2"]
-    assert provider.calls == []
+    assert model.calls == []
 
 
 async def test_replanning_skip_already_replanned() -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -157,7 +157,7 @@ async def test_replanning_skip_already_replanned() -> None:
     )
     entity_id = _create_entity(
         world,
-        provider,
+        model,
         steps=["step 1", "step 2", "step 3"],
         current_step=1,
     )
@@ -169,12 +169,12 @@ async def test_replanning_skip_already_replanned() -> None:
     plan = world.get_component(entity_id, PlanComponent)
     assert plan is not None
     assert plan.steps == ["step 1", "step 2", "step 3"]
-    assert len(provider.calls) == 1
+    assert len(model.calls) == 1
 
 
 async def test_replanning_revises_steps() -> None:
     world = World()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -186,7 +186,7 @@ async def test_replanning_revises_steps() -> None:
     )
     entity_id = _create_entity(
         world,
-        provider,
+        model,
         steps=["step 1", "old step 2", "old step 3"],
         current_step=1,
     )
@@ -200,7 +200,7 @@ async def test_replanning_revises_steps() -> None:
 
 async def test_replanning_publishes_event() -> None:
     world = World()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -212,7 +212,7 @@ async def test_replanning_publishes_event() -> None:
     )
     entity_id = _create_entity(
         world,
-        provider,
+        model,
         steps=["step 1", "old step 2", "old step 3"],
         current_step=1,
     )
@@ -234,7 +234,7 @@ async def test_replanning_publishes_event() -> None:
 
 async def test_replanning_no_event_when_steps_unchanged() -> None:
     world = World()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -246,7 +246,7 @@ async def test_replanning_no_event_when_steps_unchanged() -> None:
     )
     _ = _create_entity(
         world,
-        provider,
+        model,
         steps=["step 1", "step 2", "step 3"],
         current_step=1,
     )
@@ -265,7 +265,7 @@ async def test_replanning_no_event_when_steps_unchanged() -> None:
 
 async def test_replanning_graceful_on_invalid_json() -> None:
     world = World()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="this is not json")
@@ -274,7 +274,7 @@ async def test_replanning_graceful_on_invalid_json() -> None:
     )
     entity_id = _create_entity(
         world,
-        provider,
+        model,
         steps=["step 1", "step 2", "step 3"],
         current_step=1,
     )
@@ -288,10 +288,10 @@ async def test_replanning_graceful_on_invalid_json() -> None:
 
 async def test_replanning_graceful_on_provider_exhausted() -> None:
     world = World()
-    provider = FakeModel(responses=[])
+    model = FakeModel(responses=[])
     entity_id = _create_entity(
         world,
-        provider,
+        model,
         steps=["step 1", "step 2", "step 3"],
         current_step=1,
     )
@@ -325,7 +325,7 @@ async def test_prompt_context_injection_is_transient_for_replanning_provider_cal
     None
 ):
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -336,7 +336,7 @@ async def test_prompt_context_injection_is_transient_for_replanning_provider_cal
     )
     entity_id = _create_entity(
         world,
-        provider,
+        model,
         steps=["step 1", "step 2"],
         current_step=1,
     )
@@ -358,7 +358,7 @@ async def test_prompt_context_injection_is_transient_for_replanning_provider_cal
 
     await ReplanningSystem().process(world)
 
-    sent = provider.calls[0]
+    sent = model.calls[0]
     assert sent[-1].role == "user"
     assert "[PROMPT_CONTEXT_POOL]" in sent[-1].content
     assert "source: tool" in sent[-1].content
@@ -372,10 +372,10 @@ async def test_replanning_retry_reuses_reserved_context_then_commits_on_success(
     None
 ):
     world = World()
-    provider = FlakyRecordingProvider()
+    model = FlakyRecordingProvider()
     entity_id = _create_entity(
         world,
-        provider,
+        model,
         steps=["step 1", "step 2"],
         current_step=1,
     )
@@ -417,8 +417,8 @@ async def test_replanning_retry_reuses_reserved_context_then_commits_on_success(
 
     await system.process(world)
 
-    first_user = provider.calls[0][-1].content
-    second_user = provider.calls[1][-1].content
+    first_user = model.calls[0][-1].content
+    second_user = model.calls[1][-1].content
     assert first_user == second_user
     assert "source: subagent" not in second_user
 
@@ -432,7 +432,7 @@ async def test_event_trigger_injection_is_transient_for_replanning_provider_call
     None
 ):
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -443,7 +443,7 @@ async def test_event_trigger_injection_is_transient_for_replanning_provider_call
     )
     entity_id = _create_entity(
         world,
-        provider,
+        model,
         steps=["step 1", "step 2"],
         current_step=1,
     )
@@ -471,7 +471,7 @@ async def test_event_trigger_injection_is_transient_for_replanning_provider_call
 
     await ReplanningSystem().process(world)
 
-    sent = provider.calls[0]
+    sent = model.calls[0]
     assert sent[-1].role == "user"
     assert sent[-1].content.startswith(
         "[PROMPT_INJECT:objective]\nPrefer successful tool context"

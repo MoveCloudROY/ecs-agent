@@ -1,4 +1,4 @@
-"""Example demonstrating file-based skill discovery with dual-mode LLM provider.
+"""Example demonstrating file-based skill discovery with dual-mode LLM model.
 
 This script shows how to use SkillDiscovery to automatically find and install Skill
 implementations from a filesystem path. Supports both real LLM (OpenAIModel via
@@ -54,16 +54,16 @@ async def main() -> None:
     # manager.activate() before the skill is fully operational.
     installed_names = discovery.discover_and_install(world, agent, manager)
     print(f"Installed skills: {installed_names}")
-    # --- Create LLM provider ---
+    # --- Create LLM model ---
     if api_key:
         print(f"Using OpenAIModel with model: {model}")
         print(f"Base URL: {base_url}")
-        provider: Union[OpenAIModel, FakeModel] = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        model: Union[OpenAIModel, FakeModel] = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
         print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
         print()
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -75,7 +75,7 @@ async def main() -> None:
             ]
         )
 
-    world.add_component(agent, LLMComponent(model=provider,
+    world.add_component(agent, LLMComponent(model=model,
 ))
     world.add_component(
         agent,

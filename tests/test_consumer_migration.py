@@ -38,11 +38,11 @@ class RecordingFakeModel(FakeModel):
 @pytest.mark.asyncio
 async def test_reasoning_uses_rendered_system_prompt() -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="hello")]),
@@ -51,18 +51,18 @@ async def test_reasoning_uses_rendered_system_prompt() -> None:
 
     await ReasoningSystem().process(world)
 
-    sent = provider.calls[0]
+    sent = model.calls[0]
     assert sent[0] == Message(role="system", content="Rendered SYS")
 
 
 @pytest.mark.asyncio
 async def test_reasoning_uses_rendered_user_prompt() -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -76,18 +76,18 @@ async def test_reasoning_uses_rendered_user_prompt() -> None:
 
     await ReasoningSystem().process(world)
 
-    sent = provider.calls[0]
+    sent = model.calls[0]
     assert sent[-1] == Message(role="user", content="NORMALIZED user text")
 
 
 @pytest.mark.asyncio
 async def test_planning_uses_rendered_system_prompt() -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="plan")]),
@@ -97,14 +97,14 @@ async def test_planning_uses_rendered_system_prompt() -> None:
 
     await PlanningSystem().process(world)
 
-    sent = provider.calls[0]
+    sent = model.calls[0]
     assert sent[0] == Message(role="system", content="Rendered SYS")
 
 
 @pytest.mark.asyncio
 async def test_replanning_uses_rendered_system_prompt() -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -114,7 +114,7 @@ async def test_replanning_uses_rendered_system_prompt() -> None:
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -131,18 +131,18 @@ async def test_replanning_uses_rendered_system_prompt() -> None:
 
     await ReplanningSystem().process(world)
 
-    sent = provider.calls[0]
+    sent = model.calls[0]
     assert sent[0] == Message(role="system", content="Rendered SYS")
 
 
 @pytest.mark.asyncio
 async def test_no_rendered_component_fallback() -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(entity_id, SystemPromptComponent(content="legacy sys"))
     world.add_component(
         entity_id,
@@ -151,7 +151,7 @@ async def test_no_rendered_component_fallback() -> None:
 
     await ReasoningSystem().process(world)
 
-    sent = provider.calls[0]
+    sent = model.calls[0]
     assert sent[0] == Message(role="system", content="legacy sys")
 
 

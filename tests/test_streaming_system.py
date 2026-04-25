@@ -112,11 +112,11 @@ class ReasoningContentStreamingFakeModel(FakeModel):
 @pytest.mark.asyncio
 async def test_streaming_enabled_calls_provider_with_stream_true() -> None:
     world = World()
-    provider = RecordingStreamingFakeModel(
+    model = RecordingStreamingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="Hello"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Hi")]),
@@ -125,19 +125,19 @@ async def test_streaming_enabled_calls_provider_with_stream_true() -> None:
 
     await ReasoningSystem().process(world)
 
-    assert provider.calls == [([Message(role="user", content="Hi")], None, True)]
+    assert model.calls == [([Message(role="user", content="Hi")], None, True)]
 
 
 @pytest.mark.asyncio
 async def test_streaming_produces_complete_message_from_deltas() -> None:
     world = World()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="Hello world"))
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Say hello")]),
@@ -154,11 +154,11 @@ async def test_streaming_produces_complete_message_from_deltas() -> None:
 @pytest.mark.asyncio
 async def test_streaming_events_emitted_in_order() -> None:
     world = World()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="OK"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Go")]),
@@ -195,11 +195,11 @@ async def test_streaming_events_emitted_in_order() -> None:
 @pytest.mark.asyncio
 async def test_streaming_tool_call_deltas_accumulate_into_pending_tool_calls() -> None:
     world = World()
-    provider = ToolCallStreamingFakeModel(
+    model = ToolCallStreamingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content=""))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -225,13 +225,13 @@ async def test_streaming_error_preserves_partial_content_and_sets_error_componen
     None
 ):
     world = World()
-    provider = FailingStreamingFakeModel(
+    model = FailingStreamingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="ignored"))
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Hi")]),
@@ -252,13 +252,13 @@ async def test_streaming_error_preserves_partial_content_and_sets_error_componen
 @pytest.mark.asyncio
 async def test_without_streaming_component_uses_non_streaming_path() -> None:
     world = World()
-    provider = RecordingStreamingFakeModel(
+    model = RecordingStreamingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="non-stream"))
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Hi")]),
@@ -266,13 +266,13 @@ async def test_without_streaming_component_uses_non_streaming_path() -> None:
 
     await ReasoningSystem().process(world)
 
-    assert provider.calls == [([Message(role="user", content="Hi")], None, False)]
+    assert model.calls == [([Message(role="user", content="Hi")], None, False)]
 
 
 @pytest.mark.asyncio
 async def test_streaming_component_disabled_uses_non_streaming_path() -> None:
     world = World()
-    provider = RecordingStreamingFakeModel(
+    model = RecordingStreamingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="still non-stream")
@@ -280,7 +280,7 @@ async def test_streaming_component_disabled_uses_non_streaming_path() -> None:
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Hi")]),
@@ -289,7 +289,7 @@ async def test_streaming_component_disabled_uses_non_streaming_path() -> None:
 
     await ReasoningSystem().process(world)
 
-    assert provider.calls == [([Message(role="user", content="Hi")], None, False)]
+    assert model.calls == [([Message(role="user", content="Hi")], None, False)]
 
 
 @pytest.mark.asyncio
@@ -299,7 +299,7 @@ async def test_streaming_logs_first_sse_and_first_content_delta_latency(
     from ecs_agent.systems import reasoning as reasoning_module
 
     world = World()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="Latency check"))
         ]
@@ -308,7 +308,7 @@ async def test_streaming_logs_first_sse_and_first_content_delta_latency(
     monkeypatch.setattr(reasoning_module, "logger", logger)
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Measure")]),
@@ -347,12 +347,12 @@ async def test_streaming_non_blocking_delta_publish_avoids_handler_backpressure(
     None
 ):
     world = World()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ABCD"))]
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Hi")]),
@@ -383,14 +383,14 @@ async def test_streaming_non_blocking_delta_publish_avoids_handler_backpressure(
 @pytest.mark.asyncio
 async def test_streaming_publishes_reasoning_and_content_deltas_separately() -> None:
     world = World()
-    provider = ReasoningContentStreamingFakeModel(
+    model = ReasoningContentStreamingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="ignored"))
         ]
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Hi")]),
@@ -420,14 +420,14 @@ async def test_streaming_emits_reasoning_end_then_content_start_transition_event
     None
 ):
     world = World()
-    provider = ReasoningContentStreamingFakeModel(
+    model = ReasoningContentStreamingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="ignored"))
         ]
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Hi")]),
@@ -470,14 +470,14 @@ async def test_streaming_contract_emits_single_start_and_end_around_reasoning_an
     None
 ):
     world = World()
-    provider = ReasoningContentStreamingFakeModel(
+    model = ReasoningContentStreamingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="ignored"))
         ]
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Hi")]),

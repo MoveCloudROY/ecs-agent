@@ -114,8 +114,7 @@ def _require_adapter(adapter: ArtifactAdapter | None) -> ArtifactAdapter:
 
 
 def build_plan_task_world(
-    provider: LLMModel,
-    model: str,
+    model: LLMModel,
     base_dir: Path | None = None,
 ) -> tuple[World, EntityId, list[ArtifactAdapter | None], list[RuntimeState | None]]:
     discover_skills([_SKILLS_DIR])
@@ -125,7 +124,7 @@ def build_plan_task_world(
     agent_id = world.create_entity()
     world.add_component(
         agent_id,
-        LLMComponent(model=provider),
+        LLMComponent(model=model),
     )
     world.add_component(agent_id, ConversationComponent(messages=[]))
     world.add_component(
@@ -148,7 +147,7 @@ def build_plan_task_world(
             subagents={
                 "advisor": SubagentConfig(
                     name="advisor",
-                    model=provider,
+                    model=model,
                     description="Reviews workflow drafts as an advisor.",
                     system_prompt=ADVISOR_SYSTEM_PROMPT,
                     max_ticks=30,
@@ -160,7 +159,7 @@ def build_plan_task_world(
                 ),
                 "qa": SubagentConfig(
                     name="qa",
-                    model=provider,
+                    model=model,
                     description="Performs QA review of workflow drafts.",
                     system_prompt=QA_SYSTEM_PROMPT,
                     max_ticks=30,
@@ -172,7 +171,7 @@ def build_plan_task_world(
                 ),
                 "plan_qa": SubagentConfig(
                     name="plan_qa",
-                    model=provider,
+                    model=model,
                     description="Performs QA review of the finalized workflow_plan.md.",
                     system_prompt=PLAN_QA_REVIEW_SYSTEM_PROMPT,
                     max_ticks=30,
@@ -184,7 +183,7 @@ def build_plan_task_world(
                 ),
                 "plan_writer": SubagentConfig(
                     name="plan_writer",
-                    model=provider,
+                    model=model,
                     description="Converts an approved draft into a structured workflow_plan.md using the writing-plans skill.",
                     system_prompt=WRITE_PLAN_SYSTEM_PROMPT,
                     skills=["writing-plans"],
@@ -326,7 +325,7 @@ def build_plan_task_world(
             return "Error: /plan:start requires a non-empty description."
         try:
             derived_id = (
-                await derive_workflow_id_from_llm(description, provider)
+                await derive_workflow_id_from_llm(description, model)
                 or description[:40].strip()
             )
             adapter_ref[0] = ArtifactAdapter(
@@ -722,11 +721,11 @@ async def main() -> None:
         )
         sys.exit(1)
 
-    provider: LLMModel
+    model: LLMModel
     if api_format_str == ApiFormat.ANTHROPIC_MESSAGES:
-        logger.info("using_provider", provider="ClaudeModel", model=model)
+        logger.info("using_model", model_class="ClaudeModel", model_name=model)
         print(f"Using ClaudeModel (Anthropic Messages API) with model: {model}")
-        provider = ClaudeModel(
+        model = ClaudeModel(
             config=ProviderConfig(
                 provider_id="anthropic",
                 base_url=base_url,
@@ -739,9 +738,9 @@ async def main() -> None:
         api_format = ApiFormat.OPENAI_RESPONSES
         if api_format_str == ApiFormat.OPENAI_CHAT_COMPLETIONS:
             api_format = ApiFormat.OPENAI_CHAT_COMPLETIONS
-        logger.info("using_provider", provider="OpenAIModel", model=model)
+        logger.info("using_model", model_class="OpenAIModel", model_name=model)
         print(f"Using OpenAIModel with model: {model}")
-        provider = OpenAIModel(
+        model = OpenAIModel(
             config=ProviderConfig(
                 provider_id="openai",
                 base_url=base_url,
@@ -753,7 +752,6 @@ async def main() -> None:
         )
 
     world, agent_id, _, _ = build_plan_task_world(
-        provider=provider,
         model=model,
         base_dir=_WORKFLOW_BASE_DIR,
     )

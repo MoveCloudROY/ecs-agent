@@ -1170,24 +1170,24 @@ def test_compaction_summary_fingerprint_changes_with_summary() -> None:
     world = World()
     entity_id = world.create_entity()
     world.add_component(entity_id, CompactionConfigComponent(threshold_tokens=100))
-    provider = prompt_provider_module.CompactionSummaryPlaceholderProvider()
+    model = prompt_provider_module.CompactionSummaryPlaceholderProvider()
 
-    empty_fingerprint = provider.provider_fingerprint(world, entity_id)
+    empty_fingerprint = model.provider_fingerprint(world, entity_id)
 
     world.add_component(
         entity_id,
         CurrentCompactionSummaryComponent(summary="first summary"),
     )
-    first_fingerprint = provider.provider_fingerprint(world, entity_id)
+    first_fingerprint = model.provider_fingerprint(world, entity_id)
 
     world.add_component(
         entity_id,
         CurrentCompactionSummaryComponent(summary="second summary"),
     )
-    second_fingerprint = provider.provider_fingerprint(world, entity_id)
+    second_fingerprint = model.provider_fingerprint(world, entity_id)
 
     world.remove_component(entity_id, CurrentCompactionSummaryComponent)
-    cleared_fingerprint = provider.provider_fingerprint(world, entity_id)
+    cleared_fingerprint = model.provider_fingerprint(world, entity_id)
 
     assert empty_fingerprint != first_fingerprint
     assert first_fingerprint != second_fingerprint
@@ -1347,7 +1347,7 @@ class _ContractProvider:
 
 def _require_provider_seam_contract_surface() -> None:
     assert hasattr(render_module, "_BUILTIN_PLACEHOLDER_PROVIDERS"), (
-        "expected provider seam registry: _BUILTIN_PLACEHOLDER_PROVIDERS"
+        "expected model seam registry: _BUILTIN_PLACEHOLDER_PROVIDERS"
     )
 
 
@@ -1368,7 +1368,7 @@ async def test_builtin_provider_registration_requires_provider_id(
 
     class _ProviderWithoutId:
         def resolve(self, _world: World, _entity_id: object) -> dict[str, str]:
-            return {"_installed_tools": "- from-provider"}
+            return {"_installed_tools": "- from-model"}
 
     monkeypatch.setattr(
         render_module,
@@ -1435,7 +1435,7 @@ async def test_user_placeholder_collision_with_builtin_provider_key_raises(
         [
             _ContractProvider(
                 "collision_provider",
-                {"installed_tools": "- provider-installed"},
+                {"installed_tools": "- model-installed"},
             )
         ],
         raising=False,
@@ -1529,11 +1529,11 @@ async def test_provider_fingerprint_changes_force_rerender(
         ),
     )
 
-    provider = _ContractProvider("inventory_provider", {"_installed_tools": "- none"})
+    model = _ContractProvider("inventory_provider", {"_installed_tools": "- none"})
     monkeypatch.setattr(
         render_module,
         "_BUILTIN_PLACEHOLDER_PROVIDERS",
-        [provider],
+        [model],
         raising=False,
     )
 
@@ -1553,7 +1553,7 @@ async def test_provider_fingerprint_changes_force_rerender(
 
     system = SystemPromptRenderSystem()
     await system.process(world)
-    provider.fingerprint = "v2"
+    model.fingerprint = "v2"
     await system.process(world)
 
     assert call_count == 2
@@ -1571,7 +1571,7 @@ async def test_scratchbook_placeholder_names_are_approved_builtin_surface(
     _require_provider_seam_contract_surface()
 
     class _ScratchbookConfig:
-        path: str = ".sisyphus/notepads/scratchbook-prompt-provider"
+        path: str = ".sisyphus/notepads/scratchbook-prompt-model"
         artifact_types: tuple[str, ...] = ("plan", "report")
 
     class _ScratchbookProvider(_ContractProvider):
@@ -1648,10 +1648,10 @@ async def test_inventory_builtins_render_through_provider_aggregation(
             _ContractProvider(
                 "inventory_provider",
                 {
-                    "_installed_tools": "- from-provider-tools",
-                    "_installed_skills": "- from-provider-skills",
-                    "_installed_mcps": "- from-provider-mcps",
-                    "_installed_subagents": "- from-provider-subagents",
+                    "_installed_tools": "- from-model-tools",
+                    "_installed_skills": "- from-model-skills",
+                    "_installed_mcps": "- from-model-mcps",
+                    "_installed_subagents": "- from-model-subagents",
                 },
             )
         ],
@@ -1663,10 +1663,10 @@ async def test_inventory_builtins_render_through_provider_aggregation(
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
     assert rendered.text == (
-        "- from-provider-tools\n"
-        "- from-provider-skills\n"
-        "- from-provider-mcps\n"
-        "- from-provider-subagents"
+        "- from-model-tools\n"
+        "- from-model-skills\n"
+        "- from-model-mcps\n"
+        "- from-model-subagents"
     )
 
 

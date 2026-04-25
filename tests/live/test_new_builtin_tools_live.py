@@ -67,7 +67,7 @@ def _build_world(
     workspace.mkdir(exist_ok=True)
 
     world = World()
-    provider = _make_provider(live_api_key)
+    model = _make_provider(live_api_key)
     agent = world.create_entity()
 
     skill = BuiltinToolsSkill().bind_workspace(str(workspace))
@@ -75,11 +75,11 @@ def _build_world(
     manager.install(world, agent, skill)
 
     resolved_model = model or os.getenv("LLM_MODEL", "qwen3.5-flash")
-    provider_model = getattr(provider, "model", None) or getattr(provider, "_model", resolved_model)
+    model_model = getattr(model, "model", None) or getattr(model, "_model", resolved_model)
     world.add_component(
         agent,
         LLMComponent(
-            model=provider,
+            model=model,
             
             system_prompt=system_prompt or (
                 "You are a helpful assistant with file, shell, and web tools. "

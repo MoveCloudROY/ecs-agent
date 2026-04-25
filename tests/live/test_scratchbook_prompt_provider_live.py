@@ -42,18 +42,18 @@ def _build_scratchbook_prompt_config() -> ScratchbookPromptConfig:
             "Artifact types:\n${artifact_types}\n"
             "Use builtin tools to inspect or update artifacts when allowed."
         ),
-        scratchbook_root_path=".sisyphus/notepads/scratchbook-prompt-provider",
+        scratchbook_root_path=".sisyphus/notepads/scratchbook-prompt-model",
         artifacts=[
             ScratchbookArtifactPromptDef(
                 artifact_type_id="plan notes",
-                path=".sisyphus/notepads/scratchbook-prompt-provider/plan.md",
+                path=".sisyphus/notepads/scratchbook-prompt-model/plan.md",
                 purpose="Tracks active task intent and rationale.",
                 readonly=False,
                 read_when="Before changing task behavior.",
             ),
             ScratchbookArtifactPromptDef(
                 artifact_type_id="run log",
-                path=".sisyphus/notepads/scratchbook-prompt-provider/live-run.log",
+                path=".sisyphus/notepads/scratchbook-prompt-model/live-run.log",
                 purpose="Stores immutable live execution traces.",
                 readonly=True,
                 read_when="When validating endpoint-mode behavior.",
@@ -100,13 +100,13 @@ async def test_live_scratchbook_placeholders_render_into_system_prompt_snapshot(
     base_url: str,
     api_format: ApiFormat,
 ) -> None:
-    provider = _make_provider(live_api_key, base_url, api_format)
+    model = _make_provider(live_api_key, base_url, api_format)
     world = World()
     entity_id = world.create_entity()
 
     world.add_component(
         entity_id,
-        LLMComponent(model=provider,
+        LLMComponent(model=model,
 ),
     )
     world.add_component(
@@ -131,15 +131,15 @@ async def test_live_scratchbook_placeholders_render_into_system_prompt_snapshot(
     assert "${_scratchbook_overview}" not in rendered.text
     assert "SB-LIVE-CHECK" in rendered.text
     assert (
-        "Scratchbook path: .sisyphus/notepads/scratchbook-prompt-provider"
+        "Scratchbook path: .sisyphus/notepads/scratchbook-prompt-model"
         in rendered.text
     )
     assert (
-        "plan_path=.sisyphus/notepads/scratchbook-prompt-provider/plan.md"
+        "plan_path=.sisyphus/notepads/scratchbook-prompt-model/plan.md"
         in rendered.text
     )
     assert (
-        "run_log_path=.sisyphus/notepads/scratchbook-prompt-provider/live-run.log"
+        "run_log_path=.sisyphus/notepads/scratchbook-prompt-model/live-run.log"
         in rendered.text
     )
     assert {
@@ -161,15 +161,15 @@ async def test_live_scratchbook_rendered_prompt_reaches_aliyun_outbound_channel(
     base_url: str,
     api_format: ApiFormat,
 ) -> None:
-    provider = _make_provider(live_api_key, base_url, api_format)
-    capturing_client = _CapturingAsyncClient(provider._client)
-    provider._client = capturing_client  # type: ignore[assignment]  # test-only: monkeypatching private attr for HTTP capture
+    model = _make_provider(live_api_key, base_url, api_format)
+    capturing_client = _CapturingAsyncClient(model._client)
+    model._client = capturing_client  # type: ignore[assignment]  # test-only: monkeypatching private attr for HTTP capture
 
     world = World()
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        LLMComponent(model=provider,
+        LLMComponent(model=model,
 ),
     )
     world.add_component(

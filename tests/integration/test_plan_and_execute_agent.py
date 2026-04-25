@@ -48,7 +48,7 @@ def _replan_reply(revised_steps: list[str]) -> CompletionResult:
 
 
 def _build_plan_execute_world(
-    provider: FakeModel,
+    model: FakeModel,
     plan_steps: list[str],
     tools: dict[str, ToolSchema] | None = None,
     handlers: dict[str, object] | None = None,
@@ -58,7 +58,7 @@ def _build_plan_execute_world(
     world = World()
     agent_id = world.create_entity()
 
-    world.add_component(agent_id, LLMComponent(model=provider))
+    world.add_component(agent_id, LLMComponent(model=model))
     world.add_component(
         agent_id,
         ConversationComponent(
@@ -121,7 +121,7 @@ async def test_plan_and_execute_with_replanning() -> None:
         call_log.append(f"analyze:{data}")
         return f"Analysis of: {data}"
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             # Tick 1: PlanningSystem step 1 → tool call
             _tool_call_reply("search", "tc1", {"query": "weather beijing"}),
@@ -143,7 +143,7 @@ async def test_plan_and_execute_with_replanning() -> None:
     ]
 
     world, agent_id = _build_plan_execute_world(
-        provider,
+        model,
         plan_steps,
         tools={
             "search": ToolSchema(
@@ -192,7 +192,7 @@ async def test_plan_and_execute_with_replanning() -> None:
 async def test_plan_and_execute_no_replanning_needed() -> None:
     """All replan responses return same remaining steps. Plan completes normally."""
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             # Tick 1: PlanningSystem step 1
             _reply("Step 1 done via reasoning."),
@@ -208,7 +208,7 @@ async def test_plan_and_execute_no_replanning_needed() -> None:
     )
 
     world, agent_id = _build_plan_execute_world(
-        provider, ["Do step 1", "Do step 2", "Do step 3"]
+        model, ["Do step 1", "Do step 2", "Do step 3"]
     )
 
     runner = Runner()
@@ -224,7 +224,7 @@ async def test_plan_and_execute_no_replanning_needed() -> None:
     assistant_msgs = [m for m in conv.messages if m.role == "assistant"]
     # 3 planning responses + 2 replan responses = 5 total assistant messages
     # (replan responses are NOT added to conversation by ReplanningSystem)
-    # Actually ReplanningSystem calls provider.complete() but does NOT append to conversation
+    # Actually ReplanningSystem calls model.complete() but does NOT append to conversation
     assert len(assistant_msgs) == 3
 
 
@@ -237,7 +237,7 @@ async def test_plan_and_execute_no_replanning_needed() -> None:
 async def test_plan_and_execute_replanning_adds_steps() -> None:
     """Replanning adds extra steps. Verify total steps increased and all execute."""
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             # Tick 1: PlanningSystem step 1
             _reply("Gathered weather info: rainy."),
@@ -266,7 +266,7 @@ async def test_plan_and_execute_replanning_adds_steps() -> None:
         "Create itinerary",
     ]
 
-    world, agent_id = _build_plan_execute_world(provider, original_steps)
+    world, agent_id = _build_plan_execute_world(model, original_steps)
 
     runner = Runner()
     await runner.run(world, max_ticks=20)
@@ -293,7 +293,7 @@ async def test_plan_and_execute_replanning_adds_steps() -> None:
 async def test_plan_revised_event_fired() -> None:
     """PlanRevisedEvent fires with correct old_steps and new_steps."""
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             # Tick 1: PlanningSystem step 1
             _reply("Weather is rainy."),
@@ -315,7 +315,7 @@ async def test_plan_revised_event_fired() -> None:
     async def on_revised(event: PlanRevisedEvent) -> None:
         events.append(event)
 
-    world, agent_id = _build_plan_execute_world(provider, list(original_steps))
+    world, agent_id = _build_plan_execute_world(model, list(original_steps))
     world.event_bus.subscribe(PlanRevisedEvent, on_revised)
 
     runner = Runner()

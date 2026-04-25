@@ -83,7 +83,7 @@ class TestOpenAIModelResponseFormat(unittest.TestCase):
     """Test OpenAIModel response_format parameter support."""
 
     def setUp(self):
-        """Set up test provider."""
+        """Set up test model."""
         self.provider = OpenAIModel(
             config=ProviderConfig(
                 provider_id="openai",
@@ -286,12 +286,12 @@ class TestFakeModelResponseFormat(unittest.TestCase):
     def test_fake_model_stores_response_format(self):
         """FakeModel should store response_format for test assertions."""
         resp = CompletionResult(message=Message(role="assistant", content="Response"))
-        provider = FakeModel(responses=[resp])
+        model = FakeModel(responses=[resp])
 
         response_format = {"type": "json_object"}
 
         async def run_test():
-            await provider.complete(
+            await model.complete(
                 [Message(role="user", content="Test")], response_format=response_format
             )
 
@@ -299,17 +299,17 @@ class TestFakeModelResponseFormat(unittest.TestCase):
 
         asyncio.run(run_test())
 
-        self.assertEqual(provider.last_response_format, {"type": "json_object"})
+        self.assertEqual(model.last_response_format, {"type": "json_object"})
 
     def test_fake_model_protocol_conformance_with_response_format(self):
         """FakeModel should conform to Protocol with response_format parameter."""
         resp = CompletionResult(message=Message(role="assistant", content="Test"))
-        provider = FakeModel(responses=[resp])
+        model = FakeModel(responses=[resp])
 
         response_format = {"type": "json_object", "schema": {"type": "object"}}
 
         async def run_test():
-            result = await provider.complete(
+            result = await model.complete(
                 [Message(role="user", content="Query")],
                 tools=None,
                 stream=False,
@@ -324,7 +324,7 @@ class TestFakeModelResponseFormat(unittest.TestCase):
         # Verify response is returned correctly
         self.assertEqual(result.message.content, "Test")
         # Verify response_format was stored
-        self.assertEqual(provider.last_response_format, response_format)
+        self.assertEqual(model.last_response_format, response_format)
 
 
 if __name__ == "__main__":

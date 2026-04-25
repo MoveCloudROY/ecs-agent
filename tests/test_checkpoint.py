@@ -164,13 +164,13 @@ async def test_undo_publishes_checkpoint_restored_event() -> None:
 
 @pytest.mark.asyncio
 async def test_undo_reinjects_provider_and_tool_handlers() -> None:
-    provider = DummyProvider()
+    model = DummyProvider()
     handlers = {"ping": async_tool_handler}
 
     world = World()
     entity_id = world.create_entity()
     world.add_component(entity_id, CheckpointComponent())
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ToolRegistryComponent(
@@ -182,7 +182,7 @@ async def test_undo_reinjects_provider_and_tool_handlers() -> None:
     await CheckpointSystem().process(world)
     await CheckpointSystem.undo(
         world,
-        providers={"default": provider, "gpt-4": provider},
+        providers={"default": model, "gpt-4": model},
         tool_handlers=handlers,
     )
 
@@ -190,7 +190,7 @@ async def test_undo_reinjects_provider_and_tool_handlers() -> None:
     restored_tools = world.get_component(entity_id, ToolRegistryComponent)
     assert restored_llm is not None
     assert restored_tools is not None
-    assert restored_llm.model is provider
+    assert restored_llm.model is model
     assert restored_tools.handlers is handlers
 
 

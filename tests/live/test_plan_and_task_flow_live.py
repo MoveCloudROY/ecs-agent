@@ -1,7 +1,7 @@
 """Live acceptance tests for the plan-and-task E2E example.
 
 These tests require LLM_API_KEY to be set and will skip otherwise.
-They use the DashScope-compatible provider configuration.
+They use the DashScope-compatible model configuration.
 
 Anthropic tests additionally require LLM_API_FORMAT=anthropic_messages plus
 compatible LLM_BASE_URL / LLM_MODEL (e.g. cc2.caaa.tech / kimi-for-coding).
@@ -54,7 +54,7 @@ _WRITING_SOFTWARE_DESCRIPTION = """我希望开发一份辅助写作软件，目
 
 
 @pytest.fixture
-def live_provider(live_api_key: str) -> OpenAIModel:
+def live_model(live_api_key: str) -> OpenAIModel:
     """Create a real OpenAIModel for live tests."""
     base_url = os.getenv(
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -71,7 +71,7 @@ def live_provider(live_api_key: str) -> OpenAIModel:
 
 @pytest.mark.asyncio
 async def test_live_plan_controller_starts_plan_interview(
-    live_provider: OpenAIModel, tmp_path: Path
+    live_model: OpenAIModel, tmp_path: Path
 ) -> None:
     """Verify handle_plan_start creates artifacts and transitions to DRAFT_INTERVIEW."""
     workflow_id = "live-test-workflow-start"
@@ -91,7 +91,7 @@ async def test_live_plan_controller_starts_plan_interview(
 
 @pytest.mark.asyncio
 async def test_live_plan_controller_completes_review_cycle(
-    live_provider: OpenAIModel, tmp_path: Path
+    live_model: OpenAIModel, tmp_path: Path
 ) -> None:
     """Verify review verdicts allow transition to finalized state."""
     workflow_id = "live-test-workflow-review"
@@ -117,7 +117,7 @@ async def test_live_plan_controller_completes_review_cycle(
 
 @pytest.mark.asyncio
 async def test_live_task_exec_loads_finalized_plan(
-    live_provider: OpenAIModel, tmp_path: Path
+    live_model: OpenAIModel, tmp_path: Path
 ) -> None:
     """Verify TaskExec can load a finalized plan and populate TaskRecord list."""
     workflow_id = "live-test-workflow-exec"
@@ -145,8 +145,8 @@ async def test_live_task_exec_loads_finalized_plan(
     assert next_state.current_task_id == "task-001"
     assert (adapter.state_dir / "task_queue.json").exists()
 
-    # Use live provider to generate task output — proves LLM API is reachable
-    result = await live_provider.complete(
+    # Use live model to generate task output — proves LLM API is reachable
+    result = await live_model.complete(
         [Message(role="user", content="Confirm: this plan is ready to execute.")]
     )
     assert isinstance(result, CompletionResult)
@@ -171,10 +171,10 @@ async def test_live_task_exec_loads_finalized_plan(
 
 @pytest.mark.asyncio
 async def test_live_derive_workflow_id_from_llm_returns_valid_slug(
-    live_provider: OpenAIModel,
+    live_model: OpenAIModel,
 ) -> None:
     slug = await derive_workflow_id_from_llm(
-        _WRITING_SOFTWARE_DESCRIPTION, live_provider
+        _WRITING_SOFTWARE_DESCRIPTION, live_model
     )
 
     assert re.match(r"^[a-z][a-z0-9-]*$", slug), (
@@ -186,7 +186,7 @@ async def test_live_derive_workflow_id_from_llm_returns_valid_slug(
 
 @pytest.mark.asyncio
 async def test_live_controller_advisor_retry_loop_revise_then_approved(
-    live_provider: OpenAIModel, tmp_path: Path
+    live_model: OpenAIModel, tmp_path: Path
 ) -> None:
     workflow_id = "live-test-advisor-retry"
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id=workflow_id)
@@ -215,7 +215,7 @@ async def test_live_controller_advisor_retry_loop_revise_then_approved(
     assert len(advisor_verdicts) == 1
     assert advisor_verdicts[0].verdict == "approved"
 
-    result = await live_provider.complete(
+    result = await live_model.complete(
         [
             Message(
                 role="user",
@@ -234,7 +234,7 @@ _ANTHROPIC_SKIP = pytest.mark.skipif(
 
 
 @pytest.fixture
-def anthropic_provider(live_api_key: str) -> ClaudeModel:
+def anthropic_model(live_api_key: str) -> ClaudeModel:
     base_url = os.getenv("LLM_BASE_URL", "https://api.anthropic.com")
     model = os.getenv("LLM_MODEL", "claude-3-5-haiku-20241022")
     config = ProviderConfig(
@@ -248,10 +248,10 @@ def anthropic_provider(live_api_key: str) -> ClaudeModel:
 
 @_ANTHROPIC_SKIP
 @pytest.mark.asyncio
-async def test_anthropic_provider_completes_simple_message(
-    anthropic_provider: ClaudeModel,
+async def test_anthropic_model_completes_simple_message(
+    anthropic_model: ClaudeModel,
 ) -> None:
-    result = await anthropic_provider.complete(
+    result = await anthropic_model.complete(
         [Message(role="user", content="Reply with exactly: pong")]
     )
     assert isinstance(result, CompletionResult)
@@ -261,9 +261,9 @@ async def test_anthropic_provider_completes_simple_message(
 @_ANTHROPIC_SKIP
 @pytest.mark.asyncio
 async def test_anthropic_derive_workflow_id_returns_valid_slug(
-    anthropic_provider: ClaudeModel,
+    anthropic_model: ClaudeModel,
 ) -> None:
-    slug = await derive_workflow_id_from_llm("Build a simple todo list app", anthropic_provider)
+    slug = await derive_workflow_id_from_llm("Build a simple todo list app", anthropic_model)
     assert re.match(r"^[a-z][a-z0-9-]*$", slug), (
         f"Expected a valid slug, got: {slug!r}"
     )
@@ -273,7 +273,7 @@ async def test_anthropic_derive_workflow_id_returns_valid_slug(
 @_ANTHROPIC_SKIP
 @pytest.mark.asyncio
 async def test_anthropic_plan_controller_starts_plan_interview(
-    anthropic_provider: ClaudeModel, tmp_path: Path
+    anthropic_model: ClaudeModel, tmp_path: Path
 ) -> None:
     workflow_id = "live-anthropic-test-start"
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id=workflow_id)
@@ -285,7 +285,7 @@ async def test_anthropic_plan_controller_starts_plan_interview(
     assert state.workflow_id == workflow_id
     assert (adapter.plan_dir / "draft.md").exists()
 
-    result = await anthropic_provider.complete(
+    result = await anthropic_model.complete(
         [Message(role="user", content="Confirm: plan interview started correctly.")]
     )
     assert isinstance(result, CompletionResult)

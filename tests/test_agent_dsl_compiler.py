@@ -57,9 +57,9 @@ def test_compile_primary_and_subagent_creates_runnable_world() -> None:
             metadata={"team": "research"},
         ),
     }
-    provider_factory = _ProviderFactorySpy()
+    model_factory = _ProviderFactorySpy()
 
-    primary_entity_id, world = compile_agent_specs(specs, provider_factory)
+    primary_entity_id, world = compile_agent_specs(specs, model_factory)
 
     assert isinstance(world, World)
     assert int(primary_entity_id) > 0
@@ -85,7 +85,7 @@ def test_compile_primary_and_subagent_creates_runnable_world() -> None:
     }
     assert researcher.system_prompt == "Research system prompt"
 
-    assert provider_factory.calls == [
+    assert model_factory.calls == [
         ("gpt-main", "Primary system prompt"),
         ("gpt-research", "Research system prompt"),
     ]
@@ -378,7 +378,7 @@ def test_compiler_subagent_registry_maps_three_subagents_correctly() -> None:
 
 
 def test_compiler_subagent_registry_keeps_distinct_provider_objects() -> None:
-    """Validate each compiled subagent config keeps its own provider object."""
+    """Validate each compiled subagent config keeps its own model object."""
     from ecs_agent.dsl.compiler import compile_agent_specs
 
     specs = {
@@ -507,7 +507,7 @@ def test_compiler_missing_prompt_file_reference_raises_file_not_found_error(
 
 
 def test_compiler_provider_factory_invalid_primary_model_error_propagates() -> None:
-    """Validate primary provider factory errors surface as compile-time failures."""
+    """Validate primary model factory errors surface as compile-time failures."""
     from ecs_agent.dsl.compiler import compile_agent_specs
 
     specs = {
@@ -518,14 +518,14 @@ def test_compiler_provider_factory_invalid_primary_model_error_propagates() -> N
             prompt="Primary",
         )
     }
-    provider_factory = _ProviderFactoryFailOnModel("broken-model")
+    model_factory = _ProviderFactoryFailOnModel("broken-model")
 
     with pytest.raises(RuntimeError, match="provider factory failed"):
-        compile_agent_specs(specs, provider_factory)
+        compile_agent_specs(specs, model_factory)
 
 
 def test_compiler_provider_factory_invalid_subagent_model_error_propagates() -> None:
-    """Validate subagent provider factory errors fail compilation after primary mapping."""
+    """Validate subagent model factory errors fail compilation after primary mapping."""
     from ecs_agent.dsl.compiler import compile_agent_specs
 
     specs = {
@@ -537,12 +537,12 @@ def test_compiler_provider_factory_invalid_subagent_model_error_propagates() -> 
             prompt="S",
         ),
     }
-    provider_factory = _ProviderFactoryFailOnModel("broken-subagent")
+    model_factory = _ProviderFactoryFailOnModel("broken-subagent")
 
     with pytest.raises(RuntimeError, match="provider factory failed"):
-        compile_agent_specs(specs, provider_factory)
+        compile_agent_specs(specs, model_factory)
 
-    assert provider_factory.calls == [("gpt-main", "P"), ("broken-subagent", "S")]
+    assert model_factory.calls == [("gpt-main", "P"), ("broken-subagent", "S")]
 
 
 def test_compiler_world_state_consistency_after_repeated_compilation() -> None:

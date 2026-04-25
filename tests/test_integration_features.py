@@ -59,7 +59,7 @@ from ecs_agent.types import (
 
 @pytest.mark.skipif(not os.environ.get("LLM_API_KEY"), reason="LLM_API_KEY not set")
 async def test_responses_api_with_real_llm() -> None:
-    """Test Responses API with real LLM provider.
+    """Test Responses API with real LLM model.
 
     Note: DashScope may not support Responses API, so this test handles both
     Responses API and fallback to Chat Completions.
@@ -72,8 +72,8 @@ async def test_responses_api_with_real_llm() -> None:
 
     world = World()
 
-    # Create provider with Responses API enabled (will fallback to Chat Completions if not supported)
-    provider = OpenAIModel(
+    # Create model with Responses API enabled (will fallback to Chat Completions if not supported)
+    model = OpenAIModel(
         config=ProviderConfig(
             provider_id="openai",
             base_url=base_url,
@@ -84,7 +84,7 @@ async def test_responses_api_with_real_llm() -> None:
     )
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(model=provider))
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(
@@ -111,8 +111,8 @@ async def test_tree_conversation_with_reasoning_system() -> None:
     """Test ConversationTreeComponent with ReasoningSystem integration."""
     world = World()
 
-    # Create provider with deterministic response
-    provider = FakeModel(
+    # Create model with deterministic response
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="Test response 1")
@@ -146,7 +146,7 @@ async def test_tree_conversation_with_reasoning_system() -> None:
         ),
     )
 
-    world.add_component(entity, LLMComponent(model=provider))
+    world.add_component(entity, LLMComponent(model=model))
 
     # Add flat conversation for reasoning system
     world.add_component(
@@ -211,7 +211,7 @@ None
         world = World()
         entity = world.create_entity()
 
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(role="assistant", content="I am a test assistant")
@@ -223,7 +223,7 @@ None
         world.add_component(
             entity,
             LLMComponent(
-                model=provider, system_prompt=skill.system_prompt()
+                model=model, system_prompt=skill.system_prompt()
             ),
         )
         world.add_component(
@@ -431,7 +431,7 @@ async def test_subagent_background_stream_events_are_visible_to_parent(
     world.event_bus.subscribe(SubagentStreamDeltaEvent, on_delta)
     world.event_bus.subscribe(SubagentStreamEndEvent, on_end)
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="streamed integration output")
@@ -448,7 +448,7 @@ async def test_subagent_background_stream_events_are_visible_to_parent(
             subagents={
                 "stream-worker": SubagentConfig(
                     name="stream-worker",
-                    model=provider,
+                    model=model,
                     system_prompt="Return one short streamed answer.",
                 )
             }
@@ -502,7 +502,7 @@ async def test_subagent_wait_injects_notification_and_enables_explicit_reads(
     world = World()
     parent = world.create_entity()
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -531,7 +531,7 @@ async def test_subagent_wait_injects_notification_and_enables_explicit_reads(
             subagents={
                 "wait-worker": SubagentConfig(
                     name="wait-worker",
-                    model=provider,
+                    model=model,
                     system_prompt="Return a wrapped background result.",
                 )
             }
@@ -763,7 +763,7 @@ async def test_enhanced_logging_in_system_execution() -> None:
     world = World()
     entity = world.create_entity()
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="Logged response")
@@ -771,7 +771,7 @@ async def test_enhanced_logging_in_system_execution() -> None:
         ]
     )
 
-    world.add_component(entity, LLMComponent(model=provider))
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="Test")]),

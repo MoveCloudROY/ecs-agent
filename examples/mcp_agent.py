@@ -85,7 +85,7 @@ async def main() -> None:
     skill = MCPSkillAdapter(mock_client, server_name="weather-service")  # type: ignore[arg-type]
 
     # 3. Setup Agent and Systems
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -108,7 +108,7 @@ async def main() -> None:
         ]
     )
 
-    world.add_component(agent, LLMComponent(model=provider))
+    world.add_component(agent, LLMComponent(model=model))
     world.add_component(
         agent,
         ConversationComponent(

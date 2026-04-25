@@ -1,4 +1,4 @@
-"""Tests for OpenAI-compatible provider."""
+"""Tests for OpenAI-compatible model."""
 
 import json
 import pytest
@@ -35,14 +35,14 @@ def _openai_config(
 @pytest.mark.asyncio
 async def test_constructor_instantiation() -> None:
     """Test OpenAIModel can be instantiated with required parameters."""
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(
             api_key="test-key",
             base_url="https://test.openai.com/v1",
         ),
         model="gpt-4o-mini",
     )
-    assert provider is not None
+    assert model is not None
 
 
 @pytest.mark.asyncio
@@ -58,14 +58,14 @@ async def test_request_format(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(
             api_key="test-key",
             base_url="https://test.openai.com/v1",
         ),
         model="gpt-4o-mini",
     )
-    provider._client = mock_client
+    model._client = mock_client
 
     messages = [Message(role="user", content="test message")]
     tools = [
@@ -76,7 +76,7 @@ async def test_request_format(monkeypatch: pytest.MonkeyPatch) -> None:
         )
     ]
 
-    await provider.complete(messages, tools)
+    await model.complete(messages, tools)
 
     # Verify POST was called
     assert mock_client.post.called
@@ -120,11 +120,11 @@ async def test_response_parsing_content_and_usage(
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
-    provider._client = mock_client
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
 
     messages = [Message(role="user", content="test")]
-    result = await provider.complete(messages)
+    result = await model.complete(messages)
 
     assert result.message.role == "assistant"
     assert result.message.content == "Hello world"
@@ -165,11 +165,11 @@ async def test_response_parsing_tool_calls(monkeypatch: pytest.MonkeyPatch) -> N
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
-    provider._client = mock_client
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
 
     messages = [Message(role="user", content="What's the weather?")]
-    result = await provider.complete(messages)
+    result = await model.complete(messages)
 
     assert result.message.role == "assistant"
     assert result.message.content == ""
@@ -195,13 +195,13 @@ async def test_http_error_handling(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
-    provider._client = mock_client
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
 
     messages = [Message(role="user", content="test")]
 
     with pytest.raises(httpx.HTTPStatusError):
-        await provider.complete(messages)
+        await model.complete(messages)
 
 
 @pytest.mark.asyncio
@@ -221,13 +221,13 @@ async def test_http_error_prints_response_body(
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
-    provider._client = mock_client
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
 
     messages = [Message(role="user", content="test")]
 
     with pytest.raises(httpx.HTTPStatusError):
-        await provider.complete(messages)
+        await model.complete(messages)
 
     captured = capsys.readouterr()
     assert "400" in captured.out
@@ -242,13 +242,13 @@ async def test_network_error_prints_full_message(
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.side_effect = httpx.ConnectError("Connection refused")
 
-    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
-    provider._client = mock_client
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
 
     messages = [Message(role="user", content="test")]
 
     with pytest.raises(httpx.ConnectError):
-        await provider.complete(messages)
+        await model.complete(messages)
 
     captured = capsys.readouterr()
     assert "Connection refused" in captured.out
@@ -267,11 +267,11 @@ async def test_request_without_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
-    provider._client = mock_client
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
 
     messages = [Message(role="user", content="test")]
-    await provider.complete(messages, tools=None)
+    await model.complete(messages, tools=None)
 
     # Verify tools field is not included in request when None
     call_args = mock_client.post.call_args
@@ -282,8 +282,8 @@ async def test_request_without_tools(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.asyncio
 async def test_protocol_compliance() -> None:
     """Test OpenAIModel satisfies LLMModel Protocol."""
-    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
-    assert isinstance(provider, LLMModel)
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    assert isinstance(model, LLMModel)
 
 
 @pytest.mark.asyncio
@@ -298,8 +298,8 @@ async def test_tool_call_messages_serialize_content_as_null() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
-    provider._client = mock_client
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
 
     messages = [
         Message(role="user", content="compare cities"),
@@ -312,7 +312,7 @@ async def test_tool_call_messages_serialize_content_as_null() -> None:
         ),
         Message(role="tool", content="Sunny 28C", tool_call_id="call_1"),
     ]
-    await provider.complete(messages)
+    await model.complete(messages)
 
     body = mock_client.post.call_args[1]["json"]
     assistant_msg = body["messages"][1]
@@ -338,8 +338,8 @@ async def test_assistant_message_with_content_and_tool_calls_preserves_content()
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
-    provider._client = mock_client
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
 
     messages = [
         Message(
@@ -350,7 +350,7 @@ async def test_assistant_message_with_content_and_tool_calls_preserves_content()
             ],
         ),
     ]
-    await provider.complete(messages)
+    await model.complete(messages)
 
     body = mock_client.post.call_args[1]["json"]
     assistant_msg = body["messages"][0]
@@ -370,8 +370,8 @@ async def test_convert_messages_serializes_tool_call_arguments_as_json_string() 
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
-    provider._client = mock_client
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
 
     # Create message with tool call containing dict arguments
     message = Message(
@@ -386,7 +386,7 @@ async def test_convert_messages_serializes_tool_call_arguments_as_json_string() 
         ],
     )
 
-    await provider.complete([message])
+    await model.complete([message])
 
     # Verify the request was made with JSON-serialized arguments
     body = mock_client.post.call_args[1]["json"]
@@ -411,10 +411,10 @@ async def test_multimodal_chat_request_maps_parts_to_chat_content() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
-    provider._client = mock_client
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
 
-    await provider.complete(
+    await model.complete(
         [
             Message(
                 role="user",
@@ -459,12 +459,12 @@ async def test_multimodal_responses_request_maps_image_and_file_parts() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    provider._client = mock_client
+    model._client = mock_client
 
-    await provider.complete(
+    await model.complete(
         [
             Message(
                 role="user",
@@ -507,11 +507,11 @@ async def test_openai_chat_adapter_delivers_system_prompt_containing_summary_xml
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
-    provider._client = mock_client
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
 
     summary_xml = "<chat_history_summary>Summary: X happened</chat_history_summary>"
-    await provider.complete(
+    await model.complete(
         [
             Message(role="system", content=f"You are helpful.\n\n{summary_xml}"),
             Message(role="user", content="Hello"),
@@ -544,13 +544,13 @@ async def test_openai_responses_adapter_delivers_summary_xml_in_instructions() -
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    provider._client = mock_client
+    model._client = mock_client
 
     summary_xml = "<chat_history_summary>Summary: X happened</chat_history_summary>"
-    await provider.complete(
+    await model.complete(
         [
             Message(role="system", content=f"You are helpful.\n\n{summary_xml}"),
             Message(role="user", content="Hello"),
@@ -603,12 +603,12 @@ async def test_vision_responses_output_parses_parts_into_message_parts() -> None
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    provider._client = mock_client
+    model._client = mock_client
 
-    result = await provider.complete([Message(role="user", content="vision")])
+    result = await model.complete([Message(role="user", content="vision")])
     assert result.message.content == "Found details."
     assert result.message.parts is not None
     assert isinstance(result.message.parts[0], ImageUrlPart)
@@ -619,15 +619,15 @@ async def test_vision_responses_output_parses_parts_into_message_parts() -> None
 async def test_invalid_api_format_string_raises_value_error() -> None:
     config = _openai_config(api_key="test-key")
     config.api_format = "invalid_api_format"
-    provider = OpenAIModel(config=config)
+    model = OpenAIModel(config=config)
 
     with pytest.raises(ValueError, match="Unsupported OpenAI provider api_format"):
-        await provider.complete([Message(role="user", content="hello")])
+        await model.complete([Message(role="user", content="hello")])
 
 
 @pytest.mark.asyncio
 async def test_unsupported_api_format_raises_clear_error() -> None:
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(
             api_key="test-key",
             api_format=ApiFormat.OPENAI_EMBEDDINGS,
@@ -635,4 +635,4 @@ async def test_unsupported_api_format_raises_clear_error() -> None:
     )
 
     with pytest.raises(ValueError, match="Unsupported OpenAI provider api_format"):
-        await provider.complete([Message(role="user", content="hello")])
+        await model.complete([Message(role="user", content="hello")])

@@ -60,7 +60,7 @@ class PricingCatalog:
         self.version = version
 
     def get_pricing(self, provider_id: str, model: str) -> ModelPricing | None:
-        provider_models = self._catalog.get(provider_id)
-        if provider_models is None:
+        model_models = self._catalog.get(provider_id)
+        if model_models is None:
             return None
-        return provider_models.get(model)
+        return model_models.get(model)

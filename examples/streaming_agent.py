@@ -2,7 +2,7 @@
 
 This example shows how to use the streaming feature:
 - Creates an OpenAIModel (with FakeModel fallback for testing)
-- Calls provider.complete(messages, stream=True) to get streaming deltas
+- Calls model.complete(messages, stream=True) to get streaming deltas
 - Iterates AsyncIterator[StreamDelta] and prints content chunks in real-time
 - Shows final delta with usage stats (prompt_tokens, completion_tokens, total_tokens)
 
@@ -11,7 +11,7 @@ Usage:
   2. Run: uv run python examples/streaming_agent.py
 
 Environment variables:
-  LLM_API_KEY   — API key for the LLM provider (required, can be fake for testing)
+  LLM_API_KEY   — API key for the LLM model (required, can be fake for testing)
   LLM_BASE_URL  — Base URL for the API (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
   LLM_MODEL     — Model name (default: qwen3.5-plus)
 
@@ -44,17 +44,17 @@ async def main() -> None:
     )
     model = os.environ.get("LLM_MODEL", "qwen3.5-plus")
 
-    # --- Create LLM provider ---
+    # --- Create LLM model ---
     if api_key:
         print(f"Using OpenAIModel with model: {model}")
         print(f"Base URL: {base_url}")
-        provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
         print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
         print()
-        # Create a fake provider that streams character-by-character
-        provider = FakeModel(
+        # Create a fake model that streams character-by-character
+        model = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -80,8 +80,8 @@ async def main() -> None:
     print("Streaming response:")
     print("-" * 60)
 
-    # Call provider with streaming enabled
-    delta_iterator = await provider.complete(messages, stream=True)
+    # Call model with streaming enabled
+    delta_iterator = await model.complete(messages, stream=True)
 
     # Track final delta info
     final_delta = None

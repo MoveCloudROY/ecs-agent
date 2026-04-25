@@ -1,4 +1,4 @@
-"""Example demonstrating PermissionComponent and PermissionSystem with dual-mode LLM provider.
+"""Example demonstrating PermissionComponent and PermissionSystem with dual-mode LLM model.
 
 This script shows how to restrict an agent's access to specific tools using
 a whitelist/blacklist policy. Supports both FakeModel (no API key) and
@@ -24,23 +24,23 @@ from ecs_agent.types import CompletionResult, Message, ToolCall, ToolSchema
 
 
 async def main() -> None:
-    # --- Read environment variables for LLM provider ---
+    # --- Read environment variables for LLM model ---
     api_key = os.environ.get("LLM_API_KEY", "")
     base_url = os.environ.get(
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
     model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
     
-    # --- Create LLM provider ---
+    # --- Create LLM model ---
     if api_key:
         print(f"Using OpenAIModel with model: {model}")
         print(f"Base URL: {base_url}")
-        provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
         print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
         print()
-        provider = FakeModel([])
+        model = FakeModel([])
     
     world = World()
 
@@ -69,7 +69,7 @@ async def main() -> None:
     world.add_component(agent, PermissionComponent(denied_tools=["dangerous_tool"]))
 
     # Setup conversation and LLM
-    world.add_component(agent, LLMComponent(model=provider,
+    world.add_component(agent, LLMComponent(model=model,
 ))
     world.add_component(agent, ConversationComponent(messages=[]))
 

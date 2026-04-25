@@ -44,7 +44,7 @@ async def test_non_streaming_emits_single_llm_invocation_event_with_active_model
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     world = World()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="done"),
@@ -66,7 +66,7 @@ async def test_non_streaming_emits_single_llm_invocation_event_with_active_model
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="hello")]),
@@ -104,7 +104,7 @@ async def test_non_streaming_emits_single_llm_invocation_event_with_active_model
 @pytest.mark.asyncio
 async def test_streaming_success_emits_single_complete_llm_invocation_event() -> None:
     world = World()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="AB"),
@@ -116,7 +116,7 @@ async def test_streaming_success_emits_single_complete_llm_invocation_event() ->
 
     entity_id = world.create_entity()
     world.add_component(
-        entity_id, LLMComponent(model=provider)
+        entity_id, LLMComponent(model=model)
     )
     world.add_component(
         entity_id,
@@ -145,7 +145,7 @@ async def test_interrupted_stream_emits_single_partial_or_unknown_llm_invocation
     None
 ):
     world = World()
-    provider = _CancelledStreamingFakeModel(
+    model = _CancelledStreamingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="ignored"),
@@ -157,7 +157,7 @@ async def test_interrupted_stream_emits_single_partial_or_unknown_llm_invocation
 
     entity_id = world.create_entity()
     world.add_component(
-        entity_id, LLMComponent(model=provider)
+        entity_id, LLMComponent(model=model)
     )
     world.add_component(
         entity_id,

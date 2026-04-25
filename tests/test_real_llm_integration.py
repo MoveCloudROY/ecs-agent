@@ -1,16 +1,16 @@
 """Env-gated real-LLM integration tests for runtime control features.
 
 Tests MUST skip gracefully when LLM_API_KEY is not set (CI/local default deterministic).
-Tests MUST pass when LLM_API_KEY is present (validates real provider behavior).
+Tests MUST pass when LLM_API_KEY is present (validates real model behavior).
 
 Environment Variables (required for runtime control tests):
-    LLM_API_KEY: DashScope API key (or any OpenAI-compatible provider)
-    LLM_BASE_URL: Base URL for the LLM provider (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
+    LLM_API_KEY: DashScope API key (or any OpenAI-compatible model)
+    LLM_BASE_URL: Base URL for the LLM model (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
     LLM_MODEL: Model identifier (default: qwen3.5-flash)
     LLM_MODEL_ALTERNATIVE: Alternative model for switching tests (default: qwen3.5-turbo)
 
 Test Contract:
-    - With LLM_API_KEY set: Runtime control tests execute with real provider.
+    - With LLM_API_KEY set: Runtime control tests execute with real model.
     - Without LLM_API_KEY: Runtime control tests skip gracefully (no failures).
 """
 
@@ -98,10 +98,10 @@ def _json_events(output: str) -> list[dict[str, object]]:
 async def test_real_openai_streaming_produces_deltas() -> None:
     """Streaming ReasoningSystem with real OpenAIModel emits StreamDelta events."""
     world = World()
-    provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(model=provider))
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(
@@ -140,14 +140,14 @@ async def test_real_openai_streaming_produces_deltas() -> None:
 @pytest.mark.asyncio
 async def test_real_openai_provider_non_streaming() -> None:
     """OpenAIModel via DashScope returns valid CompletionResult."""
-    provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     messages = [
         Message(role="system", content="You are a helpful assistant."),
         Message(role="user", content="Say hello in 5 words or less"),
     ]
 
-    result = await provider.complete(messages, stream=False)
+    result = await model.complete(messages, stream=False)
 
     assert isinstance(result, CompletionResult), "Expected CompletionResult"
     assert result.message.role == "assistant"
@@ -159,14 +159,14 @@ async def test_real_openai_provider_non_streaming() -> None:
 @pytest.mark.asyncio
 async def test_real_openai_provider_streaming() -> None:
     """OpenAIModel streaming returns valid StreamDelta sequence."""
-    provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     messages = [
         Message(role="system", content="You are a helpful assistant."),
         Message(role="user", content="Say hello in 5 words or less"),
     ]
 
-    stream_result = await provider.complete(messages, stream=True)
+    stream_result = await model.complete(messages, stream=True)
 
     assert not isinstance(stream_result, CompletionResult), (
         "Expected async iterator, not CompletionResult"
@@ -188,10 +188,10 @@ async def test_real_openai_provider_streaming() -> None:
 async def test_real_full_agent_loop_streaming() -> None:
     """Full World + ReasoningSystem + StreamingComponent runs to completion."""
     world = World()
-    provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(model=provider))
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(
@@ -230,10 +230,10 @@ async def test_real_full_agent_loop_streaming() -> None:
 async def test_real_multi_turn_conversation() -> None:
     """Test multi-turn conversation with real LLM maintaining context."""
     world = World()
-    provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(model=provider))
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(
@@ -268,12 +268,12 @@ async def test_real_multi_turn_conversation() -> None:
 @pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
 @pytest.mark.asyncio
 async def test_real_llm_reasoning_logging_contracts(capsys: object) -> None:
-    """Verify structured logging contracts when ReasoningSystem uses real LLM provider."""
+    """Verify structured logging contracts when ReasoningSystem uses real LLM model."""
     world = World()
-    provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(model=provider))
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(
@@ -325,10 +325,10 @@ async def test_real_llm_reasoning_logging_contracts(capsys: object) -> None:
 async def test_real_llm_streaming_logging_metadata(capsys: object) -> None:
     """Verify streaming mode logs contain correct metadata fields."""
     world = World()
-    provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(model=provider))
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(
@@ -370,12 +370,12 @@ async def test_real_llm_streaming_logging_metadata(capsys: object) -> None:
 @pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
 @pytest.mark.asyncio
 async def test_real_llm_error_logging_contracts(capsys: object) -> None:
-    """Verify error logging when LLM provider fails (bad API key)."""
+    """Verify error logging when LLM model fails (bad API key)."""
     world = World()
-    provider = _openai_provider(api_key="sk-invalid-key-for-testing", base_url=BASE_URL, model=MODEL)
+    model = _openai_provider(api_key="sk-invalid-key-for-testing", base_url=BASE_URL, model=MODEL)
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(model=provider))
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="Hello")]),
@@ -412,7 +412,7 @@ async def test_real_llm_error_logging_contracts(capsys: object) -> None:
 
 
 def get_real_provider() -> OpenAIModel:
-    """Construct OpenAI-compatible provider from env vars."""
+    """Construct OpenAI-compatible model from env vars."""
     api_key = os.getenv("LLM_API_KEY")
     if not api_key:
         pytest.skip("LLM_API_KEY not set")
@@ -426,8 +426,8 @@ def get_real_provider() -> OpenAIModel:
 
 
 class RecordingProvider:
-    def __init__(self, provider: OpenAIModel) -> None:
-        self._provider = provider
+    def __init__(self, model: OpenAIModel) -> None:
+        self._provider = model
         self.last_messages: list[Message] = []
 
     @property
@@ -457,10 +457,10 @@ async def test_real_llm_prompt_keyword_injection_smoke() -> None:
     runner = Runner()
 
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
-    provider = RecordingProvider(get_real_provider())
+    model = RecordingProvider(get_real_provider())
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(model=provider))
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(
@@ -525,9 +525,9 @@ async def test_real_llm_prompt_keyword_injection_smoke() -> None:
 
     await runner.run(world, max_ticks=1)
 
-    assert len(provider.last_messages) >= 1
-    outbound_system = provider.last_messages[0]
-    outbound_user = provider.last_messages[-1]
+    assert len(model.last_messages) >= 1
+    outbound_system = model.last_messages[0]
+    outbound_user = model.last_messages[-1]
     assert outbound_system.role == "system"
     assert outbound_system.content == (
         "# Markdown Linked Prompt\n\n"
@@ -564,10 +564,10 @@ async def test_real_llm_prompt_event_injection_smoke() -> None:
     runner = Runner()
 
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
-    provider = RecordingProvider(get_real_provider())
+    model = RecordingProvider(get_real_provider())
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(model=provider))
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(
@@ -616,8 +616,8 @@ async def test_real_llm_prompt_event_injection_smoke() -> None:
 
     await runner.run(world, max_ticks=1)
 
-    assert len(provider.last_messages) >= 1
-    outbound_user = provider.last_messages[-1]
+    assert len(model.last_messages) >= 1
+    outbound_user = model.last_messages[-1]
     assert outbound_user.role == "user"
     assert outbound_user.content.startswith(
         "[PROMPT_INJECT:summary]\nEVENT_TEMPLATE_BLOCK\n\n"
@@ -639,15 +639,14 @@ async def test_real_llm_prompt_event_injection_smoke() -> None:
 @pytest.mark.skipif(os.getenv("LLM_API_KEY") is None, reason="LLM_API_KEY not set")
 @pytest.mark.asyncio
 async def test_real_llm_model_switching() -> None:
-    """Validate pending_model switch affects real provider responses."""
+    """Validate pending_model switch affects real model responses."""
     world = World()
     runner = Runner()
 
-    provider = get_real_provider()
-    model = os.getenv("LLM_MODEL", "qwen3.5-flash")
+    model = get_real_provider()
 
     entity = world.create_entity()
-    llm = LLMComponent(model=provider)
+    llm = LLMComponent(model=model)
     world.add_component(entity, llm)
     world.add_component(
         entity,
@@ -690,11 +689,10 @@ async def test_real_llm_graceful_interruption() -> None:
     world = World()
     runner = Runner()
 
-    provider = get_real_provider()
-    model = os.getenv("LLM_MODEL", "qwen3.5-flash")
+    model = get_real_provider()
 
     entity = world.create_entity()
-    llm = LLMComponent(model=provider)
+    llm = LLMComponent(model=model)
     world.add_component(entity, llm)
     world.add_component(
         entity,
@@ -725,15 +723,14 @@ async def test_real_llm_graceful_interruption() -> None:
 @pytest.mark.skipif(os.getenv("LLM_API_KEY") is None, reason="LLM_API_KEY not set")
 @pytest.mark.asyncio
 async def test_real_llm_conversation_tree_revert() -> None:
-    """Validate revert affects next generation context with real provider."""
+    """Validate revert affects next generation context with real model."""
     world = World()
     runner = Runner()
 
-    provider = get_real_provider()
-    model = os.getenv("LLM_MODEL", "qwen3.5-flash")
+    model = get_real_provider()
 
     entity = world.create_entity()
-    llm = LLMComponent(model=provider)
+    llm = LLMComponent(model=model)
     world.add_component(entity, llm)
 
     tree = ConversationTreeComponent()
@@ -773,15 +770,14 @@ async def test_real_llm_conversation_tree_revert() -> None:
 @pytest.mark.skipif(os.getenv("LLM_API_KEY") is None, reason="LLM_API_KEY not set")
 @pytest.mark.asyncio
 async def test_real_llm_complete_runtime_workflow() -> None:
-    """Integration test: All runtime control features with real provider."""
+    """Integration test: All runtime control features with real model."""
     world = World()
     runner = Runner()
 
-    provider = get_real_provider()
-    model = os.getenv("LLM_MODEL", "qwen3.5-flash")
+    model = get_real_provider()
 
     entity = world.create_entity()
-    llm = LLMComponent(model=provider)
+    llm = LLMComponent(model=model)
     world.add_component(entity, llm)
 
     tree = ConversationTreeComponent()
@@ -843,16 +839,16 @@ async def test_real_llm_complete_runtime_workflow() -> None:
 async def test_real_provider_smoke_with_dashscope_defaults() -> None:
     """Smoke test: OpenAIModel with DashScope-compatible endpoints returns non-empty response.
 
-    This test validates that the provider can successfully communicate with
+    This test validates that the model can successfully communicate with
     DashScope (or any OpenAI-compatible API) using environment defaults.
     """
-    provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     messages = [
         Message(role="user", content="Say hello"),
     ]
 
-    result = await provider.complete(messages, stream=False)
+    result = await model.complete(messages, stream=False)
 
     assert isinstance(result, CompletionResult), "Expected CompletionResult"
     assert result.message.role == "assistant", "Expected assistant role"
@@ -934,7 +930,7 @@ async def test_real_llm_builtin_tools_read_file_smoke(tmp_path: Any) -> None:
     note = tmp_path / "note.txt"
     note.write_text("one\ntwo\nthree\n", encoding="utf-8")
 
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -959,7 +955,7 @@ async def test_real_llm_builtin_tools_read_file_smoke(tmp_path: Any) -> None:
 
     world = World()
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(model=provider))
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="Read note.txt")]),
@@ -982,8 +978,8 @@ async def test_real_llm_builtin_tools_read_file_smoke(tmp_path: Any) -> None:
     assert conv.messages[-1].role == "assistant"
     assert len(conv.messages[-1].content) > 0
 
-    assert len(provider.recorded_messages) >= 2
-    second_turn_messages = provider.recorded_messages[1]
+    assert len(model.recorded_messages) >= 2
+    second_turn_messages = model.recorded_messages[1]
     tool_messages = [msg for msg in second_turn_messages if msg.role == "tool"]
     assert len(tool_messages) >= 1
     assert tool_messages[-1].content.startswith("1#")
@@ -1102,7 +1098,7 @@ async def test_real_llm_agent_reads_and_reports_file_content(tmp_path: Any) -> N
 
 
 class _CapturingProvider:
-    """Wraps a real provider and captures the outbound messages."""
+    """Wraps a real model and captures the outbound messages."""
 
     def __init__(self, inner: Any) -> None:
         self._inner = inner
@@ -1128,7 +1124,7 @@ class _CapturingProvider:
 @pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
 @pytest.mark.asyncio
 async def test_real_llm_rendered_system_prompt_reaches_provider() -> None:
-    """Verify RenderedSystemPromptComponent.text reaches the provider as system message."""
+    """Verify RenderedSystemPromptComponent.text reaches the model as system message."""
     from ecs_agent.components import ToolRegistryComponent
     from ecs_agent.components.definitions import RenderedSystemPromptComponent
     from ecs_agent.prompts.contracts import SystemPromptConfigSpec, PromptTemplateSource
@@ -1451,7 +1447,7 @@ async def test_real_subagent_child_world_name_in_logs(
 
     configure_logging(json_output=True, level="DEBUG")
 
-    provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     # Parent world — named
     world = World(name="test-parent")
@@ -1459,7 +1455,7 @@ async def test_real_subagent_child_world_name_in_logs(
     world.add_component(
         manager,
         LLMComponent(
-            model=provider,
+            model=model,
             
             system_prompt=(
                 "You are a helpful assistant. "
@@ -1485,7 +1481,7 @@ async def test_real_subagent_child_world_name_in_logs(
             subagents={
                 "echo": SubagentConfig(
                     name="echo",
-                    model=provider,
+                    model=model,
                     
                     system_prompt="Echo back the user's message verbatim.",
                     max_ticks=3,
@@ -1552,12 +1548,12 @@ async def test_real_subagent_rendered_prompt() -> None:
     """Child world SystemPromptRenderSystem renders the configured system prompt.
 
     Directly assembles a child world via SubagentSystem._assemble_child_world,
-    adds a user message, runs the child for one tick with a capturing provider,
+    adds a user message, runs the child for one tick with a capturing model,
     and verifies that:
     - RenderedSystemPromptComponent is present on the child entity
     - LLMComponent.system_prompt matches the rendered text
     - The configured system_prompt string is present in the rendered text
-    - The capturing provider received the rendered text as the system message
+    - The capturing model received the rendered text as the system message
     """
     from ecs_agent.components.definitions import RenderedSystemPromptComponent
     from ecs_agent.systems.subagent import SubagentSystem
@@ -1588,7 +1584,7 @@ name="rendered-prompt-test",
         parent_world, parent_entity, config
     )
 
-    # Give the child a user message so ReasoningSystem actually calls the provider.
+    # Give the child a user message so ReasoningSystem actually calls the model.
     child_conv = child_world.get_component(child_entity_id, ConversationComponent)
     assert child_conv is not None, "Child entity missing ConversationComponent"
     child_conv.messages.append(Message(role="user", content="Say hello briefly."))
@@ -1610,11 +1606,11 @@ name="rendered-prompt-test",
     )
 
     assert len(capturing.captured_messages) >= 1, (
-        "Capturing provider received no messages — ReasoningSystem did not run"
+        "Capturing model received no messages — ReasoningSystem did not run"
     )
     sys_msg = capturing.captured_messages[0]
     assert sys_msg.role == "system", (
-        f"First provider message has role {sys_msg.role!r}, expected 'system'"
+        f"First model message has role {sys_msg.role!r}, expected 'system'"
     )
     assert sys_msg.content == rendered.text, (
         "Provider system message does not match RenderedSystemPromptComponent.text"

@@ -44,7 +44,7 @@ def _build_world(
     workspace = tmp_path / "workspace"
 
     world = World()
-    provider = _make_provider(live_api_key)
+    model = _make_provider(live_api_key)
     agent = world.create_entity()
 
     skill = BuiltinToolsSkill().bind_workspace(str(workspace))
@@ -57,7 +57,7 @@ def _build_world(
     world.add_component(
         agent,
         LLMComponent(
-            model=provider,
+            model=model,
             
             system_prompt=(
                 "You are a helpful assistant with access to file and shell tools. "

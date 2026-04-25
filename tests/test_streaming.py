@@ -80,10 +80,10 @@ async def test_non_streaming_backward_compatibility() -> None:
     mock_client.post.return_value = mock_response
     mock_client.stream = Mock()
 
-    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
-    provider._client = mock_client
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
 
-    result = await provider.complete(
+    result = await model.complete(
         [Message(role="user", content="hello")], stream=False
     )
 
@@ -105,10 +105,10 @@ async def test_streaming_returns_stream_delta_objects() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
-    provider._client = mock_client
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
 
-    stream_iter = await provider.complete(
+    stream_iter = await model.complete(
         [Message(role="user", content="hello")], stream=True
     )
     deltas = [delta async for delta in stream_iter]
@@ -137,10 +137,10 @@ async def test_streaming_sse_content_chunks() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
-    provider._client = mock_client
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
 
-    stream_iter = await provider.complete(
+    stream_iter = await model.complete(
         [Message(role="user", content="hello")], stream=True
     )
     deltas = [delta async for delta in stream_iter]
@@ -184,10 +184,10 @@ async def test_streaming_preserves_reasoning_content_separately_from_content() -
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
-    provider._client = mock_client
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
 
-    stream_iter = await provider.complete(
+    stream_iter = await model.complete(
         [Message(role="user", content="hello")], stream=True
     )
     deltas = [delta async for delta in stream_iter]
@@ -245,10 +245,10 @@ async def test_streaming_accumulates_tool_call_chunks_by_index() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
-    provider._client = mock_client
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
 
-    stream_iter = await provider.complete(
+    stream_iter = await model.complete(
         [Message(role="user", content="weather")], stream=True
     )
     deltas = [delta async for delta in stream_iter]
@@ -278,10 +278,10 @@ async def test_done_sentinel_stops_iteration() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
-    provider._client = mock_client
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
 
-    stream_iter = await provider.complete(
+    stream_iter = await model.complete(
         [Message(role="user", content="x")], stream=True
     )
     deltas = [delta async for delta in stream_iter]
@@ -310,12 +310,12 @@ async def test_streaming_timeout_configuration() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(api_key="test-key", base_url="https://test.openai.com/v1")
     )
-    provider._client = mock_client
+    model._client = mock_client
 
-    stream_iter = await provider.complete(
+    stream_iter = await model.complete(
         [Message(role="user", content="x")], stream=True
     )
     _ = [delta async for delta in stream_iter]
@@ -344,16 +344,16 @@ async def test_streaming_timeout_uses_provider_custom_timeout() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(api_key="test-key"),
         connect_timeout=4.0,
         read_timeout=90.0,
         write_timeout=7.0,
         pool_timeout=3.0,
     )
-    provider._client = mock_client
+    model._client = mock_client
 
-    stream_iter = await provider.complete(
+    stream_iter = await model.complete(
         [Message(role="user", content="x")], stream=True
     )
     _ = [delta async for delta in stream_iter]
@@ -378,8 +378,8 @@ async def test_fake_model_streams_response_as_character_deltas() -> None:
     usage = Usage(prompt_tokens=1, completion_tokens=2, total_tokens=3)
     result = CompletionResult(message=msg, usage=usage)
 
-    provider = FakeModel(responses=[result])
-    stream_iter = await provider.complete(
+    model = FakeModel(responses=[result])
+    stream_iter = await model.complete(
         [Message(role="user", content="hello")], stream=True
     )
 
@@ -405,8 +405,8 @@ async def test_fake_model_streaming_with_tool_calls() -> None:
     usage = Usage(prompt_tokens=5, completion_tokens=3, total_tokens=8)
     result = CompletionResult(message=msg, usage=usage)
 
-    provider = FakeModel(responses=[result])
-    stream_iter = await provider.complete(
+    model = FakeModel(responses=[result])
+    stream_iter = await model.complete(
         [Message(role="user", content="search")], stream=True
     )
 
@@ -432,8 +432,8 @@ async def test_fake_model_streaming_empty_content() -> None:
     usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
     result = CompletionResult(message=msg, usage=usage)
 
-    provider = FakeModel(responses=[result])
-    stream_iter = await provider.complete(
+    model = FakeModel(responses=[result])
+    stream_iter = await model.complete(
         [Message(role="user", content="hi")], stream=True
     )
 
@@ -467,14 +467,14 @@ class _ChunkedStreamingFakeModel(FakeModel):
 @pytest.mark.asyncio
 async def test_streaming_partial_content_persisted_on_interrupt_cancel() -> None:
     world = World()
-    provider = _CancelledStreamingFakeModel(
+    model = _CancelledStreamingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="ignored"))
         ]
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="hello")]),
@@ -498,14 +498,14 @@ async def test_streaming_partial_content_persisted_on_interrupt_cancel() -> None
 @pytest.mark.asyncio
 async def test_streaming_partial_reraises_cancelled_after_interrupt_cleanup() -> None:
     world = World()
-    provider = _CancelledStreamingFakeModel(
+    model = _CancelledStreamingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="ignored"))
         ]
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="hello")]),
@@ -524,7 +524,7 @@ async def test_streaming_interrupt_mid_generation_preserves_partial_and_emits_st
     None
 ):
     world = World()
-    provider = _ChunkedStreamingFakeModel(
+    model = _ChunkedStreamingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="ignored"))
         ],
@@ -532,7 +532,7 @@ async def test_streaming_interrupt_mid_generation_preserves_partial_and_emits_st
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="hello")]),
@@ -584,7 +584,7 @@ async def test_streaming_interrupt_component_preexisting_skips_streaming_safely(
     None
 ):
     world = World()
-    provider = _ChunkedStreamingFakeModel(
+    model = _ChunkedStreamingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="ignored"))
         ],
@@ -592,7 +592,7 @@ async def test_streaming_interrupt_component_preexisting_skips_streaming_safely(
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="hello")]),

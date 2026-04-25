@@ -346,13 +346,13 @@ class TestRunner:
     async def test_runner_graceful_interrupt_preserves_partial(
         self, world: World, runner: Runner
     ) -> None:
-        provider = CancelledStreamingFakeModel(
+        model = CancelledStreamingFakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="ignored"))
             ]
         )
         entity_id = world.create_entity()
-        world.add_component(entity_id, LLMComponent(model=provider))
+        world.add_component(entity_id, LLMComponent(model=model))
         world.add_component(
             entity_id,
             ConversationComponent(messages=[Message(role="user", content="Hello")]),
@@ -372,13 +372,13 @@ class TestRunner:
     async def test_runner_cancelled_error_not_misclassified(
         self, world: World, runner: Runner
     ) -> None:
-        provider = CancelledStreamingFakeModel(
+        model = CancelledStreamingFakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="ignored"))
             ]
         )
         entity_id = world.create_entity()
-        world.add_component(entity_id, LLMComponent(model=provider))
+        world.add_component(entity_id, LLMComponent(model=model))
         world.add_component(
             entity_id,
             ConversationComponent(messages=[Message(role="user", content="Hello")]),
@@ -395,13 +395,13 @@ class TestRunner:
     async def test_interruption_component_attached_on_graceful_stop(
         self, world: World, runner: Runner
     ) -> None:
-        provider = CancelledStreamingFakeModel(
+        model = CancelledStreamingFakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="ignored"))
             ]
         )
         entity_id = world.create_entity()
-        world.add_component(entity_id, LLMComponent(model=provider))
+        world.add_component(entity_id, LLMComponent(model=model))
         world.add_component(
             entity_id,
             ConversationComponent(messages=[Message(role="user", content="Hello")]),
@@ -445,14 +445,14 @@ class TestRunner:
     async def test_runner_graceful_interrupt_mid_stream_component_preserves_partial(
         self, world: World, runner: Runner
     ) -> None:
-        provider = ChunkedStreamingFakeModel(
+        model = ChunkedStreamingFakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="ignored"))
             ],
             chunks=["A", "B", "C"],
         )
         entity_id = world.create_entity()
-        world.add_component(entity_id, LLMComponent(model=provider))
+        world.add_component(entity_id, LLMComponent(model=model))
         world.add_component(
             entity_id,
             ConversationComponent(messages=[Message(role="user", content="Hello")]),
@@ -491,13 +491,13 @@ class TestRunner:
     async def test_reasoning_complete_stops_runner_end_of_tick_without_cleanup(
         self, world: World, runner: Runner
     ) -> None:
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="done")),
             ]
         )
         entity_id = world.create_entity()
-        world.add_component(entity_id, LLMComponent(model=provider))
+        world.add_component(entity_id, LLMComponent(model=model))
         world.add_component(
             entity_id,
             ConversationComponent(messages=[Message(role="user", content="hello")]),
@@ -523,7 +523,7 @@ class TestRunner:
     async def test_terminal_cleanup_prevents_premature_stop_on_reasoning_complete(
         self, world: World, runner: Runner
     ) -> None:
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="done")),
                 CompletionResult(message=Message(role="assistant", content="done")),
@@ -531,7 +531,7 @@ class TestRunner:
             ]
         )
         entity_id = world.create_entity()
-        world.add_component(entity_id, LLMComponent(model=provider))
+        world.add_component(entity_id, LLMComponent(model=model))
         world.add_component(
             entity_id,
             ConversationComponent(messages=[Message(role="user", content="hello")]),

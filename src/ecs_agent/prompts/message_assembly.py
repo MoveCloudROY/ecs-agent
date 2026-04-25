@@ -1,4 +1,4 @@
-"""Canonical message assembly for LLM provider calls."""
+"""Canonical message assembly for LLM model calls."""
 
 from __future__ import annotations
 
@@ -209,7 +209,7 @@ def assemble_messages(
     keyword_registry: PromptRegistry | None = None,
     trigger_specs: list[TriggerSpec] | None = None,
 ) -> list[Message]:
-    """Assemble provider-call messages with stable ordering.
+    """Assemble model-call messages with stable ordering.
 
     Ordering is always:
     1) optional system prompt
@@ -275,7 +275,7 @@ def prepare_outbound_messages(
     current_tick: int,
     conversation_override: list[Message] | None = None,
 ) -> tuple[list[Message], PromptContextReservationComponent | None]:
-    """Build the final message list for an LLM provider call.
+    """Build the final message list for an LLM model call.
 
     Args:
         world: The ECS world.

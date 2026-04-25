@@ -11,7 +11,7 @@ It supports dual-mode execution:
 - With ``LLM_API_KEY``: uses ``OpenAIModel`` with a real OpenAI-compatible API
 
 Environment variables for real-LLM mode:
-    LLM_API_KEY   - API key for the OpenAI-compatible provider
+    LLM_API_KEY   - API key for the OpenAI-compatible model
     LLM_BASE_URL  - Base URL (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
     LLM_MODEL     - Model name (default: qwen3.5-flash)
 
@@ -174,7 +174,7 @@ def _subscribe_compaction_events(world: World) -> None:
 
 
 def _create_provider(summary_responses: list[str]) -> LLMModel:
-    """Create a real or fake provider for the demo part."""
+    """Create a real or fake model for the demo part."""
     if os.environ.get("LLM_API_KEY", ""):
         return _create_openai_provider()
     return FakeModel(
@@ -294,7 +294,7 @@ async def part_1_full_history() -> None:
     print("=" * 70)
 
     world = World()
-    provider = _create_provider(
+    model = _create_provider(
         [
             "Summary: The conversation covered ML basics, supervised versus unsupervised learning, neural networks, transformers, and why token counts matter."
         ]
@@ -305,8 +305,7 @@ async def part_1_full_history() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            model=provider,
-            ),
+            model=model,
             system_prompt="You are a helpful assistant.",
         ),
     )
@@ -350,7 +349,7 @@ async def part_2_predrop_then_compact() -> None:
     print("=" * 70)
 
     world = World()
-    provider = _create_provider(
+    model = _create_provider(
         [
             "Summary: The tool-heavy conversation narrowed down training-cost analysis and kept the decision-relevant guidance while dropping bulky tool transcripts first."
         ]
@@ -372,8 +371,7 @@ async def part_2_predrop_then_compact() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            model=provider,
-            ),
+            model=model,
             system_prompt="You are a helpful assistant.",
         ),
     )
@@ -416,7 +414,7 @@ async def part_3_custom_prompt() -> None:
     print("=" * 70)
 
     world = World()
-    provider = _create_provider(
+    model = _create_provider(
         [
             "- ML learns patterns from examples.\n- Neural networks and transformers were compared as layered architectures for representation learning.\n- Token counts matter for context limits, cost, and latency."
         ]
@@ -427,8 +425,7 @@ async def part_3_custom_prompt() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            model=provider,
-            ),
+            model=model,
             system_prompt="You are a helpful assistant.",
         ),
     )
@@ -468,7 +465,7 @@ async def part_4_repeated_compaction() -> None:
     print("=" * 70)
 
     world = World()
-    provider = (
+    model = (
         FakeModel(
             responses=[
                 _make_summary_response("Round 1 summary: user asked about ML basics."),
@@ -489,8 +486,7 @@ async def part_4_repeated_compaction() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            model=provider,
-            ),
+            model=model,
             system_prompt="You are a helpful assistant.",
         ),
     )

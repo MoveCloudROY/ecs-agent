@@ -47,7 +47,7 @@ def _tool_call_reply(tool_name: str, call_id: str, arguments: dict[str, str]) ->
 
 
 def _build_react_world(
-    provider: FakeModel,
+    model: FakeModel,
     plan_steps: list[str],
     tools: dict[str, ToolSchema] | None = None,
     handlers: dict[str, object] | None = None,
@@ -57,7 +57,7 @@ def _build_react_world(
     world = World()
     agent_id = world.create_entity()
 
-    world.add_component(agent_id, LLMComponent(model=provider))
+    world.add_component(agent_id, LLMComponent(model=model))
     world.add_component(agent_id, ConversationComponent(messages=[], max_messages=50))
     world.add_component(agent_id, PlanComponent(steps=plan_steps))
     world.add_component(agent_id, SystemPromptComponent(content=system_prompt))
@@ -90,7 +90,7 @@ def _build_react_world(
 @pytest.mark.asyncio
 async def test_react_pure_reasoning_completes_plan() -> None:
     """Agent follows a 3-step plan with pure reasoning (no tools)."""
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             _reply("Step 1: I should gather information about the weather."),
             _reply("Step 2: Based on the data, it will rain tomorrow."),
@@ -109,7 +109,7 @@ async def test_react_pure_reasoning_completes_plan() -> None:
     async def on_step_completed(event: PlanStepCompletedEvent) -> None:
         completed_events.append(event)
 
-    world, agent_id = _build_react_world(provider, plan_steps)
+    world, agent_id = _build_react_world(model, plan_steps)
     world.event_bus.subscribe(PlanStepCompletedEvent, on_step_completed)
 
     runner = Runner()
@@ -153,7 +153,7 @@ async def test_react_thought_action_observation_loop() -> None:
     Tick 1: PlanningSystem processes step 1 → LLM returns tool_call(search)
     Tick 2: ToolExecutionSystem executes search → result appended to conversation
             PlanningSystem processes step 2 → LLM summarizes search result
-    Tick 3: Plan completed, provider exhausted → TerminalComponent
+    Tick 3: Plan completed, model exhausted → TerminalComponent
     """
     search_results: list[str] = []
 
@@ -161,7 +161,7 @@ async def test_react_thought_action_observation_loop() -> None:
         search_results.append(query)
         return "Python was created by Guido van Rossum in 1991."
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             # Step 1: LLM decides to use the search tool
             _tool_call_reply(
@@ -180,7 +180,7 @@ async def test_react_thought_action_observation_loop() -> None:
     ]
 
     world, agent_id = _build_react_world(
-        provider,
+        model,
         plan_steps,
         tools={
             "search": ToolSchema(
@@ -241,7 +241,7 @@ async def test_react_multiple_steps_with_tools() -> None:
         prices = {"AAPL": "182.50", "GOOGL": "141.80"}
         return f"${prices.get(symbol, 'N/A')}"
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             # Step 1: Look up AAPL price
             _tool_call_reply("get_price", "tc1", {"symbol": "AAPL"}),
@@ -259,7 +259,7 @@ async def test_react_multiple_steps_with_tools() -> None:
     ]
 
     world, agent_id = _build_react_world(
-        provider,
+        model,
         plan_steps,
         tools={
             "get_price": ToolSchema(
@@ -316,7 +316,7 @@ async def test_react_tool_failure_does_not_break_plan() -> None:
     async def flaky_tool(x: str) -> str:
         raise ValueError(f"Connection timeout for {x}")
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             # Step 1: Try to use the flaky tool
             _tool_call_reply("flaky_tool", "tc_flaky", {"x": "data"}),
@@ -331,7 +331,7 @@ async def test_react_tool_failure_does_not_break_plan() -> None:
     ]
 
     world, agent_id = _build_react_world(
-        provider,
+        model,
         plan_steps,
         tools={
             "flaky_tool": ToolSchema(
@@ -385,7 +385,7 @@ async def test_react_events_fire_for_all_steps() -> None:
     async def on_step(event: PlanStepCompletedEvent) -> None:
         events.append(event)
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             _tool_call_reply("calc", "tc1", {"q": "6*7"}),
             _reply("The answer to life is 42."),
@@ -396,7 +396,7 @@ async def test_react_events_fire_for_all_steps() -> None:
     plan_steps = ["Calculate 6*7", "Interpret result", "Report"]
 
     world, agent_id = _build_react_world(
-        provider,
+        model,
         plan_steps,
         tools={
             "calc": ToolSchema(name="calc", description="Calculate", parameters={})
@@ -423,23 +423,23 @@ async def test_react_events_fire_for_all_steps() -> None:
 
 # ---------------------------------------------------------------------------
 # Test 6: ReAct agent terminates correctly after plan completes
-# Verifies: After plan is done, provider exhaustion triggers TerminalComponent
+# Verifies: After plan is done, model exhaustion triggers TerminalComponent
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_react_terminates_after_plan_completion() -> None:
     """Once the plan is completed, PlanningSystem stops issuing LLM calls.
-    The agent terminates via provider exhaustion on the ReasoningSystem side,
+    The agent terminates via model exhaustion on the ReasoningSystem side,
     or simply runs out of work and hits max_ticks.
     """
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             _reply("Done with step 1."),
         ]
     )
 
-    world, agent_id = _build_react_world(provider, ["Single step"])
+    world, agent_id = _build_react_world(model, ["Single step"])
 
     runner = Runner()
     await runner.run(world, max_ticks=5)
@@ -449,7 +449,7 @@ async def test_react_terminates_after_plan_completion() -> None:
     assert plan.completed is True
 
     # Should hit max_ticks since no ReasoningSystem is registered
-    # and plan is already done — no TerminalComponent from provider exhaustion
+    # and plan is already done — no TerminalComponent from model exhaustion
     terminal = world.get_component(agent_id, TerminalComponent)
     # Either terminal from max_ticks or no terminal (plan just completed)
     # The runner creates a max_ticks terminal on a NEW entity if no terminal exists

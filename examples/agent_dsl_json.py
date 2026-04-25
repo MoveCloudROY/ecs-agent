@@ -33,7 +33,7 @@ def create_provider(model: str, system_prompt: str) -> LLMModel:
 
     Args:
         model: Model identifier (e.g., "qwen3.5-flash")
-        system_prompt: System prompt for the provider (unused at construction time)
+        system_prompt: System prompt for the model (unused at construction time)
 
     Returns:
         OpenAIModel configured from environment.
@@ -103,7 +103,7 @@ async def main() -> None:
     #   - ToolRegistryComponent (always)
     #   - SubagentSystem + SubagentSessionTableComponent (when subagents present)
     print("\nCompiling agent specs into ECS World...")
-    primary_entity, world = compile_agent_specs(specs, provider_factory=create_provider)
+    primary_entity, world = compile_agent_specs(specs, model_factory=create_provider)
     print(f"Created primary entity: {primary_entity}")
 
     # Add conversation with user's research question

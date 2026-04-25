@@ -59,7 +59,7 @@ async def test_ui_design_flow_fake_provider(tmp_path: Path) -> None:
     world = World()
 
     # Create FakeModel with deterministic responses
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -86,7 +86,7 @@ async def test_ui_design_flow_fake_provider(tmp_path: Path) -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            model=provider,
+            model=model,
             system_prompt="You are a UI design expert.",
         ),
     )
@@ -251,7 +251,7 @@ async def test_ui_design_flow_real_llm(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Full E2E test with real OpenAI-compatible provider (DashScope)."""
+    """Full E2E test with real OpenAI-compatible model (DashScope)."""
     from ecs_agent.tools.builtins import BuiltinToolsSkill
 
     # Setup: Copy example structure to tmp_path
@@ -289,8 +289,8 @@ async def test_ui_design_flow_real_llm(
     # Create World
     world = World()
 
-    # Create OpenAI-compatible provider with DashScope
-    provider = OpenAIModel(
+    # Create OpenAI-compatible model with DashScope
+    model = OpenAIModel(
         config=ProviderConfig(
             provider_id="openai",
             base_url=BASE_URL,
@@ -310,7 +310,7 @@ async def test_ui_design_flow_real_llm(
     world.add_component(
         agent_id,
         LLMComponent(
-            model=provider,
+            model=model,
             
             system_prompt="You are a UI design expert.",
         ),
@@ -615,7 +615,7 @@ async def test_ui_design_flow_ui_prompt_writes_artifact(tmp_path: Path) -> None:
     world = World()
     agent_id = world.create_entity()
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -649,7 +649,7 @@ async def test_ui_design_flow_ui_prompt_writes_artifact(tmp_path: Path) -> None:
 
     world.add_component(
         agent_id,
-        LLMComponent(model=provider, system_prompt=""),
+        LLMComponent(model=model, system_prompt=""),
     )
     world.add_component(
         agent_id,

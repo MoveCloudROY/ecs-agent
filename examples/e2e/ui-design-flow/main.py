@@ -1,7 +1,7 @@
 """UI Design Flow E2E example entrypoint.
 
 Demonstrates a complete workflow for designing UI through an interactive
-agent using ECS-based composition with dual-mode provider selection.
+agent using ECS-based composition with dual-mode model selection.
 
 Features exercised:
 - SystemPromptConfigSpec with ${name} placeholder templates
@@ -102,22 +102,22 @@ async def main() -> None:
     # Create World
     world = World()
 
-    # --- Create LLM provider (dual-mode) ---
+    # --- Create LLM model (dual-mode) ---
     api_key: str = os.environ.get("LLM_API_KEY", "")
     base_url: str = os.environ.get(
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
     model: str = os.environ.get("LLM_MODEL", "qwen3.5-flash")
 
-    provider: LLMModel
+    model: LLMModel
     if api_key:
-        logger.info("using_provider", provider="OpenAIModel", model=model)
+        logger.info("using_model", model_class="OpenAIModel", model_name=model)
         print(f"Using OpenAIModel with model: {model}")
-        provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
-        logger.info("using_provider", provider="FakeModel")
+        logger.info("using_model", model_class="FakeModel")
         print("No LLM_API_KEY set. Using FakeModel for demonstration.")
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -171,11 +171,11 @@ async def main() -> None:
 
     # --- Add components ---
 
-    # LLM provider (no bare system_prompt — handled by SystemPromptConfigSpec)
+    # LLM model (no bare system_prompt — handled by SystemPromptConfigSpec)
     world.add_component(
         agent_id,
         LLMComponent(
-            model=provider,
+            model=model,
         ),
     )
 

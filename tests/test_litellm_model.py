@@ -1,4 +1,4 @@
-"""Tests for LiteLLM provider with mocked dependencies."""
+"""Tests for LiteLLM model with mocked dependencies."""
 
 import json
 import pytest
@@ -35,12 +35,12 @@ async def test_constructor_instantiation(mock_litellm) -> None:
     """Test LiteLLMModel can be instantiated with required parameters."""
     from ecs_agent.providers.litellm_model import LiteLLMModel
 
-    provider = LiteLLMModel(
+    model = LiteLLMModel(
         model="anthropic/claude-3-opus-20240229",
         api_key="test-key",
         base_url="https://test.api.com/v1",
     )
-    assert provider is not None
+    assert model is not None
 
 
 @pytest.mark.asyncio
@@ -62,8 +62,8 @@ async def test_protocol_compliance(mock_litellm) -> None:
     """Test LiteLLMModel satisfies LLMModel Protocol."""
     from ecs_agent.providers.litellm_model import LiteLLMModel
 
-    provider = LiteLLMModel(model="gpt-4o", api_key="test-key")
-    assert isinstance(provider, LLMModel)
+    model = LiteLLMModel(model="gpt-4o", api_key="test-key")
+    assert isinstance(model, LLMModel)
 
 
 @pytest.mark.asyncio
@@ -76,9 +76,9 @@ async def test_complete_returns_completion_result(mock_litellm) -> None:
         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
     }
 
-    provider = LiteLLMModel(model="gpt-4o", api_key="test-key")
+    model = LiteLLMModel(model="gpt-4o", api_key="test-key")
     messages = [Message(role="user", content="test message")]
-    result = await provider.complete(messages)
+    result = await model.complete(messages)
 
     assert isinstance(result, CompletionResult)
     assert result.message.role == "assistant"
@@ -116,9 +116,9 @@ async def test_complete_handles_tool_calls(mock_litellm) -> None:
         "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
     }
 
-    provider = LiteLLMModel(model="gpt-4o", api_key="test-key")
+    model = LiteLLMModel(model="gpt-4o", api_key="test-key")
     messages = [Message(role="user", content="What's the weather?")]
-    result = await provider.complete(messages)
+    result = await model.complete(messages)
 
     assert result.message.tool_calls is not None
     assert len(result.message.tool_calls) == 1
@@ -149,10 +149,10 @@ async def test_stream_yields_deltas(mock_litellm) -> None:
 
     mock_litellm.acompletion.return_value = mock_stream()
 
-    provider = LiteLLMModel(model="gpt-4o", api_key="test-key")
+    model = LiteLLMModel(model="gpt-4o", api_key="test-key")
     messages = [Message(role="user", content="test")]
     deltas = []
-    result = await provider.complete(messages, stream=True)
+    result = await model.complete(messages, stream=True)
     assert hasattr(result, "__aiter__"), "Stream should return AsyncIterator"
     async for delta in result:
         deltas.append(delta)
@@ -169,7 +169,7 @@ async def test_convert_messages_serializes_tool_call_arguments_as_json_string(mo
     """Test _convert_messages_to_openai serializes tool call arguments as JSON string, not dict."""
     from ecs_agent.providers.litellm_model import LiteLLMModel
 
-    provider = LiteLLMModel(
+    model = LiteLLMModel(
         model="anthropic/claude-3-opus-20240229",
         api_key="test-key",
     )
@@ -188,7 +188,7 @@ async def test_convert_messages_serializes_tool_call_arguments_as_json_string(mo
     )
 
     # Convert to OpenAI format
-    result = provider._convert_messages_to_openai([message])
+    result = model._convert_messages_to_openai([message])
 
     # Extract arguments field
     args = result[0]["tool_calls"][0]["function"]["arguments"]
