@@ -111,6 +111,12 @@ class BackgroundScheduler:
 _GLOBAL_SCHEDULER: BackgroundScheduler | None = None
 
 
+def reset_global_scheduler() -> None:
+    """Reset the global scheduler singleton. Use in test teardown to avoid state leakage."""
+    global _GLOBAL_SCHEDULER
+    _GLOBAL_SCHEDULER = None
+
+
 def get_global_scheduler(max_background_concurrency: int = 5) -> BackgroundScheduler:
     global _GLOBAL_SCHEDULER
 
@@ -405,5 +411,6 @@ __all__ = [
     "QueuedSession",
     "SubagentRuntimeManager",
     "get_global_scheduler",
+    "reset_global_scheduler",
     "render_subagent_session_reminder_table",
 ]

@@ -147,7 +147,13 @@ async def setup_interactive_input(
                     prompt = "... "
             except EOFError:
                 if not lines:
-                    lines = ["exit"]
+                    world.add_component(
+                        event.entity_id,
+                        TerminalComponent(reason="stdin_eof"),
+                    )
+                    if not event.input_future.done():
+                        event.input_future.set_result("exit")
+                    return
 
             user_text = "\n".join(lines).strip()
             if not user_text:
