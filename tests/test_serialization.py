@@ -52,6 +52,8 @@ from ecs_agent.types import (
 
 
 class DummyProvider:
+    model_id: str = "default"
+
     async def complete(self, messages, tools=None, stream=False, response_format=None):
         _ = (messages, tools, stream, response_format)
         raise NotImplementedError
@@ -164,7 +166,7 @@ def test_to_dict_skips_non_serializable_fields() -> None:
     world = World()
     entity = world.create_entity()
     world.add_component(
-        entity, LLMComponent(provider=provider, model="gpt-4", system_prompt="sys")
+        entity, LLMComponent(model=provider, system_prompt="sys")
     )
     world.add_component(
         entity,
@@ -176,10 +178,8 @@ def test_to_dict_skips_non_serializable_fields() -> None:
 
     data = WorldSerializer.to_dict(world)
 
-    assert (
-        data["entities"]["1"]["LLMComponent"]["provider"]
-        == NON_SERIALIZABLE_PLACEHOLDER
-    )
+    # LLMComponent.model is serialized as model_id string (not a placeholder)
+    assert data["entities"]["1"]["LLMComponent"]["model"] == "default"
     assert (
         data["entities"]["1"]["ToolRegistryComponent"]["handlers"]
         == NON_SERIALIZABLE_PLACEHOLDER
@@ -195,7 +195,6 @@ def test_from_dict_reconstructs_world_correctly() -> None:
         "entities": {
             "1": {
                 "LLMComponent": {
-                    "provider": NON_SERIALIZABLE_PLACEHOLDER,
                     "model": "gpt-4",
                     "system_prompt": "sys",
                 },
@@ -231,8 +230,7 @@ def test_from_dict_reconstructs_world_correctly() -> None:
     tool_registry = world.get_component(EntityId(1), ToolRegistryComponent)
 
     assert llm is not None
-    assert llm.provider is provider
-    assert llm.model == "gpt-4"
+    assert llm.model is provider
     assert conv is not None
     assert isinstance(conv.messages[0], Message)
     assert conv.messages[0].content == "hi"
@@ -250,7 +248,7 @@ def test_round_trip_preserves_state() -> None:
     world = World()
     entity = world.create_entity()
     world.add_component(
-        entity, LLMComponent(provider=provider, model="gpt-4", system_prompt="sys")
+        entity, LLMComponent(model=provider, system_prompt="sys")
     )
     world.add_component(
         entity, ConversationComponent(messages=[Message(role="user", content="hello")])
@@ -282,7 +280,7 @@ def test_save_and_load_to_file(tmp_path) -> None:
 
     world = World()
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(provider=provider, model="gpt-4"))
+    world.add_component(entity, LLMComponent(model=provider))
     world.add_component(entity, KVStoreComponent(store={"a": 1}))
 
     path = tmp_path / "world.json"
@@ -294,7 +292,7 @@ def test_save_and_load_to_file(tmp_path) -> None:
 
     assert path.exists()
     assert loaded_llm is not None
-    assert loaded_llm.provider is provider
+    assert loaded_llm.model is provider
     assert loaded_kv == KVStoreComponent(store={"a": 1})
 
 
@@ -306,7 +304,7 @@ def test_serialization_with_all_component_types() -> None:
     world = World()
     entity = world.create_entity()
     world.add_component(
-        entity, LLMComponent(provider=provider, model="gpt-4", system_prompt="sys")
+        entity, LLMComponent(model=provider, system_prompt="sys")
     )
     world.add_component(
         entity, ConversationComponent(messages=[Message(role="user", content="hello")])

@@ -643,7 +643,7 @@ async def test_retry_uses_reserved_payload_then_commit_clears_once_on_success() 
     world = World()
     provider = FlakyRecordingProvider()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -720,7 +720,7 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
     world = World()
     provider = RecordingProvider()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -820,7 +820,7 @@ async def test_keyword_trigger_injection_with_context_pool_preserves_user_tail()
     world = World()
     provider = RecordingProvider()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -886,7 +886,7 @@ async def test_non_opt_in_reasoning_path_leaves_user_prompt_and_pool_unchanged()
     world = World()
     provider = RecordingProvider()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -927,7 +927,7 @@ async def test_overflow_footer_is_injected_when_context_pool_entries_are_dropped
     world = World()
     provider = RecordingProvider()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Need summary")]),
@@ -986,7 +986,7 @@ async def test_reasoning_uses_prepare_outbound_messages_shared_path(
     world = World()
     provider = RecordingProvider()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -1051,7 +1051,7 @@ async def test_planning_uses_prepare_outbound_messages_shared_path(
     world = World()
     provider = RecordingProvider()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Plan this")]),

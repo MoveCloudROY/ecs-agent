@@ -93,8 +93,8 @@ async def main() -> None:
     world.add_component(
         agent_a_id,
         LLMComponent(
-            provider=provider_a,
-            model=model if api_key else "fake",
+            model=provider_a,
+            
             system_prompt="You are a researcher agent.",
         ),
     )
@@ -110,8 +110,8 @@ async def main() -> None:
     world.add_component(
         agent_b_id,
         LLMComponent(
-            provider=provider_b,
-            model=model if api_key else "fake",
+            model=provider_b,
+            
             system_prompt="You are a summarizer agent.",
         ),
     )

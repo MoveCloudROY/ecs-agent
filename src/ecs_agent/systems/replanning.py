@@ -113,7 +113,7 @@ class ReplanningSystem:
                 world.add_component(entity_id, context_reservation)
 
             try:
-                result = await llm_component.provider.complete(messages)
+                result = await llm_component.model.complete(messages)
                 if not isinstance(result, CompletionResult):
                     raise RuntimeError(
                         "Provider returned stream iterator in non-streaming mode"

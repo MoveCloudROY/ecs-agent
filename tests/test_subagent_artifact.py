@@ -28,9 +28,7 @@ async def test_runtime_session_id_remains_distinct_from_subagent_artifact_id(
         parent,
         SubagentRegistryComponent(
             subagents={
-                "artifact-agent": SubagentConfig(
-                    name="artifact-agent",
-                    provider=FakeProvider(
+                "artifact-agent": SubagentConfig(model=FakeProvider(
                         responses=[
                             CompletionResult(
                                 message=Message(
@@ -40,8 +38,8 @@ async def test_runtime_session_id_remains_distinct_from_subagent_artifact_id(
                             )
                         ]
                     ),
-                    model="fake",
-                )
+name="artifact-agent",
+                    )
             }
         ),
     )
@@ -87,9 +85,7 @@ async def test_foreground_subagent_artifact_record_path_points_to_records_subage
         parent,
         SubagentRegistryComponent(
             subagents={
-                "artifact-agent": SubagentConfig(
-                    name="artifact-agent",
-                    provider=FakeProvider(
+                "artifact-agent": SubagentConfig(model=FakeProvider(
                         responses=[
                             CompletionResult(
                                 message=Message(
@@ -99,8 +95,8 @@ async def test_foreground_subagent_artifact_record_path_points_to_records_subage
                             )
                         ]
                     ),
-                    model="fake",
-                )
+name="artifact-agent",
+                    )
             }
         ),
     )
@@ -141,17 +137,15 @@ async def test_background_subagent_completion_persists_full_output_to_records_su
         parent,
         SubagentRegistryComponent(
             subagents={
-                "artifact-agent": SubagentConfig(
-                    name="artifact-agent",
-                    provider=FakeProvider(
+                "artifact-agent": SubagentConfig(model=FakeProvider(
                         responses=[
                             CompletionResult(
                                 message=Message(role="assistant", content=full_result)
                             )
                         ]
                     ),
-                    model="fake",
-                )
+name="artifact-agent",
+                    )
             }
         ),
     )
@@ -215,9 +209,7 @@ async def test_background_subagent_completion_strips_envelope_before_persisting_
         parent,
         SubagentRegistryComponent(
             subagents={
-                "artifact-agent": SubagentConfig(
-                    name="artifact-agent",
-                    provider=FakeProvider(
+                "artifact-agent": SubagentConfig(model=FakeProvider(
                         responses=[
                             CompletionResult(
                                 message=Message(
@@ -226,8 +218,8 @@ async def test_background_subagent_completion_strips_envelope_before_persisting_
                             )
                         ]
                     ),
-                    model="fake",
-                )
+name="artifact-agent",
+                    )
             }
         ),
     )

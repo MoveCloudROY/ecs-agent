@@ -1,4 +1,4 @@
-"""LLM Provider Protocol definition."""
+"""LLM Model Protocol definition."""
 
 from collections.abc import AsyncIterator
 from typing import Any, Protocol, runtime_checkable
@@ -6,8 +6,13 @@ from ecs_agent.types import Message, CompletionResult, StreamDelta, ToolSchema
 
 
 @runtime_checkable
-class LLMProvider(Protocol):
-    """Protocol for LLM completion providers."""
+class LLMModel(Protocol):
+    """Protocol for LLM model implementations."""
+
+    @property
+    def model_id(self) -> str:
+        """Identifier for the underlying model (e.g. 'gpt-4o', 'claude-3-5-haiku')."""
+        ...
 
     async def complete(
         self,
@@ -26,3 +31,7 @@ class LLMProvider(Protocol):
             Completion result with message and optional usage info.
         """
         ...
+
+
+# Backward-compat alias
+LLMProvider = LLMModel

@@ -189,7 +189,7 @@ async def test_compaction_triggers_when_threshold_exceeded() -> None:
         responses=[CompletionResult(message=Message(role="assistant", content="brief"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -221,7 +221,7 @@ async def test_compaction_full_history_method_replaces_all_non_system_history() 
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -283,7 +283,7 @@ async def test_compaction_predrop_then_compact_uses_budgeted_view_without_mutati
         Message(role="tool", content="tool result", tool_call_id="call-1"),
         _message("keep me"),
     ]
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id, ConversationComponent(messages=list(original_messages))
     )
@@ -354,7 +354,7 @@ async def test_compaction_summary_input_includes_canonical_subagent_session_stat
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -426,7 +426,7 @@ async def test_compaction_calls_llm_with_expected_summarization_prompt() -> None
         responses=[CompletionResult(message=Message(role="assistant", content="s"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="base-model"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -466,7 +466,7 @@ async def test_summary_is_stored_in_archive_component() -> None:
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -497,7 +497,7 @@ async def test_compaction_publishes_event_with_original_and_compacted_token_coun
         responses=[CompletionResult(message=Message(role="assistant", content="s"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[_message("a b c d"), _message("e f g h")]),
@@ -530,7 +530,7 @@ async def test_no_compaction_when_threshold_not_exceeded() -> None:
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     original_messages = [_message("hello"), _message("world")]
     world.add_component(
         entity_id, ConversationComponent(messages=list(original_messages))
@@ -557,7 +557,7 @@ async def test_system_message_is_preserved_during_compaction() -> None:
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -599,7 +599,7 @@ async def test_compaction_updates_current_summary_and_clears_rendered_prompt_cac
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -647,7 +647,7 @@ async def test_repeated_compaction_folds_previous_current_summary_into_next_summ
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -710,8 +710,7 @@ def test_compaction_prompt_render_does_not_mutate_runtime_state() -> None:
     world.add_component(
         entity_id,
         LLMComponent(
-            provider=FakeProvider(responses=[]),
-            model="fake",
+            model=FakeProvider(responses=[]),
             system_prompt="runtime llm prompt",
         ),
     )
@@ -774,7 +773,7 @@ async def test_compaction_uses_summary_model_id_when_set(
         ]
     )
 
-    def fake_get_llm_provider(
+    def fake_get_model(
         model_id: str,
         *,
         registry: ProviderRegistry,
@@ -785,11 +784,11 @@ async def test_compaction_uses_summary_model_id_when_set(
         assert api_key is None
         return summary_provider
 
-    monkeypatch.setattr(compaction_module, "get_llm_provider", fake_get_llm_provider)
+    monkeypatch.setattr(compaction_module, "get_model", fake_get_model)
 
     entity_id = world.create_entity()
     world.add_component(
-        entity_id, LLMComponent(provider=primary_provider, model="base-model")
+        entity_id, LLMComponent(model=primary_provider)
     )
     world.add_component(
         entity_id,
@@ -830,7 +829,7 @@ async def test_compaction_falls_back_to_legacy_summary_model(
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="base-model"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -935,7 +934,7 @@ async def test_compaction_uses_default_prompt_when_no_template() -> None:
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="base-model"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -988,8 +987,7 @@ async def test_compaction_renders_custom_prompt_template() -> None:
     world.add_component(
         entity_id,
         LLMComponent(
-            provider=provider,
-            model="base-model",
+            model=provider,
             system_prompt="runtime llm prompt",
         ),
     )

@@ -80,14 +80,14 @@ async def test_multi_entity_model_switching_isolation():
     )
 
     entity1 = world.create_entity()
-    llm1 = LLMComponent(provider=provider1, model="model-1")
+    llm1 = LLMComponent(model=provider1)
     world.add_component(entity1, llm1)
     world.add_component(
         entity1, ConversationComponent(messages=[Message(role="user", content="Hello")])
     )
 
     entity2 = world.create_entity()
-    llm2 = LLMComponent(provider=provider2, model="model-2")
+    llm2 = LLMComponent(model=provider2)
     world.add_component(entity2, llm2)
     world.add_component(
         entity2, ConversationComponent(messages=[Message(role="user", content="Hi")])
@@ -95,10 +95,14 @@ async def test_multi_entity_model_switching_isolation():
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
 
-    llm1.pending_model = "model-1-switched"
+    llm1.pending_model = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="switched"))],
+        model_id="model-1-switched",
+    )
     await runner.run(world, max_ticks=1)
 
-    assert llm2.model == "model-2"
+    # entity2's model should not have been affected by entity1's pending_model switch
+    assert llm2.model is provider2
     assert llm2.pending_model is None
 
 
@@ -162,13 +166,16 @@ async def test_complete_runtime_control_workflow():
             CompletionResult(message=Message(role="assistant", content="Test response"))
         ]
     )
-    llm = LLMComponent(provider=provider, model="fake")
+    llm = LLMComponent(model=provider)
     world.add_component(agent, llm)
     world.add_component(
         agent, ConversationComponent(messages=[Message(role="user", content="Hello")])
     )
 
-    llm.pending_model = "fake-switched"
+    llm.pending_model = FakeProvider(
+        responses=[CompletionResult(message=Message(role="assistant", content="switched response"))],
+        model_id="fake-switched",
+    )
 
     # 4. Run
     await runner.run(world, max_ticks=1)

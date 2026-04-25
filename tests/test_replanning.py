@@ -72,7 +72,7 @@ def _create_entity(
     messages: list[Message] | None = None,
 ) -> int:
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(

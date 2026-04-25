@@ -22,6 +22,8 @@ DEFAULT_EMBEDDING_DIMENSION = 1024
 
 
 class _OpenAIProviderStub:
+    model_id: str = "stub"
+
     def __init__(self, content: str = "stub response") -> None:
         self.complete: AsyncMock = AsyncMock(
             return_value=CompletionResult(
@@ -31,6 +33,8 @@ class _OpenAIProviderStub:
 
 
 class _SubagentDelegationOpenAIStub:
+    model_id: str = "stub"
+
     def __init__(self) -> None:
         self._manager_turn = 0
 

@@ -50,7 +50,8 @@ from ecs_agent.types import (
     ToolTimeoutError,
     UserInputRequestedEvent,
 )
-from ecs_agent.providers.retry_provider import RetryProvider
+from ecs_agent.providers.retry_model import RetryModel
+from ecs_agent.providers.retry_provider import RetryProvider  # backward-compat
 from ecs_agent.providers.embedding_provider import OpenAIEmbeddingProvider
 from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider
 from ecs_agent.tools import (
@@ -116,13 +117,20 @@ from ecs_agent.components.definitions import (
 
 from ecs_agent.providers import (
     ApiFormat,
+    ClaudeModel,
     ClaudeProvider,
+    FakeModel,
+    LLMModel,
+    LLMProvider,
     ModelId,
+    OpenAIModel,
     ProviderConfig,
     ProviderEntry,
     ProviderRegistry,
+    create_model,
     format_model_id,
     get_llm_provider,
+    get_model,
     parse_model_id,
 )
 
@@ -158,8 +166,10 @@ __all__ = [
     "CheckpointCreatedEvent",
     "CheckpointRestoredEvent",
     "CheckpointSystem",
+    "ClaudeModel",
     "ClaudeProvider",
     "compile_agent_specs",
+    "create_model",
     "CompactionCompleteEvent",
     "CompactionConfigComponent",
     "ContextBudgetConfig",
@@ -180,6 +190,10 @@ __all__ = [
     "extract_parent_id",
     "extract_trace_id",
     "FakeEmbeddingProvider",
+    "FakeModel",
+    "get_model",
+    "LLMModel",
+    "LLMProvider",
     "LiteLLMProvider",
     "load_json_agents",
     "load_markdown_agent",
@@ -206,6 +220,8 @@ __all__ = [
     "RenderedSystemPromptComponent",
     "RenderedUserPromptComponent",
     "RetryConfig",
+    "OpenAIModel",
+    "RetryModel",
     "RetryProvider",
     "RunnerStateComponent",
     "SandboxConfigComponent",

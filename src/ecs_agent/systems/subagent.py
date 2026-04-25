@@ -64,10 +64,9 @@ from ecs_agent.types import (
     is_wake_worthy,
 )
 
-# Task 9: Import providers for retry wrapping
-from ecs_agent.providers.fake_provider import FakeProvider
-from ecs_agent.providers.protocol import LLMProvider
-from ecs_agent.providers.retry_provider import RetryProvider
+from ecs_agent.providers.fake_model import FakeModel
+from ecs_agent.providers.protocol import LLMModel
+from ecs_agent.providers.retry_model import RetryModel
 
 logger = get_logger(__name__)
 
@@ -586,25 +585,23 @@ class SubagentSystem:
 
         await self._runtime_manager.sync_to_component(world, entity_id)
 
-    def _wrap_retry_provider_if_needed(self, provider: LLMProvider) -> LLMProvider:
-        """Wrap provider with RetryProvider if not already wrapped.
+    def _wrap_retry_model_if_needed(self, model: LLMModel) -> LLMModel:
+        """Wrap model with RetryModel if not already wrapped.
 
         Args:
-            provider: LLM provider to wrap
+            model: LLM model to wrap
 
         Returns:
-            RetryProvider-wrapped provider, or original if already wrapped or FakeProvider
+            RetryModel-wrapped model, or original if already wrapped or FakeModel
         """
-        # Skip if already wrapped (idempotent)
-        if isinstance(provider, RetryProvider):
-            return provider
+        if isinstance(model, RetryModel):
+            return model
 
-        # Skip FakeProvider (deterministic tests)
-        if isinstance(provider, FakeProvider):
-            return provider
+        # Skip FakeModel (deterministic tests)
+        if isinstance(model, FakeModel):
+            return model
 
-        # Wrap with default config
-        return RetryProvider(provider=provider, retry_config=RetryConfig())
+        return RetryModel(model=model, retry_config=RetryConfig())
 
     def install_subagent_tool(
         self,
@@ -1409,7 +1406,6 @@ class SubagentSystem:
             world.add_component(
                 child_entity_id,
                 LLMComponent(
-                    provider=config.provider,
                     model=config.model,
                     system_prompt=config.system_prompt,
                 ),
@@ -1682,11 +1678,11 @@ class SubagentSystem:
                 f"Error: Unknown subagent '{subagent_name}'. Available subagents: {list(registry.subagents.keys())}"
             )
 
-        # Task 9: Wrap provider with RetryProvider by default
-        wrapped_provider = self._wrap_retry_provider_if_needed(config.provider)
+        # Wrap model with RetryModel by default
+        wrapped_model = self._wrap_retry_model_if_needed(config.model)
 
-        # Return config with wrapped provider (use replace to preserve other fields)
-        return replace(config, provider=wrapped_provider)
+        # Return config with wrapped model (use replace to preserve other fields)
+        return replace(config, model=wrapped_model)
 
     def _validate_subagent_params(
         self, category: str, prompt: str, load_skills: list[str]
@@ -1764,7 +1760,6 @@ class SubagentSystem:
         child_world.add_component(
             child_world_entity_id,
             LLMComponent(
-                provider=config.provider,
                 model=config.model,
                 system_prompt="",  # SystemPromptRenderSystem will populate this
             ),

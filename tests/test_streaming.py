@@ -474,7 +474,7 @@ async def test_streaming_partial_content_persisted_on_interrupt_cancel() -> None
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="hello")]),
@@ -505,7 +505,7 @@ async def test_streaming_partial_reraises_cancelled_after_interrupt_cleanup() ->
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="hello")]),
@@ -532,7 +532,7 @@ async def test_streaming_interrupt_mid_generation_preserves_partial_and_emits_st
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="hello")]),
@@ -592,7 +592,7 @@ async def test_streaming_interrupt_component_preexisting_skips_streaming_safely(
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="hello")]),

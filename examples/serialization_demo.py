@@ -80,7 +80,7 @@ async def main() -> None:
     world.add_component(
         main_agent,
         LLMComponent(
-            provider=provider, model="fake-model", system_prompt="You are helpful."
+            model=provider, system_prompt="You are helpful."
         ),
     )
     world.add_component(
@@ -138,7 +138,7 @@ async def main() -> None:
 
     world.add_component(
         second_agent,
-        LLMComponent(provider=provider, model="fake-model-2"),
+        LLMComponent(model=provider),
     )
     world.add_component(
         second_agent,

@@ -143,7 +143,7 @@ def test_full_skill_lifecycle() -> None:
     # Verify tools are registered
     registry = world.get_component(entity, ToolRegistryComponent)
     assert registry is not None
-    assert len(registry.tools) == 7
+    assert len(registry.tools) == 11
     tool_names = set(registry.tools.keys())
     assert "read_file" in tool_names
     assert "write_file" in tool_names
@@ -184,7 +184,7 @@ def test_multiple_skills_on_same_entity() -> None:
     # Verify both skills' tools are present
     registry = world.get_component(entity, ToolRegistryComponent)
     assert registry is not None
-    assert len(registry.tools) == 8
+    assert len(registry.tools) == 12
     tool_names = set(registry.tools.keys())
     assert "read_file" in tool_names
     assert "write_file" in tool_names
@@ -413,7 +413,7 @@ def test_skill_manager_duplicate_installation_raises_error() -> None:
     # Verify tools are not duplicated
     registry = world.get_component(entity, ToolRegistryComponent)
     assert registry is not None
-    assert len(registry.tools) == 7
+    assert len(registry.tools) == 11
 
 
 def _write_markdown_skill_fixture(base_dir: Path) -> str:

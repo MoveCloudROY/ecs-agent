@@ -88,8 +88,8 @@ async def main() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            provider=provider,
-            model=model,
+            model=provider,
+            
             system_prompt="You are a helpful assistant that provides concise answers.",
         ),
     )

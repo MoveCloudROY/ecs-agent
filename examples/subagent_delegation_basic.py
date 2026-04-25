@@ -181,8 +181,8 @@ async def main() -> None:
     world.add_component(
         manager_id,
         LLMComponent(
-            provider=manager_provider,
-            model=model if api_key else "fake-manager",
+            model=manager_provider,
+            
         ),
     )
 
@@ -233,8 +233,8 @@ async def main() -> None:
             subagents={
                 "researcher": SubagentConfig(
                     name="researcher",
-                    provider=subagent_provider,
-                    model=model if api_key else "fake-researcher",
+                    model=subagent_provider,
+                    
                     description="Research and gather information on any topic",
                     system_prompt=(
                         "You are a research sub-agent. Investigate the given topic "

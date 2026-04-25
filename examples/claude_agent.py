@@ -107,7 +107,7 @@ async def main() -> None:
     # Add components
     world.add_component(
         agent_id,
-        LLMComponent(provider=provider, model=model),
+        LLMComponent(model=provider),
     )
     world.add_component(
         agent_id,

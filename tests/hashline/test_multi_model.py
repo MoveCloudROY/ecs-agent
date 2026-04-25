@@ -39,8 +39,7 @@ async def test_real_llm_hashline_read_edit_workflow(tmp_path: Path) -> None:
     entity = world.create_entity()
     world.add_component(
         entity,
-        LLMComponent(
-            provider=OpenAIProvider(
+        LLMComponent(model=OpenAIProvider(
                 config=ProviderConfig(
                     provider_id="openai",
                     base_url=BASE_URL,
@@ -49,8 +48,7 @@ async def test_real_llm_hashline_read_edit_workflow(tmp_path: Path) -> None:
                 ),
                 model=MODEL,
             ),
-            model=MODEL,
-        ),
+),
     )
     world.add_component(
         entity,

@@ -801,11 +801,12 @@ class TestReasoningSystemLogging:
         provider = FakeProvider(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="Hello"))
-            ]
+            ],
+            model_id="fake-model",
         )
         world = World()
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(provider=provider, model="fake-model"))
+        world.add_component(entity, LLMComponent(model=provider))
         world.add_component(
             entity,
             ConversationComponent(messages=[Message(role="user", content="Hi")]),
@@ -842,11 +843,12 @@ class TestReasoningSystemLogging:
         provider = FakeProvider(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="Hello"))
-            ]
+            ],
+            model_id="fake-model",
         )
         world = World()
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(provider=provider, model="fake-model"))
+        world.add_component(entity, LLMComponent(model=provider))
         world.add_component(
             entity,
             ConversationComponent(messages=[Message(role="user", content="Hi")]),
@@ -884,6 +886,8 @@ class TestReasoningSystemLogging:
         from ecs_agent.types import Message
 
         class FailingProvider:
+            model_id: str = "failing"
+
             async def complete(
                 self, messages, tools=None, stream=False, response_format=None
             ):
@@ -892,7 +896,7 @@ class TestReasoningSystemLogging:
         world = World()
         entity = world.create_entity()
         world.add_component(
-            entity, LLMComponent(provider=FailingProvider(), model="failing-model")
+            entity, LLMComponent(model=FailingProvider())
         )
         world.add_component(
             entity,
@@ -948,7 +952,7 @@ class TestReasoningSystemLogging:
         )
         world = World()
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(provider=provider, model="fake-model"))
+        world.add_component(entity, LLMComponent(model=provider))
         world.add_component(
             entity,
             ConversationComponent(
@@ -1326,7 +1330,7 @@ class TestPlanningLogging:
 
         entity = world.create_entity()
         world.add_component(entity, PlanComponent(steps=["Do task A"], current_step=0))
-        world.add_component(entity, LLMComponent(provider=provider, model="fake"))
+        world.add_component(entity, LLMComponent(model=provider))
         world.add_component(
             entity, ConversationComponent(messages=[Message(role="user", content="hi")])
         )
@@ -1365,7 +1369,7 @@ class TestPlanningLogging:
 
         entity = world.create_entity()
         world.add_component(entity, PlanComponent(steps=["Do task A"], current_step=0))
-        world.add_component(entity, LLMComponent(provider=provider, model="fake"))
+        world.add_component(entity, LLMComponent(model=provider))
         world.add_component(
             entity, ConversationComponent(messages=[Message(role="user", content="hi")])
         )
@@ -1416,7 +1420,7 @@ class TestPlanningLogging:
 
         entity = world.create_entity()
         world.add_component(entity, PlanComponent(steps=["Do task A"], current_step=0))
-        world.add_component(entity, LLMComponent(provider=provider, model="fake"))
+        world.add_component(entity, LLMComponent(model=provider))
         world.add_component(
             entity, ConversationComponent(messages=[Message(role="user", content="hi")])
         )
@@ -1458,7 +1462,7 @@ class TestSensitiveDataPolicy:
         )
 
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(provider=provider, model="fake"))
+        world.add_component(entity, LLMComponent(model=provider))
         world.add_component(
             entity,
             ConversationComponent(
@@ -1646,7 +1650,7 @@ class TestLoggingLevelPolicy:
         )
 
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(provider=provider, model="fake"))
+        world.add_component(entity, LLMComponent(model=provider))
         world.add_component(
             entity, ConversationComponent(messages=[Message(role="user", content="hi")])
         )

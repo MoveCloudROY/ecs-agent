@@ -81,7 +81,7 @@ def test_constructor_uses_default_base_url_and_max_tokens() -> None:
     )
 
     assert provider._base_url == "https://api.anthropic.com"
-    assert provider._max_tokens == 4096
+    assert provider._max_tokens == 65535
 
 
 def test_build_messages_extracts_system_and_formats_content_blocks() -> None:

@@ -26,6 +26,8 @@ from ecs_agent.types import EntityId, Message, SubagentConfig, SubagentSessionRe
 class DummyProvider:
     """Test provider for serialization."""
 
+    model_id: str = "test"
+
     async def complete(self, messages, tools=None, stream=False, response_format=None):
         _ = (messages, tools, stream, response_format)
         raise NotImplementedError
@@ -112,7 +114,7 @@ class TestRunnerResume:
         """Test that save_checkpoint saves world state to JSON file via WorldSerializer."""
         provider = DummyProvider()
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(provider=provider, model="test"))
+        world.add_component(entity, LLMComponent(model=provider))
         world.add_component(
             entity, ConversationComponent(messages=[Message(role="user", content="hi")])
         )
@@ -134,7 +136,7 @@ class TestRunnerResume:
         """Test that load_checkpoint restores world from file."""
         provider = DummyProvider()
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(provider=provider, model="test"))
+        world.add_component(entity, LLMComponent(model=provider))
         world.add_component(
             entity, ConversationComponent(messages=[Message(role="user", content="hi")])
         )
@@ -176,7 +178,7 @@ class TestRunnerResume:
         provider = DummyProvider()
         counter = CounterSystem()
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(provider=provider, model="test"))
+        world.add_component(entity, LLMComponent(model=provider))
         world.register_system(counter, priority=0)
 
         # Run 5 ticks
@@ -216,7 +218,7 @@ class TestRunnerResume:
         provider = DummyProvider()
         counter = CounterSystem()
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(provider=provider, model="test"))
+        world.add_component(entity, LLMComponent(model=provider))
         world.register_system(counter, priority=0)
 
         # Run 7 ticks
@@ -247,7 +249,7 @@ class TestRunnerResume:
         """Test that save/load round-trip preserves conversation messages."""
         provider = DummyProvider()
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(provider=provider, model="test"))
+        world.add_component(entity, LLMComponent(model=provider))
         world.add_component(
             entity,
             ConversationComponent(
@@ -296,7 +298,7 @@ class TestRunnerResume:
 
         provider = DummyProvider()
         parent = world.create_entity()
-        world.add_component(parent, LLMComponent(provider=provider, model="test"))
+        world.add_component(parent, LLMComponent(model=provider))
         world.add_component(
             parent,
             ConversationComponent(
@@ -309,13 +311,13 @@ class TestRunnerResume:
             SubagentRegistryComponent(
                 subagents={
                     "queued-agent": SubagentConfig(
-                        name="queued-agent", provider=provider, model="test"
+                        name="queued-agent", model=provider
                     ),
                     "running-agent": SubagentConfig(
-                        name="running-agent", provider=provider, model="test"
+                        name="running-agent", model=provider
                     ),
                     "done-agent": SubagentConfig(
-                        name="done-agent", provider=provider, model="test"
+                        name="done-agent", model=provider
                     ),
                 }
             ),
@@ -504,7 +506,7 @@ class TestRunnerResume:
 
         provider = DummyProvider()
         parent = world.create_entity()
-        world.add_component(parent, LLMComponent(provider=provider, model="test"))
+        world.add_component(parent, LLMComponent(model=provider))
         world.add_component(
             parent,
             ConversationComponent(messages=[Message(role="user", content="resume")]),
@@ -515,7 +517,7 @@ class TestRunnerResume:
             SubagentRegistryComponent(
                 subagents={
                     "running-agent": SubagentConfig(
-                        name="running-agent", provider=provider, model="test"
+                        name="running-agent", model=provider
                     )
                 }
             ),

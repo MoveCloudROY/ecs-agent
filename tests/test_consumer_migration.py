@@ -42,7 +42,7 @@ async def test_reasoning_uses_rendered_system_prompt() -> None:
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="hello")]),
@@ -62,7 +62,7 @@ async def test_reasoning_uses_rendered_user_prompt() -> None:
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -87,7 +87,7 @@ async def test_planning_uses_rendered_system_prompt() -> None:
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="plan")]),
@@ -114,7 +114,7 @@ async def test_replanning_uses_rendered_system_prompt() -> None:
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -142,7 +142,7 @@ async def test_no_rendered_component_fallback() -> None:
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(entity_id, SystemPromptComponent(content="legacy sys"))
     world.add_component(
         entity_id,

@@ -61,12 +61,11 @@ def compile_agent_specs(
     primary_entity = world.create_entity()
 
     _, primary_spec = primary_specs[0]
-    primary_provider = provider_factory(primary_spec.model, primary_spec.prompt)
+    primary_model = provider_factory(primary_spec.model, primary_spec.prompt)
     world.add_component(
         primary_entity,
         LLMComponent(
-            provider=primary_provider,
-            model=primary_spec.model,
+            model=primary_model,
             system_prompt=primary_spec.prompt,
         ),
     )
@@ -149,8 +148,7 @@ def compile_agent_specs(
             continue
         subagents[agent_name] = SubagentConfig(
             name=agent_name,
-            provider=provider_factory(spec.model, spec.prompt),
-            model=spec.model,
+            model=provider_factory(spec.model, spec.prompt),
             system_prompt=spec.prompt,
         )
 

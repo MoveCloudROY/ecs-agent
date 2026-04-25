@@ -305,8 +305,8 @@ async def part_1_full_history() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            provider=provider,
-            model=_get_model_name(),
+            model=provider,
+            ),
             system_prompt="You are a helpful assistant.",
         ),
     )
@@ -372,8 +372,8 @@ async def part_2_predrop_then_compact() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            provider=provider,
-            model=_get_model_name(),
+            model=provider,
+            ),
             system_prompt="You are a helpful assistant.",
         ),
     )
@@ -427,8 +427,8 @@ async def part_3_custom_prompt() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            provider=provider,
-            model=_get_model_name(),
+            model=provider,
+            ),
             system_prompt="You are a helpful assistant.",
         ),
     )
@@ -489,8 +489,8 @@ async def part_4_repeated_compaction() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            provider=provider,
-            model=_get_model_name(),
+            model=provider,
+            ),
             system_prompt="You are a helpful assistant.",
         ),
     )

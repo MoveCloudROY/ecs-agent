@@ -100,8 +100,8 @@ async def main() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            provider=provider,
-            model=model,
+            model=provider,
+            
             system_prompt=(
                 "You are a helpful assistant that can check weather and send emails. "
                 "Use the provided tools to fulfill the user's request."

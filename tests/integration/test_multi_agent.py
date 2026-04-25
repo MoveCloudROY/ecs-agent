@@ -190,7 +190,7 @@ async def test_multi_agent_full_loop() -> None:
 
     world.add_component(
         agent_a_id,
-        LLMComponent(provider=provider_a, model="fake", system_prompt=""),
+        LLMComponent(model=provider_a, system_prompt=""),
     )
     world.add_component(
         agent_a_id,
@@ -207,7 +207,7 @@ async def test_multi_agent_full_loop() -> None:
 
     world.add_component(
         agent_b_id,
-        LLMComponent(provider=provider_b, model="fake", system_prompt=""),
+        LLMComponent(model=provider_b, system_prompt=""),
     )
     world.add_component(
         agent_b_id,

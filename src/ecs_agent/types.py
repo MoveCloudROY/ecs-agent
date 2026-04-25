@@ -509,8 +509,7 @@ class SubagentConfig:
     """Configuration for a named subagent."""
 
     name: str
-    provider: Any  # LLMProvider (can't reference Protocol in dataclass field type)
-    model: str
+    model: Any  # LLMModel — using Any to avoid Protocol import in slots dataclass
     description: str = ""
     system_prompt: str = ""
     skills: list[str] = field(default_factory=list)  # skill names to install

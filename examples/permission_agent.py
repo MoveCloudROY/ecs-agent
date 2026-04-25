@@ -69,7 +69,8 @@ async def main() -> None:
     world.add_component(agent, PermissionComponent(denied_tools=["dangerous_tool"]))
 
     # Setup conversation and LLM
-    world.add_component(agent, LLMComponent(provider=provider, model=model if api_key else "fake"))
+    world.add_component(agent, LLMComponent(model=provider,
+))
     world.add_component(agent, ConversationComponent(messages=[]))
 
     # 3. Register PermissionSystem (priority -10) and ToolExecutionSystem (priority 5)

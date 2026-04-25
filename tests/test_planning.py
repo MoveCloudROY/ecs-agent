@@ -69,7 +69,7 @@ async def test_process_advances_one_step_appends_response_and_publishes_event() 
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="start")]),
@@ -110,7 +110,7 @@ async def test_skips_entity_when_plan_is_completed() -> None:
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="start")]),
@@ -136,7 +136,7 @@ async def test_skips_entity_when_plan_steps_are_empty() -> None:
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="start")]),
@@ -157,7 +157,7 @@ async def test_plan_context_is_injected_before_llm_call() -> None:
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(entity_id, SystemPromptComponent(content="You are concise"))
     world.add_component(
         entity_id,
@@ -193,7 +193,7 @@ async def test_tool_calls_attach_pending_tool_calls_component() -> None:
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="use tool")]),
@@ -214,7 +214,7 @@ async def test_marks_plan_completed_after_final_step() -> None:
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="finish")]),
@@ -237,7 +237,7 @@ async def test_provider_exhaustion_adds_terminal_component() -> None:
     world = World()
     provider = FakeProvider(responses=[])
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="start")]),
@@ -267,7 +267,7 @@ async def test_generic_exception_adds_error_component() -> None:
     world = World()
     entity_id = world.create_entity()
     world.add_component(
-        entity_id, LLMComponent(provider=ExplodingProvider(), model="fake")
+        entity_id, LLMComponent(model=ExplodingProvider())
     )  # type: ignore[arg-type]
     world.add_component(
         entity_id,
@@ -295,7 +295,7 @@ async def test_prompt_context_injection_is_transient_for_planning_provider_call(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(entity_id, SystemPromptComponent(content="You are concise"))
     world.add_component(
         entity_id,
@@ -339,7 +339,7 @@ async def test_planning_retry_reuses_reserved_context_then_commits_on_success() 
     world = World()
     provider = FlakyRecordingProvider()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Plan this")]),
@@ -404,7 +404,7 @@ async def test_event_trigger_injection_is_transient_for_planning_provider_call()
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(entity_id, SystemPromptComponent(content="You are concise"))
     world.add_component(
         entity_id,

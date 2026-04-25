@@ -246,7 +246,7 @@ async def test_responses_api_complete_non_streaming_state_component_updates_on_s
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
     provider._client = mock_client
-    world.add_component(entity, LLMComponent(provider=provider, model="gpt-4o-mini"))
+    world.add_component(entity, LLMComponent(model=provider))
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="hello")]),
@@ -290,7 +290,7 @@ async def test_responses_api_complete_non_streaming_previous_response_id_from_st
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
     provider._client = mock_client
-    world.add_component(entity, LLMComponent(provider=provider, model="gpt-4o-mini"))
+    world.add_component(entity, LLMComponent(model=provider))
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="continue")]),
@@ -565,7 +565,7 @@ async def test_responses_api_streaming_previous_response_id_updates_state_compon
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
     provider._client = mock_client
-    world.add_component(entity, LLMComponent(provider=provider, model="gpt-4o-mini"))
+    world.add_component(entity, LLMComponent(model=provider))
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="hi")]),
@@ -603,7 +603,7 @@ async def test_responses_api_non_streaming_previous_response_id_preserved_on_fai
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
     provider._client = mock_client
-    world.add_component(entity, LLMComponent(provider=provider, model="gpt-4o-mini"))
+    world.add_component(entity, LLMComponent(model=provider))
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="continue")]),
@@ -659,7 +659,7 @@ async def test_responses_api_streaming_previous_response_id_preserved_on_interru
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
     provider._client = mock_client
-    world.add_component(entity, LLMComponent(provider=provider, model="gpt-4o-mini"))
+    world.add_component(entity, LLMComponent(model=provider))
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="interrupt")]),

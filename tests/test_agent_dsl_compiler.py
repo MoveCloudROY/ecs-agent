@@ -66,12 +66,11 @@ def test_compile_primary_and_subagent_creates_runnable_world() -> None:
 
     llm = world.get_component(primary_entity_id, LLMComponent)
     assert llm is not None
-    assert llm.model == "gpt-main"
-    assert llm.system_prompt == "Primary system prompt"
-    assert llm.provider == {
+    assert llm.model == {
         "model": "gpt-main",
         "system_prompt": "Primary system prompt",
     }
+    assert llm.system_prompt == "Primary system prompt"
 
     registry = world.get_component(primary_entity_id, SubagentRegistryComponent)
     assert registry is not None
@@ -80,12 +79,11 @@ def test_compile_primary_and_subagent_creates_runnable_world() -> None:
     researcher = registry.subagents["researcher"]
     assert isinstance(researcher, SubagentConfig)
     assert researcher.name == "researcher"
-    assert researcher.model == "gpt-research"
-    assert researcher.system_prompt == "Research system prompt"
-    assert researcher.provider == {
+    assert researcher.model == {
         "model": "gpt-research",
         "system_prompt": "Research system prompt",
     }
+    assert researcher.system_prompt == "Research system prompt"
 
     assert provider_factory.calls == [
         ("gpt-main", "Primary system prompt"),
@@ -200,7 +198,7 @@ def test_compile_subagent_config_maps_expected_fields() -> None:
     helper = registry.subagents["helper"]
 
     assert helper.name == "helper"
-    assert helper.model == "gpt-helper"
+    assert helper.model == {"model": "gpt-helper", "system_prompt": "Helper prompt"}
     assert helper.system_prompt == "Helper prompt"
     assert helper.max_ticks is None
     assert helper.skills == []
@@ -374,7 +372,7 @@ def test_compiler_subagent_registry_maps_three_subagents_correctly() -> None:
 
     assert registry is not None
     assert set(registry.subagents.keys()) == {"researcher", "planner", "writer"}
-    assert registry.subagents["researcher"].model == "gpt-research"
+    assert registry.subagents["researcher"].model["model"] == "gpt-research"
     assert registry.subagents["planner"].system_prompt == "Plan"
     assert registry.subagents["writer"].max_ticks is None
 
@@ -393,7 +391,7 @@ def test_compiler_subagent_registry_keeps_distinct_provider_objects() -> None:
     registry = world.get_component(primary_entity_id, SubagentRegistryComponent)
 
     assert registry is not None
-    assert registry.subagents["a"].provider is not registry.subagents["b"].provider
+    assert registry.subagents["a"].model is not registry.subagents["b"].model
 
 
 def test_compiler_permission_mapping_all_true_preserves_tool_names() -> None:

@@ -96,8 +96,7 @@ async def main() -> None:
         world.add_component(
             agent,
             LLMComponent(
-                provider=provider,
-                model="gpt-4o",
+                model=provider,
                 system_prompt="You are a file manager.",
             ),
         )

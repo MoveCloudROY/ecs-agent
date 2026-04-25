@@ -106,7 +106,8 @@ async def test_live_scratchbook_placeholders_render_into_system_prompt_snapshot(
 
     world.add_component(
         entity_id,
-        LLMComponent(provider=provider, model=provider.model),
+        LLMComponent(model=provider,
+),
     )
     world.add_component(
         entity_id,
@@ -168,7 +169,8 @@ async def test_live_scratchbook_rendered_prompt_reaches_aliyun_outbound_channel(
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        LLMComponent(provider=provider, model=provider.model),
+        LLMComponent(model=provider,
+),
     )
     world.add_component(
         entity_id,

@@ -184,8 +184,8 @@ def _build_world(
     world.add_component(
         parent_id,
         LLMComponent(
-            provider=parent_provider,
-            model=model,
+            model=parent_provider,
+            
             system_prompt=PARENT_SYSTEM_PROMPT,
         ),
     )
@@ -283,26 +283,22 @@ def _build_providers(
         subagents={
             "sync-worker": SubagentConfig(
                 name="sync-worker",
-                provider=sync_provider,
-                model="fake-sync",
+                model=sync_provider,
                 system_prompt="Return a concise direct answer.",
             ),
             "slow-worker": SubagentConfig(
                 name="slow-worker",
-                provider=slow_provider,
-                model="fake-slow",
+                model=slow_provider,
                 system_prompt="Return a concise answer after a brief pause.",
             ),
             "queued-worker": SubagentConfig(
                 name="queued-worker",
-                provider=queued_provider,
-                model="fake-queued",
+                model=queued_provider,
                 system_prompt="Return a short queued follow-up answer.",
             ),
             "stream-worker": SubagentConfig(
                 name="stream-worker",
-                provider=stream_provider,
-                model="fake-stream",
+                model=stream_provider,
                 system_prompt="Return a short answer suitable for streaming.",
             ),
         }
@@ -315,26 +311,24 @@ def _build_registry(provider: LLMProvider, *, model: str) -> SubagentRegistryCom
         subagents={
             "sync-worker": SubagentConfig(
                 name="sync-worker",
-                provider=provider,
-                model=model,
+                model=provider,
+                
                 system_prompt="Return a concise direct answer.",
             ),
-            "slow-worker": SubagentConfig(
-                name="slow-worker",
-                provider=DelayedProvider(provider, delay_seconds=0.2),
-                model=model,
+            "slow-worker": SubagentConfig(model=DelayedProvider(provider, delay_seconds=0.2),
+name="slow-worker",
                 system_prompt="Return a concise answer after a brief pause.",
             ),
             "queued-worker": SubagentConfig(
                 name="queued-worker",
-                provider=provider,
-                model=model,
+                model=provider,
+                
                 system_prompt="Return a short queued follow-up answer.",
             ),
             "stream-worker": SubagentConfig(
                 name="stream-worker",
-                provider=provider,
-                model=model,
+                model=provider,
+                
                 system_prompt="Return a short answer suitable for streaming.",
             ),
         }
