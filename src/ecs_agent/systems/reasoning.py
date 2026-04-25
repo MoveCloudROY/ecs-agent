@@ -33,8 +33,8 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
-from ecs_agent.providers.protocol import LLMProvider
-from ecs_agent.providers.openai_provider import OpenAIProvider
+from ecs_agent.providers.protocol import LLMModel
+from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.prompts.message_assembly import (
     commit_prompt_context_reservation,
     prepare_outbound_messages,
@@ -75,10 +75,9 @@ class ReasoningSystem:
             start_time = time.time()
             assert isinstance(llm_component, LLMComponent)
 
-            # Sample provider and model at request start for in-flight stability
-            active_provider = llm_component.pending_provider or llm_component.provider
+            # Sample model at request start for in-flight stability
             active_model = llm_component.pending_model or llm_component.model
-            provider_id = self._resolve_provider_id(active_provider)
+            provider_id = self._resolve_provider_id(active_model)
             responses_api_state = world.get_component(
                 entity_id, ResponsesAPIStateComponent
             )
@@ -94,7 +93,7 @@ class ReasoningSystem:
                 continue
 
             # Handle model switching
-            if hasattr(llm_component, "pending_model") and llm_component.pending_model:
+            if llm_component.pending_model is not None:
                 llm_component.model = llm_component.pending_model
                 llm_component.pending_model = None
 
@@ -148,7 +147,7 @@ class ReasoningSystem:
             logger.info(
                 "reasoning_start",
                 entity_id=int(entity_id),
-                model=active_model,
+                model=active_model.model_id,
                 streaming=streaming_enabled,
                 non_blocking_delta_publish=non_blocking_delta_publish,
                 system="ReasoningSystem",
@@ -160,7 +159,6 @@ class ReasoningSystem:
                     result = await self._process_streaming(
                         world,
                         entity_id,
-                        active_provider,
                         active_model,
                         conversation,
                         messages,
@@ -169,20 +167,20 @@ class ReasoningSystem:
                         previous_response_id,
                     )
                 else:
-                    if isinstance(active_provider, OpenAIProvider):
-                        non_stream_result = await active_provider.complete(
+                    if isinstance(active_model, OpenAIModel):
+                        non_stream_result = await active_model.complete(
                             messages,
                             tools=tools,
                             thread_response_id=previous_response_id,
                         )
                     else:
-                        non_stream_result = await active_provider.complete(
+                        non_stream_result = await active_model.complete(
                             messages,
                             tools=tools,
                         )
                     if not isinstance(non_stream_result, CompletionResult):
                         raise RuntimeError(
-                            "Provider returned stream iterator in non-streaming mode"
+                            "Model returned stream iterator in non-streaming mode"
                         )
                     result = non_stream_result
 
@@ -196,7 +194,7 @@ class ReasoningSystem:
                     world=world,
                     entity_id=entity_id,
                     provider_id=provider_id,
-                    model=active_model,
+                    model=active_model.model_id,
                     usage=result.usage,
                     stream_completeness=StreamCompleteness.COMPLETE,
                     request_id=result.response_id,
@@ -231,7 +229,7 @@ class ReasoningSystem:
                 logger.info(
                     "reasoning_complete",
                     entity_id=int(entity_id),
-                    model=active_model,
+                    model=active_model.model_id,
                     duration_ms=round(duration_ms, 2),
                     tool_call_count=len(tool_call_names),
                     tool_call_names=tool_call_names,
@@ -246,7 +244,7 @@ class ReasoningSystem:
                     await world.event_bus.publish(
                         ReasoningCompleteEvent(
                             entity_id=entity_id,
-                            model=active_model,
+                            model=active_model.model_id,
                             duration_ms=round(duration_ms, 2),
                         )
                     )
@@ -271,7 +269,7 @@ class ReasoningSystem:
                         world=world,
                         entity_id=entity_id,
                         provider_id=provider_id,
-                        model=active_model,
+                        model=active_model.model_id,
                         usage=None,
                         stream_completeness=stream_completeness,
                         request_id=None,
@@ -298,7 +296,7 @@ class ReasoningSystem:
                         world=world,
                         entity_id=entity_id,
                         provider_id=provider_id,
-                        model=active_model,
+                        model=active_model.model_id,
                         usage=None,
                         stream_completeness=stream_completeness,
                         request_id=None,
@@ -319,11 +317,11 @@ class ReasoningSystem:
                     ),
                 )
 
-    def _resolve_provider_id(self, active_provider: LLMProvider) -> str:
-        provider_id = getattr(active_provider, "provider_id", None)
+    def _resolve_provider_id(self, active_model: LLMModel) -> str:
+        provider_id = getattr(active_model, "provider_id", None)
         if isinstance(provider_id, str) and provider_id:
             return provider_id
-        return type(active_provider).__name__
+        return type(active_model).__name__
 
     def _usage_to_usage_record(
         self,
@@ -384,23 +382,22 @@ class ReasoningSystem:
         self,
         world: World,
         entity_id: EntityId,
-        active_provider: LLMProvider,
-        active_model: str,
+        active_model: LLMModel,
         conversation: ConversationComponent | None,
         messages: list[Message],
         tools: list[ToolSchema] | None,
         non_blocking_delta_publish: bool,
         previous_response_id: str | None,
     ) -> CompletionResult:
-        if isinstance(active_provider, OpenAIProvider):
-            stream_result = await active_provider.complete(
+        if isinstance(active_model, OpenAIModel):
+            stream_result = await active_model.complete(
                 messages,
                 tools=tools,
                 stream=True,
                 thread_response_id=previous_response_id,
             )
         else:
-            stream_result = await active_provider.complete(
+            stream_result = await active_model.complete(
                 messages,
                 tools=tools,
                 stream=True,
@@ -436,7 +433,7 @@ class ReasoningSystem:
                     logger.info(
                         "reasoning_stream_first_sse_event",
                         entity_id=int(entity_id),
-                        model=active_model,
+                        model=active_model.model_id,
                         stream_setup_ms=round(
                             (stream_start_published_at - stream_started_at) * 1000,
                             2,
@@ -488,7 +485,7 @@ class ReasoningSystem:
                         logger.info(
                             "reasoning_stream_first_content_delta",
                             entity_id=int(entity_id),
-                            model=active_model,
+                            model=active_model.model_id,
                             stream_setup_ms=round(
                                 (stream_start_published_at - stream_started_at) * 1000,
                                 2,

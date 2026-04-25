@@ -165,7 +165,7 @@ async def test_render_system_renders_inline_template_and_bridges_to_llm() -> Non
             handlers={},
         ),
     )
-    world.add_component(entity_id, LLMComponent(provider=object(), model="demo"))
+    world.add_component(entity_id, LLMComponent(model=object()))
 
     await SystemPromptRenderSystem().process(world)
 
@@ -301,9 +301,9 @@ async def test_render_system_renders_all_builtin_placeholders() -> None:
         entity_id,
         SubagentRegistryComponent(
             subagents={
-                "planner": SubagentConfig(name="planner", provider=object(), model="m"),
+                "planner": SubagentConfig(name="planner", model=object()),
                 "researcher": SubagentConfig(
-                    name="researcher", provider=object(), model="m"
+                    name="researcher", model=object()
                 ),
             }
         ),
@@ -578,7 +578,7 @@ async def test_render_system_mirrors_to_llm_component() -> None:
     )
     world.add_component(
         entity_id,
-        LLMComponent(provider=FakeProvider(responses=[]), model="fake"),
+        LLMComponent(model=FakeProvider(responses=[])),
     )
 
     await SystemPromptRenderSystem().process(world)
@@ -715,13 +715,11 @@ async def test_render_system_installed_subagents_sorted() -> None:
             subagents={
                 "researcher": SubagentConfig(
                     name="researcher",
-                    provider=object(),
-                    model="demo",
+                    model=object(),
                 ),
                 "analyst": SubagentConfig(
                     name="analyst",
-                    provider=object(),
-                    model="demo",
+                    model=object(),
                 ),
             }
         ),
@@ -817,7 +815,7 @@ async def test_render_system_all_builtins_together(
         entity_id,
         SubagentRegistryComponent(
             subagents={
-                "child": SubagentConfig(name="child", provider=object(), model="demo")
+                "child": SubagentConfig(name="child", model=object())
             }
         ),
     )
@@ -988,8 +986,7 @@ def test_render_compaction_prompt_does_not_mutate_runtime_prompt_state() -> None
     world.add_component(
         entity_id,
         LLMComponent(
-            provider=FakeProvider(responses=[]),
-            model="fake",
+            model=FakeProvider(responses=[]),
             system_prompt="live llm prompt",
         ),
     )
@@ -1033,8 +1030,7 @@ async def test_system_prompt_render_system_cached_process_still_bridges_runtime_
     world.add_component(
         entity_id,
         LLMComponent(
-            provider=FakeProvider(responses=[]),
-            model="fake",
+            model=FakeProvider(responses=[]),
             system_prompt="stale llm prompt",
         ),
     )
@@ -1266,8 +1262,7 @@ async def test_legacy_agent_gets_xml_tail_without_explicit_placeholder() -> None
     world.add_component(
         entity_id,
         LLMComponent(
-            provider=FakeProvider(responses=[]),
-            model="fake",
+            model=FakeProvider(responses=[]),
             system_prompt="Legacy base",
         ),
     )
@@ -1292,8 +1287,7 @@ async def test_rerender_legacy_agent_after_summary_change_no_double_block() -> N
     world.add_component(
         entity_id,
         LLMComponent(
-            provider=FakeProvider(responses=[]),
-            model="fake",
+            model=FakeProvider(responses=[]),
             system_prompt="You are helpful.",
         ),
     )
@@ -1715,7 +1709,7 @@ async def test_rendered_system_prompt_bridges_to_llm_and_legacy_components_after
             template_source=PromptTemplateSource(inline="${_provider_text}"),
         ),
     )
-    world.add_component(entity_id, LLMComponent(provider=object(), model="demo"))
+    world.add_component(entity_id, LLMComponent(model=object()))
     world.add_component(entity_id, SystemPromptComponent())
     monkeypatch.setattr(
         render_module,

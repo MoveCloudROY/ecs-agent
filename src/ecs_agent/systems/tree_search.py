@@ -210,7 +210,7 @@ class TreeSearchSystem:
                 role="user", content=f"Current path: {self._path_text(nodes, node_id)}"
             ),
         ]
-        result = await llm_component.provider.complete(messages)
+        result = await llm_component.model.complete(messages)
         if not isinstance(result, CompletionResult):
             raise TypeError("Streaming response not supported in TreeSearchSystem")
 
@@ -251,7 +251,7 @@ class TreeSearchSystem:
             Message(role="user", content=prompt),
         ]
 
-        result = await llm_component.provider.complete(messages)
+        result = await llm_component.model.complete(messages)
         if not isinstance(result, CompletionResult):
             raise TypeError("Streaming response not supported in TreeSearchSystem")
 

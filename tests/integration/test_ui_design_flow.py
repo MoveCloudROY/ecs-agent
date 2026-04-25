@@ -86,8 +86,7 @@ async def test_ui_design_flow_fake_provider(tmp_path: Path) -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            provider=provider,
-            model="fake",
+            model=provider,
             system_prompt="You are a UI design expert.",
         ),
     )
@@ -311,8 +310,8 @@ async def test_ui_design_flow_real_llm(
     world.add_component(
         agent_id,
         LLMComponent(
-            provider=provider,
-            model=MODEL,
+            model=provider,
+            
             system_prompt="You are a UI design expert.",
         ),
     )
@@ -650,7 +649,7 @@ async def test_ui_design_flow_ui_prompt_writes_artifact(tmp_path: Path) -> None:
 
     world.add_component(
         agent_id,
-        LLMComponent(provider=provider, model="fake", system_prompt=""),
+        LLMComponent(model=provider, system_prompt=""),
     )
     world.add_component(
         agent_id,

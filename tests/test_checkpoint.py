@@ -170,7 +170,7 @@ async def test_undo_reinjects_provider_and_tool_handlers() -> None:
     world = World()
     entity_id = world.create_entity()
     world.add_component(entity_id, CheckpointComponent())
-    world.add_component(entity_id, LLMComponent(provider=provider, model="gpt-4"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ToolRegistryComponent(
@@ -190,7 +190,7 @@ async def test_undo_reinjects_provider_and_tool_handlers() -> None:
     restored_tools = world.get_component(entity_id, ToolRegistryComponent)
     assert restored_llm is not None
     assert restored_tools is not None
-    assert restored_llm.provider is provider
+    assert restored_llm.model is provider
     assert restored_tools.handlers is handlers
 
 

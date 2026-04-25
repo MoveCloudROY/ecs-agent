@@ -75,7 +75,8 @@ async def main() -> None:
             ]
         )
 
-    world.add_component(agent, LLMComponent(provider=provider, model=model if api_key else "fake"))
+    world.add_component(agent, LLMComponent(model=provider,
+))
     world.add_component(
         agent,
         ConversationComponent(

@@ -84,7 +84,7 @@ async def test_responses_api_with_real_llm() -> None:
     )
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(provider=provider, model=model))
+    world.add_component(entity, LLMComponent(model=provider))
     world.add_component(
         entity,
         ConversationComponent(
@@ -146,7 +146,7 @@ async def test_tree_conversation_with_reasoning_system() -> None:
         ),
     )
 
-    world.add_component(entity, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity, LLMComponent(model=provider))
 
     # Add flat conversation for reasoning system
     world.add_component(
@@ -223,7 +223,7 @@ None
         world.add_component(
             entity,
             LLMComponent(
-                provider=provider, model="fake", system_prompt=skill.system_prompt()
+                model=provider, system_prompt=skill.system_prompt()
             ),
         )
         world.add_component(
@@ -260,16 +260,14 @@ async def test_subagent_delegation_end_to_end(
     parent_entity = world.create_entity()
 
     # Create FakeProvider-based subagent config
-    subagent_config = SubagentConfig(
-        name="test-subagent",
-        provider=FakeProvider(
+    subagent_config = SubagentConfig(model=FakeProvider(
             responses=[
                 CompletionResult(
                     message=Message(role="assistant", content="Subagent result")
                 )
             ]
         ),
-        model="fake",
+name="test-subagent",
         system_prompt="You are a test subagent",
         max_ticks=5,
         skills=[],
@@ -283,8 +281,7 @@ async def test_subagent_delegation_end_to_end(
     world.add_component(
         parent_entity,
         LLMComponent(
-            provider=FakeProvider(responses=[]),
-            model="fake",
+            model=FakeProvider(responses=[]),
         ),
     )
     world.add_component(
@@ -348,8 +345,7 @@ async def test_subagent_queue_saturation_respects_global_capacity(
             subagents={
                 "worker": SubagentConfig(
                     name="worker",
-                    provider=blocking_provider,
-                    model="fake",
+                    model=blocking_provider,
                     system_prompt="Block until released.",
                 )
             }
@@ -452,8 +448,7 @@ async def test_subagent_background_stream_events_are_visible_to_parent(
             subagents={
                 "stream-worker": SubagentConfig(
                     name="stream-worker",
-                    provider=provider,
-                    model="fake",
+                    model=provider,
                     system_prompt="Return one short streamed answer.",
                 )
             }
@@ -536,8 +531,7 @@ async def test_subagent_wait_injects_notification_and_enables_explicit_reads(
             subagents={
                 "wait-worker": SubagentConfig(
                     name="wait-worker",
-                    provider=provider,
-                    model="fake",
+                    model=provider,
                     system_prompt="Return a wrapped background result.",
                 )
             }
@@ -666,14 +660,12 @@ async def test_subagent_queued_session_survives_restore_and_reenqueue(
             subagents={
                 "blocking-worker": SubagentConfig(
                     name="blocking-worker",
-                    provider=queued_provider,
-                    model="fake",
+                    model=queued_provider,
                     system_prompt="Block until released.",
                 ),
                 "queued-worker": SubagentConfig(
                     name="queued-worker",
-                    provider=queued_provider,
-                    model="fake",
+                    model=queued_provider,
                     system_prompt="Finish quickly once admitted.",
                 ),
             }
@@ -779,7 +771,7 @@ async def test_enhanced_logging_in_system_execution() -> None:
         ]
     )
 
-    world.add_component(entity, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity, LLMComponent(model=provider))
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="Test")]),
@@ -833,10 +825,10 @@ async def test_all_new_components_serializable() -> None:
     )
 
     # SubagentRegistryComponent
+    fake_subagent_provider = FakeProvider(responses=[])
     subagent_config = SubagentConfig(
         name="test",
-        provider=FakeProvider(responses=[]),
-        model="fake",
+        model=fake_subagent_provider,
         system_prompt="",
         max_ticks=10,
         skills=[],
@@ -855,8 +847,10 @@ async def test_all_new_components_serializable() -> None:
     assert "ResponsesAPIStateComponent" in entity_data
     assert "SubagentRegistryComponent" in entity_data
 
-    # Deserialize
-    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+    # Deserialize - provide providers so SubagentRegistryComponent can reconstruct models
+    restored = WorldSerializer.from_dict(
+        serialized, providers={"fake": fake_subagent_provider}, tool_handlers={}
+    )
 
     # Verify all components restored
     tree = restored.get_component(entity, ConversationTreeComponent)

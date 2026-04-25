@@ -125,7 +125,7 @@ def build_plan_task_world(
     agent_id = world.create_entity()
     world.add_component(
         agent_id,
-        LLMComponent(provider=provider, model=model),
+        LLMComponent(model=provider),
     )
     world.add_component(agent_id, ConversationComponent(messages=[]))
     world.add_component(
@@ -148,8 +148,7 @@ def build_plan_task_world(
             subagents={
                 "advisor": SubagentConfig(
                     name="advisor",
-                    provider=provider,
-                    model=model,
+                    model=provider,
                     description="Reviews workflow drafts as an advisor.",
                     system_prompt=ADVISOR_SYSTEM_PROMPT,
                     max_ticks=30,
@@ -161,8 +160,7 @@ def build_plan_task_world(
                 ),
                 "qa": SubagentConfig(
                     name="qa",
-                    provider=provider,
-                    model=model,
+                    model=provider,
                     description="Performs QA review of workflow drafts.",
                     system_prompt=QA_SYSTEM_PROMPT,
                     max_ticks=30,
@@ -174,8 +172,7 @@ def build_plan_task_world(
                 ),
                 "plan_qa": SubagentConfig(
                     name="plan_qa",
-                    provider=provider,
-                    model=model,
+                    model=provider,
                     description="Performs QA review of the finalized workflow_plan.md.",
                     system_prompt=PLAN_QA_REVIEW_SYSTEM_PROMPT,
                     max_ticks=30,
@@ -187,8 +184,7 @@ def build_plan_task_world(
                 ),
                 "plan_writer": SubagentConfig(
                     name="plan_writer",
-                    provider=provider,
-                    model=model,
+                    model=provider,
                     description="Converts an approved draft into a structured workflow_plan.md using the writing-plans skill.",
                     system_prompt=WRITE_PLAN_SYSTEM_PROMPT,
                     skills=["writing-plans"],

@@ -89,7 +89,7 @@ async def main() -> None:
 
     # [3] Model Switching
     print("\n[3] Per-Entity Model Switching")
-    llm = LLMComponent(provider=provider, model="fake" if not api_key else model)
+    llm = LLMComponent(model=provider if not api_key else model)
     world.add_component(agent, llm)
     world.add_component(
         agent,

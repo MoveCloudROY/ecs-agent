@@ -31,22 +31,13 @@ if TYPE_CHECKING:
 
 ScriptHandler = Callable[["World", EntityId, str], Awaitable[str | None]]
 
-try:
-    from ecs_agent.providers.protocol import LLMProvider
-except ImportError:
-    # TYPE_CHECKING workaround: if LLMProvider not yet implemented, use Any
-    LLMProvider = Any  # type: ignore[assignment,misc]
-
-
 @dataclass(slots=True)
 class LLMComponent:
-    """Links Agent to LLM provider."""
+    """Links Agent to an LLM model implementation."""
 
-    provider: LLMProvider
-    model: str
+    model: Any  # LLMModel — using Any to avoid Protocol import in slots dataclass
     system_prompt: str = ""
-    pending_provider: LLMProvider | None = None
-    pending_model: str | None = None
+    pending_model: Any | None = None  # LLMModel | None
 
 
 @dataclass(slots=True)

@@ -271,7 +271,7 @@ async def main() -> None:
     main_agent = world.create_entity()
 
     # Attach components
-    world.add_component(main_agent, LLMComponent(provider=provider, model=model))
+    world.add_component(main_agent, LLMComponent(model=provider))
     world.add_component(
         main_agent,
         ConversationComponent(

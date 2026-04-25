@@ -19,14 +19,14 @@ def mock_litellm(monkeypatch: pytest.MonkeyPatch):
     # Inject mock before reload
     monkeypatch.setitem(__import__("sys").modules, "litellm", mock_module)
 
-    # Reload the provider module so it picks up the mocked litellm from sys.modules
+    # Reload the actual model module so it picks up the mocked litellm from sys.modules
     import importlib
-    import ecs_agent.providers.litellm_provider
+    import ecs_agent.providers.litellm_model
 
-    importlib.reload(ecs_agent.providers.litellm_provider)
+    importlib.reload(ecs_agent.providers.litellm_model)
 
-    # Make HAS_LITELLM=True so provider can be instantiated
-    monkeypatch.setattr("ecs_agent.providers.litellm_provider.HAS_LITELLM", True)
+    # Make HAS_LITELLM=True on the actual model module so the constructor passes
+    monkeypatch.setattr("ecs_agent.providers.litellm_model.HAS_LITELLM", True)
     return mock_module
 
 
@@ -48,8 +48,8 @@ async def test_import_guard_raises_when_litellm_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Test constructor raises ImportError with helpful message when litellm not available."""
-    # Force HAS_LITELLM=False
-    monkeypatch.setattr("ecs_agent.providers.litellm_provider.HAS_LITELLM", False)
+    # Force HAS_LITELLM=False on the actual model module
+    monkeypatch.setattr("ecs_agent.providers.litellm_model.HAS_LITELLM", False)
 
     from ecs_agent.providers.litellm_provider import LiteLLMProvider
 

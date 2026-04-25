@@ -162,8 +162,8 @@ async def main() -> None:
     world.add_component(
         agent,
         LLMComponent(
-            provider=provider,
-            model=model if api_key else "fake-model",
+            model=provider,
+            
             system_prompt=(
                 "You are a planning expert using MCTS to explore solution strategies. "
                 "When asked to generate actions, return one per line. "

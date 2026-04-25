@@ -57,7 +57,7 @@ def _build_react_world(
     world = World()
     agent_id = world.create_entity()
 
-    world.add_component(agent_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(agent_id, LLMComponent(model=provider))
     world.add_component(agent_id, ConversationComponent(messages=[], max_messages=50))
     world.add_component(agent_id, PlanComponent(steps=plan_steps))
     world.add_component(agent_id, SystemPromptComponent(content=system_prompt))

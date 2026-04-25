@@ -59,8 +59,7 @@ async def test_simple_chat_agent_end_to_end() -> None:
     world.add_component(
         eid,
         LLMComponent(
-            provider=provider,
-            model="fake",
+            model=provider,
             system_prompt="You are helpful.",
         ),
     )
@@ -99,8 +98,7 @@ async def test_terminal_on_reasoning_complete() -> None:
     world.add_component(
         eid,
         LLMComponent(
-            provider=provider,
-            model="fake",
+            model=provider,
             system_prompt="You are helpful.",
         ),
     )

@@ -44,7 +44,7 @@ def _make_world(
 ) -> tuple[World, int]:
     world = World()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Solve this")]),

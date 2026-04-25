@@ -47,7 +47,7 @@ async def test_tool_call_execution_end_to_end() -> None:
 
     world = World()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -112,7 +112,7 @@ async def test_unknown_tool_graceful_handling() -> None:
 
     world = World()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(

@@ -123,8 +123,7 @@ async def part_1_undo() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            provider=provider,
-            model=_get_model_name(),
+            model=provider,
             system_prompt="You are a helpful assistant.",
         ),
     )
@@ -158,7 +157,7 @@ async def part_1_undo() -> None:
 
     # Undo the last tick
     print("\nUndoing last tick...")
-    await CheckpointSystem.undo(world, {_get_model_name(): provider}, {})
+    await CheckpointSystem.undo(world, {getattr(provider, "model_id", "default"): provider, "default": provider}, {})
 
     # Show conversation after undo
     conv = world.get_component(agent_id, ConversationComponent)
@@ -185,8 +184,7 @@ async def part_2_resume() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            provider=provider,
-            model=_get_model_name(),
+            model=provider,
             system_prompt="You are a helpful assistant.",
         ),
     )
@@ -226,7 +224,7 @@ async def part_2_resume() -> None:
 
         # Load checkpoint and resume
         loaded_world, current_tick = Runner.load_checkpoint(
-            checkpoint_path, {_get_model_name(): provider}, {}
+            checkpoint_path, {getattr(provider, "model_id", "default"): provider, "default": provider}, {}
         )
         print(f"✓ Checkpoint loaded (current_tick={current_tick})")
 
@@ -297,8 +295,7 @@ async def part_3_compact() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            provider=provider,
-            model=_get_model_name(),
+            model=provider,
             system_prompt="You are a helpful assistant.",
         ),
     )

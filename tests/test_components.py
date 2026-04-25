@@ -40,20 +40,19 @@ class TestLLMComponent:
 
     def test_instantiation(self, mock_llm):
         """Test LLMComponent can be instantiated."""
-        comp = LLMComponent(provider=mock_llm, model="gpt-4")
-        assert comp.provider is mock_llm
-        assert comp.model == "gpt-4"
+        comp = LLMComponent(model=mock_llm)
+        assert comp.model is mock_llm
         assert comp.system_prompt == ""
 
     def test_system_prompt_default(self, mock_llm):
         """Test system_prompt defaults to empty string."""
-        comp = LLMComponent(provider=mock_llm, model="gpt-3.5-turbo")
+        comp = LLMComponent(model=mock_llm)
         assert comp.system_prompt == ""
 
     def test_system_prompt_custom(self, mock_llm):
         """Test system_prompt can be set."""
         prompt = "You are a helpful assistant."
-        comp = LLMComponent(provider=mock_llm, model="gpt-4", system_prompt=prompt)
+        comp = LLMComponent(model=mock_llm, system_prompt=prompt)
         assert comp.system_prompt == prompt
 
     def test_dataclass_slots(self):

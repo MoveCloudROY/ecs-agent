@@ -57,8 +57,8 @@ def _build_world(
     world.add_component(
         agent,
         LLMComponent(
-            provider=provider,
-            model=provider.model,
+            model=provider,
+            
             system_prompt=(
                 "You are a helpful assistant with access to file and shell tools. "
                 "Use the tools as instructed. Be precise and concise."

@@ -92,8 +92,8 @@ async def main() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            provider=provider,
-            model=model,
+            model=provider,
+            
             system_prompt="You are a helpful calculator assistant. Use the provided tools to compute results.",
         ),
     )

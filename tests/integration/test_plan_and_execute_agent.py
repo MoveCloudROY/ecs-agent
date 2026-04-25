@@ -58,7 +58,7 @@ def _build_plan_execute_world(
     world = World()
     agent_id = world.create_entity()
 
-    world.add_component(agent_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(agent_id, LLMComponent(model=provider))
     world.add_component(
         agent_id,
         ConversationComponent(

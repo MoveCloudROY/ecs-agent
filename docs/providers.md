@@ -15,7 +15,7 @@ import os
 
 from ecs_agent.accounting.subscriber import AccountingSubscriber
 from ecs_agent.core import World
-from ecs_agent.providers.registry import ProviderRegistry, get_llm_provider
+from ecs_agent.providers.registry import ProviderRegistry, get_model
 
 # 1) Load provider configs from TOML file
 registry = ProviderRegistry.from_toml("providers.toml")
@@ -28,8 +28,8 @@ registry = ProviderRegistry.from_toml("providers.toml")
 #     }
 # })
 
-# 2) One call: model ID → correct provider type (determined by api_format)
-provider = get_llm_provider("aliyun/qwen3.5-flash", registry=registry)
+# 2) One call: model ID → correct LLMModel instance (determined by api_format)
+model = get_model("aliyun/qwen3.5-flash", registry=registry)
 
 # 3) Attach accounting to the World's event bus
 world = World()
@@ -41,7 +41,7 @@ subscriber.subscribe(world.event_bus)
 
 ## Provider Registry
 
-`ProviderRegistry` maps provider IDs to endpoint/auth/protocol configs. `get_llm_provider` uses it to construct the right provider type automatically.
+`ProviderRegistry` maps provider IDs to endpoint/auth/protocol configs. `get_model` uses it to construct the right model type automatically.
 
 ### TOML Configuration
 
@@ -66,7 +66,7 @@ default_max_tokens = 8192
 ### Loading a Registry
 
 ```python
-from ecs_agent.providers.registry import ProviderRegistry, get_llm_provider
+from ecs_agent.providers.registry import ProviderRegistry, get_model
 
 # From TOML file
 registry = ProviderRegistry.from_toml("providers.toml")
@@ -81,25 +81,29 @@ registry = ProviderRegistry.from_dict({
 })
 ```
 
-### `get_llm_provider`
+### `get_model`
 
 ```python
-# Resolves provider ID → ProviderEntry → ProviderConfig → correct provider type
-provider = get_llm_provider("aliyun/qwen3.5-flash", registry=registry)
+from ecs_agent.providers.registry import get_model
+
+# Resolves provider ID → ProviderEntry → ProviderConfig → correct LLMModel instance
+model = get_model("aliyun/qwen3.5-flash", registry=registry)
 
 # Override API key at call time
-provider = get_llm_provider("aliyun/qwen3.5-flash", registry=registry, api_key="sk-...")
+model = get_model("aliyun/qwen3.5-flash", registry=registry, api_key="sk-...")
 ```
+
+`get_llm_provider` is a backward-compatible alias for `get_model`.
 
 API key resolution order: explicit `api_key` argument → `ProviderEntry.api_key` → env var named by `ProviderEntry.api_key_env`.
 
 Dispatch by `api_format`:
 
-| `api_format` | Provider type returned |
+| `api_format` | Model type returned |
 |---|---|
-| `openai_chat_completions` | `OpenAIProvider` |
-| `openai_responses` | `OpenAIProvider` (Responses API) |
-| `anthropic_messages` | `ClaudeProvider` |
+| `openai_chat_completions` | `OpenAIModel` |
+| `openai_responses` | `OpenAIModel` (Responses API) |
+| `anthropic_messages` | `ClaudeModel` |
 | `openai_embeddings` | raises `ValueError` — use `get_embedding_provider` |
 | `openai_files` | raises `ValueError` — use `get_file_service` |
 
@@ -113,7 +117,7 @@ Dispatch by `api_format`:
 | `api_key_env` | `str \| None` | `None` | Env var name to read the key from |
 | `extra_headers` | `dict[str, str]` | `{}` | Extra HTTP headers |
 | `timeout` | `float \| None` | `None` | Global timeout override (seconds) |
-| `default_max_tokens` | `int` | `4096` | Used as `max_tokens` for `ClaudeProvider` |
+| `default_max_tokens` | `int` | `4096` | Used as `max_tokens` for `ClaudeModel` |
 
 ---
 
@@ -170,9 +174,9 @@ Available `ApiFormat` values:
 | `extra_headers` | `dict[str, str]` | `{}` | Additional HTTP headers |
 | `timeout` | `float \| None` | `None` | Global timeout override (seconds) |
 
-## LLMProvider Protocol
+## LLMModel Protocol
 
-The `LLMProvider` protocol defines the interface for all language model implementations. It's located in `ecs_agent.providers.protocol`.
+The `LLMModel` protocol defines the interface for all language model implementations. It's located in `ecs_agent.providers.protocol`.
 
 ```python
 from typing import Any, Protocol, runtime_checkable
@@ -180,7 +184,12 @@ from collections.abc import AsyncIterator
 from ecs_agent.types import Message, CompletionResult, StreamDelta, ToolSchema
 
 @runtime_checkable
-class LLMProvider(Protocol):
+class LLMModel(Protocol):
+    @property
+    def model_id(self) -> str:
+        """Canonical model identifier, e.g. 'qwen3.5-flash'."""
+        ...
+
     async def complete(
         self,
         messages: list[Message],
@@ -189,20 +198,55 @@ class LLMProvider(Protocol):
         response_format: dict[str, Any] | None = None,
     ) -> CompletionResult | AsyncIterator[StreamDelta]:
         ...
+
+# Backward-compatible alias
+LLMProvider = LLMModel
 ```
 
 The `complete` method returns a `CompletionResult` when `stream=False` and an `AsyncIterator[StreamDelta]` when `stream=True`.
 
+### Using LLMModel with LLMComponent
+
+```python
+from ecs_agent.components import LLMComponent
+from ecs_agent.providers import OpenAIModel
+from ecs_agent.providers.config import ApiFormat, ProviderConfig
+
+model = OpenAIModel(
+    config=ProviderConfig(
+        provider_id="aliyun",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        api_key="your-api-key",
+        api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+    ),
+    model="qwen3.5-flash",
+)
+
+# LLMComponent takes the model object directly (not a string)
+llm = LLMComponent(model=model, system_prompt="You are a helpful assistant.")
+```
+
+### Switching models at runtime
+
+Set `pending_model` on `LLMComponent` to a new `LLMModel` object before the tick runs. The system will swap it in, update `model`, and clear `pending_model` after the call:
+
+```python
+llm_component = world.get_component(entity, LLMComponent)
+llm_component.pending_model = get_model("aliyun/qwen3.5-flash", registry=registry)
+```
+
 ---
 
-## OpenAIProvider
+## OpenAIModel
 
-`OpenAIProvider` is an OpenAI-compatible HTTP provider using `httpx.AsyncClient`. It works with OpenAI's API as well as compatible alternatives like DashScope, vLLM, or Ollama. Internally it dispatches to explicit **chat completions** or **responses** adapters based on the `api_format` in the `ProviderConfig`.
+`OpenAIModel` is an OpenAI-compatible HTTP model using `httpx.AsyncClient`. It works with OpenAI's API as well as compatible alternatives like DashScope, vLLM, or Ollama. Internally it dispatches to explicit **chat completions** or **responses** adapters based on the `api_format` in the `ProviderConfig`.
+
+`OpenAIProvider` is a backward-compatible alias for `OpenAIModel`.
 
 ### Configuration
 
 ```python
-from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers import OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 
 # Chat Completions
@@ -212,7 +256,7 @@ config = ProviderConfig(
     api_key="your-api-key",
     api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
 )
-provider = OpenAIProvider(
+model = OpenAIModel(
     config=config,
     model="gpt-4o-mini",
     connect_timeout=10.0,
@@ -228,7 +272,7 @@ responses_config = ProviderConfig(
     api_key="your-api-key",
     api_format=ApiFormat.OPENAI_RESPONSES,
 )
-provider = OpenAIProvider(config=responses_config, model="qwen3.5-flash")
+model = OpenAIModel(config=responses_config, model="qwen3.5-flash")
 ```
 
 ### Chat Completions Adapter
@@ -271,14 +315,16 @@ response_format = pydantic_to_response_format(User)
 
 ---
 
-## ClaudeProvider
+## ClaudeModel
 
-`ClaudeProvider` is an Anthropic-compatible provider with full SSE streaming and cache-aware usage normalization. It communicates with the Anthropic Messages API format using `httpx.AsyncClient`.
+`ClaudeModel` is an Anthropic-compatible model with full SSE streaming and cache-aware usage normalization. It communicates with the Anthropic Messages API format using `httpx.AsyncClient`.
+
+`ClaudeProvider` is a backward-compatible alias for `ClaudeModel`.
 
 ### Configuration
 
 ```python
-from ecs_agent.providers import ClaudeProvider
+from ecs_agent.providers import ClaudeModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 
 # Direct Anthropic API
@@ -288,13 +334,13 @@ config = ProviderConfig(
     api_key="your-anthropic-api-key",
     api_format=ApiFormat.ANTHROPIC_MESSAGES,
 )
-provider = ClaudeProvider(config=config, model="claude-3-5-haiku-latest", max_tokens=4096)
+model = ClaudeModel(config=config, model="claude-3-5-haiku-latest", max_tokens=4096)
 ```
 
 For Anthropic-compatible endpoints (e.g. Aliyun Kimi):
 
 ```python
-from ecs_agent.providers import ClaudeProvider
+from ecs_agent.providers import ClaudeModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 
 # Anthropic-compatible endpoint (e.g. Aliyun Kimi)
@@ -304,7 +350,7 @@ config = ProviderConfig(
     api_key="your-api-key",
     api_format=ApiFormat.ANTHROPIC_MESSAGES,
 )
-provider = ClaudeProvider(config=config, model="kimi-k2.5")
+model = ClaudeModel(config=config, model="kimi-k2.5")
 ```
 
 ### Constructor Parameters
@@ -329,11 +375,11 @@ provider = ClaudeProvider(config=config, model="kimi-k2.5")
 - **Error Handling**: `httpx.HTTPStatusError` and `httpx.RequestError` are logged and re-raised.
 - **Headers**: Sends `x-api-key` and `anthropic-version: 2023-06-01` headers.
 
-### Usage with RetryProvider
+### Usage with RetryModel
 
 ```python
-from ecs_agent import RetryProvider, RetryConfig
-from ecs_agent.providers import ClaudeProvider
+from ecs_agent import RetryModel, RetryConfig
+from ecs_agent.providers import ClaudeModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 
 config = ProviderConfig(
@@ -342,34 +388,43 @@ config = ProviderConfig(
     api_key="your-api-key",
     api_format=ApiFormat.ANTHROPIC_MESSAGES,
 )
-provider = RetryProvider(
-    provider=ClaudeProvider(config=config, model="claude-sonnet-4-20250514"),
-    config=RetryConfig(max_retries=3),
+model = RetryModel(
+    model=ClaudeModel(config=config, model="claude-sonnet-4-20250514"),
+    retry_config=RetryConfig(max_retries=3),
 )
 ```
 
 ---
 
-## FakeProvider
+## FakeModel
 
-`FakeProvider` is designed for deterministic testing. It returns a sequence of pre-configured responses.
+`FakeModel` is designed for deterministic testing. It returns a sequence of pre-configured responses.
+
+`FakeProvider` is a backward-compatible alias for `FakeModel`.
 
 ### Usage
 
 ```python
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.types import CompletionResult, Message
 
 responses = [
     CompletionResult(message=Message(role="assistant", content="Hello!")),
     CompletionResult(message=Message(role="assistant", content="How can I help?"))
 ]
-provider = FakeProvider(responses=responses)
+model = FakeModel(responses=responses, model_id="test-model")
 
 # First call returns "Hello!"
 # Second call returns "How can I help?"
 # Third call raises IndexError
 ```
+
+### Constructor Parameters
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `responses` | `list[CompletionResult]` | (required) | Sequence of responses to return |
+| `model_id` | `str` | `"fake"` | Identifier returned by `model.model_id` |
 
 ### Behavior
 
@@ -379,15 +434,17 @@ provider = FakeProvider(responses=responses)
 
 ---
 
-## RetryProvider
+## RetryModel
 
-`RetryProvider` adds resilience to any `LLMProvider` by wrapping it and implementing retry logic using `tenacity`.
+`RetryModel` adds resilience to any `LLMModel` by wrapping it and implementing retry logic using `tenacity`.
+
+`RetryProvider` is a backward-compatible alias for `RetryModel`.
 
 ### Usage
 
 ```python
-from ecs_agent.providers import OpenAIProvider
-from ecs_agent import RetryProvider
+from ecs_agent.providers import OpenAIModel
+from ecs_agent import RetryModel
 from ecs_agent.types import RetryConfig
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 
@@ -397,7 +454,7 @@ config = ProviderConfig(
     api_key="your-api-key",
     api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
 )
-base_provider = OpenAIProvider(config=config, model="gpt-4o-mini")
+base_model = OpenAIModel(config=config, model="gpt-4o-mini")
 retry_config = RetryConfig(
     max_attempts=3,
     multiplier=1.0,
@@ -406,7 +463,7 @@ retry_config = RetryConfig(
     retry_status_codes=(429, 500, 502, 503, 504)
 )
 
-provider = RetryProvider(provider=base_provider, retry_config=retry_config)
+model = RetryModel(model=base_model, retry_config=retry_config)
 ```
 
 ### Behavior
@@ -417,23 +474,25 @@ provider = RetryProvider(provider=base_provider, retry_config=retry_config)
 
 ---
 
-## LiteLLMProvider
+## LiteLLMModel
 
-`LiteLLMProvider` enables access to 100+ LLM providers through a single unified interface via the `litellm` library. This is an optional dependency — install with `pip install litellm`.
+`LiteLLMModel` enables access to 100+ LLM providers through a single unified interface via the `litellm` library. This is an optional dependency — install with `pip install litellm`.
+
+`LiteLLMProvider` is a backward-compatible alias for `LiteLLMModel`.
 
 ### Configuration
 
 ```python
-from ecs_agent.providers import LiteLLMProvider
+from ecs_agent.providers import LiteLLMModel
 
 # OpenAI
-provider = LiteLLMProvider(model="gpt-4o", api_key="sk-...")
+model = LiteLLMModel(model="gpt-4o", api_key="sk-...")
 
 # Anthropic
-provider = LiteLLMProvider(model="claude-sonnet-4-20250514", api_key="sk-ant-...")
+model = LiteLLMModel(model="claude-sonnet-4-20250514", api_key="sk-ant-...")
 
 # Any litellm-supported model
-provider = LiteLLMProvider(model="ollama/llama3", base_url="http://localhost:11434")
+model = LiteLLMModel(model="ollama/llama3", base_url="http://localhost:11434")
 ```
 
 ### Constructor Parameters
@@ -748,11 +807,12 @@ results = await store.search([0.1, 0.2, ...], top_k=5)
 
 ---
 
-## Choosing a Provider
+## Choosing a Model
 
-- **Production**: Use `OpenAIProvider` for real API interaction. Wrap it in a `RetryProvider` to handle transient network issues or rate limits.
-- **Testing**: Use `FakeProvider` for unit tests where you need predictable, deterministic results without making real network requests.
-- **Resilience**: Always consider wrapping your primary provider in a `RetryProvider` for production environments.
-- **Claude-native**: Use `ClaudeProvider` for direct Anthropic API access with native tool use support and cache-aware accounting.
-- **Multi-provider**: Use `LiteLLMProvider` when you need to switch between different providers without changing code.
+- **Production**: Use `OpenAIModel` for real API interaction. Wrap it in a `RetryModel` to handle transient network issues or rate limits.
+- **Testing**: Use `FakeModel` for unit tests where you need predictable, deterministic results without making real network requests.
+- **Resilience**: Always consider wrapping your primary model in a `RetryModel` for production environments.
+- **Claude-native**: Use `ClaudeModel` for direct Anthropic API access with native tool use support and cache-aware accounting.
+- **Multi-provider**: Use `LiteLLMModel` when you need to switch between different providers without changing code.
 - **Accounting**: Attach `AccountingSubscriber` to the `EventBus` to track cost and cache hit-rate metrics across invocations.
+- **Backward compat**: All `*Provider` names (`OpenAIProvider`, `ClaudeProvider`, `FakeProvider`, `RetryProvider`, `LiteLLMProvider`, `LLMProvider`, `get_llm_provider`) remain importable as aliases.

@@ -1,4 +1,4 @@
-"""Provider registry and factory for LLM providers."""
+"""Provider registry and factory for LLM models."""
 
 from __future__ import annotations
 
@@ -6,11 +6,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-from ecs_agent.providers.claude_provider import ClaudeProvider
 from ecs_agent.providers.config import ApiFormat, ProviderConfig, ProviderEntry
+from ecs_agent.providers.model_factory import create_model
 from ecs_agent.providers.model_id import ModelId, parse_model_id
-from ecs_agent.providers.openai_provider import OpenAIProvider
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.protocol import LLMModel
 
 
 class ProviderRegistry:
@@ -51,12 +50,12 @@ class ProviderRegistry:
         return sorted(self._entries.keys())
 
 
-def get_llm_provider(
+def get_model(
     model_id: str | ModelId,
     *,
     registry: ProviderRegistry,
     api_key: str | None = None,
-) -> LLMProvider:
+) -> LLMModel:
     parsed = parse_model_id(model_id) if isinstance(model_id, str) else model_id
     entry = registry.get_entry(parsed.provider)
 
@@ -76,20 +75,27 @@ def get_llm_provider(
         timeout=entry.timeout,
     )
 
-    match entry.api_format:
-        case ApiFormat.OPENAI_CHAT_COMPLETIONS | ApiFormat.OPENAI_RESPONSES:
-            return OpenAIProvider(config=config, model=parsed.model)
-        case ApiFormat.ANTHROPIC_MESSAGES:
-            return ClaudeProvider(
-                config=config,
-                model=parsed.model,
-                max_tokens=entry.default_max_tokens,
-            )
-        case ApiFormat.OPENAI_EMBEDDINGS | ApiFormat.OPENAI_FILES:
-            raise ValueError(
-                f"api_format '{entry.api_format.value}' is not supported by get_llm_provider; "
-                "use get_embedding_provider/get_file_service"
-            )
+    if entry.api_format in (ApiFormat.OPENAI_EMBEDDINGS, ApiFormat.OPENAI_FILES):
+        raise ValueError(
+            f"api_format '{entry.api_format.value}' is not supported by get_model; "
+            "use get_embedding_provider/get_file_service"
+        )
+
+    kwargs: dict[str, Any] = {}
+    if entry.api_format == ApiFormat.ANTHROPIC_MESSAGES and entry.default_max_tokens is not None:
+        kwargs["max_tokens"] = entry.default_max_tokens
+
+    return create_model(config, parsed.model, **kwargs)
+
+
+# Backward-compat alias
+def get_llm_provider(
+    model_id: str | ModelId,
+    *,
+    registry: ProviderRegistry,
+    api_key: str | None = None,
+) -> LLMModel:
+    return get_model(model_id, registry=registry, api_key=api_key)
 
 
 def _resolve_api_key(

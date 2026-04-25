@@ -74,7 +74,7 @@ async def test_live_script_action_rewrites_prompt_before_llm(live_api_key: str) 
     world.add_component(
         entity,
         LLMComponent(
-            provider=provider, model=model, system_prompt="You are a helpful assistant."
+            model=provider, system_prompt="You are a helpful assistant."
         ),
     )
     world.add_component(
@@ -139,7 +139,7 @@ async def test_live_script_action_world_mutation_persists(live_api_key: str) -> 
     world.add_component(
         entity,
         LLMComponent(
-            provider=provider, model=model, system_prompt="You are a helpful assistant."
+            model=provider, system_prompt="You are a helpful assistant."
         ),
     )
     world.add_component(

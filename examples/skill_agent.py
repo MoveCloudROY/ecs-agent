@@ -74,7 +74,7 @@ async def main() -> None:
         selected_model = "fake"
         print("No LLM_API_KEY provided. Using FakeProvider.")
 
-    world.add_component(agent, LLMComponent(provider=provider, model=selected_model))
+    world.add_component(agent, LLMComponent(model=provider))
     world.add_component(
         agent,
         ConversationComponent(

@@ -55,8 +55,18 @@ async def test_non_streaming_emits_single_llm_invocation_event_with_active_model
     logger = _RecordingLogger()
     monkeypatch.setattr(reasoning_module, "logger", logger)
 
+    active_model = FakeProvider(
+        responses=[
+            CompletionResult(
+                message=Message(role="assistant", content="done"),
+                usage=Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+            )
+        ],
+        model_id="active-model",
+    )
+
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="base-model"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="hello")]),
@@ -64,7 +74,7 @@ async def test_non_streaming_emits_single_llm_invocation_event_with_active_model
 
     llm_component = world.get_component(entity_id, LLMComponent)
     assert llm_component is not None
-    llm_component.pending_model = "active-model"
+    llm_component.pending_model = active_model
 
     invocation_events: list[LLMInvocationEvent] = []
 
@@ -100,12 +110,13 @@ async def test_streaming_success_emits_single_complete_llm_invocation_event() ->
                 message=Message(role="assistant", content="AB"),
                 usage=Usage(prompt_tokens=8, completion_tokens=4, total_tokens=12),
             )
-        ]
+        ],
+        model_id="stream-model",
     )
 
     entity_id = world.create_entity()
     world.add_component(
-        entity_id, LLMComponent(provider=provider, model="stream-model")
+        entity_id, LLMComponent(model=provider)
     )
     world.add_component(
         entity_id,
@@ -140,12 +151,13 @@ async def test_interrupted_stream_emits_single_partial_or_unknown_llm_invocation
                 message=Message(role="assistant", content="ignored"),
                 usage=Usage(prompt_tokens=2, completion_tokens=1, total_tokens=3),
             )
-        ]
+        ],
+        model_id="interrupt-model",
     )
 
     entity_id = world.create_entity()
     world.add_component(
-        entity_id, LLMComponent(provider=provider, model="interrupt-model")
+        entity_id, LLMComponent(model=provider)
     )
     world.add_component(
         entity_id,

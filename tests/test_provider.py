@@ -71,12 +71,24 @@ def test_llmprovider_has_response_format_parameter() -> None:
 
 def test_openai_provider_conforms_to_protocol() -> None:
     """OpenAIProvider should conform to LLMProvider Protocol."""
-    assert issubclass(OpenAIProvider, LLMProvider)
+    from ecs_agent.providers.config import ApiFormat, ProviderConfig
+    instance = OpenAIProvider(
+        config=ProviderConfig(
+            provider_id="openai",
+            base_url="http://test",
+            api_key="test",
+            api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+        ),
+        model="gpt-4",
+    )
+    assert isinstance(instance, LLMProvider)
 
 
 def test_fake_provider_conforms_to_protocol() -> None:
     """FakeProvider should conform to LLMProvider Protocol."""
-    assert issubclass(FakeProvider, LLMProvider)
+    from ecs_agent.types import CompletionResult, Message
+    instance = FakeProvider(responses=[CompletionResult(message=Message(role="assistant", content="hi"))])
+    assert isinstance(instance, LLMProvider)
 
 
 @pytest.mark.asyncio

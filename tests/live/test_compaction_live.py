@@ -113,7 +113,7 @@ def _build_python_conversation() -> list[Message]:
 def _build_compaction_world(provider: object) -> tuple[World, EntityId]:
     world = World()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model=MODEL))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(messages=_build_python_conversation()),
@@ -136,8 +136,8 @@ async def test_live_compaction_xml_summary_visible_chat_completions(
     world.add_component(
         entity_id,
         LLMComponent(
-            provider=provider,
-            model=MODEL,
+            model=provider,
+            
             system_prompt="You are a helpful assistant.",
         ),
     )
@@ -191,8 +191,8 @@ async def test_live_compaction_xml_summary_visible_responses_api(
     world.add_component(
         entity_id,
         LLMComponent(
-            provider=provider,
-            model=MODEL,
+            model=provider,
+            
             system_prompt="You are a helpful assistant.",
         ),
     )

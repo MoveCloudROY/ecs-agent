@@ -41,7 +41,7 @@ async def test_reasoning_uses_tree_when_tree_component_exists() -> None:
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
 
     # Create tree with messages
     tree = ConversationTreeComponent()
@@ -75,7 +75,7 @@ async def test_reasoning_falls_back_to_flat_conversation_when_no_tree() -> None:
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -105,7 +105,7 @@ async def test_reasoning_tree_with_system_prompt() -> None:
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(entity_id, SystemPromptComponent(content="You are helpful"))
 
     tree = ConversationTreeComponent()
@@ -139,7 +139,7 @@ async def test_reasoning_after_revert_uses_reverted_branch_context() -> None:
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
 
     # Build tree: root -> child1 -> child2
     tree = ConversationTreeComponent()
@@ -180,7 +180,7 @@ async def test_reasoning_tree_follows_active_branch() -> None:
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity_id, LLMComponent(model=provider))
 
     # Create tree with two branches
     tree = ConversationTreeComponent()

@@ -98,7 +98,7 @@ class PlanningSystem:
             start_time = time.monotonic()
             try:
                 logger.info("planning_request", message_count=len(messages))
-                result = await llm_component.provider.complete(messages, tools=tools)
+                result = await llm_component.model.complete(messages, tools=tools)
                 if not isinstance(result, CompletionResult):
                     raise RuntimeError(
                         "Provider returned stream iterator in non-streaming mode"

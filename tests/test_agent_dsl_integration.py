@@ -56,8 +56,8 @@ def create_fake_provider_factory(responses: list[CompletionResult]):
     """Create a provider factory that returns FakeProvider instances."""
 
     def factory(model: str, system_prompt: str):
-        # Each subagent gets its own provider instance
-        return FakeProvider(responses=responses.copy())
+        # Each subagent gets its own model instance
+        return FakeProvider(responses=responses.copy(), model_id=model)
 
     return factory
 
@@ -281,7 +281,7 @@ Markdown system prompt
         # Verify LLMComponent has markdown config
         llm = world.get_component(primary_entity, LLMComponent)
         assert llm is not None
-        assert llm.model == "markdown-model"
+        assert llm.model.model_id == "markdown-model"
         assert llm.system_prompt == "Markdown system prompt"
 
 
@@ -339,12 +339,12 @@ async def test_subagent_registry_integration() -> None:
         # Verify subagent names and models match DSL
         researcher = registry.subagents["researcher"]
         assert researcher.name == "researcher"
-        assert researcher.model == "research-model"
+        assert researcher.model.model_id == "research-model"
         assert researcher.system_prompt == "I research topics."
 
         writer = registry.subagents["writer"]
         assert writer.name == "writer"
-        assert writer.model == "write-model"
+        assert writer.model.model_id == "write-model"
         assert writer.system_prompt == "I write content."
 
 
@@ -498,7 +498,7 @@ I am a helper agent.
         # Verify World state
         llm = world.get_component(primary_entity, LLMComponent)
         assert llm is not None
-        assert llm.model == "fake-model"
+        assert llm.model.model_id == "fake-model"
 
         registry = world.get_component(primary_entity, SubagentRegistryComponent)
         assert registry is not None

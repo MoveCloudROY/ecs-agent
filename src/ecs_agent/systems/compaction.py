@@ -18,8 +18,8 @@ from ecs_agent.components import (
 from ecs_agent.core import World
 from ecs_agent.logging import get_logger
 from ecs_agent.prompts.message_assembly import apply_outbound_budget
-from ecs_agent.providers.protocol import LLMProvider
-from ecs_agent.providers.registry import ProviderRegistry, get_llm_provider
+from ecs_agent.providers.protocol import LLMModel
+from ecs_agent.providers.registry import ProviderRegistry, get_model
 from ecs_agent.systems.subagent_wait import build_subagent_compaction_state
 from ecs_agent.systems.system_prompt_render_system import render_compaction_prompt
 from ecs_agent.types import (
@@ -70,7 +70,7 @@ class CompactionSystem:
                 messages=working_messages,
             )
 
-            summary_provider, summary_model = self._resolve_summary_target(
+            summary_model = self._resolve_summary_target(
                 world=world,
                 entity_id=entity_id,
                 llm_component=llm_component,
@@ -85,7 +85,7 @@ class CompactionSystem:
                 entity_id, CurrentCompactionSummaryComponent
             )
             summary = await self._summarize(
-                provider=summary_provider,
+                model=summary_model,
                 messages=self._build_summary_input_messages(
                     previous_summary=(
                         current_summary.summary
@@ -135,7 +135,7 @@ class CompactionSystem:
                 compacted_tokens=compacted_tokens,
                 summary_model=config.summary_model,
                 summary_model_id=config.summary_model_id,
-                resolved_summary_model=summary_model,
+                resolved_summary_model=summary_model.model_id,
             )
 
     def _estimate_tokens(self, messages: list[Message]) -> int:
@@ -214,15 +214,14 @@ class CompactionSystem:
         entity_id: EntityId,
         llm_component: LLMComponent,
         config: CompactionConfigComponent,
-    ) -> tuple[LLMProvider, str]:
+    ) -> LLMModel:
         if config.summary_model_id is not None:
             registry = self._resolve_provider_registry(world, entity_id, llm_component)
-            provider = get_llm_provider(
+            return get_model(
                 config.summary_model_id,
                 registry=registry,
-                api_key=self._resolve_api_key(llm_component.provider),
+                api_key=self._resolve_api_key(llm_component.model),
             )
-            return provider, config.summary_model_id
 
         if config.summary_model is not None:
             logger.warning(
@@ -230,9 +229,8 @@ class CompactionSystem:
                 entity_id=entity_id,
                 summary_model=config.summary_model,
             )
-            return llm_component.provider, config.summary_model
 
-        return llm_component.provider, llm_component.model
+        return llm_component.model
 
     def _resolve_provider_registry(
         self,
@@ -240,7 +238,7 @@ class CompactionSystem:
         entity_id: EntityId,
         llm_component: LLMComponent,
     ) -> ProviderRegistry:
-        provider_registry = getattr(llm_component.provider, "registry", None)
+        provider_registry = getattr(llm_component.model, "registry", None)
         if isinstance(provider_registry, ProviderRegistry):
             return provider_registry
 
@@ -251,12 +249,12 @@ class CompactionSystem:
                 return registry
 
         raise ValueError(
-            "summary_model_id requires a ProviderRegistry on the current provider "
+            "summary_model_id requires a ProviderRegistry on the current model "
             "or entity metadata"
         )
 
-    def _resolve_api_key(self, provider: LLMProvider) -> str | None:
-        provider_config = getattr(provider, "_provider_config", None)
+    def _resolve_api_key(self, model: LLMModel) -> str | None:
+        provider_config = getattr(model, "_provider_config", None)
         api_key = getattr(provider_config, "api_key", None)
         return cast(str | None, api_key)
 
@@ -279,7 +277,7 @@ class CompactionSystem:
     async def _summarize(
         self,
         *,
-        provider: LLMProvider,
+        model: LLMModel,
         messages: list[Message],
         system_prompt: str,
         subagent_state: str | None,
@@ -289,7 +287,7 @@ class CompactionSystem:
         )
         if subagent_state is not None:
             formatted_messages = f"{formatted_messages}\n\n{subagent_state}"
-        result = await provider.complete(
+        result = await model.complete(
             messages=[
                 Message(role="system", content=system_prompt),
                 Message(role="user", content=formatted_messages),

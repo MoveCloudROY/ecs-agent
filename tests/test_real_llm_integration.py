@@ -101,7 +101,7 @@ async def test_real_openai_streaming_produces_deltas() -> None:
     provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(provider=provider, model=MODEL))
+    world.add_component(entity, LLMComponent(model=provider))
     world.add_component(
         entity,
         ConversationComponent(
@@ -191,7 +191,7 @@ async def test_real_full_agent_loop_streaming() -> None:
     provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(provider=provider, model=MODEL))
+    world.add_component(entity, LLMComponent(model=provider))
     world.add_component(
         entity,
         ConversationComponent(
@@ -233,7 +233,7 @@ async def test_real_multi_turn_conversation() -> None:
     provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(provider=provider, model=MODEL))
+    world.add_component(entity, LLMComponent(model=provider))
     world.add_component(
         entity,
         ConversationComponent(
@@ -273,7 +273,7 @@ async def test_real_llm_reasoning_logging_contracts(capsys: object) -> None:
     provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(provider=provider, model=MODEL))
+    world.add_component(entity, LLMComponent(model=provider))
     world.add_component(
         entity,
         ConversationComponent(
@@ -328,7 +328,7 @@ async def test_real_llm_streaming_logging_metadata(capsys: object) -> None:
     provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(provider=provider, model=MODEL))
+    world.add_component(entity, LLMComponent(model=provider))
     world.add_component(
         entity,
         ConversationComponent(
@@ -375,7 +375,7 @@ async def test_real_llm_error_logging_contracts(capsys: object) -> None:
     provider = _openai_provider(api_key="sk-invalid-key-for-testing", base_url=BASE_URL, model=MODEL)
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(provider=provider, model=MODEL))
+    world.add_component(entity, LLMComponent(model=provider))
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="Hello")]),
@@ -456,7 +456,7 @@ async def test_real_llm_prompt_keyword_injection_smoke() -> None:
     provider = RecordingProvider(get_real_provider())
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(provider=provider, model=model))
+    world.add_component(entity, LLMComponent(model=provider))
     world.add_component(
         entity,
         ConversationComponent(
@@ -563,7 +563,7 @@ async def test_real_llm_prompt_event_injection_smoke() -> None:
     provider = RecordingProvider(get_real_provider())
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(provider=provider, model=model))
+    world.add_component(entity, LLMComponent(model=provider))
     world.add_component(
         entity,
         ConversationComponent(
@@ -643,7 +643,7 @@ async def test_real_llm_model_switching() -> None:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
 
     entity = world.create_entity()
-    llm = LLMComponent(provider=provider, model=model)
+    llm = LLMComponent(model=provider)
     world.add_component(entity, llm)
     world.add_component(
         entity,
@@ -690,7 +690,7 @@ async def test_real_llm_graceful_interruption() -> None:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
 
     entity = world.create_entity()
-    llm = LLMComponent(provider=provider, model=model)
+    llm = LLMComponent(model=provider)
     world.add_component(entity, llm)
     world.add_component(
         entity,
@@ -729,7 +729,7 @@ async def test_real_llm_conversation_tree_revert() -> None:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
 
     entity = world.create_entity()
-    llm = LLMComponent(provider=provider, model=model)
+    llm = LLMComponent(model=provider)
     world.add_component(entity, llm)
 
     tree = ConversationTreeComponent()
@@ -777,7 +777,7 @@ async def test_real_llm_complete_runtime_workflow() -> None:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
 
     entity = world.create_entity()
-    llm = LLMComponent(provider=provider, model=model)
+    llm = LLMComponent(model=provider)
     world.add_component(entity, llm)
 
     tree = ConversationTreeComponent()
@@ -955,7 +955,7 @@ async def test_real_llm_builtin_tools_read_file_smoke(tmp_path: Any) -> None:
 
     world = World()
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity, LLMComponent(model=provider))
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="Read note.txt")]),
@@ -1001,9 +1001,8 @@ async def test_real_llm_agent_uses_glob_to_find_files(tmp_path: Any) -> None:
     entity = world.create_entity()
     world.add_component(
         entity,
-        LLMComponent(
-            provider=get_real_provider(), model=os.getenv("LLM_MODEL", "qwen3.5-flash")
-        ),
+        LLMComponent(model=get_real_provider(),
+),
     )
     world.add_component(
         entity,
@@ -1055,9 +1054,8 @@ async def test_real_llm_agent_reads_and_reports_file_content(tmp_path: Any) -> N
     entity = world.create_entity()
     world.add_component(
         entity,
-        LLMComponent(
-            provider=get_real_provider(), model=os.getenv("LLM_MODEL", "qwen3.5-flash")
-        ),
+        LLMComponent(model=get_real_provider(),
+),
     )
     world.add_component(
         entity,
@@ -1134,7 +1132,7 @@ async def test_real_llm_rendered_system_prompt_reaches_provider() -> None:
 
     world = World()
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(provider=capturing, model=MODEL))  # type: ignore[arg-type]
+    world.add_component(entity, LLMComponent(model=capturing))  # type: ignore[arg-type]
     world.add_component(
         entity,
         ConversationComponent(
@@ -1194,7 +1192,7 @@ async def test_real_llm_rendered_user_prompt_trigger_injection() -> None:
 
     world = World()
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(provider=capturing, model=MODEL))  # type: ignore[arg-type]
+    world.add_component(entity, LLMComponent(model=capturing))  # type: ignore[arg-type]
     world.add_component(
         entity,
         ConversationComponent(
@@ -1263,7 +1261,7 @@ async def test_slash_skill_context_injection_real_llm() -> None:
     inner = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
     world = World()
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(provider=inner, model=MODEL))
+    world.add_component(entity, LLMComponent(model=inner))
 
     original_text = "/test-skill please help"
     world.add_component(
@@ -1361,7 +1359,7 @@ async def test_real_llm_load_skill_details_returns_context_in_tool_message(
 
     world = World()
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(provider=capturing, model=MODEL))  # type: ignore[arg-type]
+    world.add_component(entity, LLMComponent(model=capturing))  # type: ignore[arg-type]
     world.add_component(
         entity,
         ConversationComponent(
@@ -1453,8 +1451,8 @@ async def test_real_subagent_child_world_name_in_logs(
     world.add_component(
         manager,
         LLMComponent(
-            provider=provider,
-            model=MODEL,
+            model=provider,
+            
             system_prompt=(
                 "You are a helpful assistant. "
                 "When asked to delegate, use the subagent tool."
@@ -1479,8 +1477,8 @@ async def test_real_subagent_child_world_name_in_logs(
             subagents={
                 "echo": SubagentConfig(
                     name="echo",
-                    provider=provider,
-                    model=MODEL,
+                    model=provider,
+                    
                     system_prompt="Echo back the user's message verbatim.",
                     max_ticks=3,
                 )
@@ -1567,13 +1565,12 @@ async def test_real_subagent_rendered_prompt() -> None:
     parent_entity = parent_world.create_entity()
     parent_world.add_component(
         parent_entity,
-        LLMComponent(provider=inner, model=MODEL, system_prompt="Parent prompt."),  # type: ignore[arg-type]
+        LLMComponent(model=inner, system_prompt="Parent prompt."),  # type: ignore[arg-type]
     )
 
-    config = SubagentConfig(
-        name="rendered-prompt-test",
-        provider=capturing,  # type: ignore[arg-type]
-        model=MODEL,
+    config = SubagentConfig(model=capturing,
+name="rendered-prompt-test",
+        # type: ignore[arg-type]
         system_prompt=_SYSTEM_PROMPT,
         max_ticks=1,
     )
@@ -1641,17 +1638,16 @@ async def test_real_subagent_workspace_inherits() -> None:
         parent_entity = parent_world.create_entity()
         parent_world.add_component(
             parent_entity,
-            LLMComponent(provider=inner, model=MODEL, system_prompt="Parent."),  # type: ignore[arg-type]
+            LLMComponent(model=inner, system_prompt="Parent."),  # type: ignore[arg-type]
         )
         parent_world.add_component(
             parent_entity,
             WorkspaceBindingComponent(workspace_root=workspace_root),
         )
 
-        config = SubagentConfig(
-            name="workspace-test",
-            provider=inner,  # type: ignore[arg-type]
-            model=MODEL,
+        config = SubagentConfig(model=inner,
+name="workspace-test",
+            # type: ignore[arg-type]
             system_prompt="You are a subagent.",
             max_ticks=1,
         )

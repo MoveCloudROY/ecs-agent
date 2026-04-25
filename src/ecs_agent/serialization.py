@@ -277,7 +277,8 @@ class WorldSerializer:
         serialized = asdict(component)
 
         if isinstance(component, LLMComponent):
-            serialized["provider"] = NON_SERIALIZABLE_PLACEHOLDER
+            serialized["model"] = getattr(component.model, "model_id", "default")
+            serialized["pending_model"] = None
 
         if isinstance(component, ToolRegistryComponent):
             serialized["handlers"] = NON_SERIALIZABLE_PLACEHOLDER
@@ -290,6 +291,24 @@ class WorldSerializer:
 
         if isinstance(component, VectorStoreComponent):
             serialized["store"] = NON_SERIALIZABLE_PLACEHOLDER
+
+        if isinstance(component, SubagentRegistryComponent):
+            subagents_serialized: dict[str, Any] = {}
+            for name, cfg in component.subagents.items():
+                subagents_serialized[name] = {
+                    "name": cfg.name,
+                    "model": getattr(cfg.model, "model_id", "default"),
+                    "description": cfg.description,
+                    "system_prompt": cfg.system_prompt,
+                    "skills": list(cfg.skills),
+                    "max_ticks": cfg.max_ticks,
+                    "inheritance_policy": {
+                        "inherit_tools": cfg.inheritance_policy.inherit_tools,
+                        "inherit_system_prompt": cfg.inheritance_policy.inherit_system_prompt,
+                    },
+                    "provider": NON_SERIALIZABLE_PLACEHOLDER,
+                }
+            serialized["subagents"] = subagents_serialized
 
         if isinstance(component, ConversationComponent):
             serialized["messages"] = [
@@ -427,17 +446,18 @@ class WorldSerializer:
             normalized_data["placeholders"] = normalized_placeholders
 
         if component_name == LLMComponent.__name__:
-            provider_value = normalized_data.get("provider")
-            if provider_value == NON_SERIALIZABLE_PLACEHOLDER:
-                model = normalized_data.get("model")
-                # Ensure model is a string for dict lookup
-                model_str: str = model if isinstance(model, str) else "default"
-                provider = providers.get(model_str, providers.get("default"))
-                if provider is None:
+            model_str_or_obj = normalized_data.get("model")
+            if not callable(getattr(model_str_or_obj, "complete", None)):
+                # model field holds a model_id string (serialized state)
+                model_str: str = model_str_or_obj if isinstance(model_str_or_obj, str) else "default"
+                model_obj = providers.get(model_str, providers.get("default"))
+                if model_obj is None:
                     raise ValueError(
-                        f"No provider configured for model '{model}' and no default provider found"
+                        f"No model configured for model_id '{model_str}' and no default model found"
                     )
-                normalized_data["provider"] = provider
+                normalized_data["model"] = model_obj
+            # Drop legacy "provider" key if present in saved state
+            normalized_data.pop("provider", None)
 
         # MessageBusSubscriptionComponent: convert list[str] back to set[str]
         if component_name == MessageBusSubscriptionComponent.__name__:
@@ -483,8 +503,7 @@ class WorldSerializer:
                 subagent_config = SubagentConfig(
                     name=config_data["name"],
                     description=config_data.get("description", ""),
-                    provider=provider,
-                    model=config_data["model"],
+                    model=provider,
                     system_prompt=config_data.get("system_prompt", ""),
                     skills=config_data.get("skills", []),
                     max_ticks=config_data.get("max_ticks", 10),

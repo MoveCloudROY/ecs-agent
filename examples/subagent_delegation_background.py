@@ -167,8 +167,7 @@ def _build_providers(
         subagents={
             "analyst": SubagentConfig(
                 name="analyst",
-                provider=analyst_provider,
-                model="fake-analyst",
+                model=analyst_provider,
                 description="Analyze audience and content signals",
                 system_prompt=(
                     "You are an analyst sub-agent. Identify the strongest audience, "
@@ -182,8 +181,7 @@ def _build_providers(
             ),
             "writer": SubagentConfig(
                 name="writer",
-                provider=writer_provider,
-                model="fake-writer",
+                model=writer_provider,
                 description="Write concise launch copy from findings",
                 system_prompt=(
                     "You are a writer sub-agent. Turn the available direction into "
@@ -205,8 +203,8 @@ def _build_registry(provider: LLMProvider, *, model: str) -> SubagentRegistryCom
         subagents={
             "analyst": SubagentConfig(
                 name="analyst",
-                provider=provider,
-                model=model,
+                model=provider,
+                
                 description="Analyze audience and content signals",
                 system_prompt=(
                     "You are an analyst sub-agent. Identify the strongest audience, "
@@ -220,8 +218,8 @@ def _build_registry(provider: LLMProvider, *, model: str) -> SubagentRegistryCom
             ),
             "writer": SubagentConfig(
                 name="writer",
-                provider=provider,
-                model=model,
+                model=provider,
+                
                 description="Write concise launch copy from findings",
                 system_prompt=(
                     "You are a writer sub-agent. Turn the available direction into "
@@ -249,8 +247,8 @@ def _build_world(
     world.add_component(
         manager_id,
         LLMComponent(
-            provider=manager_provider,
-            model=model,
+            model=manager_provider,
+            
             system_prompt=MANAGER_SYSTEM_PROMPT,
         ),
     )

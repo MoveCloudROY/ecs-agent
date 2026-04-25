@@ -69,6 +69,10 @@ class RecordingProvider:
         self._provider = provider
         self.last_messages: list[Message] = []
 
+    @property
+    def model_id(self) -> str:
+        return getattr(self._provider, "model_id", "recording")
+
     async def complete(
         self,
         messages: list[Message],
@@ -238,7 +242,7 @@ async def main() -> None:
     provider = RecordingProvider(base_provider)
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(provider=provider, model=model))
+    world.add_component(entity, LLMComponent(model=provider))
     world.add_component(
         entity,
         ConversationComponent(
@@ -300,15 +304,15 @@ async def main() -> None:
             subagents={
                 "researcher": SubagentConfig(
                     name="researcher",
-                    provider=base_provider,
-                    model=model,
+                    model=base_provider,
+                    
                     description="Research and gather information",
                     system_prompt="Research assistant",
                 ),
                 "reviewer": SubagentConfig(
                     name="reviewer",
-                    provider=base_provider,
-                    model=model,
+                    model=base_provider,
+                    
                     description="Review and critique work products",
                     system_prompt="Review assistant",
                 ),
