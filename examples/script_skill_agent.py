@@ -36,10 +36,10 @@ async def main() -> None:
         # 1. Setup Provider (Use OpenAI if key is present, otherwise Fake)
         api_key = os.getenv("LLM_API_KEY")
         if api_key:
-            provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"), api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=os.getenv("LLM_MODEL", "qwen3.5-flash"))
+            model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"), api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=os.getenv("LLM_MODEL", "qwen3.5-flash"))
         else:
             # Fake responses for the demo
-            provider = FakeModel(
+            model = FakeModel(
                 responses=[
                     # First response: call read_file
                     CompletionResult(
@@ -96,7 +96,7 @@ async def main() -> None:
         world.add_component(
             agent,
             LLMComponent(
-                model=provider,
+                model=model,
                 system_prompt="You are a file manager.",
             ),
         )

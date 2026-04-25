@@ -59,7 +59,7 @@ async def _execute_live_subagent(
 ) -> None:
     world = World(name="subagent-live")
     entity_id = world.create_entity()
-    provider = _build_provider(
+    model = _build_provider(
         live_api_key,
         base_url=base_url,
         api_format=api_format,
@@ -68,7 +68,7 @@ async def _execute_live_subagent(
     world.add_component(
         entity_id,
         LLMComponent(
-            model=provider,
+            model=model,
             
             system_prompt="You are a helpful parent agent.",
         ),
@@ -81,7 +81,7 @@ async def _execute_live_subagent(
             subagents={
                 "worker": SubagentConfig(
                     name="worker",
-                    model=provider,
+                    model=model,
                     
                     system_prompt="Answer the user's request directly and briefly.",
                     max_ticks=3,
@@ -172,7 +172,7 @@ async def _execute_live_notification_flow(
 ) -> None:
     world = World(name="subagent-live-notification")
     entity_id = world.create_entity()
-    provider = _build_provider(
+    model = _build_provider(
         live_api_key,
         base_url=base_url,
         api_format=api_format,
@@ -181,7 +181,7 @@ async def _execute_live_notification_flow(
     world.add_component(
         entity_id,
         LLMComponent(
-            model=provider,
+            model=model,
             
             system_prompt="You are a helpful parent agent.",
         ),
@@ -194,7 +194,7 @@ async def _execute_live_notification_flow(
             subagents={
                 "worker": SubagentConfig(
                     name="worker",
-                    model=provider,
+                    model=model,
                     
                     system_prompt="Answer the user's request directly and briefly.",
                     max_ticks=3,

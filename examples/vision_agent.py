@@ -55,10 +55,10 @@ async def main() -> None:
         "https://dashscope.oss-cn-beijing.aliyuncs.com/images/dog_and_girl.jpeg",
     )
 
-    provider: LLMModel
+    model: LLMModel
     if api_key:
         print(f"Using OpenAIModel (Chat Completions) with model: {model}")
-        provider = OpenAIModel(
+        model = OpenAIModel(
             config=ProviderConfig(
                 provider_id="aliyun",
                 base_url=base_url,
@@ -69,7 +69,7 @@ async def main() -> None:
         )
     else:
         print("No LLM_API_KEY set. Using FakeModel for demonstration.")
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -89,7 +89,7 @@ async def main() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            model=provider,
+            model=model,
             
             system_prompt="",
         ),

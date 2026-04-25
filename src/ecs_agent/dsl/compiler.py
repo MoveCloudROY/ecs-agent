@@ -39,7 +39,7 @@ logger = get_logger(__name__)
 
 def compile_agent_specs(
     specs: dict[str, AgentSpec],
-    provider_factory: Callable[[str, str], LLMModel],
+    model_factory: Callable[[str, str], LLMModel],
     *,
     source_dir: Path | None = None,
 ) -> tuple[EntityId, World]:
@@ -61,7 +61,7 @@ def compile_agent_specs(
     primary_entity = world.create_entity()
 
     _, primary_spec = primary_specs[0]
-    primary_model = provider_factory(primary_spec.model, primary_spec.prompt)
+    primary_model = model_factory(primary_spec.model, primary_spec.prompt)
     world.add_component(
         primary_entity,
         LLMComponent(
@@ -148,7 +148,7 @@ def compile_agent_specs(
             continue
         subagents[agent_name] = SubagentConfig(
             name=agent_name,
-            model=provider_factory(spec.model, spec.prompt),
+            model=model_factory(spec.model, spec.prompt),
             system_prompt=spec.prompt,
         )
 

@@ -114,8 +114,8 @@ PARENT_USER_PROMPT = (
 
 
 class DelayedProvider:
-    def __init__(self, provider: LLMModel, delay_seconds: float) -> None:
-        self._provider = provider
+    def __init__(self, model: LLMModel, delay_seconds: float) -> None:
+        self._provider = model
         self._delay_seconds = delay_seconds
 
     async def complete(
@@ -228,7 +228,7 @@ def _build_providers(
             ),
             model=model,
         )
-        registry = _build_registry(base_model, model=model)
+        registry = _build_registry(base_model)
         return base_model, registry
 
     parent_provider = FakeModel(responses=_fake_parent_responses())
@@ -306,28 +306,28 @@ def _build_providers(
     return parent_provider, registry
 
 
-def _build_registry(provider: LLMModel, *, model: str) -> SubagentRegistryComponent:
+def _build_registry(model: LLMModel) -> SubagentRegistryComponent:
     return SubagentRegistryComponent(
         subagents={
             "sync-worker": SubagentConfig(
                 name="sync-worker",
-                model=provider,
+                model=model,
                 
                 system_prompt="Return a concise direct answer.",
             ),
-            "slow-worker": SubagentConfig(model=DelayedProvider(provider, delay_seconds=0.2),
+            "slow-worker": SubagentConfig(model=DelayedProvider(model, delay_seconds=0.2),
 name="slow-worker",
                 system_prompt="Return a concise answer after a brief pause.",
             ),
             "queued-worker": SubagentConfig(
                 name="queued-worker",
-                model=provider,
+                model=model,
                 
                 system_prompt="Return a short queued follow-up answer.",
             ),
             "stream-worker": SubagentConfig(
                 name="stream-worker",
-                model=provider,
+                model=model,
                 
                 system_prompt="Return a short answer suitable for streaming.",
             ),

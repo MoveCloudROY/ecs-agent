@@ -63,13 +63,13 @@ class FlakyRecordingProvider(FakeModel):
 @pytest.mark.asyncio
 async def test_process_advances_one_step_appends_response_and_publishes_event() -> None:
     world = World()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="step done"))
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="start")]),
@@ -104,13 +104,13 @@ async def test_process_advances_one_step_appends_response_and_publishes_event() 
 @pytest.mark.asyncio
 async def test_skips_entity_when_plan_is_completed() -> None:
     world = World()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="unused"))
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="start")]),
@@ -130,13 +130,13 @@ async def test_skips_entity_when_plan_is_completed() -> None:
 @pytest.mark.asyncio
 async def test_skips_entity_when_plan_steps_are_empty() -> None:
     world = World()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="unused"))
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="start")]),
@@ -153,11 +153,11 @@ async def test_skips_entity_when_plan_steps_are_empty() -> None:
 @pytest.mark.asyncio
 async def test_plan_context_is_injected_before_llm_call() -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(entity_id, SystemPromptComponent(content="You are concise"))
     world.add_component(
         entity_id,
@@ -170,8 +170,8 @@ async def test_plan_context_is_injected_before_llm_call() -> None:
 
     await PlanningSystem().process(world)
 
-    assert len(provider.calls) == 1
-    sent = provider.calls[0]
+    assert len(model.calls) == 1
+    sent = model.calls[0]
     assert sent[0] == Message(role="system", content="You are concise")
     assert sent[1] == Message(role="system", content="Step 1/1: inspect state")
     assert sent[2] == Message(role="user", content="hello")
@@ -181,7 +181,7 @@ async def test_plan_context_is_injected_before_llm_call() -> None:
 async def test_tool_calls_attach_pending_tool_calls_component() -> None:
     world = World()
     tool_call = ToolCall(id="call-1", name="lookup", arguments={"q": "x"})
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -193,7 +193,7 @@ async def test_tool_calls_attach_pending_tool_calls_component() -> None:
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="use tool")]),
@@ -210,11 +210,11 @@ async def test_tool_calls_attach_pending_tool_calls_component() -> None:
 @pytest.mark.asyncio
 async def test_marks_plan_completed_after_final_step() -> None:
     world = World()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="finish")]),
@@ -235,9 +235,9 @@ async def test_marks_plan_completed_after_final_step() -> None:
 @pytest.mark.asyncio
 async def test_provider_exhaustion_adds_terminal_component() -> None:
     world = World()
-    provider = FakeModel(responses=[])
+    model = FakeModel(responses=[])
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="start")]),
@@ -248,7 +248,7 @@ async def test_provider_exhaustion_adds_terminal_component() -> None:
 
     error = world.get_component(entity_id, ErrorComponent)
     terminal = world.get_component(entity_id, TerminalComponent)
-    # FakeModel raises IndexError when empty -> caught as provider_exhausted
+    # FakeModel raises IndexError when empty -> caught as model_exhausted
     assert terminal is not None
     assert terminal.reason == "provider_exhausted"
     assert error is None
@@ -291,11 +291,11 @@ async def test_prompt_context_injection_is_transient_for_planning_provider_call(
     None
 ):
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(entity_id, SystemPromptComponent(content="You are concise"))
     world.add_component(
         entity_id,
@@ -322,7 +322,7 @@ async def test_prompt_context_injection_is_transient_for_planning_provider_call(
 
     await PlanningSystem().process(world)
 
-    sent = provider.calls[0]
+    sent = model.calls[0]
     assert sent[0] == Message(role="system", content="You are concise")
     assert sent[1] == Message(role="system", content="Step 1/1: inspect state")
     assert sent[2].role == "user"
@@ -337,9 +337,9 @@ async def test_prompt_context_injection_is_transient_for_planning_provider_call(
 @pytest.mark.asyncio
 async def test_planning_retry_reuses_reserved_context_then_commits_on_success() -> None:
     world = World()
-    provider = FlakyRecordingProvider()
+    model = FlakyRecordingProvider()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Plan this")]),
@@ -384,8 +384,8 @@ async def test_planning_retry_reuses_reserved_context_then_commits_on_success() 
 
     await PlanningSystem().process(world)
 
-    first_user = provider.calls[0][-1].content
-    second_user = provider.calls[1][-1].content
+    first_user = model.calls[0][-1].content
+    second_user = model.calls[1][-1].content
     assert first_user == second_user
     assert "source: subagent" not in second_user
 
@@ -400,11 +400,11 @@ async def test_event_trigger_injection_is_transient_for_planning_provider_call()
     None
 ):
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(entity_id, SystemPromptComponent(content="You are concise"))
     world.add_component(
         entity_id,
@@ -437,7 +437,7 @@ async def test_event_trigger_injection_is_transient_for_planning_provider_call()
 
     await PlanningSystem().process(world)
 
-    sent = provider.calls[0]
+    sent = model.calls[0]
     assert sent[2].role == "user"
     assert sent[2].content.startswith(
         "[PROMPT_INJECT:Plan]\nPrefer successful tool context"

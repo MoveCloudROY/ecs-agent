@@ -1,6 +1,6 @@
 """Streaming system agent example demonstrating real-time response streaming via EventBus.
 
-This example shows system-level streaming (different from provider-level streaming):
+This example shows system-level streaming (different from model-level streaming):
 - Creates an agent entity with StreamingComponent(enabled=True)
 - ReasoningSystem detects the streaming flag and publishes EventBus events
 - Subscribes to StreamStartEvent, StreamReasoningDeltaEvent, StreamReasoningEndEvent,
@@ -10,7 +10,7 @@ This example shows system-level streaming (different from provider-level streami
 - Falls back to FakeModel for demo without API key
 
 Key difference from streaming_agent.py:
-- streaming_agent.py: Provider-level streaming (await provider.complete(stream=True))
+- streaming_agent.py: Provider-level streaming (await model.complete(stream=True))
 - This example: System-level streaming (EventBus events published by ReasoningSystem)
 """
 
@@ -54,19 +54,19 @@ async def main() -> None:
     )
     model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
 
-    # --- Create LLM provider ---
-    provider: LLMModel
+    # --- Create LLM model ---
+    model: LLMModel
     if api_key:
         print(f"Using OpenAIModel with model: {model}")
         print(f"Base URL: {base_url}")
-        provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
         print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
         print()
 
-        # Create a fake provider that simulates streaming character-by-character
-        provider = FakeModel(
+        # Create a fake model that simulates streaming character-by-character
+        model = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -88,7 +88,7 @@ async def main() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            model=provider,
+            model=model,
             
             system_prompt="You are a helpful assistant that provides concise answers.",
         ),

@@ -11,12 +11,12 @@ async def test_fake_model_returns_responses_sequentially() -> None:
     resp1 = CompletionResult(message=Message(role="assistant", content="First"))
     resp2 = CompletionResult(message=Message(role="assistant", content="Second"))
 
-    provider = FakeModel(responses=[resp1, resp2])
+    model = FakeModel(responses=[resp1, resp2])
 
-    result1 = await provider.complete([Message(role="user", content="Hi")])
+    result1 = await model.complete([Message(role="user", content="Hi")])
     assert result1.message.content == "First"
 
-    result2 = await provider.complete([Message(role="user", content="Hey")])
+    result2 = await model.complete([Message(role="user", content="Hey")])
     assert result2.message.content == "Second"
 
 
@@ -24,23 +24,23 @@ async def test_fake_model_returns_responses_sequentially() -> None:
 async def test_fake_model_raises_on_exhaustion() -> None:
     """FakeModel should raise IndexError when responses exhausted."""
     resp = CompletionResult(message=Message(role="assistant", content="Only one"))
-    provider = FakeModel(responses=[resp])
+    model = FakeModel(responses=[resp])
 
     # First call succeeds
-    await provider.complete([Message(role="user", content="1")])
+    await model.complete([Message(role="user", content="1")])
 
     # Second call should raise
     with pytest.raises((IndexError, StopIteration)):
-        await provider.complete([Message(role="user", content="2")])
+        await model.complete([Message(role="user", content="2")])
 
 
 @pytest.mark.asyncio
 async def test_fake_model_with_empty_list() -> None:
     """FakeModel with empty list should raise immediately."""
-    provider = FakeModel(responses=[])
+    model = FakeModel(responses=[])
 
     with pytest.raises((IndexError, StopIteration)):
-        await provider.complete([Message(role="user", content="Hi")])
+        await model.complete([Message(role="user", content="Hi")])
 
 
 @pytest.mark.asyncio
@@ -50,8 +50,8 @@ async def test_fake_model_preserves_tool_calls() -> None:
     msg = Message(role="assistant", content="Calling tool", tool_calls=[tool_call])
     resp = CompletionResult(message=msg)
 
-    provider = FakeModel(responses=[resp])
-    result = await provider.complete([Message(role="user", content="Search")])
+    model = FakeModel(responses=[resp])
+    result = await model.complete([Message(role="user", content="Search")])
 
     assert result.message.tool_calls is not None
     assert len(result.message.tool_calls) == 1
@@ -63,13 +63,13 @@ def test_fake_model_satisfies_protocol() -> None:
     from typing import get_type_hints
     import inspect
 
-    provider = FakeModel(responses=[])
+    model = FakeModel(responses=[])
 
     # Check that FakeModel has 'complete' method
-    assert hasattr(provider, "complete")
+    assert hasattr(model, "complete")
 
     # Check that complete is async
-    assert inspect.iscoroutinefunction(provider.complete)
+    assert inspect.iscoroutinefunction(model.complete)
 
 
 @pytest.mark.asyncio
@@ -81,8 +81,8 @@ async def test_fake_model_with_usage() -> None:
     usage = Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
     resp = CompletionResult(message=msg, usage=usage)
 
-    provider = FakeModel(responses=[resp])
-    result = await provider.complete([Message(role="user", content="Hi")])
+    model = FakeModel(responses=[resp])
+    result = await model.complete([Message(role="user", content="Hi")])
 
     assert result.usage is not None
     assert result.usage.prompt_tokens == 10

@@ -653,7 +653,7 @@ class TestSensitiveDataPolicy:
         configure_logging(json_output=True, level="INFO")
         logger = get_logger("test")
 
-        # Log provider config with metadata only
+        # Log model config with metadata only
         logger.info(
             "provider_configured", model="gpt-4", base_url="https://api.openai.com"
         )
@@ -798,7 +798,7 @@ class TestReasoningSystemLogging:
         from ecs_agent.providers import FakeModel
         from ecs_agent.types import Message, CompletionResult
 
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="Hello"))
             ],
@@ -806,7 +806,7 @@ class TestReasoningSystemLogging:
         )
         world = World()
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(model=provider))
+        world.add_component(entity, LLMComponent(model=model))
         world.add_component(
             entity,
             ConversationComponent(messages=[Message(role="user", content="Hi")]),
@@ -840,7 +840,7 @@ class TestReasoningSystemLogging:
         from ecs_agent.providers import FakeModel
         from ecs_agent.types import Message, CompletionResult
 
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="Hello"))
             ],
@@ -848,7 +848,7 @@ class TestReasoningSystemLogging:
         )
         world = World()
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(model=provider))
+        world.add_component(entity, LLMComponent(model=model))
         world.add_component(
             entity,
             ConversationComponent(messages=[Message(role="user", content="Hi")]),
@@ -873,7 +873,7 @@ class TestReasoningSystemLogging:
         )  # logger has 'reasoning' system name
 
     async def test_reasoning_error_logs_exception(self, capsys):
-        """Test ReasoningSystem emits reasoning_error on provider exception."""
+        """Test ReasoningSystem emits reasoning_error on model exception."""
         configure_logging(json_output=True, level="INFO")
 
         from ecs_agent.core import World
@@ -933,7 +933,7 @@ class TestReasoningSystemLogging:
         from ecs_agent.providers import FakeModel
         from ecs_agent.types import Message, CompletionResult, ToolCall
 
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -952,7 +952,7 @@ class TestReasoningSystemLogging:
         )
         world = World()
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(model=provider))
+        world.add_component(entity, LLMComponent(model=model))
         world.add_component(
             entity,
             ConversationComponent(
@@ -1320,7 +1320,7 @@ class TestPlanningLogging:
         from ecs_agent.types import CompletionResult, Message
 
         world = World()
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(role="assistant", content="Step 1 complete")
@@ -1330,7 +1330,7 @@ class TestPlanningLogging:
 
         entity = world.create_entity()
         world.add_component(entity, PlanComponent(steps=["Do task A"], current_step=0))
-        world.add_component(entity, LLMComponent(model=provider))
+        world.add_component(entity, LLMComponent(model=model))
         world.add_component(
             entity, ConversationComponent(messages=[Message(role="user", content="hi")])
         )
@@ -1359,7 +1359,7 @@ class TestPlanningLogging:
         from ecs_agent.types import CompletionResult, Message
 
         world = World()
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(role="assistant", content="Step 1 complete")
@@ -1369,7 +1369,7 @@ class TestPlanningLogging:
 
         entity = world.create_entity()
         world.add_component(entity, PlanComponent(steps=["Do task A"], current_step=0))
-        world.add_component(entity, LLMComponent(model=provider))
+        world.add_component(entity, LLMComponent(model=model))
         world.add_component(
             entity, ConversationComponent(messages=[Message(role="user", content="hi")])
         )
@@ -1404,7 +1404,7 @@ class TestPlanningLogging:
         from ecs_agent.types import Message, ToolSchema, CompletionResult
         from typing import AsyncIterator, Any
 
-        # Create a provider that raises a real exception (not IndexError)
+        # Create a model that raises a real exception (not IndexError)
         class FailingProvider:
             async def complete(
                 self,
@@ -1416,11 +1416,11 @@ class TestPlanningLogging:
                 raise RuntimeError("Provider failed!")
 
         world = World()
-        provider = FailingProvider()
+        model = FailingProvider()
 
         entity = world.create_entity()
         world.add_component(entity, PlanComponent(steps=["Do task A"], current_step=0))
-        world.add_component(entity, LLMComponent(model=provider))
+        world.add_component(entity, LLMComponent(model=model))
         world.add_component(
             entity, ConversationComponent(messages=[Message(role="user", content="hi")])
         )
@@ -1453,7 +1453,7 @@ class TestSensitiveDataPolicy:
         from ecs_agent.types import Message, CompletionResult
 
         world = World()
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(role="assistant", content="Secret response")
@@ -1462,7 +1462,7 @@ class TestSensitiveDataPolicy:
         )
 
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(model=provider))
+        world.add_component(entity, LLMComponent(model=model))
         world.add_component(
             entity,
             ConversationComponent(
@@ -1561,13 +1561,13 @@ class TestSensitiveDataPolicy:
             ), f"Found tool arguments in log: {event}"
 
     async def test_no_api_keys_in_provider_logs(self, capsys):
-        """Verify provider logging does not expose API keys or tokens."""
+        """Verify model logging does not expose API keys or tokens."""
         from ecs_agent.providers.openai_model import OpenAIModel
         from ecs_agent.providers.config import ApiFormat, ProviderConfig
         from ecs_agent.types import Message
 
-        # Create provider with fake API key
-        provider = OpenAIModel(
+        # Create model with fake API key
+        model = OpenAIModel(
             config=ProviderConfig(
                 provider_id="openai",
                 base_url="https://api.openai.com/v1",
@@ -1579,7 +1579,7 @@ class TestSensitiveDataPolicy:
 
         # Note: This will fail to connect, but we're checking logs not functionality
         try:
-            await provider.complete([Message(role="user", content="test")])
+            await model.complete([Message(role="user", content="test")])
         except Exception:
             pass  # Expected to fail without real endpoint
 
@@ -1643,14 +1643,14 @@ class TestLoggingLevelPolicy:
         from ecs_agent.types import Message, CompletionResult
 
         world = World()
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="Done"))
             ]
         )
 
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(model=provider))
+        world.add_component(entity, LLMComponent(model=model))
         world.add_component(
             entity, ConversationComponent(messages=[Message(role="user", content="hi")])
         )

@@ -35,13 +35,13 @@ def _live_registry() -> ProviderRegistry:
 @pytest.mark.asyncio
 async def test_live_openai_chat_text_response(live_api_key: str) -> None:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
-    provider = get_model(
+    model = get_model(
         f"aliyun/{model}",
         registry=_live_registry(),
         api_key=live_api_key,
     )
 
-    result = await provider.complete(
+    result = await model.complete(
         [Message(role="user", content="Say hello in 5 words.")]
     )
 
@@ -54,14 +54,14 @@ async def test_live_openai_responses_text_response(live_api_key: str) -> None:
     import httpx
 
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
-    provider = get_model(
+    model = get_model(
         f"aliyun-responses/{model}",
         registry=_live_registry(),
         api_key=live_api_key,
     )
 
     try:
-        result = await provider.complete(
+        result = await model.complete(
             [Message(role="user", content="Say hello in 5 words.")]
         )
     except httpx.ReadTimeout:
@@ -76,13 +76,13 @@ async def test_live_openai_responses_vision_response(
     live_api_key: str, live_image_url: str
 ) -> None:
     model = os.getenv("LLM_MODEL", "qwen3-vl-flash")
-    provider = get_model(
+    model = get_model(
         f"aliyun-vision/{model}",
         registry=_live_registry(),
         api_key=live_api_key,
     )
 
-    result = await provider.complete(
+    result = await model.complete(
         [
             Message(
                 role="user",
@@ -101,13 +101,13 @@ async def test_live_openai_responses_vision_response(
 @pytest.mark.asyncio
 async def test_live_anthropic_messages_text_response(live_api_key: str) -> None:
     model = os.getenv("LLM_MODEL", "kimi-k2.5")
-    provider = get_model(
+    model = get_model(
         f"aliyun-anthropic/{model}",
         registry=_live_registry(),
         api_key=live_api_key,
     )
 
-    result = await provider.complete(
+    result = await model.complete(
         [Message(role="user", content="Say hello in 5 words.")]
     )
 

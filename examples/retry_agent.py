@@ -1,6 +1,6 @@
-"""Retry provider example with custom retry configuration.
+"""Retry model example with custom retry configuration.
 
-This example demonstrates how to wrap an LLM provider with RetryModel to add
+This example demonstrates how to wrap an LLM model with RetryModel to add
 automatic retry logic with exponential backoff for transient failures.
 
 The RetryModel:
@@ -22,7 +22,7 @@ Usage:
   2. Run: uv run python examples/retry_agent.py
 
 Environment variables:
-  LLM_API_KEY   — API key for the LLM provider (required)
+  LLM_API_KEY   — API key for the LLM model (required)
   LLM_BASE_URL  — Base URL for the API (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
   LLM_MODEL     — Model name (default: qwen3.5-plus)
 """
@@ -43,7 +43,7 @@ logger = get_logger(__name__)
 
 
 async def main() -> None:
-    """Run an agent with retry-wrapped provider."""
+    """Run an agent with retry-wrapped model."""
     # --- Configure logging ---
     configure_logging(json_output=False)
 
@@ -54,18 +54,18 @@ async def main() -> None:
     )
     model = os.environ.get("LLM_MODEL", "qwen3.5-plus")
 
-    # --- Create base provider ---
+    # --- Create base model ---
     if api_key:
         print(f"Using OpenAIModel with model: {model}")
         print(f"Base URL: {base_url}")
         base_model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
         print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
-        # Create a fake provider with a realistic response
+        # Create a fake model with a realistic response
         fake_result = CompletionResult(
             message=Message(
                 role="assistant",
-                content="This is a demonstration response from the retry-wrapped provider. "
+                content="This is a demonstration response from the retry-wrapped model. "
                 "In production, the RetryModel would transparently retry "
                 "on transient errors like rate limits (429) and server errors (500, 502, 503, 504).",
             ),
@@ -96,8 +96,8 @@ async def main() -> None:
     print(f"  retry_status_codes: {retry_config.retry_status_codes}")
     print()
 
-    # --- Wrap provider with retry logic ---
-    provider = RetryModel(base_model, retry_config=retry_config)
+    # --- Wrap model with retry logic ---
+    model = RetryModel(base_model, retry_config=retry_config)
 
     # --- Make a completion request ---
     messages = [
@@ -107,11 +107,11 @@ async def main() -> None:
         )
     ]
 
-    print("Making completion request through retry-wrapped provider...")
+    print("Making completion request through retry-wrapped model...")
     print()
 
     try:
-        result = await provider.complete(messages=messages)
+        result = await model.complete(messages=messages)
         print("Completion Result:")
         print(f"  Role: {result.message.role}")
         print(f"  Content: {result.message.content}")
@@ -143,7 +143,7 @@ async def main() -> None:
     print("- Retry attempts are logged at WARNING level with structured fields:")
     print("  {attempt, error, wait_seconds}")
     print(
-        "- Streaming calls bypass retry logic and are passed directly to the base provider"
+        "- Streaming calls bypass retry logic and are passed directly to the base model"
     )
 
 

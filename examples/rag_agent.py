@@ -2,7 +2,7 @@
 
 This example demonstrates:
 - Setting up a vector store with sample documents
-- Dual-mode provider support (fake/real) for both LLM and embedding
+- Dual-mode model support (fake/real) for both LLM and embedding
 - Registering RAGSystem to retrieve relevant context before reasoning
 - Showing how RAG context is injected into the conversation
 
@@ -51,13 +51,13 @@ async def main() -> None:
     # Create World
     world = World()
 
-    # --- Create LLM provider (dual-mode) ---
+    # --- Create LLM model (dual-mode) ---
     if api_key:
         print(f"Using OpenAIModel with model: {model}")
-        provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
         print("No LLM_API_KEY set. Using FakeModel for demonstration.")
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -68,7 +68,7 @@ async def main() -> None:
             ]
         )
 
-    # --- Create embedding provider (dual-mode) ---
+    # --- Create embedding model (dual-mode) ---
     if api_key:
         print(f"Using OpenAIEmbeddingProvider with model: {embedding_model}")
         embedding_provider = OpenAIEmbeddingProvider(
@@ -88,7 +88,7 @@ async def main() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            model=provider,
+            model=model,
             
             system_prompt="You are a helpful assistant that answers questions about AI and machine learning.",
         ),

@@ -129,7 +129,7 @@ def _build_providers(
             ),
             model=model,
         )
-        return manager_provider, _build_registry(subagent_provider, model=model)
+        return manager_provider, _build_registry(subagent_provider)
 
     manager_provider = FakeModel(responses=_fake_manager_responses())
     analyst_provider = FakeModel(
@@ -198,12 +198,12 @@ def _build_providers(
     return manager_provider, registry
 
 
-def _build_registry(provider: LLMModel, *, model: str) -> SubagentRegistryComponent:
+def _build_registry(model: LLMModel) -> SubagentRegistryComponent:
     return SubagentRegistryComponent(
         subagents={
             "analyst": SubagentConfig(
                 name="analyst",
-                model=provider,
+                model=model,
                 
                 description="Analyze audience and content signals",
                 system_prompt=(
@@ -218,7 +218,7 @@ def _build_registry(provider: LLMModel, *, model: str) -> SubagentRegistryCompon
             ),
             "writer": SubagentConfig(
                 name="writer",
-                model=provider,
+                model=model,
                 
                 description="Write concise launch copy from findings",
                 system_prompt=(

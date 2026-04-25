@@ -53,7 +53,7 @@ def create_temp_markdown_file(directory: Path, filename: str, content: str) -> P
 
 
 def create_fake_provider_factory(responses: list[CompletionResult]):
-    """Create a provider factory that returns FakeModel instances."""
+    """Create a model factory that returns FakeModel instances."""
 
     def factory(model: str, system_prompt: str):
         # Each subagent gets its own model instance

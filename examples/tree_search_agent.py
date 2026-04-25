@@ -56,15 +56,15 @@ async def main() -> None:
 
 
     # =========================================================================
-    # MCTS Setup: Fake provider with alternating expand/simulate responses
+    # MCTS Setup: Fake model with alternating expand/simulate responses
     # =========================================================================
     # TreeSearchSystem follows this pattern each iteration:
     # 1. Select a leaf node (using UCB1)
     # 2. If leaf is at depth < max_depth and has no children: Expand
-    #    - Calls provider.complete(), expects response with actions (one per line)
+    #    - Calls model.complete(), expects response with actions (one per line)
     #    - Creates up to max_branching children from the actions
     # 3. Simulate the selected/newly-expanded node
-    #    - Calls provider.complete(), expects response with a score (float 0.0-1.0)
+    #    - Calls model.complete(), expects response with a score (float 0.0-1.0)
     #    - _parse_score extracts the number from the response
     # 4. Backpropagate the score up the tree
     # 5. Repeat until max_depth reached or no more expandable nodes
@@ -132,16 +132,16 @@ async def main() -> None:
     # =========================================================================
     world = World()
 
-    # Create provider with pre-defined responses (FakeModel) or real LLM
+    # Create model with pre-defined responses (FakeModel) or real LLM
     if api_key:
         print(f"Using OpenAIModel with model: {model}")
         print(f"Base URL: {base_url}")
-        provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
         print("No LLM_API_KEY set. Using FakeModel for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
         print()
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 response_expand_0,
                 response_score_0,
@@ -162,7 +162,7 @@ async def main() -> None:
     world.add_component(
         agent,
         LLMComponent(
-            model=provider,
+            model=model,
             
             system_prompt=(
                 "You are a planning expert using MCTS to explore solution strategies. "

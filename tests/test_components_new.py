@@ -176,17 +176,17 @@ class TestEmbeddingComponent:
     """Test EmbeddingComponent instantiation and fields."""
 
     def test_instantiate_with_provider(self) -> None:
-        """Test instantiation with provider."""
-        provider = object()
-        comp = EmbeddingComponent(provider=provider)
-        assert comp.provider is provider
+        """Test instantiation with model."""
+        model = object()
+        comp = EmbeddingComponent(provider=model)
+        assert comp.provider is model
         assert comp.dimension == 0
 
     def test_instantiate_with_all_args(self) -> None:
         """Test instantiation with all arguments."""
-        provider = object()
-        comp = EmbeddingComponent(provider=provider, dimension=384)
-        assert comp.provider is provider
+        model = object()
+        comp = EmbeddingComponent(provider=model, dimension=384)
+        assert comp.provider is model
         assert comp.dimension == 384
 
     def test_has_slots(self) -> None:

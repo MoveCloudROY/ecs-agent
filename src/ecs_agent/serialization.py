@@ -489,21 +489,21 @@ class WorldSerializer:
                 # Provider needs to be resolved (currently dict or placeholder)
                 provider_value = config_data.get("provider")
                 if provider_value == NON_SERIALIZABLE_PLACEHOLDER:
-                    # Try to get provider from providers dict
-                    model = config_data.get("model")
-                    model_str = model if isinstance(model, str) else "default"
-                    provider = providers.get(model_str, providers.get("default"))
-                    if provider is None:
+                    # Try to get model from models dict
+                    model_key = config_data.get("model")
+                    model_str = model_key if isinstance(model_key, str) else "default"
+                    model = providers.get(model_str, providers.get("default"))
+                    if model is None:
                         raise ValueError(
-                            f"No provider configured for subagent '{name}' model '{model}'"
+                            f"No model configured for subagent '{name}' model '{model_str}'"
                         )
                 else:
-                    provider = provider_value
+                    model = provider_value
 
                 subagent_config = SubagentConfig(
                     name=config_data["name"],
                     description=config_data.get("description", ""),
-                    model=provider,
+                    model=model,
                     system_prompt=config_data.get("system_prompt", ""),
                     skills=config_data.get("skills", []),
                     max_ticks=config_data.get("max_ticks", 10),

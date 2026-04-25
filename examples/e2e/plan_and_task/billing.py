@@ -2,7 +2,7 @@
 
 Emits structured log events:
 * ``plan_task_llm_usage`` — per-invocation token counts and raw cache fields.
-* ``plan_task_llm_cache_stats`` — per-invocation cache hit-rate (only when provider
+* ``plan_task_llm_cache_stats`` — per-invocation cache hit-rate (only when model
   returns cache token data such as DashScope / OpenAI prompt-cache).
 * ``plan_task_session_billing_summary`` — cumulative totals for the whole session.
 """

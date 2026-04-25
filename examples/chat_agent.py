@@ -1,6 +1,6 @@
 """Simple chat agent example using the ECS-based LLM Agent framework.
 
-This example demonstrates dual-mode LLM provider selection:
+This example demonstrates dual-mode LLM model selection:
 - Without LLM_API_KEY: Uses FakeModel for deterministic testing
 - With LLM_API_KEY: Uses OpenAIModel with DashScope/Qwen
 
@@ -33,20 +33,20 @@ async def main() -> None:
     # Create World
     world = World()
 
-    # --- Create LLM provider ---
+    # --- Create LLM model ---
     api_key: str = os.environ.get("LLM_API_KEY", "")
     base_url: str = os.environ.get(
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
     model: str = os.environ.get("LLM_MODEL", "qwen3.5-flash")
 
-    provider: LLMModel
+    model: LLMModel
     if api_key:
         print(f"Using OpenAIModel with model: {model}")
-        provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
         print("No LLM_API_KEY set. Using FakeModel for demonstration.")
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -62,7 +62,7 @@ async def main() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            model=provider,
+            model=model,
             system_prompt="You are a helpful assistant.",
         ),
     )

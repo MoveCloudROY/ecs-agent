@@ -43,11 +43,11 @@ async def test_tool_call_execution_end_to_end() -> None:
     final_response = CompletionResult(
         message=Message(role="assistant", content="The answer is 5")
     )
-    provider = FakeModel(responses=[tool_call_response, final_response])
+    model = FakeModel(responses=[tool_call_response, final_response])
 
     world = World()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -92,7 +92,7 @@ async def test_tool_call_execution_end_to_end() -> None:
 
 @pytest.mark.asyncio
 async def test_unknown_tool_graceful_handling() -> None:
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -112,7 +112,7 @@ async def test_unknown_tool_graceful_handling() -> None:
 
     world = World()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(

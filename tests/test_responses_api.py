@@ -106,7 +106,7 @@ async def test_responses_api_complete_non_streaming_sends_correct_request() -> N
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(
             api_key="test-key",
             base_url="https://test.openai.com/v1",
@@ -114,7 +114,7 @@ async def test_responses_api_complete_non_streaming_sends_correct_request() -> N
         ),
         model="gpt-4o-mini",
     )
-    provider._client = mock_client
+    model._client = mock_client
 
     messages = [
         Message(role="system", content="You are a helpful assistant."),
@@ -122,7 +122,7 @@ async def test_responses_api_complete_non_streaming_sends_correct_request() -> N
         Message(role="assistant", content="Hi there"),
     ]
 
-    await provider.complete(messages)
+    await model.complete(messages)
 
     assert mock_client.post.called
     call_args = mock_client.post.call_args
@@ -167,12 +167,12 @@ async def test_responses_api_complete_non_streaming_parses_response() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    provider._client = mock_client
+    model._client = mock_client
 
-    result = await provider.complete([Message(role="user", content="hello")])
+    result = await model.complete([Message(role="user", content="hello")])
 
     assert result.message.role == "assistant"
     assert result.message.content == "Response from API"
@@ -203,12 +203,12 @@ async def test_responses_api_complete_non_streaming_with_tools() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    provider._client = mock_client
+    model._client = mock_client
 
-    result = await provider.complete([Message(role="user", content="weather?")])
+    result = await model.complete([Message(role="user", content="weather?")])
 
     assert result.message.role == "assistant"
     assert result.message.content == ""
@@ -242,11 +242,11 @@ async def test_responses_api_complete_non_streaming_state_component_updates_on_s
 
     world = World()
     entity = world.create_entity()
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    provider._client = mock_client
-    world.add_component(entity, LLMComponent(model=provider))
+    model._client = mock_client
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="hello")]),
@@ -286,11 +286,11 @@ async def test_responses_api_complete_non_streaming_previous_response_id_from_st
 
     world = World()
     entity = world.create_entity()
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    provider._client = mock_client
-    world.add_component(entity, LLMComponent(model=provider))
+    model._client = mock_client
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="continue")]),
@@ -317,14 +317,14 @@ async def test_responses_api_complete_non_streaming_falls_back_when_disabled() -
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(
             api_key="test-key",
             base_url="https://test.openai.com/v1",
             api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
         )
     )
-    provider._client = mock_client
+    model._client = mock_client
 
     tools = [
         ToolSchema(
@@ -333,7 +333,7 @@ async def test_responses_api_complete_non_streaming_falls_back_when_disabled() -
             parameters={"type": "object", "properties": {"city": {"type": "string"}}},
         )
     ]
-    await provider.complete([Message(role="user", content="hello")], tools=tools)
+    await model.complete([Message(role="user", content="hello")], tools=tools)
 
     call_args = mock_client.post.call_args
     assert call_args[0][0] == "https://test.openai.com/v1/chat/completions"
@@ -362,20 +362,20 @@ async def test_responses_api_complete_non_streaming_falls_back_on_404() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.side_effect = [responses_error, fallback_response]
 
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(
             api_key="test-key",
             base_url="https://test.openai.com/v1",
             api_format=ApiFormat.OPENAI_RESPONSES,
         )
     )
-    provider._client = mock_client
+    model._client = mock_client
 
-    result = await provider.complete([Message(role="user", content="hello")])
+    result = await model.complete([Message(role="user", content="hello")])
 
     assert result.message.role == "assistant"
     assert result.message.content == "fallback"
-    assert provider._responses_api_available is False
+    assert model._responses_api_available is False
     assert mock_client.post.call_count == 2
     assert (
         mock_client.post.call_args_list[0][0][0]
@@ -419,13 +419,13 @@ async def test_responses_api_streaming_yields_stream_deltas() -> None:
     mock_client.stream = MagicMock()
     mock_client.stream.return_value.__aenter__.return_value = mock_response
 
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    provider._client = mock_client
+    model._client = mock_client
 
     deltas = []
-    stream_result = await provider.complete(
+    stream_result = await model.complete(
         [Message(role="user", content="Hi")], stream=True
     )
     async for delta in stream_result:
@@ -465,13 +465,13 @@ async def test_responses_api_streaming_handles_tool_calls() -> None:
     mock_client.stream = MagicMock()
     mock_client.stream.return_value.__aenter__.return_value = mock_response
 
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    provider._client = mock_client
+    model._client = mock_client
 
     deltas = []
-    stream_result = await provider.complete(
+    stream_result = await model.complete(
         [Message(role="user", content="weather?")], stream=True
     )
     async for delta in stream_result:
@@ -511,13 +511,13 @@ async def test_responses_api_streaming_emits_done() -> None:
     mock_client.stream = MagicMock()
     mock_client.stream.return_value.__aenter__.return_value = mock_response
 
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    provider._client = mock_client
+    model._client = mock_client
 
     deltas = []
-    stream_result = await provider.complete(
+    stream_result = await model.complete(
         [Message(role="user", content="test")], stream=True
     )
     async for delta in stream_result:
@@ -561,11 +561,11 @@ async def test_responses_api_streaming_previous_response_id_updates_state_compon
 
     world = World()
     entity = world.create_entity()
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    provider._client = mock_client
-    world.add_component(entity, LLMComponent(model=provider))
+    model._client = mock_client
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="hi")]),
@@ -599,11 +599,11 @@ async def test_responses_api_non_streaming_previous_response_id_preserved_on_fai
 
     world = World()
     entity = world.create_entity()
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    provider._client = mock_client
-    world.add_component(entity, LLMComponent(model=provider))
+    model._client = mock_client
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="continue")]),
@@ -655,11 +655,11 @@ async def test_responses_api_streaming_previous_response_id_preserved_on_interru
     mock_client.stream = MagicMock()
     mock_client.stream.return_value.__aenter__.return_value = mock_response
 
-    provider = OpenAIModel(
+    model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    provider._client = mock_client
-    world.add_component(entity, LLMComponent(model=provider))
+    model._client = mock_client
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(messages=[Message(role="user", content="interrupt")]),

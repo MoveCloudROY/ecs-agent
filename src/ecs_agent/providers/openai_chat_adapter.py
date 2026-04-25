@@ -45,8 +45,8 @@ class _OpenAIModelFacade(Protocol):
 class OpenAIChatAdapter:
     """Adapter for OpenAI-compatible Chat Completions requests."""
 
-    def __init__(self, provider: _OpenAIModelFacade) -> None:
-        self._provider = provider
+    def __init__(self, facade: _OpenAIModelFacade) -> None:
+        self._facade = facade
 
     async def complete(
         self,
@@ -54,21 +54,21 @@ class OpenAIChatAdapter:
         tools: list[ToolSchema] | None = None,
         response_format: dict[str, Any] | None = None,
     ) -> CompletionResult:
-        url = f"{self._provider._base_url}/chat/completions"
+        url = f"{self._facade._base_url}/chat/completions"
         request_body = self._build_request_body(messages, tools, response_format)
 
         try:
-            response = await self._provider._client.post(
+            response = await self._facade._client.post(
                 url,
                 json=request_body,
-                headers=self._provider._build_headers(),
+                headers=self._facade._build_headers(),
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            self._provider._handle_http_error(exc)
+            self._facade._handle_http_error(exc)
             raise
         except httpx.RequestError as exc:
-            self._provider._handle_request_error(exc)
+            self._facade._handle_request_error(exc)
             raise
 
         response_data = response.json()
@@ -80,25 +80,25 @@ class OpenAIChatAdapter:
         tools: list[ToolSchema] | None = None,
         response_format: dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamDelta]:
-        url = f"{self._provider._base_url}/chat/completions"
+        url = f"{self._facade._base_url}/chat/completions"
         request_body = self._build_request_body(messages, tools, response_format)
         stream_body = dict(request_body)
         stream_body["stream"] = True
 
         timeout = httpx.Timeout(
-            connect=self._provider._timeout.connect,
+            connect=self._facade._timeout.connect,
             read=None,
-            write=self._provider._timeout.write,
-            pool=self._provider._timeout.pool,
+            write=self._facade._timeout.write,
+            pool=self._facade._timeout.pool,
         )
         accumulated_tool_calls: dict[int, dict[str, str]] = {}
 
         try:
-            async with self._provider._client.stream(
+            async with self._facade._client.stream(
                 "POST",
                 url,
                 json=stream_body,
-                headers=self._provider._build_headers(),
+                headers=self._facade._build_headers(),
                 timeout=timeout,
             ) as response:
                 response.raise_for_status()
@@ -133,7 +133,7 @@ class OpenAIChatAdapter:
                         reasoning_content = None
 
                     finish_reason = choice.get("finish_reason")
-                    usage = self._provider._usage_from_raw(response_json.get("usage"))
+                    usage = self._facade._usage_from_raw(response_json.get("usage"))
 
                     tool_calls_delta = delta.get("tool_calls")
                     stream_tool_calls: list[ToolCall] | None = None
@@ -193,10 +193,10 @@ class OpenAIChatAdapter:
                         usage=usage,
                     )
         except httpx.HTTPStatusError as exc:
-            self._provider._handle_http_error(exc)
+            self._facade._handle_http_error(exc)
             raise
         except httpx.RequestError as exc:
-            self._provider._handle_request_error(exc)
+            self._facade._handle_request_error(exc)
             raise
 
     def _build_request_body(
@@ -206,12 +206,12 @@ class OpenAIChatAdapter:
         response_format: dict[str, Any] | None,
     ) -> dict[str, Any]:
         request_body: dict[str, Any] = {
-            "model": self._provider._model,
+            "model": self._facade._model,
             "messages": self._convert_messages_to_openai(messages),
         }
 
         if tools is not None:
-            request_body["tools"] = self._provider._convert_tools_to_openai(tools)
+            request_body["tools"] = self._facade._convert_tools_to_openai(tools)
         if response_format is not None:
             request_body["response_format"] = response_format
         return request_body
@@ -280,7 +280,7 @@ class OpenAIChatAdapter:
     def _parse_response(self, response_data: dict[str, Any]) -> CompletionResult:
         message_data = response_data["choices"][0]["message"]
         message = self._parse_chat_message(message_data)
-        usage = self._provider._usage_from_raw(response_data.get("usage"))
+        usage = self._facade._usage_from_raw(response_data.get("usage"))
         return CompletionResult(message=message, usage=usage)
 
     def _parse_chat_message(self, message_data: dict[str, Any]) -> Message:

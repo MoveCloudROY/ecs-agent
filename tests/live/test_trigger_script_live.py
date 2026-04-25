@@ -53,7 +53,7 @@ async def test_live_script_action_rewrites_prompt_before_llm(live_api_key: str) 
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
-    provider = _make_provider(api_key=live_api_key, base_url=base_url, model=model)
+    model = _make_provider(api_key=live_api_key, base_url=base_url, model=model)
 
     async def tag_handler(
         world: World,
@@ -74,7 +74,7 @@ async def test_live_script_action_rewrites_prompt_before_llm(live_api_key: str) 
     world.add_component(
         entity,
         LLMComponent(
-            model=provider, system_prompt="You are a helpful assistant."
+            model=model, system_prompt="You are a helpful assistant."
         ),
     )
     world.add_component(
@@ -114,7 +114,7 @@ async def test_live_script_action_world_mutation_persists(live_api_key: str) -> 
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
-    provider = _make_provider(api_key=live_api_key, base_url=base_url, model=model)
+    model = _make_provider(api_key=live_api_key, base_url=base_url, model=model)
 
     async def store_handler(
         world: World,
@@ -139,7 +139,7 @@ async def test_live_script_action_world_mutation_persists(live_api_key: str) -> 
     world.add_component(
         entity,
         LLMComponent(
-            model=provider, system_prompt="You are a helpful assistant."
+            model=model, system_prompt="You are a helpful assistant."
         ),
     )
     world.add_component(

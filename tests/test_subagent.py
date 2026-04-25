@@ -100,20 +100,20 @@ class RecordingFakeModel(FakeModel):
 
 def test_subagent_config_dataclass() -> None:
     """Verify SubagentConfig has all required fields."""
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
 
     config = SubagentConfig(
         name="researcher",
-        model=provider,
+        model=model,
         system_prompt="You research things",
         skills=["web-search", "read-file"],
         max_ticks=5,
     )
 
     assert config.name == "researcher"
-    assert config.model is provider
+    assert config.model is model
     assert config.system_prompt == "You research things"
     assert config.skills == ["web-search", "read-file"]
     assert config.max_ticks == 5
@@ -121,11 +121,11 @@ def test_subagent_config_dataclass() -> None:
 
 def test_subagent_config_defaults() -> None:
     """Verify SubagentConfig has sensible defaults."""
-    provider = FakeModel(responses=[])
+    model = FakeModel(responses=[])
 
     config = SubagentConfig(
         name="default-agent",
-        model=provider,
+        model=model,
     )
 
     assert config.system_prompt == ""
@@ -149,7 +149,7 @@ def test_subagent_registry_component_defaults() -> None:
 
 def test_subagent_registry_register_and_lookup() -> None:
     """Register a SubagentConfig and look it up by name."""
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="result"))
         ]
@@ -158,7 +158,7 @@ def test_subagent_registry_register_and_lookup() -> None:
     registry = SubagentRegistryComponent()
     config = SubagentConfig(
         name="researcher",
-        model=provider,
+        model=model,
         system_prompt="You research things",
     )
 
@@ -166,7 +166,7 @@ def test_subagent_registry_register_and_lookup() -> None:
 
     retrieved = registry.subagents["researcher"]
     assert retrieved.name == "researcher"
-    assert retrieved.model is provider
+    assert retrieved.model is model
     assert retrieved.max_ticks is None
 
 
@@ -568,10 +568,10 @@ async def test_subagent_background_stream_true_bridges_child_stream_events_to_pa
 ):
     world = World()
     parent_entity = world.create_entity()
-    provider = ReasoningAndContentStreamingFakeModel(
+    model = ReasoningAndContentStreamingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
-    config = SubagentConfig(name="research", model=provider)
+    config = SubagentConfig(name="research", model=model)
 
     system = SubagentSystem()
     captured: dict[str, Any] = {}
@@ -669,10 +669,10 @@ async def test_subagent_background_stream_true_bridges_child_stream_events_to_pa
 async def test_subagent_background_stream_false_keeps_bridge_dormant() -> None:
     world = World()
     parent_entity = world.create_entity()
-    provider = ReasoningAndContentStreamingFakeModel(
+    model = ReasoningAndContentStreamingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
-    config = SubagentConfig(name="research", model=provider)
+    config = SubagentConfig(name="research", model=model)
 
     system = SubagentSystem()
     captured: dict[str, Any] = {}
@@ -743,12 +743,12 @@ async def test_subagent_background_parent_event_bus_bridge_cleans_up_after_failu
 ):
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="ignored"))
         ]
     )
-    config = SubagentConfig(name="research", model=provider)
+    config = SubagentConfig(name="research", model=model)
 
     system = SubagentSystem()
     captured: dict[str, Any] = {}
@@ -873,10 +873,10 @@ async def test_delegation_event_correlation_integrity() -> None:
     world = World()
     parent_entity = world.create_entity()
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
     )
-    config = SubagentConfig(name="test-agent", model=provider)
+    config = SubagentConfig(name="test-agent", model=model)
     registry = SubagentRegistryComponent(subagents={"test-agent": config})
     world.add_component(parent_entity, registry)
     world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
@@ -946,10 +946,10 @@ async def test_backward_compatible_auto_registration_still_works() -> None:
     world = World()
     entity = world.create_entity()
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
     )
-    config = SubagentConfig(name="test-agent", model=provider)
+    config = SubagentConfig(name="test-agent", model=model)
     registry = SubagentRegistryComponent(subagents={"test-agent": config})
     world.add_component(entity, registry)
     world.add_component(entity, ToolRegistryComponent(tools={}, handlers={}))
@@ -1881,19 +1881,19 @@ name="test",
 async def test_category_mapping_exact_match() -> None:
     """SubagentSystem._resolve_subagent_config looks up subagent from registry."""
     system = SubagentSystem()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     config = SubagentConfig(
         name="ultrabrain",
-        model=provider,
+        model=model,
     )
     registry = SubagentRegistryComponent(subagents={"ultrabrain": config})
 
     resolved = system._resolve_subagent_config(registry, "ultrabrain")
 
     assert resolved.name == "ultrabrain"
-    assert resolved.model is provider
+    assert resolved.model is model
 
 
 async def test_category_mapping_unknown_category() -> None:
@@ -1908,10 +1908,10 @@ async def test_category_mapping_unknown_category() -> None:
 async def test_subagent_tool_sync_happy_path() -> None:
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
-    config = SubagentConfig(name="quick", model=provider)
+    config = SubagentConfig(name="quick", model=model)
 
     world.add_component(
         parent_entity,
@@ -1962,10 +1962,10 @@ async def test_subagent_tool_sync_happy_path() -> None:
 async def test_subagent_tool_background_returns_session_id() -> None:
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
-    config = SubagentConfig(name="deep", model=provider)
+    config = SubagentConfig(name="deep", model=model)
 
     world.add_component(
         parent_entity,
@@ -2023,12 +2023,12 @@ async def test_subagent_tool_background_returns_session_id() -> None:
 async def test_subagent_handler_uses_immutable_effective_config_snapshot() -> None:
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     config = SubagentConfig(
         name="deep",
-        model=provider,
+        model=model,
         skills=["base-skill"],
     )
 
@@ -2055,7 +2055,7 @@ async def test_subagent_handler_uses_immutable_effective_config_snapshot() -> No
         child_entity = child_world.create_entity()
         child_world.add_component(
             child_entity,
-            LLMComponent(model=provider, system_prompt=""),
+            LLMComponent(model=model, system_prompt=""),
         )
         child_world.add_component(child_entity, ConversationComponent(messages=[]))
         return child_world, child_entity
@@ -2100,12 +2100,12 @@ async def test_subagent_tool_background_enqueue_session_records_stream() -> None
 
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     config = SubagentConfig(
         name="deep",
-        model=provider,
+        model=model,
         skills=["base-skill"],
     )
 
@@ -2169,10 +2169,10 @@ async def test_subagent_tool_background_returns_queued_lifecycle_status_when_sch
 
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
-    config = SubagentConfig(name="deep", model=provider)
+    config = SubagentConfig(name="deep", model=model)
 
     world.add_component(
         parent_entity,
@@ -2247,10 +2247,10 @@ async def test_subagent_tool_background_returns_queued_lifecycle_status_when_sch
 async def test_subagent_tool_validates_parameters() -> None:
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
-    config = SubagentConfig(name="quick", model=provider)
+    config = SubagentConfig(name="quick", model=model)
 
     world.add_component(
         parent_entity,
@@ -2276,7 +2276,7 @@ async def test_subagent_tool_validates_parameters() -> None:
 
 
 class SlowFakeModel:
-    """Test provider that simulates slow responses with configurable delay."""
+    """Test model that simulates slow responses with configurable delay."""
 
     model_id: str = "slow-fake"
 
@@ -2299,12 +2299,12 @@ async def test_subagent_timeout_global_default() -> None:
     parent_entity = world.create_entity()
 
     # Provider that simulates a long-running task
-    provider = SlowFakeModel(
+    model = SlowFakeModel(
         delay=5.0,
         response=CompletionResult(message=Message(role="assistant", content="done")),
     )
 
-    config = SubagentConfig(name="slow", model=provider)
+    config = SubagentConfig(name="slow", model=model)
     world.add_component(
         parent_entity,
         SubagentRegistryComponent(subagents={"slow": config}),
@@ -2337,12 +2337,12 @@ async def test_subagent_timeout_per_call_override() -> None:
     parent_entity = world.create_entity()
 
     # Provider that simulates a task taking 0.3s
-    provider = SlowFakeModel(
+    model = SlowFakeModel(
         delay=0.3,
         response=CompletionResult(message=Message(role="assistant", content="done")),
     )
 
-    config = SubagentConfig(name="medium", model=provider)
+    config = SubagentConfig(name="medium", model=model)
     world.add_component(
         parent_entity,
         SubagentRegistryComponent(subagents={"medium": config}),
@@ -2374,14 +2374,14 @@ async def test_subagent_timeout_none_disables() -> None:
     world = World()
     parent_entity = world.create_entity()
 
-    # Fast provider
-    provider = FakeModel(
+    # Fast model
+    model = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="success"))
         ]
     )
 
-    config = SubagentConfig(name="fast", model=provider)
+    config = SubagentConfig(name="fast", model=model)
     world.add_component(
         parent_entity,
         SubagentRegistryComponent(subagents={"fast": config}),
@@ -2417,12 +2417,12 @@ async def test_subagent_timeout_sets_state() -> None:
     parent_entity = world.create_entity()
 
     # Provider that simulates a long-running task
-    provider = SlowFakeModel(
+    model = SlowFakeModel(
         delay=5.0,
         response=CompletionResult(message=Message(role="assistant", content="done")),
     )
 
-    config = SubagentConfig(name="slow_bg", model=provider)
+    config = SubagentConfig(name="slow_bg", model=model)
     world.add_component(
         parent_entity,
         SubagentRegistryComponent(subagents={"slow_bg": config}),
@@ -2466,10 +2466,10 @@ async def test_completion_enqueues_parent_notification(
 
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
-    config = SubagentConfig(name="notify-success", model=provider)
+    config = SubagentConfig(name="notify-success", model=model)
 
     world.add_component(
         parent_entity,
@@ -2538,8 +2538,8 @@ async def test_failed_background_session_enqueues_parent_notification_before_com
 
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeModel(responses=[])
-    config = SubagentConfig(name="notify-failure", model=provider)
+    model = FakeModel(responses=[])
+    config = SubagentConfig(name="notify-failure", model=model)
 
     world.add_component(
         parent_entity,
@@ -2617,11 +2617,11 @@ async def test_timed_out_background_session_enqueues_parent_notification(
 
     world = World()
     parent_entity = world.create_entity()
-    provider = SlowFakeModel(
+    model = SlowFakeModel(
         delay=5.0,
         response=CompletionResult(message=Message(role="assistant", content="done")),
     )
-    config = SubagentConfig(name="notify-timeout", model=provider)
+    config = SubagentConfig(name="notify-timeout", model=model)
 
     world.add_component(
         parent_entity,
@@ -2688,11 +2688,11 @@ async def test_cancelled_background_session_does_not_enqueue_notification(
 
     world = World()
     parent_entity = world.create_entity()
-    provider = SlowFakeModel(
+    model = SlowFakeModel(
         delay=5.0,
         response=CompletionResult(message=Message(role="assistant", content="done")),
     )
-    config = SubagentConfig(name="notify-cancel", model=provider)
+    config = SubagentConfig(name="notify-cancel", model=model)
 
     world.add_component(
         parent_entity,
@@ -2743,10 +2743,10 @@ async def test_cancelled_background_session_does_not_enqueue_notification(
 async def test_sync_subagent_call_does_not_enqueue_parent_notification() -> None:
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
-    config = SubagentConfig(name="sync-agent", model=provider)
+    config = SubagentConfig(name="sync-agent", model=model)
 
     world.add_component(
         parent_entity,
@@ -2870,10 +2870,10 @@ async def test_waiting_parent_future_is_resolved_when_background_completion_noti
 
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
-    config = SubagentConfig(name="notify-waiter", model=provider)
+    config = SubagentConfig(name="notify-waiter", model=model)
 
     world.add_component(
         parent_entity,
@@ -2927,7 +2927,7 @@ async def test_waiting_parent_future_is_resolved_when_background_completion_noti
 async def test_completion_notification_is_injected_before_next_reasoning_turn() -> None:
     world = World()
     entity_id = world.create_entity()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="I resumed work.")
@@ -2935,7 +2935,7 @@ async def test_completion_notification_is_injected_before_next_reasoning_turn() 
         ]
     )
 
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Continue.")]),
@@ -2982,8 +2982,8 @@ async def test_completion_notification_is_injected_before_next_reasoning_turn() 
     reasoning_system = ReasoningSystem(priority=0)
     await reasoning_system.process(world)
 
-    assert len(provider.calls) == 1
-    assert provider.calls[0][-1] == Message(
+    assert len(model.calls) == 1
+    assert model.calls[0][-1] == Message(
         role="system",
         content=(
             "Background subagent updates:\n"
@@ -4216,7 +4216,7 @@ async def test_subagent_result_timeout() -> None:
     world.add_component(parent, SubagentSessionTableComponent())
     world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
 
-    # Create provider with delayed response
+    # Create model with delayed response
     async def slow_completion(*args: Any, **kwargs: Any) -> CompletionResult:
         await asyncio.sleep(10.0)  # Very long delay
         return CompletionResult(
@@ -4605,7 +4605,7 @@ async def test_subagent_cancel_active_session() -> None:
     world.add_component(parent, SubagentSessionTableComponent())
     world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
 
-    # Create provider with very slow response
+    # Create model with very slow response
     async def very_slow_completion(*args: Any, **kwargs: Any) -> CompletionResult:
         await asyncio.sleep(100.0)
         return CompletionResult(
@@ -4862,20 +4862,20 @@ def test_assemble_child_world_name_follows_convention() -> None:
         LLMComponent,
     )
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     world = World(name="parent-world")
     parent = world.create_entity()
     world.add_component(
-        parent, LLMComponent(model=provider, system_prompt="")
+        parent, LLMComponent(model=model, system_prompt="")
     )
     world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
     world.add_component(parent, ConversationComponent(messages=[]))
 
     config = SubagentConfig(
         name="researcher",
-        model=provider,
+        model=model,
         system_prompt="",
     )
 
@@ -4897,19 +4897,19 @@ def test_assemble_child_world_different_calls_produce_unique_names() -> None:
         LLMComponent,
     )
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
         * 4
     )
     world = World(name="parent")
     parent = world.create_entity()
     world.add_component(
-        parent, LLMComponent(model=provider, system_prompt="")
+        parent, LLMComponent(model=model, system_prompt="")
     )
     world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
     world.add_component(parent, ConversationComponent(messages=[]))
 
-    config = SubagentConfig(name="worker", model=provider)
+    config = SubagentConfig(name="worker", model=model)
     system = SubagentSystem()
 
     w1, _ = system._assemble_child_world(world, parent, config)

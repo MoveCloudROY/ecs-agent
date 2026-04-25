@@ -60,7 +60,7 @@ def _anthropic_config(
 
 
 def test_constructor_stores_configuration() -> None:
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(
             api_key="test-key",
             base_url="https://test.anthropic.com",
@@ -69,23 +69,23 @@ def test_constructor_stores_configuration() -> None:
         max_tokens=2048,
     )
 
-    assert provider._api_key == "test-key"
-    assert provider._base_url == "https://test.anthropic.com"
-    assert provider._model == "claude-3-opus-20240229"
-    assert provider._max_tokens == 2048
+    assert model._api_key == "test-key"
+    assert model._base_url == "https://test.anthropic.com"
+    assert model._model == "claude-3-opus-20240229"
+    assert model._max_tokens == 2048
 
 
 def test_constructor_uses_default_base_url_and_max_tokens() -> None:
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
 
-    assert provider._base_url == "https://api.anthropic.com"
-    assert provider._max_tokens == 65535
+    assert model._base_url == "https://api.anthropic.com"
+    assert model._max_tokens == 65535
 
 
 def test_build_messages_extracts_system_and_formats_content_blocks() -> None:
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     messages = [
@@ -94,7 +94,7 @@ def test_build_messages_extracts_system_and_formats_content_blocks() -> None:
         Message(role="assistant", content="Hi"),
     ]
 
-    system, anthropic_messages = provider._build_messages(messages)
+    system, anthropic_messages = model._build_messages(messages)
 
     assert system == "You are concise."
     assert anthropic_messages == [
@@ -104,14 +104,14 @@ def test_build_messages_extracts_system_and_formats_content_blocks() -> None:
 
 
 def test_build_messages_converts_tool_result_to_user_tool_result_block() -> None:
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     messages = [
         Message(role="tool", content="22C and sunny", tool_call_id="toolu_123"),
     ]
 
-    system, anthropic_messages = provider._build_messages(messages)
+    system, anthropic_messages = model._build_messages(messages)
 
     assert system is None
     assert anthropic_messages == [
@@ -130,12 +130,12 @@ def test_build_messages_converts_tool_result_to_user_tool_result_block() -> None
 
 def test_build_messages_delivers_summary_xml_in_system_string() -> None:
     """Test that Anthropic adapter delivers XML summary in system string."""
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
 
     summary_xml = "<chat_history_summary>Summary: X happened</chat_history_summary>"
-    system, anthropic_messages = provider._build_messages(
+    system, anthropic_messages = model._build_messages(
         [
             Message(role="system", content=f"You are helpful.\n\n{summary_xml}"),
             Message(role="user", content="Hello"),
@@ -149,7 +149,7 @@ def test_build_messages_delivers_summary_xml_in_system_string() -> None:
 
 
 def test_build_tools_converts_parameters_to_input_schema() -> None:
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     tools = [
@@ -164,7 +164,7 @@ def test_build_tools_converts_parameters_to_input_schema() -> None:
         )
     ]
 
-    anthropic_tools = provider._build_tools(tools)
+    anthropic_tools = model._build_tools(tools)
 
     assert anthropic_tools == [
         {
@@ -180,7 +180,7 @@ def test_build_tools_converts_parameters_to_input_schema() -> None:
 
 
 def test_parse_response_text_content_blocks() -> None:
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     response_data: dict[str, Any] = {
@@ -188,7 +188,7 @@ def test_parse_response_text_content_blocks() -> None:
         "usage": {"input_tokens": 10, "output_tokens": 4},
     }
 
-    result = provider._parse_response(response_data)
+    result = model._parse_response(response_data)
 
     assert result.message.role == "assistant"
     assert result.message.content == "Hello from Claude"
@@ -200,7 +200,7 @@ def test_parse_response_text_content_blocks() -> None:
 
 
 def test_parse_response_usage_includes_cache_fields_and_metadata() -> None:
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     response_data: dict[str, Any] = {
@@ -213,7 +213,7 @@ def test_parse_response_usage_includes_cache_fields_and_metadata() -> None:
         },
     }
 
-    result = provider._parse_response(response_data)
+    result = model._parse_response(response_data)
 
     assert result.usage is not None
     assert result.usage.prompt_tokens == 10
@@ -236,7 +236,7 @@ def test_build_messages_unsupported_multimodal_without_vision_raises(
     parts: list[ImageUrlPart | FileRefPart],
     expected_part_name: str,
 ) -> None:
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
 
@@ -247,11 +247,11 @@ def test_build_messages_unsupported_multimodal_without_vision_raises(
             f"{expected_part_name}"
         ),
     ):
-        provider._build_messages([Message(role="user", content="", parts=parts)])
+        model._build_messages([Message(role="user", content="", parts=parts)])
 
 
 def test_parse_response_tool_use_content_blocks() -> None:
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     response_data: dict[str, Any] = {
@@ -265,7 +265,7 @@ def test_parse_response_tool_use_content_blocks() -> None:
         ]
     }
 
-    result = provider._parse_response(response_data)
+    result = model._parse_response(response_data)
 
     assert result.message.role == "assistant"
     assert result.message.content == ""
@@ -276,7 +276,7 @@ def test_parse_response_tool_use_content_blocks() -> None:
 
 
 def test_parse_response_mixed_text_and_tool_use_blocks() -> None:
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     response_data: dict[str, Any] = {
@@ -291,7 +291,7 @@ def test_parse_response_mixed_text_and_tool_use_blocks() -> None:
         ]
     }
 
-    result = provider._parse_response(response_data)
+    result = model._parse_response(response_data)
 
     assert result.message.content == "Checking now."
     assert result.message.tool_calls is not None
@@ -310,14 +310,14 @@ async def test_complete_non_streaming_makes_expected_request() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(
             api_key="test-key", base_url="https://api.anthropic.com"
         ),
         model="claude-3-haiku-20240307",
         max_tokens=300,
     )
-    provider._client = mock_client
+    model._client = mock_client
 
     messages = [
         Message(role="system", content="System prompt"),
@@ -332,7 +332,7 @@ async def test_complete_non_streaming_makes_expected_request() -> None:
         )
     ]
 
-    result = await provider.complete(messages=messages, tools=tools, stream=False)
+    result = await model.complete(messages=messages, tools=tools, stream=False)
 
     assert mock_client.post.called
     call_args = mock_client.post.call_args
@@ -379,22 +379,22 @@ async def test_complete_raises_on_http_status_error() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
-    provider._client = mock_client
+    model._client = mock_client
 
     with pytest.raises(httpx.HTTPStatusError):
-        await provider.complete(
+        await model.complete(
             messages=[Message(role="user", content="hello")], stream=False
         )
 
 
 def test_protocol_compliance() -> None:
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
-    assert isinstance(provider, LLMModel)
+    assert isinstance(model, LLMModel)
 
 
 @pytest.mark.asyncio
@@ -435,12 +435,12 @@ async def test_complete_streaming_returns_async_iterator() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
-    provider._client = mock_client
+    model._client = mock_client
 
-    stream_iter = await provider.complete(
+    stream_iter = await model.complete(
         messages=[Message(role="user", content="hello")],
         stream=True,
     )
@@ -461,15 +461,15 @@ async def test_complete_streaming_uses_stream_request_with_stream_true() -> None
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(
             api_key="test-key", base_url="https://api.anthropic.com"
         ),
         model="claude-3-haiku-20240307",
     )
-    provider._client = mock_client
+    model._client = mock_client
 
-    stream_iter = await provider.complete(
+    stream_iter = await model.complete(
         messages=[Message(role="user", content="hello")],
         stream=True,
     )
@@ -525,12 +525,12 @@ async def test_streaming_yields_text_deltas_from_content_block_delta() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
-    provider._client = mock_client
+    model._client = mock_client
 
-    stream_iter = await provider.complete(
+    stream_iter = await model.complete(
         messages=[Message(role="user", content="hello")],
         stream=True,
     )
@@ -589,12 +589,12 @@ async def test_streaming_accumulates_tool_use_input_json_until_content_block_sto
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
-    provider._client = mock_client
+    model._client = mock_client
 
-    stream_iter = await provider.complete(
+    stream_iter = await model.complete(
         messages=[Message(role="user", content="weather")],
         stream=True,
     )
@@ -645,12 +645,12 @@ async def test_streaming_tool_use_invalid_json_yields_partial_arguments() -> Non
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
-    provider._client = mock_client
+    model._client = mock_client
 
-    stream_iter = await provider.complete(
+    stream_iter = await model.complete(
         messages=[Message(role="user", content="lookup")],
         stream=True,
     )
@@ -681,12 +681,12 @@ async def test_streaming_handles_message_delta_finish_reason() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
-    provider._client = mock_client
+    model._client = mock_client
 
-    stream_iter = await provider.complete(
+    stream_iter = await model.complete(
         messages=[Message(role="user", content="x")],
         stream=True,
     )
@@ -714,12 +714,12 @@ async def test_streaming_skips_empty_lines_and_done_marker() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
-    provider._client = mock_client
+    model._client = mock_client
 
-    stream_iter = await provider.complete(
+    stream_iter = await model.complete(
         messages=[Message(role="user", content="x")],
         stream=True,
     )
@@ -738,16 +738,16 @@ async def test_streaming_timeout_uses_read_none_and_custom_values() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = ClaudeModel(
+    model = ClaudeModel(
         config=_anthropic_config(api_key="test-key"),
         connect_timeout=5.0,
         read_timeout=90.0,
         write_timeout=8.0,
         pool_timeout=6.0,
     )
-    provider._client = mock_client
+    model._client = mock_client
 
-    stream_iter = await provider.complete(
+    stream_iter = await model.complete(
         messages=[Message(role="user", content="hello")],
         stream=True,
     )

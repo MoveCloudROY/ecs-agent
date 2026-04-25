@@ -185,11 +185,11 @@ def test_current_compaction_summary_component_can_be_stored_independently() -> N
 @pytest.mark.asyncio
 async def test_compaction_triggers_when_threshold_exceeded() -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="brief"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -207,7 +207,7 @@ async def test_compaction_triggers_when_threshold_exceeded() -> None:
     conversation = world.get_component(entity_id, ConversationComponent)
     current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
     assert conversation is not None
-    assert len(provider.calls) == 1
+    assert len(model.calls) == 1
     assert len(conversation.messages) == 0
     assert current_summary == CurrentCompactionSummaryComponent(summary="brief")
 
@@ -215,13 +215,13 @@ async def test_compaction_triggers_when_threshold_exceeded() -> None:
 @pytest.mark.asyncio
 async def test_compaction_full_history_method_replaces_all_non_system_history() -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="full summary"))
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -252,7 +252,7 @@ async def test_compaction_full_history_method_replaces_all_non_system_history() 
     ]
     assert current_summary == CurrentCompactionSummaryComponent(summary="full summary")
 
-    sent_messages, _, _ = provider.calls[0]
+    sent_messages, _, _ = model.calls[0]
     assert sent_messages[1].role == "user"
     assert "user: old-0" in sent_messages[1].content
     assert "user: old-1" in sent_messages[1].content
@@ -265,7 +265,7 @@ async def test_compaction_predrop_then_compact_uses_budgeted_view_without_mutati
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="budgeted summary")
@@ -283,7 +283,7 @@ async def test_compaction_predrop_then_compact_uses_budgeted_view_without_mutati
         Message(role="tool", content="tool result", tool_call_id="call-1"),
         _message("keep me"),
     ]
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id, ConversationComponent(messages=list(original_messages))
     )
@@ -323,7 +323,7 @@ async def test_compaction_predrop_then_compact_uses_budgeted_view_without_mutati
     assert isinstance(budget_config, ContextBudgetConfig)
     assert budget_config.prune_tool_results is True
 
-    summarized_input = provider.calls[0][0][1].content
+    summarized_input = model.calls[0][0][1].content
     assert "assistant: tool call" not in summarized_input
     assert "tool: tool result" not in summarized_input
     assert "user: keep me" in summarized_input
@@ -346,7 +346,7 @@ async def test_compaction_summary_input_includes_canonical_subagent_session_stat
     None
 ):
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="subagent-aware summary")
@@ -354,7 +354,7 @@ async def test_compaction_summary_input_includes_canonical_subagent_session_stat
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -410,7 +410,7 @@ async def test_compaction_summary_input_includes_canonical_subagent_session_stat
 
     await CompactionSystem().process(world)
 
-    summary_input = provider.calls[0][0][1].content
+    summary_input = model.calls[0][0][1].content
     assert "conversation text claims sess-pending succeeded" in summary_input
     assert "Subagent session state:" in summary_input
     assert "Pending: sess-pending" in summary_input
@@ -422,11 +422,11 @@ async def test_compaction_summary_input_includes_canonical_subagent_session_stat
 @pytest.mark.asyncio
 async def test_compaction_calls_llm_with_expected_summarization_prompt() -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="s"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -445,8 +445,8 @@ async def test_compaction_calls_llm_with_expected_summarization_prompt() -> None
 
     await CompactionSystem().process(world)
 
-    assert len(provider.calls) == 1
-    sent_messages, sent_tools, sent_stream = provider.calls[0]
+    assert len(model.calls) == 1
+    sent_messages, sent_tools, sent_stream = model.calls[0]
     assert sent_tools is None
     assert sent_stream is False
     assert len(sent_messages) == 2
@@ -460,13 +460,13 @@ async def test_compaction_calls_llm_with_expected_summarization_prompt() -> None
 @pytest.mark.asyncio
 async def test_summary_is_stored_in_archive_component() -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="saved summary"))
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -493,11 +493,11 @@ async def test_compaction_publishes_event_with_original_and_compacted_token_coun
     None
 ):
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="s"))]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[_message("a b c d"), _message("e f g h")]),
@@ -524,13 +524,13 @@ async def test_compaction_publishes_event_with_original_and_compacted_token_coun
 @pytest.mark.asyncio
 async def test_no_compaction_when_threshold_not_exceeded() -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="unused"))
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     original_messages = [_message("hello"), _message("world")]
     world.add_component(
         entity_id, ConversationComponent(messages=list(original_messages))
@@ -545,19 +545,19 @@ async def test_no_compaction_when_threshold_not_exceeded() -> None:
     conversation = world.get_component(entity_id, ConversationComponent)
     assert conversation is not None
     assert conversation.messages == original_messages
-    assert provider.calls == []
+    assert model.calls == []
 
 
 @pytest.mark.asyncio
 async def test_system_message_is_preserved_during_compaction() -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="summary"))
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -591,7 +591,7 @@ async def test_compaction_updates_current_summary_and_clears_rendered_prompt_cac
     None
 ):
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="state-backed summary")
@@ -599,7 +599,7 @@ async def test_compaction_updates_current_summary_and_clears_rendered_prompt_cac
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -636,7 +636,7 @@ async def test_repeated_compaction_folds_previous_current_summary_into_next_summ
     None
 ):
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="first summary")
@@ -647,7 +647,7 @@ async def test_repeated_compaction_folds_previous_current_summary_into_next_summ
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -675,7 +675,7 @@ async def test_repeated_compaction_folds_previous_current_summary_into_next_summ
 
     archive = world.get_component(entity_id, ConversationArchiveComponent)
     current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
-    second_summary_input = provider.calls[1][0][1].content
+    second_summary_input = model.calls[1][0][1].content
     previous_summary_index = second_summary_input.index(
         "user: Previous summary:\n\nfirst summary"
     )
@@ -821,7 +821,7 @@ async def test_compaction_falls_back_to_legacy_summary_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="legacy summary")
@@ -829,7 +829,7 @@ async def test_compaction_falls_back_to_legacy_summary_model(
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -858,8 +858,8 @@ async def test_compaction_falls_back_to_legacy_summary_model(
 
     await CompactionSystem().process(world)
 
-    assert len(provider.calls) == 1
-    assert provider.calls[0][0][0].content == DEFAULT_COMPACTION_PROMPT
+    assert len(model.calls) == 1
+    assert model.calls[0][0][0].content == DEFAULT_COMPACTION_PROMPT
 
 
 def test_overflow_pruning_logs_observable_event(
@@ -926,7 +926,7 @@ def test_overflow_pruning_logs_observable_event(
 @pytest.mark.asyncio
 async def test_compaction_uses_default_prompt_when_no_template() -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="default prompt summary")
@@ -934,7 +934,7 @@ async def test_compaction_uses_default_prompt_when_no_template() -> None:
         ]
     )
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -953,8 +953,8 @@ async def test_compaction_uses_default_prompt_when_no_template() -> None:
 
     await CompactionSystem().process(world)
 
-    assert len(provider.calls) == 1
-    sent_messages, _, _ = provider.calls[0]
+    assert len(model.calls) == 1
+    sent_messages, _, _ = model.calls[0]
     assert sent_messages[0].role == "system"
     assert sent_messages[0].content == DEFAULT_COMPACTION_PROMPT
 
@@ -962,7 +962,7 @@ async def test_compaction_uses_default_prompt_when_no_template() -> None:
 @pytest.mark.asyncio
 async def test_compaction_renders_custom_prompt_template() -> None:
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="custom prompt summary")
@@ -987,7 +987,7 @@ async def test_compaction_renders_custom_prompt_template() -> None:
     world.add_component(
         entity_id,
         LLMComponent(
-            model=provider,
+            model=model,
             system_prompt="runtime llm prompt",
         ),
     )
@@ -1016,7 +1016,7 @@ async def test_compaction_renders_custom_prompt_template() -> None:
 
     await CompactionSystem().process(world)
 
-    sent_messages, _, _ = provider.calls[0]
+    sent_messages, _, _ = model.calls[0]
     llm = world.get_component(entity_id, LLMComponent)
     runtime_cache = world.get_component(entity_id, RenderedSystemPromptComponent)
     legacy_prompt = world.get_component(entity_id, SystemPromptComponent)

@@ -9,7 +9,7 @@ This example demonstrates the full serialization cycle:
 Key features:
 - Multiple entities (agent, sub-agent, collaboration peer)
 - Multiple component types: LLMComponent, ConversationComponent, PlanComponent, etc.
-- Non-serializable fields (provider, handlers) are handled gracefully
+- Non-serializable fields (model, handlers) are handled gracefully
 - Provider re-injection on deserialization
 - No API key required (uses FakeModel)
 
@@ -54,7 +54,7 @@ from ecs_agent.types import (
 async def main() -> None:
     """Demonstrate World serialization and deserialization."""
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="This is a response."),
@@ -80,7 +80,7 @@ async def main() -> None:
     world.add_component(
         main_agent,
         LLMComponent(
-            model=provider, system_prompt="You are helpful."
+            model=model, system_prompt="You are helpful."
         ),
     )
     world.add_component(
@@ -138,7 +138,7 @@ async def main() -> None:
 
     world.add_component(
         second_agent,
-        LLMComponent(model=provider),
+        LLMComponent(model=model),
     )
     world.add_component(
         second_agent,
@@ -197,7 +197,7 @@ async def main() -> None:
 
         loaded_world = WorldSerializer.load(
             json_file,
-            providers={"fake-model": provider, "fake-model-2": provider},
+            providers={"fake-model": model, "fake-model-2": model},
             tool_handlers=tool_handlers,
         )
         print(f"✓ World loaded from {json_file}")

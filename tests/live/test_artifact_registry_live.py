@@ -124,13 +124,13 @@ async def test_live_planning_writes_canonical_plan_md(
     base_url: str,
 ) -> None:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
-    provider = _make_provider(api_key=live_api_key, base_url=base_url, model=model)
+    model = _make_provider(api_key=live_api_key, base_url=base_url, model=model)
 
     registry = ArtifactRegistry(root=tmp_path)
     world = World()
     entity = world.create_entity()
 
-    world.add_component(entity, LLMComponent(model=provider))
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(
@@ -218,7 +218,7 @@ async def test_live_no_legacy_category_paths_written(
     base_url: str,
 ) -> None:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
-    provider = _make_provider(api_key=live_api_key, base_url=base_url, model=model)
+    model = _make_provider(api_key=live_api_key, base_url=base_url, model=model)
 
     registry = ArtifactRegistry(root=tmp_path)
     world = World()
@@ -236,7 +236,7 @@ async def test_live_no_legacy_category_paths_written(
     async def live_tool(payload: str) -> str:
         return f"ok:{payload}"
 
-    world.add_component(entity, LLMComponent(model=provider))
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(

@@ -1,7 +1,7 @@
 """Tool Approval Agent Example with real LLM.
 
 Demonstrates the @tool decorator, scan_module tool discovery, approval workflow,
-and sandboxed tool execution using a real LLM provider.
+and sandboxed tool execution using a real LLM model.
 
 The example shows:
   - Defining @tool-decorated functions (get_weather, send_email)
@@ -15,7 +15,7 @@ Usage:
   2. Run: uv run python examples/tool_approval_agent.py
 
 Environment variables:
-  LLM_API_KEY   — API key for the LLM provider (required)
+  LLM_API_KEY   — API key for the LLM model (required)
   LLM_BASE_URL  — Base URL for the API (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
   LLM_MODEL     — Model name (default: qwen3.5-plus)
 """
@@ -80,9 +80,9 @@ async def main() -> None:
     print(f"Base URL: {base_url}")
     print()
 
-    # --- Create LLM provider ---
+    # --- Create LLM model ---
     base_model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model, connect_timeout=connect_timeout, read_timeout=read_timeout, write_timeout=write_timeout, pool_timeout=pool_timeout)
-    provider = RetryModel(
+    model = RetryModel(
         base_model,
         retry_config=RetryConfig(
             max_attempts=max_retries,
@@ -100,7 +100,7 @@ async def main() -> None:
     world.add_component(
         agent_id,
         LLMComponent(
-            model=provider,
+            model=model,
             
             system_prompt=(
                 "You are a helpful assistant that can check weather and send emails. "

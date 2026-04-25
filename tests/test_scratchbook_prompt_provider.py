@@ -163,11 +163,11 @@ def test_provider_emits_approved_placeholder_surface() -> None:
         ],
     )
 
-    provider = ScratchbookPromptPlaceholderProvider(config)
+    model = ScratchbookPromptPlaceholderProvider(config)
     world = World()
     entity_id = world.create_entity()
 
-    placeholders = provider.resolve_placeholders(world, entity_id)
+    placeholders = model.resolve_placeholders(world, entity_id)
 
     assert "_scratchbook_path" in placeholders
     assert "_scratchbook_artifact_types" in placeholders
@@ -186,11 +186,11 @@ def test_empty_state_outputs_use_none_contract() -> None:
         artifacts=[],
     )
 
-    provider = ScratchbookPromptPlaceholderProvider(config)
+    model = ScratchbookPromptPlaceholderProvider(config)
     world = World()
     entity_id = world.create_entity()
 
-    placeholders = provider.resolve_placeholders(world, entity_id)
+    placeholders = model.resolve_placeholders(world, entity_id)
 
     assert placeholders["_scratchbook_artifacts"] == "- none"
     assert placeholders["_scratchbook_artifact_types"] == "- none"
@@ -203,11 +203,11 @@ def test_registered_type_with_zero_instances_uses_explicit_none_contract() -> No
         artifacts=[],
     )
 
-    provider = ScratchbookPromptPlaceholderProvider(config)
+    model = ScratchbookPromptPlaceholderProvider(config)
     world = World()
     entity_id = world.create_entity()
 
-    placeholders = provider.resolve_placeholders(world, entity_id)
+    placeholders = model.resolve_placeholders(world, entity_id)
 
     assert placeholders["_scratchbook_artifact_types"] == "- none"
     assert placeholders["_scratchbook_artifacts"] == "- none"
@@ -221,11 +221,11 @@ def test_zero_artifact_definitions_emit_no_dynamic_artifact_keys() -> None:
         artifacts=[],
     )
 
-    provider = ScratchbookPromptPlaceholderProvider(config)
+    model = ScratchbookPromptPlaceholderProvider(config)
     world = World()
     entity_id = world.create_entity()
 
-    placeholders = provider.resolve_placeholders(world, entity_id)
+    placeholders = model.resolve_placeholders(world, entity_id)
 
     assert not any(
         key.startswith("_scratchbook_artifact_")
@@ -255,11 +255,11 @@ def test_custom_overview_and_artifact_templates_override_defaults() -> None:
         ],
     )
 
-    provider = ScratchbookPromptPlaceholderProvider(config)
+    model = ScratchbookPromptPlaceholderProvider(config)
     world = World()
     entity_id = world.create_entity()
 
-    placeholders = provider.resolve_placeholders(world, entity_id)
+    placeholders = model.resolve_placeholders(world, entity_id)
 
     assert placeholders["_scratchbook_overview"] == "Custom overview scratchbook"
     assert placeholders["_scratchbook_artifact_tool_output"].startswith("User ")
@@ -284,11 +284,11 @@ def test_readonly_emphasis_appears_in_artifact_block() -> None:
         ],
     )
 
-    provider = ScratchbookPromptPlaceholderProvider(config)
+    model = ScratchbookPromptPlaceholderProvider(config)
     world = World()
     entity_id = world.create_entity()
 
-    placeholders = provider.resolve_placeholders(world, entity_id)
+    placeholders = model.resolve_placeholders(world, entity_id)
     block = placeholders["_scratchbook_artifact_tool_output"]
 
     assert "READONLY" in block or "⚠️" in block
@@ -301,11 +301,11 @@ def test_scratchbook_path_is_root_relative_without_trailing_slash() -> None:
         artifacts=[],
     )
 
-    provider = ScratchbookPromptPlaceholderProvider(config)
+    model = ScratchbookPromptPlaceholderProvider(config)
     world = World()
     entity_id = world.create_entity()
 
-    placeholders = provider.resolve_placeholders(world, entity_id)
+    placeholders = model.resolve_placeholders(world, entity_id)
 
     assert placeholders["_scratchbook_path"] == "scratchbook"
 
@@ -332,11 +332,11 @@ def test_artifact_blocks_are_sorted_deterministically() -> None:
         ],
     )
 
-    provider = ScratchbookPromptPlaceholderProvider(config)
+    model = ScratchbookPromptPlaceholderProvider(config)
     world = World()
     entity_id = world.create_entity()
 
-    placeholders = provider.resolve_placeholders(world, entity_id)
+    placeholders = model.resolve_placeholders(world, entity_id)
 
     assert placeholders["_scratchbook_artifact_types"] == "- a_type\n- z_type"
     assert placeholders["_scratchbook_artifacts"].index(
@@ -366,11 +366,11 @@ def test_deterministic_ordering_of_artifact_placeholders() -> None:
         ],
     )
 
-    provider = ScratchbookPromptPlaceholderProvider(config)
+    model = ScratchbookPromptPlaceholderProvider(config)
     world = World()
     entity_id = world.create_entity()
 
-    placeholders = provider.resolve_placeholders(world, entity_id)
+    placeholders = model.resolve_placeholders(world, entity_id)
     dynamic_keys = [
         key
         for key in placeholders
@@ -431,12 +431,12 @@ def test_provider_fingerprint_is_stable_for_same_config() -> None:
         ],
     )
 
-    provider_one = ScratchbookPromptPlaceholderProvider(config)
-    provider_two = ScratchbookPromptPlaceholderProvider(config)
+    model_one = ScratchbookPromptPlaceholderProvider(config)
+    model_two = ScratchbookPromptPlaceholderProvider(config)
     world = World()
     entity_id = world.create_entity()
 
-    assert provider_one.provider_fingerprint(
+    assert model_one.provider_fingerprint(
         world,
         entity_id,
-    ) == provider_two.provider_fingerprint(world, entity_id)
+    ) == model_two.provider_fingerprint(world, entity_id)

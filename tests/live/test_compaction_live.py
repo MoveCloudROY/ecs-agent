@@ -110,10 +110,10 @@ def _build_python_conversation() -> list[Message]:
     return messages
 
 
-def _build_compaction_world(provider: object) -> tuple[World, EntityId]:
+def _build_compaction_world(model: object) -> tuple[World, EntityId]:
     world = World()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(messages=_build_python_conversation()),
@@ -126,7 +126,7 @@ def _build_compaction_world(provider: object) -> tuple[World, EntityId]:
 async def test_live_compaction_xml_summary_visible_chat_completions(
     live_api_key: str,
 ) -> None:
-    provider = get_model(
+    model = get_model(
         "aliyun/qwen3.5-flash",
         registry=_live_registry(),
         api_key=live_api_key,
@@ -136,7 +136,7 @@ async def test_live_compaction_xml_summary_visible_chat_completions(
     world.add_component(
         entity_id,
         LLMComponent(
-            model=provider,
+            model=model,
             
             system_prompt="You are a helpful assistant.",
         ),
@@ -166,7 +166,7 @@ async def test_live_compaction_xml_summary_visible_chat_completions(
     assert "<chat_history_summary>" in rendered.text
     assert "orchid-47" in rendered.text
 
-    result = await provider.complete(
+    result = await model.complete(
         [
             Message(role="system", content=rendered.text),
             Message(role="user", content="What is the secret codename?"),
@@ -181,7 +181,7 @@ async def test_live_compaction_xml_summary_visible_chat_completions(
 async def test_live_compaction_xml_summary_visible_responses_api(
     live_api_key: str,
 ) -> None:
-    provider = get_model(
+    model = get_model(
         "aliyun-responses/qwen3.5-flash",
         registry=_live_registry(),
         api_key=live_api_key,
@@ -191,7 +191,7 @@ async def test_live_compaction_xml_summary_visible_responses_api(
     world.add_component(
         entity_id,
         LLMComponent(
-            model=provider,
+            model=model,
             
             system_prompt="You are a helpful assistant.",
         ),
@@ -219,7 +219,7 @@ async def test_live_compaction_xml_summary_visible_responses_api(
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
 
-    result = await provider.complete(
+    result = await model.complete(
         [
             Message(role="system", content=rendered.text),
             Message(role="user", content="What is the secret codename?"),
@@ -234,12 +234,12 @@ async def test_live_compaction_xml_summary_visible_responses_api(
 async def test_live_compaction_system_triggers_and_summarizes_chat(
     live_api_key: str,
 ) -> None:
-    provider = get_model(
+    model = get_model(
         "aliyun/qwen3.5-flash",
         registry=_live_registry(),
         api_key=live_api_key,
     )
-    world, entity_id = _build_compaction_world(provider)
+    world, entity_id = _build_compaction_world(model)
     world.add_component(
         entity_id,
         CompactionConfigComponent(
@@ -268,12 +268,12 @@ async def test_live_compaction_system_triggers_and_summarizes_chat(
 async def test_live_compaction_system_triggers_and_summarizes_responses(
     live_api_key: str,
 ) -> None:
-    provider = get_model(
+    model = get_model(
         "aliyun-responses/qwen3.5-flash",
         registry=_live_registry(),
         api_key=live_api_key,
     )
-    world, entity_id = _build_compaction_world(provider)
+    world, entity_id = _build_compaction_world(model)
     world.add_component(
         entity_id,
         CompactionConfigComponent(
@@ -300,12 +300,12 @@ async def test_live_compaction_system_triggers_and_summarizes_responses(
 
 @pytest.mark.asyncio
 async def test_live_compaction_full_history_method(live_api_key: str) -> None:
-    provider = get_model(
+    model = get_model(
         "aliyun/qwen3.5-flash",
         registry=_live_registry(),
         api_key=live_api_key,
     )
-    world, entity_id = _build_compaction_world(provider)
+    world, entity_id = _build_compaction_world(model)
     world.add_component(
         entity_id,
         CompactionConfigComponent(
@@ -329,12 +329,12 @@ async def test_live_compaction_full_history_method(live_api_key: str) -> None:
 
 @pytest.mark.asyncio
 async def test_live_compaction_custom_prompt_template(live_api_key: str) -> None:
-    provider = get_model(
+    model = get_model(
         "aliyun/qwen3.5-flash",
         registry=_live_registry(),
         api_key=live_api_key,
     )
-    world, entity_id = _build_compaction_world(provider)
+    world, entity_id = _build_compaction_world(model)
     world.add_component(
         entity_id,
         CompactionConfigComponent(
@@ -360,8 +360,8 @@ async def test_live_compaction_custom_prompt_template(live_api_key: str) -> None
 
 @pytest.mark.asyncio
 async def test_live_compaction_summary_model_id_routing(live_api_key: str) -> None:
-    provider = _make_manual_chat_provider(live_api_key)
-    world, entity_id = _build_compaction_world(provider)
+    model = _make_manual_chat_provider(live_api_key)
+    world, entity_id = _build_compaction_world(model)
     world.add_component(
         entity_id,
         CompactionConfigComponent(

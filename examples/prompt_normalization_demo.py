@@ -65,8 +65,8 @@ from ecs_agent.types import (
 
 
 class RecordingProvider:
-    def __init__(self, provider: LLMModel) -> None:
-        self._provider = provider
+    def __init__(self, model: LLMModel) -> None:
+        self._provider = model
         self.last_messages: list[Message] = []
 
     @property
@@ -239,10 +239,10 @@ async def _run_file_template_demo() -> str:
 async def main() -> None:
     world = World()
     base_model, model, mode = _build_provider_from_env()
-    provider = RecordingProvider(base_model)
+    model = RecordingProvider(base_model)
 
     entity = world.create_entity()
-    world.add_component(entity, LLMComponent(model=provider))
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
         ConversationComponent(
@@ -392,7 +392,7 @@ async def main() -> None:
 
     await Runner().run(world, max_ticks=1)
 
-    outbound_user = _extract_outbound_user_message(provider.last_messages)
+    outbound_user = _extract_outbound_user_message(model.last_messages)
     rendered_system = world.get_component(entity, RenderedSystemPromptComponent)
     rendered_user = world.get_component(entity, RenderedUserPromptComponent)
     context_queue = world.get_component(entity, PromptContextQueueComponent)

@@ -1826,13 +1826,12 @@ def _build_test_world(
         PlanTaskScratchbookAdapter,
     )
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ready"))]
     )
 
     world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
-        provider=provider,
-        model="fake-plan-task",
+        model=model,
         base_dir=tmp_path,
     )
     test_adapter = PlanTaskScratchbookAdapter(
@@ -2205,10 +2204,9 @@ def test_plan_start_handler_sets_workflow_id_from_description(
         PlanTaskScratchbookAdapter,
     )
 
-    provider = FakeModel(responses=["ok"])
+    model = FakeModel(responses=["ok"])
     world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
-        provider=provider,
-        model="fake",
+        model=model,
         base_dir=tmp_path,
     )
 
@@ -2287,14 +2285,14 @@ async def test_derive_workflow_id_uses_llm_slug() -> None:
     from ecs_agent.types import CompletionResult, Message
     from examples.e2e.plan_and_task.runtime import derive_workflow_id_from_llm
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="writing-assistant-tool")
             )
         ]
     )
-    result = await derive_workflow_id_from_llm("辅助写作软件", provider)
+    result = await derive_workflow_id_from_llm("辅助写作软件", model)
     assert result == "writing-assistant-tool"
 
 
@@ -2303,14 +2301,14 @@ async def test_derive_workflow_id_normalizes_llm_output() -> None:
     from ecs_agent.types import CompletionResult, Message
     from examples.e2e.plan_and_task.runtime import derive_workflow_id_from_llm
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="Writing Assistant Tool!")
             )
         ]
     )
-    result = await derive_workflow_id_from_llm("Writing assistant", provider)
+    result = await derive_workflow_id_from_llm("Writing assistant", model)
     assert result == "writing-assistant-tool"
 
 
@@ -2322,10 +2320,10 @@ async def test_derive_workflow_id_falls_back_on_empty_response() -> None:
         slug_from_description,
     )
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="   "))]
     )
-    result = await derive_workflow_id_from_llm("build a task manager", provider)
+    result = await derive_workflow_id_from_llm("build a task manager", model)
     assert result == slug_from_description("build a task manager")
     assert result != ""
 
@@ -2338,8 +2336,8 @@ async def test_derive_workflow_id_falls_back_on_provider_error() -> None:
         slug_from_description,
     )
 
-    provider = FakeModel(responses=[])
-    result = await derive_workflow_id_from_llm("build a task manager", provider)
+    model = FakeModel(responses=[])
+    result = await derive_workflow_id_from_llm("build a task manager", model)
     assert result == slug_from_description("build a task manager")
 
 
@@ -3145,9 +3143,9 @@ async def test_plan_write_command_transitions_phase(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
-    provider = FakeModel(responses=["ok"])
+    model = FakeModel(responses=["ok"])
     world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
-        provider=provider, model="fake", base_dir=tmp_path
+        model=model, base_dir=tmp_path
     )
 
     workflow_id = "write-plan-cmd-test"
@@ -3180,9 +3178,9 @@ async def test_plan_qa_review_command_approved(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
-    provider = FakeModel(responses=["ok"])
+    model = FakeModel(responses=["ok"])
     world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
-        provider=provider, model="fake", base_dir=tmp_path
+        model=model, base_dir=tmp_path
     )
 
     workflow_id = "plan-qa-cmd-test"
@@ -3215,9 +3213,9 @@ async def test_plan_qa_review_command_invalid_verdict(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
-    provider = FakeModel(responses=["ok"])
+    model = FakeModel(responses=["ok"])
     world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
-        provider=provider, model="fake", base_dir=tmp_path
+        model=model, base_dir=tmp_path
     )
 
     workflow_id = "plan-qa-cmd-bad-verdict"
@@ -3290,9 +3288,9 @@ def test_plan_writer_subagent_registered(tmp_path: Path) -> None:
     from ecs_agent.providers.fake_model import FakeModel
     from examples.e2e.plan_and_task.main import build_plan_task_world
 
-    provider = FakeModel(responses=["ok"])
+    model = FakeModel(responses=["ok"])
     world, agent_id, _, _ = build_plan_task_world(
-        provider=provider, model="fake", base_dir=tmp_path
+        model=model, base_dir=tmp_path
     )
 
     registry = world.get_component(agent_id, SubagentRegistryComponent)
@@ -3307,8 +3305,8 @@ def test_writing_plans_skill_registered_in_catalog(tmp_path: Path) -> None:
     from ecs_agent.skills import catalog as _catalog
     from examples.e2e.plan_and_task.main import build_plan_task_world
 
-    provider = FakeModel(responses=["ok"])
-    build_plan_task_world(provider=provider, model="fake", base_dir=tmp_path)
+    model = FakeModel(responses=["ok"])
+    build_plan_task_world(model=model, base_dir=tmp_path)
 
     descriptor = _catalog.lookup("writing-plans")
     assert descriptor is not None
@@ -3397,8 +3395,8 @@ def test_billing_subscriber_wired_in_build_plan_task_world(tmp_path: Path) -> No
     from examples.e2e.plan_and_task.billing import BillingSubscriber
     from examples.e2e.plan_and_task.main import build_plan_task_world
 
-    provider = FakeModel(responses=["ok"])
-    world, _, _, _ = build_plan_task_world(provider=provider, model="fake", base_dir=tmp_path)
+    model = FakeModel(responses=["ok"])
+    world, _, _, _ = build_plan_task_world(model=model, base_dir=tmp_path)
 
     sub = BillingSubscriber()
     sub.subscribe(world.event_bus)
@@ -3413,8 +3411,8 @@ def test_accounting_subscriber_wired_in_main(tmp_path: Path) -> None:
     from ecs_agent.accounting.models import LLMInvocationEvent
     from examples.e2e.plan_and_task.main import build_plan_task_world
 
-    provider = FakeModel(responses=["ok"])
-    world, _, _, _ = build_plan_task_world(provider=provider, model="fake", base_dir=tmp_path)
+    model = FakeModel(responses=["ok"])
+    world, _, _, _ = build_plan_task_world(model=model, base_dir=tmp_path)
 
     acc = AccountingSubscriber()
     acc.subscribe(world.event_bus)
@@ -3619,9 +3617,9 @@ async def test_plan_resume_draft_qa_approved_injects_write_plan_message(
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
-    provider = FakeModel(responses=["ok"])
+    model = FakeModel(responses=["ok"])
     world, agent_id, _adapter_ref, _runtime_state = build_plan_task_world(
-        provider=provider, model="fake", base_dir=tmp_path
+        model=model, base_dir=tmp_path
     )
 
     workflow_id = "resume-draft-qa-approved"
@@ -3658,9 +3656,9 @@ async def test_plan_resume_write_plan_phase_injects_write_plan_message(
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
-    provider = FakeModel(responses=["ok"])
+    model = FakeModel(responses=["ok"])
     world, agent_id, _adapter_ref, _runtime_state = build_plan_task_world(
-        provider=provider, model="fake", base_dir=tmp_path
+        model=model, base_dir=tmp_path
     )
 
     workflow_id = "resume-write-plan"
@@ -3696,9 +3694,9 @@ async def test_plan_resume_plan_qa_approved_advances_to_finalized(
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
-    provider = FakeModel(responses=["ok"])
+    model = FakeModel(responses=["ok"])
     world, agent_id, _adapter_ref, _runtime_state = build_plan_task_world(
-        provider=provider, model="fake", base_dir=tmp_path
+        model=model, base_dir=tmp_path
     )
 
     workflow_id = "resume-plan-qa-approved"
@@ -3734,9 +3732,9 @@ async def test_plan_resume_draft_interview_no_message_injected(
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
-    provider = FakeModel(responses=["ok"])
+    model = FakeModel(responses=["ok"])
     world, agent_id, _adapter_ref, _runtime_state = build_plan_task_world(
-        provider=provider, model="fake", base_dir=tmp_path
+        model=model, base_dir=tmp_path
     )
 
     workflow_id = "resume-draft-interview"
@@ -3919,11 +3917,11 @@ def test_advisor_qa_subagents_inherit_readonly_tools_only(tmp_path: Path) -> Non
     from ecs_agent.types import CompletionResult, Message
     from examples.e2e.plan_and_task.main import build_plan_task_world
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     world, agent_id, _, _ = build_plan_task_world(
-        provider=provider, model="fake", base_dir=tmp_path
+        model=model, base_dir=tmp_path
     )
     registry = world.get_component(agent_id, SubagentRegistryComponent)
     assert registry is not None, "SubagentRegistryComponent not found"
@@ -3991,11 +3989,11 @@ def test_plan_qa_subagent_registered_with_plan_qa_system_prompt(tmp_path: Path) 
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.prompts import PLAN_QA_REVIEW_SYSTEM_PROMPT, QA_SYSTEM_PROMPT
 
-    provider = FakeModel(
+    model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     world, agent_id, _, _ = build_plan_task_world(
-        provider=provider, model="fake", base_dir=tmp_path
+        model=model, base_dir=tmp_path
     )
     registry = world.get_component(agent_id, SubagentRegistryComponent)
     assert registry is not None, "SubagentRegistryComponent not found"
@@ -4053,9 +4051,9 @@ def test_build_plan_task_world_uses_plan_main_agent_system_prompt(tmp_path: Path
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.prompts import PLAN_MAIN_AGENT_SYSTEM_PROMPT
 
-    provider = FakeModel(responses=["ok"])
+    model = FakeModel(responses=["ok"])
     world, agent_id, _, _ = build_plan_task_world(
-        provider=provider, model="fake", base_dir=tmp_path
+        model=model, base_dir=tmp_path
     )
 
     spec = world.get_component(agent_id, SystemPromptConfigSpec)

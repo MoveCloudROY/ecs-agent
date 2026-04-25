@@ -36,12 +36,12 @@ class RecordingFakeModel(FakeModel):
 async def test_reasoning_uses_tree_when_tree_component_exists() -> None:
     """ReasoningSystem uses linearize(tree) when ConversationTreeComponent exists."""
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="reply"))]
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
 
     # Create tree with messages
     tree = ConversationTreeComponent()
@@ -57,9 +57,9 @@ async def test_reasoning_uses_tree_when_tree_component_exists() -> None:
 
     await ReasoningSystem().process(world)
 
-    # Verify provider received linearized tree messages (3 messages from tree)
-    assert len(provider.calls) == 1
-    sent_messages = provider.calls[0]
+    # Verify model received linearized tree messages (3 messages from tree)
+    assert len(model.calls) == 1
+    sent_messages = model.calls[0]
     assert len(sent_messages) == 3
     assert sent_messages[0].content == "hello"
     assert sent_messages[1].content == "hi"
@@ -70,12 +70,12 @@ async def test_reasoning_uses_tree_when_tree_component_exists() -> None:
 async def test_reasoning_falls_back_to_flat_conversation_when_no_tree() -> None:
     """ReasoningSystem uses ConversationComponent when tree is absent (backward compat)."""
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="reply"))]
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -88,9 +88,9 @@ async def test_reasoning_falls_back_to_flat_conversation_when_no_tree() -> None:
 
     await ReasoningSystem().process(world)
 
-    # Verify provider received flat conversation messages
-    assert len(provider.calls) == 1
-    sent_messages = provider.calls[0]
+    # Verify model received flat conversation messages
+    assert len(model.calls) == 1
+    sent_messages = model.calls[0]
     assert len(sent_messages) == 2
     assert sent_messages[0].content == "test message 1"
     assert sent_messages[1].content == "test message 2"
@@ -100,12 +100,12 @@ async def test_reasoning_falls_back_to_flat_conversation_when_no_tree() -> None:
 async def test_reasoning_tree_with_system_prompt() -> None:
     """ReasoningSystem prepends system prompt before tree messages."""
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(entity_id, SystemPromptComponent(content="You are helpful"))
 
     tree = ConversationTreeComponent()
@@ -118,8 +118,8 @@ async def test_reasoning_tree_with_system_prompt() -> None:
     await ReasoningSystem().process(world)
 
     # Verify system prompt comes first
-    assert len(provider.calls) == 1
-    sent_messages = provider.calls[0]
+    assert len(model.calls) == 1
+    sent_messages = model.calls[0]
     assert len(sent_messages) == 2
     assert sent_messages[0].role == "system"
     assert sent_messages[0].content == "You are helpful"
@@ -131,7 +131,7 @@ async def test_reasoning_tree_with_system_prompt() -> None:
 async def test_reasoning_after_revert_uses_reverted_branch_context() -> None:
     """After revert_to_message(), next reasoning uses reverted branch context."""
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="first")),
             CompletionResult(message=Message(role="assistant", content="second")),
@@ -139,7 +139,7 @@ async def test_reasoning_after_revert_uses_reverted_branch_context() -> None:
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
 
     # Build tree: root -> child1 -> child2
     tree = ConversationTreeComponent()
@@ -154,16 +154,16 @@ async def test_reasoning_after_revert_uses_reverted_branch_context() -> None:
 
     # First reasoning call (should use all 3 messages: root, child1, child2)
     await ReasoningSystem().process(world)
-    assert len(provider.calls) == 1
-    assert len(provider.calls[0]) == 3
+    assert len(model.calls) == 1
+    assert len(model.calls[0]) == 3
 
     # Revert to child1 (drops child2 from active branch)
     revert_to_message(tree, child1.id)
 
     # Second reasoning call (should use only 2 messages: root, child1)
     await ReasoningSystem().process(world)
-    assert len(provider.calls) == 2
-    sent_messages = provider.calls[1]
+    assert len(model.calls) == 2
+    sent_messages = model.calls[1]
     assert len(sent_messages) == 2
     assert sent_messages[0].content == "root message"
     assert sent_messages[1].content == "child1"
@@ -175,12 +175,12 @@ async def test_reasoning_after_revert_uses_reverted_branch_context() -> None:
 async def test_reasoning_tree_follows_active_branch() -> None:
     """ReasoningSystem follows active branch when multiple branches exist."""
     world = World()
-    provider = RecordingFakeModel(
+    model = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
 
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=provider))
+    world.add_component(entity_id, LLMComponent(model=model))
 
     # Create tree with two branches
     tree = ConversationTreeComponent()
@@ -203,9 +203,9 @@ async def test_reasoning_tree_follows_active_branch() -> None:
 
     await ReasoningSystem().process(world)
 
-    # Verify provider received branch-b messages (not branch-a)
-    assert len(provider.calls) == 1
-    sent_messages = provider.calls[0]
+    # Verify model received branch-b messages (not branch-a)
+    assert len(model.calls) == 1
+    sent_messages = model.calls[0]
     assert len(sent_messages) == 2
     assert sent_messages[0].content == "root"
     assert sent_messages[1].content == "branch B"

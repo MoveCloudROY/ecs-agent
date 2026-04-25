@@ -71,6 +71,13 @@ class ReasoningSystem:
             # not runnable agents. ReasoningSystem must not infer over them.
             if world.has_component(entity_id, ChildStubComponent):
                 continue
+            # Skip entities that have a persistent terminal condition set earlier
+            # in this tick (e.g. user typed "exit").  "reasoning_complete" is
+            # excluded because it is always transient and removed by
+            # TerminalCleanupSystem within the same tick.
+            _terminal = world.get_component(entity_id, TerminalComponent)
+            if _terminal is not None and _terminal.reason != "reasoning_complete":
+                continue
 
             start_time = time.time()
             assert isinstance(llm_component, LLMComponent)

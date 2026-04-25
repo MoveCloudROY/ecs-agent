@@ -14,9 +14,9 @@ from ecs_agent.types import CompletionResult, Message, ToolSchema
 def make_recording_fake_provider(
     responses: list[CompletionResult],
 ) -> tuple[FakeModel, dict[str, int]]:
-    provider = FakeModel(responses=responses)
+    model = FakeModel(responses=responses)
     call_counts = {"attempt": 0, "success": 0}
-    original_complete = provider.complete
+    original_complete = model.complete
 
     async def wrapped_complete(
         messages: list[Message],
@@ -27,8 +27,8 @@ def make_recording_fake_provider(
         call_counts["success"] += 1
         return result
 
-    provider.complete = wrapped_complete  # type: ignore[method-assign]
-    return provider, call_counts
+    model.complete = wrapped_complete  # type: ignore[method-assign]
+    return model, call_counts
 
 
 class CounterSystem:
@@ -44,7 +44,7 @@ class CounterSystem:
 @pytest.mark.asyncio
 async def test_simple_chat_agent_end_to_end() -> None:
     world = World()
-    provider, call_counts = make_recording_fake_provider(
+    model, call_counts = make_recording_fake_provider(
         [
             CompletionResult(
                 message=Message(
@@ -59,7 +59,7 @@ async def test_simple_chat_agent_end_to_end() -> None:
     world.add_component(
         eid,
         LLMComponent(
-            model=provider,
+            model=model,
             system_prompt="You are helpful.",
         ),
     )
@@ -90,7 +90,7 @@ async def test_simple_chat_agent_end_to_end() -> None:
 async def test_terminal_on_reasoning_complete() -> None:
     """Agent terminates with reasoning_complete after a non-tool-call response."""
     world = World()
-    provider, call_counts = make_recording_fake_provider(
+    model, call_counts = make_recording_fake_provider(
         [CompletionResult(message=Message(role="assistant", content="Only once"))]
     )
 
@@ -98,7 +98,7 @@ async def test_terminal_on_reasoning_complete() -> None:
     world.add_component(
         eid,
         LLMComponent(
-            model=provider,
+            model=model,
             system_prompt="You are helpful.",
         ),
     )

@@ -73,11 +73,11 @@ async def main() -> None:
     base_url = os.environ.get("LLM_BASE_URL", "https://api.anthropic.com")
     model = os.environ.get("LLM_MODEL", "claude-3-5-haiku-latest")
 
-    # Decide which provider to use
-    provider: LLMModel
+    # Decide which model to use
+    model: LLMModel
     if api_key and HAS_CLAUDE:
         print(f"Using ClaudeModel: {model}")
-        provider = ClaudeModel(
+        model = ClaudeModel(
             config=ProviderConfig(
                 provider_id="anthropic",
                 base_url=base_url,
@@ -88,7 +88,7 @@ async def main() -> None:
         )
     else:
         print("Using FakeModel (no API key or ClaudeModel unavailable)")
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -107,7 +107,7 @@ async def main() -> None:
     # Add components
     world.add_component(
         agent_id,
-        LLMComponent(model=provider),
+        LLMComponent(model=model),
     )
     world.add_component(
         agent_id,

@@ -56,8 +56,8 @@ class _OpenAIModelFacade(Protocol):
 class OpenAIResponsesAdapter:
     """Adapter for OpenAI-compatible Responses requests."""
 
-    def __init__(self, provider: _OpenAIModelFacade) -> None:
-        self._provider = provider
+    def __init__(self, facade: _OpenAIModelFacade) -> None:
+        self._facade = facade
 
     async def complete(
         self,
@@ -72,20 +72,20 @@ class OpenAIResponsesAdapter:
             response_format,
             previous_response_id,
         )
-        url = f"{self._provider._base_url}/responses"
+        url = f"{self._facade._base_url}/responses"
 
         try:
-            response = await self._provider._client.post(
+            response = await self._facade._client.post(
                 url,
                 json=request_body,
-                headers=self._provider._build_headers(),
+                headers=self._facade._build_headers(),
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            self._provider._handle_http_error(exc)
+            self._facade._handle_http_error(exc)
             raise
         except httpx.RequestError as exc:
-            self._provider._handle_request_error(exc)
+            self._facade._handle_request_error(exc)
             raise
 
         response_data = response.json()
@@ -100,7 +100,7 @@ class OpenAIResponsesAdapter:
             raise ValueError(f"Responses API returned failed status: [{code}] {msg}")
 
         message = self._parse_responses_output(response_data.get("output", []))
-        usage = self._provider._usage_from_raw(response_data.get("usage"))
+        usage = self._facade._usage_from_raw(response_data.get("usage"))
         return CompletionResult(
             message=message,
             usage=usage,
@@ -122,23 +122,23 @@ class OpenAIResponsesAdapter:
         )
         request_body["stream"] = True
 
-        url = f"{self._provider._base_url}/responses"
+        url = f"{self._facade._base_url}/responses"
         timeout = httpx.Timeout(
-            connect=self._provider._timeout.connect,
+            connect=self._facade._timeout.connect,
             read=None,
-            write=self._provider._timeout.write,
-            pool=self._provider._timeout.pool,
+            write=self._facade._timeout.write,
+            pool=self._facade._timeout.pool,
         )
 
         output_items: dict[int, dict[str, Any]] = {}
         current_response_id: str | None = None
 
         try:
-            async with self._provider._client.stream(
+            async with self._facade._client.stream(
                 "POST",
                 url,
                 json=request_body,
-                headers=self._provider._build_headers(),
+                headers=self._facade._build_headers(),
                 timeout=timeout,
             ) as response:
                 response.raise_for_status()
@@ -231,7 +231,7 @@ class OpenAIResponsesAdapter:
                     if event_type == "response.done":
                         response_obj = event_data.get("response", {})
                         response_id = response_obj.get("id")
-                        usage = self._provider._usage_from_raw(
+                        usage = self._facade._usage_from_raw(
                             response_obj.get("usage")
                         )
                         if isinstance(response_id, str) and response_id:
@@ -244,13 +244,13 @@ class OpenAIResponsesAdapter:
                         )
                         break
         except httpx.HTTPStatusError as exc:
-            self._provider._handle_http_error(exc)
+            self._facade._handle_http_error(exc)
             raise
         except httpx.RequestError as exc:
-            self._provider._handle_request_error(exc)
+            self._facade._handle_request_error(exc)
             raise
 
-        self._provider._responses_api_available = True
+        self._facade._responses_api_available = True
 
     def _build_request_body(
         self,
@@ -260,16 +260,16 @@ class OpenAIResponsesAdapter:
         previous_response_id: str | None,
     ) -> dict[str, Any]:
         request_body: dict[str, Any] = {
-            "model": self._provider._model,
+            "model": self._facade._model,
             "input": self._convert_messages_to_responses_input(messages),
-            "store": self._provider._provider_config.enable_store,
+            "store": self._facade._provider_config.enable_store,
         }
 
-        instructions = self._provider._extract_responses_instructions(messages)
+        instructions = self._facade._extract_responses_instructions(messages)
         if instructions:
             request_body["instructions"] = instructions
         if tools is not None:
-            request_body["tools"] = self._provider._convert_tools_to_responses(tools)
+            request_body["tools"] = self._facade._convert_tools_to_responses(tools)
         if response_format is not None:
             request_body["response_format"] = response_format
         if previous_response_id is not None:

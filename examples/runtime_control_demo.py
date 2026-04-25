@@ -31,20 +31,20 @@ from ecs_agent.types import CompletionResult, InterruptionReason, Message
 
 
 async def main() -> None:
-    """Demonstrate runtime control features with dual-mode provider."""
+    """Demonstrate runtime control features with dual-mode model."""
     print("=== ECS-Agent Runtime Control Demo ===\n")
 
-    # Dual-mode provider selection
+    # Dual-mode model selection
     api_key = os.getenv("LLM_API_KEY")
     if api_key:
         base_url = os.getenv(
             "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
         model = os.getenv("LLM_MODEL", "qwen3.5-flash")
-        provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
         print(f"[Provider] OpenAI-compatible: {model}")
     else:
-        provider = FakeModel(
+        model = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -89,7 +89,7 @@ async def main() -> None:
 
     # [3] Model Switching
     print("\n[3] Per-Entity Model Switching")
-    llm = LLMComponent(model=provider if not api_key else model)
+    llm = LLMComponent(model=model if not api_key else model)
     world.add_component(agent, llm)
     world.add_component(
         agent,

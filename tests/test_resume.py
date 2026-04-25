@@ -24,7 +24,7 @@ from ecs_agent.types import EntityId, Message, SubagentConfig, SubagentSessionRe
 
 
 class DummyProvider:
-    """Test provider for serialization."""
+    """Test model for serialization."""
 
     model_id: str = "test"
 
@@ -112,9 +112,9 @@ class TestRunnerResume:
         self, world: World, runner: Runner, tmp_checkpoint_path: Path
     ) -> None:
         """Test that save_checkpoint saves world state to JSON file via WorldSerializer."""
-        provider = DummyProvider()
+        model = DummyProvider()
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(model=provider))
+        world.add_component(entity, LLMComponent(model=model))
         world.add_component(
             entity, ConversationComponent(messages=[Message(role="user", content="hi")])
         )
@@ -134,9 +134,9 @@ class TestRunnerResume:
         self, world: World, runner: Runner, tmp_checkpoint_path: Path
     ) -> None:
         """Test that load_checkpoint restores world from file."""
-        provider = DummyProvider()
+        model = DummyProvider()
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(model=provider))
+        world.add_component(entity, LLMComponent(model=model))
         world.add_component(
             entity, ConversationComponent(messages=[Message(role="user", content="hi")])
         )
@@ -144,7 +144,7 @@ class TestRunnerResume:
         runner.save_checkpoint(world, tmp_checkpoint_path)
 
         loaded_world, loaded_tick = Runner.load_checkpoint(
-            tmp_checkpoint_path, providers={"test": provider}, tool_handlers={}
+            tmp_checkpoint_path, providers={"test": model}, tool_handlers={}
         )
 
         assert loaded_world.has_component(EntityId(1), LLMComponent)
@@ -175,10 +175,10 @@ class TestRunnerResume:
         self, world: World, runner: Runner, tmp_checkpoint_path: Path
     ) -> None:
         """Test that resume continues from saved tick count (doesn't restart from 0)."""
-        provider = DummyProvider()
+        model = DummyProvider()
         counter = CounterSystem()
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(model=provider))
+        world.add_component(entity, LLMComponent(model=model))
         world.register_system(counter, priority=0)
 
         # Run 5 ticks
@@ -190,7 +190,7 @@ class TestRunnerResume:
 
         # Load checkpoint and resume for 3 more ticks
         loaded_world, start_tick = Runner.load_checkpoint(
-            tmp_checkpoint_path, providers={"test": provider}, tool_handlers={}
+            tmp_checkpoint_path, providers={"test": model}, tool_handlers={}
         )
         assert start_tick == 5
 
@@ -215,10 +215,10 @@ class TestRunnerResume:
         self, world: World, runner: Runner, tmp_checkpoint_path: Path
     ) -> None:
         """Test that resume respects remaining max_ticks (total - already_run)."""
-        provider = DummyProvider()
+        model = DummyProvider()
         counter = CounterSystem()
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(model=provider))
+        world.add_component(entity, LLMComponent(model=model))
         world.register_system(counter, priority=0)
 
         # Run 7 ticks
@@ -230,7 +230,7 @@ class TestRunnerResume:
 
         # Load checkpoint and resume with max_ticks=10 (should run only 3 more)
         loaded_world, start_tick = Runner.load_checkpoint(
-            tmp_checkpoint_path, providers={"test": provider}, tool_handlers={}
+            tmp_checkpoint_path, providers={"test": model}, tool_handlers={}
         )
 
         new_runner = Runner()
@@ -247,9 +247,9 @@ class TestRunnerResume:
         self, world: World, runner: Runner, tmp_checkpoint_path: Path
     ) -> None:
         """Test that save/load round-trip preserves conversation messages."""
-        provider = DummyProvider()
+        model = DummyProvider()
         entity = world.create_entity()
-        world.add_component(entity, LLMComponent(model=provider))
+        world.add_component(entity, LLMComponent(model=model))
         world.add_component(
             entity,
             ConversationComponent(
@@ -264,7 +264,7 @@ class TestRunnerResume:
         runner.save_checkpoint(world, tmp_checkpoint_path)
 
         loaded_world, _ = Runner.load_checkpoint(
-            tmp_checkpoint_path, providers={"test": provider}, tool_handlers={}
+            tmp_checkpoint_path, providers={"test": model}, tool_handlers={}
         )
 
         conv = loaded_world.get_component(EntityId(1), ConversationComponent)
@@ -296,9 +296,9 @@ class TestRunnerResume:
 
         monkeypatch.setattr(runtime_module, "_GLOBAL_SCHEDULER", None)
 
-        provider = DummyProvider()
+        model = DummyProvider()
         parent = world.create_entity()
-        world.add_component(parent, LLMComponent(model=provider))
+        world.add_component(parent, LLMComponent(model=model))
         world.add_component(
             parent,
             ConversationComponent(
@@ -311,13 +311,13 @@ class TestRunnerResume:
             SubagentRegistryComponent(
                 subagents={
                     "queued-agent": SubagentConfig(
-                        name="queued-agent", model=provider
+                        name="queued-agent", model=model
                     ),
                     "running-agent": SubagentConfig(
-                        name="running-agent", model=provider
+                        name="running-agent", model=model
                     ),
                     "done-agent": SubagentConfig(
-                        name="done-agent", model=provider
+                        name="done-agent", model=model
                     ),
                 }
             ),
@@ -382,7 +382,7 @@ class TestRunnerResume:
 
         loaded_world, _ = Runner.load_checkpoint(
             tmp_checkpoint_path,
-            providers={"default": provider, "test": provider},
+            providers={"default": model, "test": model},
             tool_handlers={},
         )
 
@@ -504,9 +504,9 @@ class TestRunnerResume:
 
         monkeypatch.setattr(runtime_module, "_GLOBAL_SCHEDULER", None)
 
-        provider = DummyProvider()
+        model = DummyProvider()
         parent = world.create_entity()
-        world.add_component(parent, LLMComponent(model=provider))
+        world.add_component(parent, LLMComponent(model=model))
         world.add_component(
             parent,
             ConversationComponent(messages=[Message(role="user", content="resume")]),
@@ -517,7 +517,7 @@ class TestRunnerResume:
             SubagentRegistryComponent(
                 subagents={
                     "running-agent": SubagentConfig(
-                        name="running-agent", model=provider
+                        name="running-agent", model=model
                     )
                 }
             ),
@@ -552,7 +552,7 @@ class TestRunnerResume:
 
         loaded_world, _ = Runner.load_checkpoint(
             tmp_checkpoint_path,
-            providers={"default": provider, "test": provider},
+            providers={"default": model, "test": model},
             tool_handlers={},
         )
 

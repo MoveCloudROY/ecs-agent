@@ -185,12 +185,12 @@ async def test_multi_agent_full_loop() -> None:
     agent_a_id = world.create_entity()
     agent_b_id = world.create_entity()
 
-    provider_a = FakeModel(responses=[_assistant_reply("Agent A ready")])
-    provider_b = FakeModel(responses=[_assistant_reply("Agent B ready")])
+    model_a = FakeModel(responses=[_assistant_reply("Agent A ready")])
+    model_b = FakeModel(responses=[_assistant_reply("Agent B ready")])
 
     world.add_component(
         agent_a_id,
-        LLMComponent(model=provider_a, system_prompt=""),
+        LLMComponent(model=model_a, system_prompt=""),
     )
     world.add_component(
         agent_a_id,
@@ -207,7 +207,7 @@ async def test_multi_agent_full_loop() -> None:
 
     world.add_component(
         agent_b_id,
-        LLMComponent(model=provider_b, system_prompt=""),
+        LLMComponent(model=model_b, system_prompt=""),
     )
     world.add_component(
         agent_b_id,

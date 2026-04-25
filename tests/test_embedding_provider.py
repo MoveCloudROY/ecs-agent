@@ -1,4 +1,4 @@
-"""Tests for embedding provider implementations."""
+"""Tests for embedding model implementations."""
 
 from __future__ import annotations
 import pytest
@@ -14,10 +14,10 @@ from ecs_agent.providers.embedding_provider import OpenAIEmbeddingProvider
 @pytest.mark.asyncio
 async def test_fake_embedding_provider_returns_deterministic_vectors() -> None:
     """FakeEmbeddingProvider should return deterministic vectors for same input."""
-    provider = FakeEmbeddingProvider(dimension=8)
+    model = FakeEmbeddingProvider(dimension=8)
 
-    result1 = await provider.embed(["hello"])
-    result2 = await provider.embed(["hello"])
+    result1 = await model.embed(["hello"])
+    result2 = await model.embed(["hello"])
 
     assert result1 == result2, "Same input should produce same vector"
     assert len(result1) == 1
@@ -28,16 +28,16 @@ async def test_fake_embedding_provider_returns_deterministic_vectors() -> None:
 @pytest.mark.asyncio
 async def test_fake_embedding_provider_satisfies_protocol() -> None:
     """FakeEmbeddingProvider should satisfy EmbeddingProvider protocol."""
-    provider = FakeEmbeddingProvider(dimension=384)
-    assert isinstance(provider, EmbeddingProvider)
+    model = FakeEmbeddingProvider(dimension=384)
+    assert isinstance(model, EmbeddingProvider)
 
 
 @pytest.mark.asyncio
 async def test_fake_embedding_provider_empty_list_returns_empty() -> None:
     """FakeEmbeddingProvider.embed([]) should return []."""
-    provider = FakeEmbeddingProvider(dimension=10)
+    model = FakeEmbeddingProvider(dimension=10)
 
-    result = await provider.embed([])
+    result = await model.embed([])
 
     assert result == []
 
@@ -45,9 +45,9 @@ async def test_fake_embedding_provider_empty_list_returns_empty() -> None:
 @pytest.mark.asyncio
 async def test_fake_embedding_provider_single_text_correct_dimension() -> None:
     """FakeEmbeddingProvider should return vector of configured dimension."""
-    provider = FakeEmbeddingProvider(dimension=16)
+    model = FakeEmbeddingProvider(dimension=16)
 
-    result = await provider.embed(["hello"])
+    result = await model.embed(["hello"])
 
     assert len(result) == 1
     assert len(result[0]) == 16
@@ -56,9 +56,9 @@ async def test_fake_embedding_provider_single_text_correct_dimension() -> None:
 @pytest.mark.asyncio
 async def test_fake_embedding_provider_multiple_texts() -> None:
     """FakeEmbeddingProvider should return one vector per input text."""
-    provider = FakeEmbeddingProvider(dimension=5)
+    model = FakeEmbeddingProvider(dimension=5)
 
-    result = await provider.embed(["a", "b"])
+    result = await model.embed(["a", "b"])
 
     assert len(result) == 2
     assert len(result[0]) == 5
@@ -68,10 +68,10 @@ async def test_fake_embedding_provider_multiple_texts() -> None:
 @pytest.mark.asyncio
 async def test_fake_embedding_provider_different_texts_different_vectors() -> None:
     """Different input texts should produce different vectors."""
-    provider = FakeEmbeddingProvider(dimension=8)
+    model = FakeEmbeddingProvider(dimension=8)
 
-    result1 = await provider.embed(["hello"])
-    result2 = await provider.embed(["world"])
+    result1 = await model.embed(["hello"])
+    result2 = await model.embed(["world"])
 
     assert result1 != result2
 
@@ -82,14 +82,14 @@ async def test_fake_embedding_provider_different_texts_different_vectors() -> No
 @pytest.mark.asyncio
 async def test_openai_embedding_provider_satisfies_protocol() -> None:
     """OpenAIEmbeddingProvider should satisfy EmbeddingProvider protocol."""
-    provider = OpenAIEmbeddingProvider(api_key="test-key")
-    assert isinstance(provider, EmbeddingProvider)
+    model = OpenAIEmbeddingProvider(api_key="test-key")
+    assert isinstance(model, EmbeddingProvider)
 
 
 @pytest.mark.asyncio
 async def test_openai_embedding_provider_makes_correct_api_call() -> None:
     """OpenAIEmbeddingProvider should POST correct request to embeddings endpoint."""
-    provider = OpenAIEmbeddingProvider(
+    model = OpenAIEmbeddingProvider(
         api_key="test-key",
         base_url="https://api.example.com/v1",
         model="text-embedding-3-small",
@@ -110,10 +110,10 @@ async def test_openai_embedding_provider_makes_correct_api_call() -> None:
         },
     )
 
-    with patch.object(provider._client, "post", new_callable=AsyncMock) as mock_post:
+    with patch.object(model._client, "post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_response
 
-        result = await provider.embed(["hello", "world"])
+        result = await model.embed(["hello", "world"])
 
         # Verify API call was made correctly
         mock_post.assert_called_once()
@@ -135,7 +135,7 @@ async def test_openai_embedding_provider_makes_correct_api_call() -> None:
 @pytest.mark.asyncio
 async def test_openai_embedding_provider_parses_response_correctly() -> None:
     """OpenAIEmbeddingProvider should extract embeddings from response data."""
-    provider = OpenAIEmbeddingProvider(api_key="test-key")
+    model = OpenAIEmbeddingProvider(api_key="test-key")
 
     request = httpx.Request("POST", "https://api.openai.com/v1/embeddings")
     mock_response = httpx.Response(
@@ -153,10 +153,10 @@ async def test_openai_embedding_provider_parses_response_correctly() -> None:
         },
     )
 
-    with patch.object(provider._client, "post", new_callable=AsyncMock) as mock_post:
+    with patch.object(model._client, "post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_response
 
-        result = await provider.embed(["first", "second", "third"])
+        result = await model.embed(["first", "second", "third"])
 
         assert len(result) == 3
         assert result[0] == [1.0, 2.0]
@@ -167,7 +167,7 @@ async def test_openai_embedding_provider_parses_response_correctly() -> None:
 @pytest.mark.asyncio
 async def test_openai_embedding_provider_handles_http_error() -> None:
     """OpenAIEmbeddingProvider should log and re-raise HTTPStatusError."""
-    provider = OpenAIEmbeddingProvider(api_key="test-key")
+    model = OpenAIEmbeddingProvider(api_key="test-key")
 
     request = httpx.Request("POST", "https://api.openai.com/v1/embeddings")
     mock_response = httpx.Response(
@@ -176,32 +176,32 @@ async def test_openai_embedding_provider_handles_http_error() -> None:
         json={"error": {"message": "Invalid API key", "type": "invalid_request_error"}},
     )
 
-    with patch.object(provider._client, "post", new_callable=AsyncMock) as mock_post:
+    with patch.object(model._client, "post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_response
 
         with pytest.raises(httpx.HTTPStatusError):
-            await provider.embed(["test"])
+            await model.embed(["test"])
 
 
 @pytest.mark.asyncio
 async def test_openai_embedding_provider_handles_request_error() -> None:
     """OpenAIEmbeddingProvider should log and re-raise RequestError."""
-    provider = OpenAIEmbeddingProvider(api_key="test-key")
+    model = OpenAIEmbeddingProvider(api_key="test-key")
 
-    with patch.object(provider._client, "post", new_callable=AsyncMock) as mock_post:
+    with patch.object(model._client, "post", new_callable=AsyncMock) as mock_post:
         mock_post.side_effect = httpx.ConnectError("Connection refused")
 
         with pytest.raises(httpx.ConnectError):
-            await provider.embed(["test"])
+            await model.embed(["test"])
 
 
 @pytest.mark.asyncio
 async def test_openai_embedding_provider_empty_input_returns_empty() -> None:
     """OpenAIEmbeddingProvider should return empty list for empty input without API call."""
-    provider = OpenAIEmbeddingProvider(api_key="test-key")
+    model = OpenAIEmbeddingProvider(api_key="test-key")
 
-    with patch.object(provider._client, "post", new_callable=AsyncMock) as mock_post:
-        result = await provider.embed([])
+    with patch.object(model._client, "post", new_callable=AsyncMock) as mock_post:
+        result = await model.embed([])
 
         # Should not make API call
         mock_post.assert_not_called()
@@ -211,7 +211,7 @@ async def test_openai_embedding_provider_empty_input_returns_empty() -> None:
 @pytest.mark.asyncio
 async def test_openai_embedding_provider_default_model() -> None:
     """OpenAIEmbeddingProvider should use default model text-embedding-3-small."""
-    provider = OpenAIEmbeddingProvider(api_key="test-key")
+    model = OpenAIEmbeddingProvider(api_key="test-key")
 
     request = httpx.Request("POST", "https://api.openai.com/v1/embeddings")
     mock_response = httpx.Response(
@@ -225,10 +225,10 @@ async def test_openai_embedding_provider_default_model() -> None:
         },
     )
 
-    with patch.object(provider._client, "post", new_callable=AsyncMock) as mock_post:
+    with patch.object(model._client, "post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_response
 
-        await provider.embed(["test"])
+        await model.embed(["test"])
 
         call_args = mock_post.call_args
         assert call_args.kwargs["json"]["model"] == "text-embedding-3-small"
@@ -237,14 +237,14 @@ async def test_openai_embedding_provider_default_model() -> None:
 @pytest.mark.asyncio
 async def test_openai_embedding_provider_custom_timeouts() -> None:
     """OpenAIEmbeddingProvider should respect custom timeout settings."""
-    provider = OpenAIEmbeddingProvider(
+    model = OpenAIEmbeddingProvider(
         api_key="test-key",
         connect_timeout=5.0,
         read_timeout=60.0,
     )
 
-    assert provider._timeout.connect == 5.0
-    assert provider._timeout.read == 60.0
+    assert model._timeout.connect == 5.0
+    assert model._timeout.read == 60.0
 
 
 @pytest.mark.asyncio
@@ -255,16 +255,16 @@ async def test_openai_embedding_provider_accepts_provider_config() -> None:
         api_key="test-key",
         api_format=ApiFormat.OPENAI_EMBEDDINGS,
     )
-    provider = OpenAIEmbeddingProvider(config=config, model="text-embedding-3-small")
+    model = OpenAIEmbeddingProvider(config=config, model="text-embedding-3-small")
 
-    assert provider.canonical_model_id == "openai/text-embedding-3-small"
+    assert model.canonical_model_id == "openai/text-embedding-3-small"
 
 
 @pytest.mark.asyncio
 async def test_openai_embedding_provider_records_usage_for_embedding_accounting() -> (
     None
 ):
-    provider = OpenAIEmbeddingProvider(api_key="test-key")
+    model = OpenAIEmbeddingProvider(api_key="test-key")
 
     request = httpx.Request("POST", "https://api.openai.com/v1/embeddings")
     mock_response = httpx.Response(
@@ -278,11 +278,11 @@ async def test_openai_embedding_provider_records_usage_for_embedding_accounting(
         },
     )
 
-    with patch.object(provider._client, "post", new_callable=AsyncMock) as mock_post:
+    with patch.object(model._client, "post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_response
-        await provider.embed(["hello"])
+        await model.embed(["hello"])
 
-    usage = provider.last_usage
+    usage = model.last_usage
     assert usage is not None
     assert usage.prompt_tokens == 9
     assert usage.completion_tokens is None
