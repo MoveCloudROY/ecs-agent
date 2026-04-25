@@ -18,7 +18,7 @@ from ecs_agent.components import (
 from ecs_agent.components.definitions import RenderedUserPromptComponent
 from ecs_agent.core import World
 from ecs_agent.prompts.contracts import TriggerSpec
-from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers import OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.scratchbook import ArtifactRegistry
 from ecs_agent.systems.planning import PlanningSystem
@@ -46,8 +46,8 @@ def _api_format_for_base_url(base_url: str) -> ApiFormat:
     return ApiFormat.OPENAI_CHAT_COMPLETIONS
 
 
-def _make_provider(api_key: str, base_url: str, model: str) -> OpenAIProvider:
-    return OpenAIProvider(
+def _make_provider(api_key: str, base_url: str, model: str) -> OpenAIModel:
+    return OpenAIModel(
         config=ProviderConfig(
             provider_id="aliyun",
             base_url=base_url,

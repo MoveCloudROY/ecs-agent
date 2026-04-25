@@ -6,7 +6,7 @@ from pathlib import Path
 
 from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers import FakeModel, OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.skill import Skill
@@ -38,11 +38,11 @@ async def main() -> None:
     model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
 
     if api_key:
-        provider: OpenAIProvider | FakeProvider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        provider: OpenAIModel | FakeModel = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
         selected_model = model
-        print(f"Using OpenAIProvider with model: {model}")
+        print(f"Using OpenAIModel with model: {model}")
     else:
-        provider = FakeProvider(
+        provider = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -72,7 +72,7 @@ async def main() -> None:
             ]
         )
         selected_model = "fake"
-        print("No LLM_API_KEY provided. Using FakeProvider.")
+        print("No LLM_API_KEY provided. Using FakeModel.")
 
     world.add_component(agent, LLMComponent(model=provider))
     world.add_component(

@@ -10,7 +10,7 @@ from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.components.definitions import RenderedSystemPromptComponent
 from ecs_agent.core import Runner, World
 from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
-from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers import OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.scratchbook.prompt_definition import (
     ScratchbookArtifactPromptDef,
@@ -64,9 +64,9 @@ def _build_scratchbook_prompt_config() -> ScratchbookPromptConfig:
 
 def _make_provider(
     api_key: str, base_url: str, api_format: ApiFormat
-) -> OpenAIProvider:
+) -> OpenAIModel:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
-    return OpenAIProvider(
+    return OpenAIModel(
         config=ProviderConfig(
             provider_id="aliyun",
             base_url=base_url,

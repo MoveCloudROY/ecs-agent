@@ -34,7 +34,7 @@ import os
 
 from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers import OpenAIModel
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
@@ -45,20 +45,19 @@ from ecs_agent.providers.config import ApiFormat, ProviderConfig
 async def main() -> None:
     world = World(name="my-agent")  # optional name — appears in all log events
 
-    # Create a provider (any OpenAI-compatible API works)
+    # Create a model (any OpenAI-compatible API works)
     config = ProviderConfig(
         provider_id="openai",
         base_url=os.getenv("LLM_BASE_URL", "https://api.openai.com/v1"),
         api_key=os.environ["LLM_API_KEY"],
         api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
     )
-    provider = OpenAIProvider(config=config, model=os.getenv("LLM_MODEL", "gpt-4o"))
+    model = OpenAIModel(config=config, model=os.getenv("LLM_MODEL", "gpt-4o"))
 
     # Create an agent entity and attach components
     agent = world.create_entity()
     world.add_component(agent, LLMComponent(
-        provider=provider,
-        model=provider.model,
+        model=model,
         system_prompt="You are a helpful assistant.",
     ))
     world.add_component(agent, ConversationComponent(
@@ -148,7 +147,7 @@ src/ecs_agent/
 ├── components/
 │   └── definitions.py        # 30 component dataclasses
 ├── providers/
-│   ├── protocol.py           # LLMProvider Protocol
+│   ├── protocol.py           # LLMModel Protocol
 │   ├── openai_provider.py    # OpenAI-compatible HTTP provider (httpx)
 │   ├── claude_provider.py    # Anthropic Claude provider
 │   ├── litellm_provider.py   # LiteLLM unified provider
@@ -226,13 +225,13 @@ The `examples/` directory contains runnable demos for the major patterns in the 
 
 | Example | Description |
 |---------|-------------|
-| [`chat_agent.py`](examples/chat_agent.py) | Minimal agent with dual-mode provider (FakeProvider / OpenAIProvider) |
+| [`chat_agent.py`](examples/chat_agent.py) | Minimal agent with dual-mode model (FakeModel / OpenAIModel) |
 | [`tool_agent.py`](examples/tool_agent.py) | Tool use with automatic call/result cycling |
 | [`react_agent.py`](examples/react_agent.py) | ReAct pattern. Thought → Action → Observation loop |
-| [`plan_and_execute_agent.py`](examples/plan_and_execute_agent.py) | Dynamic replanning with RetryProvider and configurable timeouts |
+| [`plan_and_execute_agent.py`](examples/plan_and_execute_agent.py) | Dynamic replanning with RetryModel and configurable timeouts |
 | [`streaming_agent.py`](examples/streaming_agent.py) | Real-time token streaming via SSE |
 | [`vision_agent.py`](examples/vision_agent.py) | Multimodal image understanding with vision-capable LLM using `ImageUrlPart` |
-| [`retry_agent.py`](examples/retry_agent.py) | RetryProvider with custom retry configuration |
+| [`retry_agent.py`](examples/retry_agent.py) | RetryModel with custom retry configuration |
 | [`multi_agent.py`](examples/multi_agent.py) | Two agents collaborating via `MessageBusSystem` pub/sub (dual-mode) |
 | [`structured_output_agent.py`](examples/structured_output_agent.py) | Pydantic schema → JSON mode for type-safe responses |
 | [`serialization_demo.py`](examples/serialization_demo.py) | Save and restore World state to/from JSON |
@@ -259,7 +258,7 @@ The `examples/` directory contains runnable demos for the major patterns in the 
 Run any example:
 
 ```bash
-# FakeProvider mode (no API key needed — works out of the box)
+# FakeModel mode (no API key needed — works out of the box)
 uv run python examples/chat_agent.py
 uv run python examples/tool_agent.py
 
@@ -358,7 +357,7 @@ See [`docs/`](docs/) for detailed guides:
 - [Structured Output](docs/features/structured-output.md), Pydantic schema → JSON mode
 - [Serialization](docs/features/serialization.md), World state persistence
 - [Logging](docs/features/logging.md), structlog integration
-- [Retry](docs/features/retry.md), RetryProvider configuration
+- [Retry](docs/features/retry.md), RetryModel configuration
 
 ### Agent Capabilities
 - [Context Management](docs/features/context-management.md), Checkpoint, undo, and compaction

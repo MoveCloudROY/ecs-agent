@@ -10,7 +10,7 @@ from ecs_agent.components.definitions import (
     RenderedSystemPromptComponent,
     RenderedUserPromptComponent,
 )
-from ecs_agent.providers.fake_provider import FakeProvider
+from ecs_agent.providers.fake_model import FakeModel
 from ecs_agent.providers.openai_chat_adapter import OpenAIChatAdapter
 from ecs_agent.types import CompletionResult, ImageUrlPart, Message
 
@@ -92,8 +92,8 @@ async def test_vision_agent_receives_description() -> None:
 
     with patch.dict(os.environ, {}, clear=True):
         with patch(
-            "examples.vision_agent.FakeProvider",
-            return_value=FakeProvider(responses=[_fake_completion(expected)]),
+            "examples.vision_agent.FakeModel",
+            return_value=FakeModel(responses=[_fake_completion(expected)]),
         ):
             with patch.object(module.World, "__init__", capture_world_init):
                 await module.main()
@@ -112,11 +112,11 @@ async def test_vision_agent_fake_mode_no_api_key() -> None:
 
     with patch.dict(os.environ, {}, clear=True):
         with patch(
-            "examples.vision_agent.FakeProvider",
-            side_effect=FakeProvider,
+            "examples.vision_agent.FakeModel",
+            side_effect=FakeModel,
         ) as fake_ctor:
             with patch(
-                "examples.vision_agent.OpenAIProvider", create=True
+                "examples.vision_agent.OpenAIModel", create=True
             ) as openai_ctor:
                 await module.main()
 

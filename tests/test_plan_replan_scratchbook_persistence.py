@@ -17,7 +17,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import World
 from ecs_agent.prompts.contracts import TriggerSpec
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.scratchbook import ArtifactRegistry
 from ecs_agent.systems.planning import PlanningSystem
 from ecs_agent.systems.replanning import ReplanningSystem
@@ -41,7 +41,7 @@ async def test_plan_persists_to_canonical_plan_md_path(
     registry: ArtifactRegistry,
 ) -> None:
     world = World()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="step 1 done"))
         ]
@@ -75,7 +75,7 @@ async def test_replanning_updates_same_plan_md_without_legacy_category_writes(
     registry: ArtifactRegistry,
 ) -> None:
     world = World()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="step 1 done")),
             CompletionResult(
@@ -163,7 +163,7 @@ async def test_plan_and_tool_transitions_update_same_boulder_file(
     registry: ArtifactRegistry,
 ) -> None:
     world = World()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -235,7 +235,7 @@ async def test_replanning_updates_existing_boulder_without_recreation(
     registry: ArtifactRegistry,
 ) -> None:
     world = World()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="step 1 done")),
             CompletionResult(

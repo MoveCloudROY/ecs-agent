@@ -5,8 +5,8 @@ using the ECS-based agent framework, with full prompt normalization via
 SystemPromptRenderSystem and UserPromptNormalizationSystem.
 
 Dual-mode:
-- Without LLM_API_KEY: Uses FakeProvider with a mock image description.
-- With LLM_API_KEY: Uses OpenAIProvider with Chat Completions API.
+- Without LLM_API_KEY: Uses FakeModel with a mock image description.
+- With LLM_API_KEY: Uses OpenAIModel with Chat Completions API.
 
 Environment variables:
   LLM_API_KEY   — API key (required for real LLM mode)
@@ -25,9 +25,9 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import configure_logging
-from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers import FakeModel, OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -55,10 +55,10 @@ async def main() -> None:
         "https://dashscope.oss-cn-beijing.aliyuncs.com/images/dog_and_girl.jpeg",
     )
 
-    provider: LLMProvider
+    provider: LLMModel
     if api_key:
-        print(f"Using OpenAIProvider (Chat Completions) with model: {model}")
-        provider = OpenAIProvider(
+        print(f"Using OpenAIModel (Chat Completions) with model: {model}")
+        provider = OpenAIModel(
             config=ProviderConfig(
                 provider_id="aliyun",
                 base_url=base_url,
@@ -68,8 +68,8 @@ async def main() -> None:
             model=model,
         )
     else:
-        print("No LLM_API_KEY set. Using FakeProvider for demonstration.")
-        provider = FakeProvider(
+        print("No LLM_API_KEY set. Using FakeModel for demonstration.")
+        provider = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(

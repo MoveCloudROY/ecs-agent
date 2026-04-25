@@ -1,8 +1,8 @@
 """Simple chat agent example using the ECS-based LLM Agent framework.
 
 This example demonstrates dual-mode LLM provider selection:
-- Without LLM_API_KEY: Uses FakeProvider for deterministic testing
-- With LLM_API_KEY: Uses OpenAIProvider with DashScope/Qwen
+- Without LLM_API_KEY: Uses FakeModel for deterministic testing
+- With LLM_API_KEY: Uses OpenAIModel with DashScope/Qwen
 
 Also demonstrates:
 - Creating a World with ReasoningSystem, MemorySystem, and ErrorHandlingSystem
@@ -17,9 +17,9 @@ import os
 from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import configure_logging
-from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers import FakeModel, OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -40,13 +40,13 @@ async def main() -> None:
     )
     model: str = os.environ.get("LLM_MODEL", "qwen3.5-flash")
 
-    provider: LLMProvider
+    provider: LLMModel
     if api_key:
-        print(f"Using OpenAIProvider with model: {model}")
-        provider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        print(f"Using OpenAIModel with model: {model}")
+        provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
-        print("No LLM_API_KEY set. Using FakeProvider for demonstration.")
-        provider = FakeProvider(
+        print("No LLM_API_KEY set. Using FakeModel for demonstration.")
+        provider = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(

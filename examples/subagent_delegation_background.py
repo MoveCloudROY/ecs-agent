@@ -6,8 +6,8 @@ final summary.
 
 Dual-mode operation:
 
-- Without ``LLM_API_KEY``: uses ``FakeProvider`` and runs out of the box.
-- With ``LLM_API_KEY``: uses ``OpenAIProvider`` against an OpenAI-compatible
+- Without ``LLM_API_KEY``: uses ``FakeModel`` and runs out of the box.
+- With ``LLM_API_KEY``: uses ``OpenAIModel`` against an OpenAI-compatible
   endpoint.
 """
 
@@ -25,9 +25,9 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import configure_logging, get_logger
-from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers import FakeModel, OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.subagent import SubagentSystem
@@ -76,10 +76,10 @@ async def main() -> None:
     model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
 
     if api_key:
-        print(f"Using OpenAIProvider with model: {model}")
+        print(f"Using OpenAIModel with model: {model}")
         print(f"Base URL: {base_url}")
     else:
-        print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
+        print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
     print()
 
@@ -108,10 +108,10 @@ def _build_providers(
     api_key: str,
     base_url: str,
     model: str,
-) -> tuple[LLMProvider, SubagentRegistryComponent]:
-    manager_provider: LLMProvider
+) -> tuple[LLMModel, SubagentRegistryComponent]:
+    manager_provider: LLMModel
     if api_key:
-        manager_provider = OpenAIProvider(
+        manager_provider = OpenAIModel(
             config=ProviderConfig(
                 provider_id="openai",
                 base_url=base_url,
@@ -120,7 +120,7 @@ def _build_providers(
             ),
             model=model,
         )
-        subagent_provider = OpenAIProvider(
+        subagent_provider = OpenAIModel(
             config=ProviderConfig(
                 provider_id="openai",
                 base_url=base_url,
@@ -131,8 +131,8 @@ def _build_providers(
         )
         return manager_provider, _build_registry(subagent_provider, model=model)
 
-    manager_provider = FakeProvider(responses=_fake_manager_responses())
-    analyst_provider = FakeProvider(
+    manager_provider = FakeModel(responses=_fake_manager_responses())
+    analyst_provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -148,7 +148,7 @@ def _build_providers(
             )
         ]
     )
-    writer_provider = FakeProvider(
+    writer_provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -198,7 +198,7 @@ def _build_providers(
     return manager_provider, registry
 
 
-def _build_registry(provider: LLMProvider, *, model: str) -> SubagentRegistryComponent:
+def _build_registry(provider: LLMModel, *, model: str) -> SubagentRegistryComponent:
     return SubagentRegistryComponent(
         subagents={
             "analyst": SubagentConfig(
@@ -237,7 +237,7 @@ def _build_registry(provider: LLMProvider, *, model: str) -> SubagentRegistryCom
 
 def _build_world(
     *,
-    manager_provider: LLMProvider,
+    manager_provider: LLMModel,
     registry: SubagentRegistryComponent,
     model: str,
 ) -> tuple[World, EntityId]:

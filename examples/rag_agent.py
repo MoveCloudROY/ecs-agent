@@ -7,7 +7,7 @@ This example demonstrates:
 - Showing how RAG context is injected into the conversation
 
 Environment variables:
-- LLM_API_KEY: API key (if set, uses OpenAI-compatible providers; if unset, uses FakeProvider)
+- LLM_API_KEY: API key (if set, uses OpenAI-compatible providers; if unset, uses FakeModel)
 - LLM_BASE_URL: Base URL (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
 - LLM_MODEL: LLM model name (default: qwen3.5-flash)
 - EMBEDDING_MODEL: Embedding model name (default: text-embedding-v3)
@@ -25,7 +25,7 @@ from ecs_agent.components import (
     VectorStoreComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers import FakeModel, OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.embedding_provider import OpenAIEmbeddingProvider
 from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider
@@ -53,11 +53,11 @@ async def main() -> None:
 
     # --- Create LLM provider (dual-mode) ---
     if api_key:
-        print(f"Using OpenAIProvider with model: {model}")
-        provider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        print(f"Using OpenAIModel with model: {model}")
+        provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
-        print("No LLM_API_KEY set. Using FakeProvider for demonstration.")
-        provider = FakeProvider(
+        print("No LLM_API_KEY set. Using FakeModel for demonstration.")
+        provider = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(

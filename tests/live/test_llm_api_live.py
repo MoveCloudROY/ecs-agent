@@ -6,7 +6,7 @@ from ecs_agent.types import CompletionResult, ImageUrlPart, Message
 
 _registry_module = pytest.importorskip("ecs_agent.providers.registry")
 ProviderRegistry = _registry_module.ProviderRegistry
-get_llm_provider = _registry_module.get_llm_provider
+get_model = _registry_module.get_model
 
 
 def _live_registry() -> ProviderRegistry:
@@ -35,7 +35,7 @@ def _live_registry() -> ProviderRegistry:
 @pytest.mark.asyncio
 async def test_live_openai_chat_text_response(live_api_key: str) -> None:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
-    provider = get_llm_provider(
+    provider = get_model(
         f"aliyun/{model}",
         registry=_live_registry(),
         api_key=live_api_key,
@@ -52,7 +52,7 @@ async def test_live_openai_chat_text_response(live_api_key: str) -> None:
 @pytest.mark.asyncio
 async def test_live_openai_responses_text_response(live_api_key: str) -> None:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
-    provider = get_llm_provider(
+    provider = get_model(
         f"aliyun-responses/{model}",
         registry=_live_registry(),
         api_key=live_api_key,
@@ -71,7 +71,7 @@ async def test_live_openai_responses_vision_response(
     live_api_key: str, live_image_url: str
 ) -> None:
     model = os.getenv("LLM_MODEL", "qwen3-vl-flash")
-    provider = get_llm_provider(
+    provider = get_model(
         f"aliyun-vision/{model}",
         registry=_live_registry(),
         api_key=live_api_key,
@@ -96,7 +96,7 @@ async def test_live_openai_responses_vision_response(
 @pytest.mark.asyncio
 async def test_live_anthropic_messages_text_response(live_api_key: str) -> None:
     model = os.getenv("LLM_MODEL", "kimi-k2.5")
-    provider = get_llm_provider(
+    provider = get_model(
         f"aliyun-anthropic/{model}",
         registry=_live_registry(),
         api_key=live_api_key,

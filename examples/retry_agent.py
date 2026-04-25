@@ -1,10 +1,10 @@
 """Retry provider example with custom retry configuration.
 
-This example demonstrates how to wrap an LLM provider with RetryProvider to add
+This example demonstrates how to wrap an LLM provider with RetryModel to add
 automatic retry logic with exponential backoff for transient failures.
 
-The RetryProvider:
-- Wraps any LLMProvider (e.g., OpenAIProvider, FakeProvider)
+The RetryModel:
+- Wraps any LLMModel (e.g., OpenAIModel, FakeModel)
 - Retries non-streaming completion calls on network/HTTP errors
 - Uses exponential backoff with configurable parameters (max_attempts, min_wait, max_wait)
 - Skips retry logic for streaming calls (passes through directly)
@@ -34,9 +34,9 @@ import os
 import sys
 
 from ecs_agent.logging import configure_logging, get_logger
-from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers import FakeModel, OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.retry_provider import RetryProvider
+from ecs_agent.providers.retry_model import RetryModel
 from ecs_agent.types import CompletionResult, Message, RetryConfig, Usage
 
 logger = get_logger(__name__)
@@ -56,17 +56,17 @@ async def main() -> None:
 
     # --- Create base provider ---
     if api_key:
-        print(f"Using OpenAIProvider with model: {model}")
+        print(f"Using OpenAIModel with model: {model}")
         print(f"Base URL: {base_url}")
-        base_provider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        base_model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
-        print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
+        print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         # Create a fake provider with a realistic response
         fake_result = CompletionResult(
             message=Message(
                 role="assistant",
                 content="This is a demonstration response from the retry-wrapped provider. "
-                "In production, the RetryProvider would transparently retry "
+                "In production, the RetryModel would transparently retry "
                 "on transient errors like rate limits (429) and server errors (500, 502, 503, 504).",
             ),
             usage=Usage(
@@ -75,7 +75,7 @@ async def main() -> None:
                 total_tokens=60,
             ),
         )
-        base_provider = FakeProvider(responses=[fake_result])
+        base_model = FakeModel(responses=[fake_result])
 
     # --- Create custom retry configuration ---
     # This demonstrates custom retry parameters beyond the defaults
@@ -97,13 +97,13 @@ async def main() -> None:
     print()
 
     # --- Wrap provider with retry logic ---
-    provider = RetryProvider(base_provider, retry_config=retry_config)
+    provider = RetryModel(base_model, retry_config=retry_config)
 
     # --- Make a completion request ---
     messages = [
         Message(
             role="user",
-            content="Explain how the RetryProvider works with exponential backoff.",
+            content="Explain how the RetryModel works with exponential backoff.",
         )
     ]
 
@@ -138,7 +138,7 @@ async def main() -> None:
     print("Notes:")
     print("- If this request had encountered transient errors (429, 500, etc.),")
     print(
-        "  the RetryProvider would have automatically retried with exponential backoff"
+        "  the RetryModel would have automatically retried with exponential backoff"
     )
     print("- Retry attempts are logged at WARNING level with structured fields:")
     print("  {attempt, error, wait_seconds}")

@@ -93,8 +93,6 @@ model = get_model("aliyun/qwen3.5-flash", registry=registry)
 model = get_model("aliyun/qwen3.5-flash", registry=registry, api_key="sk-...")
 ```
 
-`get_llm_provider` is a backward-compatible alias for `get_model`.
-
 API key resolution order: explicit `api_key` argument → `ProviderEntry.api_key` → env var named by `ProviderEntry.api_key_env`.
 
 Dispatch by `api_format`:
@@ -198,9 +196,6 @@ class LLMModel(Protocol):
         response_format: dict[str, Any] | None = None,
     ) -> CompletionResult | AsyncIterator[StreamDelta]:
         ...
-
-# Backward-compatible alias
-LLMProvider = LLMModel
 ```
 
 The `complete` method returns a `CompletionResult` when `stream=False` and an `AsyncIterator[StreamDelta]` when `stream=True`.
@@ -240,8 +235,6 @@ llm_component.pending_model = get_model("aliyun/qwen3.5-flash", registry=registr
 ## OpenAIModel
 
 `OpenAIModel` is an OpenAI-compatible HTTP model using `httpx.AsyncClient`. It works with OpenAI's API as well as compatible alternatives like DashScope, vLLM, or Ollama. Internally it dispatches to explicit **chat completions** or **responses** adapters based on the `api_format` in the `ProviderConfig`.
-
-`OpenAIProvider` is a backward-compatible alias for `OpenAIModel`.
 
 ### Configuration
 
@@ -319,7 +312,6 @@ response_format = pydantic_to_response_format(User)
 
 `ClaudeModel` is an Anthropic-compatible model with full SSE streaming and cache-aware usage normalization. It communicates with the Anthropic Messages API format using `httpx.AsyncClient`.
 
-`ClaudeProvider` is a backward-compatible alias for `ClaudeModel`.
 
 ### Configuration
 
@@ -400,7 +392,6 @@ model = RetryModel(
 
 `FakeModel` is designed for deterministic testing. It returns a sequence of pre-configured responses.
 
-`FakeProvider` is a backward-compatible alias for `FakeModel`.
 
 ### Usage
 
@@ -438,7 +429,6 @@ model = FakeModel(responses=responses, model_id="test-model")
 
 `RetryModel` adds resilience to any `LLMModel` by wrapping it and implementing retry logic using `tenacity`.
 
-`RetryProvider` is a backward-compatible alias for `RetryModel`.
 
 ### Usage
 
@@ -478,7 +468,6 @@ model = RetryModel(model=base_model, retry_config=retry_config)
 
 `LiteLLMModel` enables access to 100+ LLM providers through a single unified interface via the `litellm` library. This is an optional dependency — install with `pip install litellm`.
 
-`LiteLLMProvider` is a backward-compatible alias for `LiteLLMModel`.
 
 ### Configuration
 
@@ -815,4 +804,3 @@ results = await store.search([0.1, 0.2, ...], top_k=5)
 - **Claude-native**: Use `ClaudeModel` for direct Anthropic API access with native tool use support and cache-aware accounting.
 - **Multi-provider**: Use `LiteLLMModel` when you need to switch between different providers without changing code.
 - **Accounting**: Attach `AccountingSubscriber` to the `EventBus` to track cost and cache hit-rate metrics across invocations.
-- **Backward compat**: All `*Provider` names (`OpenAIProvider`, `ClaudeProvider`, `FakeProvider`, `RetryProvider`, `LiteLLMProvider`, `LLMProvider`, `get_llm_provider`) remain importable as aliases.

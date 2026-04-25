@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from ecs_agent.components import UserInputComponent
 from ecs_agent.components.definitions import ConversationComponent, TerminalComponent
 from ecs_agent.logging import get_logger
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems import TerminalCleanupSystem
 from ecs_agent.systems.user_input import UserInputSystem
 from ecs_agent.types import (
@@ -67,7 +67,7 @@ def slug_from_description(description: str) -> str:
 _VALID_SLUG = _re.compile(r"^[a-z][a-z0-9-]*$")
 
 
-async def derive_workflow_id_from_llm(description: str, provider: LLMProvider) -> str:
+async def derive_workflow_id_from_llm(description: str, provider: LLMModel) -> str:
     prompt = (
         "Convert the following task description into a short, meaningful English "
         "workflow identifier. Rules: lowercase letters, digits, and hyphens only; "

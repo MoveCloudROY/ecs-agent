@@ -15,7 +15,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.observability import generate_traceparent
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.message_bus import MessageBusSystem
@@ -185,8 +185,8 @@ async def test_multi_agent_full_loop() -> None:
     agent_a_id = world.create_entity()
     agent_b_id = world.create_entity()
 
-    provider_a = FakeProvider(responses=[_assistant_reply("Agent A ready")])
-    provider_b = FakeProvider(responses=[_assistant_reply("Agent B ready")])
+    provider_a = FakeModel(responses=[_assistant_reply("Agent A ready")])
+    provider_b = FakeModel(responses=[_assistant_reply("Agent B ready")])
 
     world.add_component(
         agent_a_id,

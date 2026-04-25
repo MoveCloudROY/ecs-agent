@@ -21,7 +21,7 @@ from ecs_agent.prompts.message_assembly import (
     prepare_outbound_messages,
     reserve_prompt_context_reservation,
 )
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.systems.prompt_context_collector import (
     CONTEXT_ENTRY_DELIMITER,
     CONTEXT_POOL_OVERFLOW_FOOTER_PREFIX,
@@ -40,7 +40,7 @@ from ecs_agent.types import (
 )
 
 
-class FlakyRecordingProvider(FakeProvider):
+class FlakyRecordingProvider(FakeModel):
     def __init__(self) -> None:
         super().__init__(
             responses=[
@@ -63,7 +63,7 @@ class FlakyRecordingProvider(FakeProvider):
         return await super().complete(messages, tools)
 
 
-class RecordingProvider(FakeProvider):
+class RecordingProvider(FakeModel):
     def __init__(self) -> None:
         super().__init__(
             responses=[

@@ -13,7 +13,7 @@ from ecs_agent.components import (
 from ecs_agent.components.definitions import TerminalComponent
 from ecs_agent.core import Runner, World
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.openai_provider import OpenAIProvider
+from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.skills import SkillManager
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -23,7 +23,7 @@ from ecs_agent.tools.builtins.edit_tool import compute_line_hash
 from ecs_agent.types import Message
 
 
-def _make_provider(live_api_key: str) -> OpenAIProvider:
+def _make_provider(live_api_key: str) -> OpenAIModel:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
     base_url = os.getenv(
         "LLM_BASE_URL",
@@ -35,7 +35,7 @@ def _make_provider(live_api_key: str) -> OpenAIProvider:
         api_key=live_api_key,
         api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
     )
-    return OpenAIProvider(config=config, model=model)
+    return OpenAIModel(config=config, model=model)
 
 
 def _build_world(

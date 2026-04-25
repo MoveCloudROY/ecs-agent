@@ -17,7 +17,7 @@ from ecs_agent.components.definitions import (
     SubagentWaitComponent,
 )
 from ecs_agent.core import World
-from ecs_agent.providers import ApiFormat, OpenAIProvider, ProviderConfig
+from ecs_agent.providers import ApiFormat, OpenAIModel, ProviderConfig
 from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.systems.subagent_wait import SubagentWaitSystem
 from ecs_agent.types import (
@@ -37,9 +37,9 @@ BACKGROUND_PROMPT = (
 
 def _build_provider(
     api_key: str, *, base_url: str, api_format: ApiFormat
-) -> OpenAIProvider:
+) -> OpenAIModel:
     model = "qwen3.5-flash"
-    return OpenAIProvider(
+    return OpenAIModel(
         config=ProviderConfig(
             provider_id="aliyun",
             base_url=base_url,

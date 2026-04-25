@@ -24,7 +24,7 @@ from ecs_agent.types import (
 )
 
 
-class _OpenAIProviderFacade(Protocol):
+class _OpenAIModelFacade(Protocol):
     _base_url: str
     _model: str
     _client: httpx.AsyncClient
@@ -56,7 +56,7 @@ class _OpenAIProviderFacade(Protocol):
 class OpenAIResponsesAdapter:
     """Adapter for OpenAI-compatible Responses requests."""
 
-    def __init__(self, provider: _OpenAIProviderFacade) -> None:
+    def __init__(self, provider: _OpenAIModelFacade) -> None:
         self._provider = provider
 
     async def complete(

@@ -14,7 +14,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import World
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.openai_provider import OpenAIProvider
+from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import ResponsesAPICallEvent, EntityId
 from ecs_agent.types import InterruptionReason, Message, ToolSchema
@@ -106,7 +106,7 @@ async def test_responses_api_complete_non_streaming_sends_correct_request() -> N
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(
             api_key="test-key",
             base_url="https://test.openai.com/v1",
@@ -167,7 +167,7 @@ async def test_responses_api_complete_non_streaming_parses_response() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
     provider._client = mock_client
@@ -203,7 +203,7 @@ async def test_responses_api_complete_non_streaming_with_tools() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
     provider._client = mock_client
@@ -242,7 +242,7 @@ async def test_responses_api_complete_non_streaming_state_component_updates_on_s
 
     world = World()
     entity = world.create_entity()
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
     provider._client = mock_client
@@ -286,7 +286,7 @@ async def test_responses_api_complete_non_streaming_previous_response_id_from_st
 
     world = World()
     entity = world.create_entity()
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
     provider._client = mock_client
@@ -317,7 +317,7 @@ async def test_responses_api_complete_non_streaming_falls_back_when_disabled() -
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(
             api_key="test-key",
             base_url="https://test.openai.com/v1",
@@ -362,7 +362,7 @@ async def test_responses_api_complete_non_streaming_falls_back_on_404() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.side_effect = [responses_error, fallback_response]
 
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(
             api_key="test-key",
             base_url="https://test.openai.com/v1",
@@ -419,7 +419,7 @@ async def test_responses_api_streaming_yields_stream_deltas() -> None:
     mock_client.stream = MagicMock()
     mock_client.stream.return_value.__aenter__.return_value = mock_response
 
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
     provider._client = mock_client
@@ -465,7 +465,7 @@ async def test_responses_api_streaming_handles_tool_calls() -> None:
     mock_client.stream = MagicMock()
     mock_client.stream.return_value.__aenter__.return_value = mock_response
 
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
     provider._client = mock_client
@@ -511,7 +511,7 @@ async def test_responses_api_streaming_emits_done() -> None:
     mock_client.stream = MagicMock()
     mock_client.stream.return_value.__aenter__.return_value = mock_response
 
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
     provider._client = mock_client
@@ -561,7 +561,7 @@ async def test_responses_api_streaming_previous_response_id_updates_state_compon
 
     world = World()
     entity = world.create_entity()
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
     provider._client = mock_client
@@ -599,7 +599,7 @@ async def test_responses_api_non_streaming_previous_response_id_preserved_on_fai
 
     world = World()
     entity = world.create_entity()
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
     provider._client = mock_client
@@ -655,7 +655,7 @@ async def test_responses_api_streaming_previous_response_id_preserved_on_interru
     mock_client.stream = MagicMock()
     mock_client.stream.return_value.__aenter__.return_value = mock_response
 
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
     provider._client = mock_client

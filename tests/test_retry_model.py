@@ -4,7 +4,7 @@ import asyncio
 import httpx
 import pytest
 
-from ecs_agent.providers.retry_provider import RetryProvider
+from ecs_agent.providers.retry_model import RetryModel
 from ecs_agent.types import CompletionResult, Message, RetryConfig, StreamDelta
 
 
@@ -66,7 +66,7 @@ class SequencedProvider:
 @pytest.mark.asyncio
 async def test_successful_call_no_retry() -> None:
     provider = SequencedProvider(outcomes=[_result("done")])
-    retry_provider = RetryProvider(provider)
+    retry_provider = RetryModel(provider)
 
     result = await retry_provider.complete([Message(role="user", content="hello")])
 
@@ -77,7 +77,7 @@ async def test_successful_call_no_retry() -> None:
 @pytest.mark.asyncio
 async def test_retry_on_429_with_eventual_success() -> None:
     provider = SequencedProvider(outcomes=[_http_status_error(429), _result("ok")])
-    retry_provider = RetryProvider(
+    retry_provider = RetryModel(
         provider,
         RetryConfig(max_attempts=3, min_wait=0.0, max_wait=0.0),
     )
@@ -91,7 +91,7 @@ async def test_retry_on_429_with_eventual_success() -> None:
 @pytest.mark.asyncio
 async def test_retry_on_500_with_eventual_success() -> None:
     provider = SequencedProvider(outcomes=[_http_status_error(500), _result("ok")])
-    retry_provider = RetryProvider(
+    retry_provider = RetryModel(
         provider,
         RetryConfig(max_attempts=3, min_wait=0.0, max_wait=0.0),
     )
@@ -114,7 +114,7 @@ async def test_max_retries_exhausted_raises() -> None:
             httpx.ConnectError("no route", request=request),
         ]
     )
-    retry_provider = RetryProvider(
+    retry_provider = RetryModel(
         provider,
         RetryConfig(max_attempts=3, min_wait=0.0, max_wait=0.0),
     )
@@ -130,7 +130,7 @@ async def test_streaming_calls_bypass_retry() -> None:
     request = httpx.Request("POST", "https://example.test/v1/chat/completions")
     stream_error = httpx.ConnectError("stream dropped", request=request)
     provider = SequencedProvider(outcomes=[], stream_response=stream_error)
-    retry_provider = RetryProvider(provider, RetryConfig(max_attempts=5))
+    retry_provider = RetryModel(provider, RetryConfig(max_attempts=5))
 
     with pytest.raises(httpx.ConnectError):
         await retry_provider.complete(
@@ -158,7 +158,7 @@ async def test_retry_config_custom_values_applied(
         outcomes=[httpx.ConnectError("flaky", request=request), _result("ok")]
     )
     config = RetryConfig(max_attempts=2, multiplier=3.0, min_wait=5.0, max_wait=5.0)
-    retry_provider = RetryProvider(provider, config)
+    retry_provider = RetryModel(provider, config)
 
     result = await retry_provider.complete([Message(role="user", content="x")])
 
@@ -186,7 +186,7 @@ async def test_exponential_backoff_timing(monkeypatch: pytest.MonkeyPatch) -> No
         ]
     )
     config = RetryConfig(max_attempts=4, multiplier=1.0, min_wait=0.0, max_wait=10.0)
-    retry_provider = RetryProvider(provider, config)
+    retry_provider = RetryModel(provider, config)
 
     result = await retry_provider.complete([Message(role="user", content="x")])
 

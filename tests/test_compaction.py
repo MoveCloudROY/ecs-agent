@@ -16,7 +16,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import World
 from ecs_agent.serialization import WorldSerializer
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.providers.registry import ProviderRegistry
 from ecs_agent.systems.compaction import DEFAULT_COMPACTION_PROMPT, CompactionSystem
 import ecs_agent.systems.compaction as compaction_module
@@ -39,7 +39,7 @@ from ecs_agent.types import (
 from ecs_agent.components.definitions import ContextEntry
 
 
-class RecordingFakeProvider(FakeProvider):
+class RecordingFakeModel(FakeModel):
     def __init__(self, responses: list[CompletionResult]) -> None:
         super().__init__(responses=responses)
         self.calls: list[tuple[list[Message], list[ToolSchema] | None, bool]] = []
@@ -58,7 +58,7 @@ class RecordingFakeProvider(FakeProvider):
         return result
 
 
-class RegistryBackedRecordingFakeProvider(RecordingFakeProvider):
+class RegistryBackedRecordingFakeModel(RecordingFakeModel):
     def __init__(
         self,
         responses: list[CompletionResult],
@@ -185,7 +185,7 @@ def test_current_compaction_summary_component_can_be_stored_independently() -> N
 @pytest.mark.asyncio
 async def test_compaction_triggers_when_threshold_exceeded() -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="brief"))]
     )
     entity_id = world.create_entity()
@@ -215,7 +215,7 @@ async def test_compaction_triggers_when_threshold_exceeded() -> None:
 @pytest.mark.asyncio
 async def test_compaction_full_history_method_replaces_all_non_system_history() -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="full summary"))
         ]
@@ -265,7 +265,7 @@ async def test_compaction_predrop_then_compact_uses_budgeted_view_without_mutati
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="budgeted summary")
@@ -346,7 +346,7 @@ async def test_compaction_summary_input_includes_canonical_subagent_session_stat
     None
 ):
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="subagent-aware summary")
@@ -422,7 +422,7 @@ async def test_compaction_summary_input_includes_canonical_subagent_session_stat
 @pytest.mark.asyncio
 async def test_compaction_calls_llm_with_expected_summarization_prompt() -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="s"))]
     )
     entity_id = world.create_entity()
@@ -460,7 +460,7 @@ async def test_compaction_calls_llm_with_expected_summarization_prompt() -> None
 @pytest.mark.asyncio
 async def test_summary_is_stored_in_archive_component() -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="saved summary"))
         ]
@@ -493,7 +493,7 @@ async def test_compaction_publishes_event_with_original_and_compacted_token_coun
     None
 ):
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="s"))]
     )
     entity_id = world.create_entity()
@@ -524,7 +524,7 @@ async def test_compaction_publishes_event_with_original_and_compacted_token_coun
 @pytest.mark.asyncio
 async def test_no_compaction_when_threshold_not_exceeded() -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="unused"))
         ]
@@ -551,7 +551,7 @@ async def test_no_compaction_when_threshold_not_exceeded() -> None:
 @pytest.mark.asyncio
 async def test_system_message_is_preserved_during_compaction() -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="summary"))
         ]
@@ -591,7 +591,7 @@ async def test_compaction_updates_current_summary_and_clears_rendered_prompt_cac
     None
 ):
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="state-backed summary")
@@ -636,7 +636,7 @@ async def test_repeated_compaction_folds_previous_current_summary_into_next_summ
     None
 ):
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="first summary")
@@ -710,7 +710,7 @@ def test_compaction_prompt_render_does_not_mutate_runtime_state() -> None:
     world.add_component(
         entity_id,
         LLMComponent(
-            model=FakeProvider(responses=[]),
+            model=FakeModel(responses=[]),
             system_prompt="runtime llm prompt",
         ),
     )
@@ -759,13 +759,13 @@ async def test_compaction_uses_summary_model_id_when_set(
             }
         }
     )
-    primary_provider = RegistryBackedRecordingFakeProvider(
+    primary_provider = RegistryBackedRecordingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="unused"))
         ],
         registry=registry,
     )
-    summary_provider = RecordingFakeProvider(
+    summary_provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="model-id summary")
@@ -778,7 +778,7 @@ async def test_compaction_uses_summary_model_id_when_set(
         *,
         registry: ProviderRegistry,
         api_key: str | None = None,
-    ) -> RecordingFakeProvider:
+    ) -> RecordingFakeModel:
         assert model_id == "fake/test-model"
         assert registry is primary_provider.registry
         assert api_key is None
@@ -821,7 +821,7 @@ async def test_compaction_falls_back_to_legacy_summary_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="legacy summary")
@@ -926,7 +926,7 @@ def test_overflow_pruning_logs_observable_event(
 @pytest.mark.asyncio
 async def test_compaction_uses_default_prompt_when_no_template() -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="default prompt summary")
@@ -962,7 +962,7 @@ async def test_compaction_uses_default_prompt_when_no_template() -> None:
 @pytest.mark.asyncio
 async def test_compaction_renders_custom_prompt_template() -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="custom prompt summary")

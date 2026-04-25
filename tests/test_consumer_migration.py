@@ -12,7 +12,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import World
 from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.systems.planning import PlanningSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.replanning import ReplanningSystem
@@ -20,7 +20,7 @@ from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSyst
 from ecs_agent.types import CompletionResult, Message
 
 
-class RecordingFakeProvider(FakeProvider):
+class RecordingFakeModel(FakeModel):
     def __init__(self, responses: list[CompletionResult]) -> None:
         super().__init__(responses=responses)
         self.calls: list[list[Message]] = []
@@ -38,7 +38,7 @@ class RecordingFakeProvider(FakeProvider):
 @pytest.mark.asyncio
 async def test_reasoning_uses_rendered_system_prompt() -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
@@ -58,7 +58,7 @@ async def test_reasoning_uses_rendered_system_prompt() -> None:
 @pytest.mark.asyncio
 async def test_reasoning_uses_rendered_user_prompt() -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
@@ -83,7 +83,7 @@ async def test_reasoning_uses_rendered_user_prompt() -> None:
 @pytest.mark.asyncio
 async def test_planning_uses_rendered_system_prompt() -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
@@ -104,7 +104,7 @@ async def test_planning_uses_rendered_system_prompt() -> None:
 @pytest.mark.asyncio
 async def test_replanning_uses_rendered_system_prompt() -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -138,7 +138,7 @@ async def test_replanning_uses_rendered_system_prompt() -> None:
 @pytest.mark.asyncio
 async def test_no_rendered_component_fallback() -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()

@@ -1,6 +1,6 @@
 """Integration tests for UI Design Flow E2E example.
 
-Tests deterministic UI design flow execution with FakeProvider and
+Tests deterministic UI design flow execution with FakeModel and
 error handling without LLM_API_KEY requirement. All tests are offline.
 """
 
@@ -17,9 +17,9 @@ import pytest
 from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.components.definitions import TerminalComponent
 from ecs_agent.core import World
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.openai_provider import OpenAIProvider
+from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.skills.discovery import DiscoveryManager
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.skill import Skill
@@ -41,7 +41,7 @@ MODEL = os.getenv("LLM_MODEL", "qwen3.5-flash")
 
 @pytest.mark.asyncio
 async def test_ui_design_flow_fake_provider(tmp_path: Path) -> None:
-    """Full E2E test with FakeProvider and simulated input."""
+    """Full E2E test with FakeModel and simulated input."""
     # Setup: Copy example structure to tmp_path
     example_base = tmp_path / "ui-design-flow"
     example_base.mkdir()
@@ -58,8 +58,8 @@ async def test_ui_design_flow_fake_provider(tmp_path: Path) -> None:
     # Create World
     world = World()
 
-    # Create FakeProvider with deterministic responses
-    provider = FakeProvider(
+    # Create FakeModel with deterministic responses
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -160,7 +160,7 @@ async def test_ui_design_flow_missing_prompt(tmp_path: Path) -> None:
     # Create World
     world = World()
 
-    # Create FakeProvider
+    # Create FakeModel
 
     # Create Agent Entity
     agent_id = world.create_entity()
@@ -290,7 +290,7 @@ async def test_ui_design_flow_real_llm(
     world = World()
 
     # Create OpenAI-compatible provider with DashScope
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=ProviderConfig(
             provider_id="openai",
             base_url=BASE_URL,
@@ -426,10 +426,10 @@ async def test_ui_design_flow_real_llm(
 
 @pytest.mark.asyncio
 async def test_ui_design_flow_cli_automation() -> None:
-    """Test CLI automation with piped stdin input (FakeProvider mode).
+    """Test CLI automation with piped stdin input (FakeModel mode).
 
     This test simulates interactive CLI usage by piping stdin to main.py
-    without LLM_API_KEY set, ensuring FakeProvider fallback is used.
+    without LLM_API_KEY set, ensuring FakeModel fallback is used.
     Verifies the agent responds to user input and conversation occurs.
     """
     # Input sequence: Design request → continue → exit
@@ -442,7 +442,7 @@ async def test_ui_design_flow_cli_automation() -> None:
         text=True,
         capture_output=True,
         cwd=Path(__file__).parent.parent.parent,
-        env={**os.environ, "LLM_API_KEY": ""},  # Force FakeProvider
+        env={**os.environ, "LLM_API_KEY": ""},  # Force FakeModel
     )
 
     # Verify successful execution
@@ -615,7 +615,7 @@ async def test_ui_design_flow_ui_prompt_writes_artifact(tmp_path: Path) -> None:
     world = World()
     agent_id = world.create_entity()
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(

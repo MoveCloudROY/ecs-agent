@@ -4,7 +4,7 @@ import json
 import pytest
 from unittest.mock import AsyncMock, Mock, MagicMock
 from typing import AsyncIterator
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.types import Message, CompletionResult, ToolSchema, ToolCall, Usage
 
 
@@ -32,10 +32,10 @@ def mock_litellm(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 async def test_constructor_instantiation(mock_litellm) -> None:
-    """Test LiteLLMProvider can be instantiated with required parameters."""
-    from ecs_agent.providers.litellm_provider import LiteLLMProvider
+    """Test LiteLLMModel can be instantiated with required parameters."""
+    from ecs_agent.providers.litellm_model import LiteLLMModel
 
-    provider = LiteLLMProvider(
+    provider = LiteLLMModel(
         model="anthropic/claude-3-opus-20240229",
         api_key="test-key",
         base_url="https://test.api.com/v1",
@@ -51,32 +51,32 @@ async def test_import_guard_raises_when_litellm_missing(
     # Force HAS_LITELLM=False on the actual model module
     monkeypatch.setattr("ecs_agent.providers.litellm_model.HAS_LITELLM", False)
 
-    from ecs_agent.providers.litellm_provider import LiteLLMProvider
+    from ecs_agent.providers.litellm_model import LiteLLMModel
 
     with pytest.raises(ImportError, match="litellm"):
-        LiteLLMProvider(model="gpt-4o", api_key="test-key")
+        LiteLLMModel(model="gpt-4o", api_key="test-key")
 
 
 @pytest.mark.asyncio
 async def test_protocol_compliance(mock_litellm) -> None:
-    """Test LiteLLMProvider satisfies LLMProvider Protocol."""
-    from ecs_agent.providers.litellm_provider import LiteLLMProvider
+    """Test LiteLLMModel satisfies LLMModel Protocol."""
+    from ecs_agent.providers.litellm_model import LiteLLMModel
 
-    provider = LiteLLMProvider(model="gpt-4o", api_key="test-key")
-    assert isinstance(provider, LLMProvider)
+    provider = LiteLLMModel(model="gpt-4o", api_key="test-key")
+    assert isinstance(provider, LLMModel)
 
 
 @pytest.mark.asyncio
 async def test_complete_returns_completion_result(mock_litellm) -> None:
     """Test complete() returns CompletionResult with message and usage."""
-    from ecs_agent.providers.litellm_provider import LiteLLMProvider
+    from ecs_agent.providers.litellm_model import LiteLLMModel
 
     mock_litellm.acompletion.return_value = {
         "choices": [{"message": {"role": "assistant", "content": "test response"}}],
         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
     }
 
-    provider = LiteLLMProvider(model="gpt-4o", api_key="test-key")
+    provider = LiteLLMModel(model="gpt-4o", api_key="test-key")
     messages = [Message(role="user", content="test message")]
     result = await provider.complete(messages)
 
@@ -92,7 +92,7 @@ async def test_complete_returns_completion_result(mock_litellm) -> None:
 @pytest.mark.asyncio
 async def test_complete_handles_tool_calls(mock_litellm) -> None:
     """Test complete() parses tool calls correctly."""
-    from ecs_agent.providers.litellm_provider import LiteLLMProvider
+    from ecs_agent.providers.litellm_model import LiteLLMModel
 
     mock_litellm.acompletion.return_value = {
         "choices": [
@@ -116,7 +116,7 @@ async def test_complete_handles_tool_calls(mock_litellm) -> None:
         "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
     }
 
-    provider = LiteLLMProvider(model="gpt-4o", api_key="test-key")
+    provider = LiteLLMModel(model="gpt-4o", api_key="test-key")
     messages = [Message(role="user", content="What's the weather?")]
     result = await provider.complete(messages)
 
@@ -130,7 +130,7 @@ async def test_complete_handles_tool_calls(mock_litellm) -> None:
 @pytest.mark.asyncio
 async def test_stream_yields_deltas(mock_litellm) -> None:
     """Test stream() yields StreamDelta objects."""
-    from ecs_agent.providers.litellm_provider import LiteLLMProvider
+    from ecs_agent.providers.litellm_model import LiteLLMModel
     from ecs_agent.types import StreamDelta
 
     async def mock_stream():
@@ -149,7 +149,7 @@ async def test_stream_yields_deltas(mock_litellm) -> None:
 
     mock_litellm.acompletion.return_value = mock_stream()
 
-    provider = LiteLLMProvider(model="gpt-4o", api_key="test-key")
+    provider = LiteLLMModel(model="gpt-4o", api_key="test-key")
     messages = [Message(role="user", content="test")]
     deltas = []
     result = await provider.complete(messages, stream=True)
@@ -167,9 +167,9 @@ async def test_stream_yields_deltas(mock_litellm) -> None:
 @pytest.mark.asyncio
 async def test_convert_messages_serializes_tool_call_arguments_as_json_string(mock_litellm) -> None:
     """Test _convert_messages_to_openai serializes tool call arguments as JSON string, not dict."""
-    from ecs_agent.providers.litellm_provider import LiteLLMProvider
+    from ecs_agent.providers.litellm_model import LiteLLMModel
 
-    provider = LiteLLMProvider(
+    provider = LiteLLMModel(
         model="anthropic/claude-3-opus-20240229",
         api_key="test-key",
     )

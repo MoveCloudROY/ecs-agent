@@ -7,8 +7,8 @@ This example is split into four self-contained parts:
 4. Repeated compaction with summary folding across rounds
 
 It supports dual-mode execution:
-- Without ``LLM_API_KEY``: uses ``FakeProvider`` and runs deterministically
-- With ``LLM_API_KEY``: uses ``OpenAIProvider`` with a real OpenAI-compatible API
+- Without ``LLM_API_KEY``: uses ``FakeModel`` and runs deterministically
+- With ``LLM_API_KEY``: uses ``OpenAIModel`` with a real OpenAI-compatible API
 
 Environment variables for real-LLM mode:
     LLM_API_KEY   - API key for the OpenAI-compatible provider
@@ -32,9 +32,9 @@ from ecs_agent.components import (
 from ecs_agent.components.definitions import CurrentCompactionSummaryComponent
 from ecs_agent.core import World
 from ecs_agent.prompts.message_assembly import apply_outbound_budget
-from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers import FakeModel, OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -70,9 +70,9 @@ def _get_model_name() -> str:
     return "fake"
 
 
-def _create_openai_provider() -> OpenAIProvider:
-    """Build OpenAIProvider from environment variables."""
-    return OpenAIProvider(
+def _create_openai_provider() -> OpenAIModel:
+    """Build OpenAIModel from environment variables."""
+    return OpenAIModel(
         config=ProviderConfig(
             provider_id="openai",
             base_url=os.environ.get(
@@ -173,11 +173,11 @@ def _subscribe_compaction_events(world: World) -> None:
     world.event_bus.subscribe(CompactionCompleteEvent, _on_compaction)
 
 
-def _create_provider(summary_responses: list[str]) -> LLMProvider:
+def _create_provider(summary_responses: list[str]) -> LLMModel:
     """Create a real or fake provider for the demo part."""
     if os.environ.get("LLM_API_KEY", ""):
         return _create_openai_provider()
-    return FakeProvider(
+    return FakeModel(
         responses=[_make_summary_response(text) for text in summary_responses]
     )
 
@@ -469,7 +469,7 @@ async def part_4_repeated_compaction() -> None:
 
     world = World()
     provider = (
-        FakeProvider(
+        FakeModel(
             responses=[
                 _make_summary_response("Round 1 summary: user asked about ML basics."),
                 _make_summary_response(
@@ -539,17 +539,17 @@ async def main() -> None:
     print("=" * 70)
     print("COMPACTION DEMO")
     print("Demonstrating full-history compaction, pre-drop compaction, custom prompts,")
-    print("and repeated summary folding with FakeProvider/OpenAI dual mode.")
+    print("and repeated summary folding with FakeModel/OpenAI dual mode.")
     print("=" * 70)
 
     if os.environ.get("LLM_API_KEY", ""):
-        print(f"Using OpenAIProvider with model: {_get_model_name()}")
+        print(f"Using OpenAIModel with model: {_get_model_name()}")
         print(
             "Base URL: "
             f"{os.environ.get('LLM_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1')}"
         )
     else:
-        print("No LLM_API_KEY provided. Using FakeProvider for deterministic output.")
+        print("No LLM_API_KEY provided. Using FakeModel for deterministic output.")
         print("Set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL to run against a real API.")
 
     await part_1_full_history()

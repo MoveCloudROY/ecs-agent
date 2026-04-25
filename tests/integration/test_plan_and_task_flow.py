@@ -587,8 +587,8 @@ async def test_plan_task_cli_automation() -> None:
     )
 
     output = result.stdout.decode("utf-8", errors="replace")
-    assert "OpenAIProvider" in output, (
-        f"Expected OpenAIProvider indication in output. Got:\n{output}"
+    assert "OpenAIModel" in output, (
+        f"Expected OpenAIModel indication in output. Got:\n{output}"
     )
 
 
@@ -1816,14 +1816,14 @@ def test_runtime_setup_does_not_intercept_slash_commands(tmp_path: Path) -> None
 def _build_test_world(
     tmp_path: Path,
 ) -> tuple[World, object, ArtifactAdapter, list[RuntimeState | None]]:
-    from ecs_agent.providers import FakeProvider
+    from ecs_agent.providers import FakeModel
     from ecs_agent.types import CompletionResult, Message
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import (
         PlanTaskScratchbookAdapter,
     )
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ready"))]
     )
 
@@ -2196,13 +2196,13 @@ def test_slug_from_description_special_chars_stripped() -> None:
 def test_plan_start_handler_sets_workflow_id_from_description(
     tmp_path: Path,
 ) -> None:
-    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.providers.fake_model import FakeModel
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import (
         PlanTaskScratchbookAdapter,
     )
 
-    provider = FakeProvider(responses=["ok"])
+    provider = FakeModel(responses=["ok"])
     world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
         provider=provider,
         model="fake",
@@ -2280,11 +2280,11 @@ async def test_edit_file_raises_on_invalid_edits_json(tmp_path: Path) -> None:
 
 
 async def test_derive_workflow_id_uses_llm_slug() -> None:
-    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.providers.fake_model import FakeModel
     from ecs_agent.types import CompletionResult, Message
     from examples.e2e.plan_and_task.runtime import derive_workflow_id_from_llm
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="writing-assistant-tool")
@@ -2296,11 +2296,11 @@ async def test_derive_workflow_id_uses_llm_slug() -> None:
 
 
 async def test_derive_workflow_id_normalizes_llm_output() -> None:
-    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.providers.fake_model import FakeModel
     from ecs_agent.types import CompletionResult, Message
     from examples.e2e.plan_and_task.runtime import derive_workflow_id_from_llm
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="Writing Assistant Tool!")
@@ -2312,14 +2312,14 @@ async def test_derive_workflow_id_normalizes_llm_output() -> None:
 
 
 async def test_derive_workflow_id_falls_back_on_empty_response() -> None:
-    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.providers.fake_model import FakeModel
     from ecs_agent.types import CompletionResult, Message
     from examples.e2e.plan_and_task.runtime import (
         derive_workflow_id_from_llm,
         slug_from_description,
     )
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="   "))]
     )
     result = await derive_workflow_id_from_llm("build a task manager", provider)
@@ -2328,14 +2328,14 @@ async def test_derive_workflow_id_falls_back_on_empty_response() -> None:
 
 
 async def test_derive_workflow_id_falls_back_on_provider_error() -> None:
-    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.providers.fake_model import FakeModel
     from ecs_agent.types import CompletionResult, Message
     from examples.e2e.plan_and_task.runtime import (
         derive_workflow_id_from_llm,
         slug_from_description,
     )
 
-    provider = FakeProvider(responses=[])
+    provider = FakeModel(responses=[])
     result = await derive_workflow_id_from_llm("build a task manager", provider)
     assert result == slug_from_description("build a task manager")
 
@@ -3138,11 +3138,11 @@ def test_finalize_blocked_without_plan_qa_review(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_plan_write_command_transitions_phase(tmp_path: Path) -> None:
     from ecs_agent.components import UserPromptConfigComponent
-    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.providers.fake_model import FakeModel
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
-    provider = FakeProvider(responses=["ok"])
+    provider = FakeModel(responses=["ok"])
     world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
         provider=provider, model="fake", base_dir=tmp_path
     )
@@ -3173,11 +3173,11 @@ async def test_plan_write_command_transitions_phase(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_plan_qa_review_command_approved(tmp_path: Path) -> None:
     from ecs_agent.components import UserPromptConfigComponent
-    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.providers.fake_model import FakeModel
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
-    provider = FakeProvider(responses=["ok"])
+    provider = FakeModel(responses=["ok"])
     world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
         provider=provider, model="fake", base_dir=tmp_path
     )
@@ -3208,11 +3208,11 @@ async def test_plan_qa_review_command_approved(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_plan_qa_review_command_invalid_verdict(tmp_path: Path) -> None:
     from ecs_agent.components import UserPromptConfigComponent
-    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.providers.fake_model import FakeModel
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
-    provider = FakeProvider(responses=["ok"])
+    provider = FakeModel(responses=["ok"])
     world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
         provider=provider, model="fake", base_dir=tmp_path
     )
@@ -3284,10 +3284,10 @@ def test_handle_write_plan_completed_rejects_wrong_phase(tmp_path: Path) -> None
 
 def test_plan_writer_subagent_registered(tmp_path: Path) -> None:
     from ecs_agent.components.definitions import SubagentRegistryComponent
-    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.providers.fake_model import FakeModel
     from examples.e2e.plan_and_task.main import build_plan_task_world
 
-    provider = FakeProvider(responses=["ok"])
+    provider = FakeModel(responses=["ok"])
     world, agent_id, _, _ = build_plan_task_world(
         provider=provider, model="fake", base_dir=tmp_path
     )
@@ -3300,11 +3300,11 @@ def test_plan_writer_subagent_registered(tmp_path: Path) -> None:
 
 
 def test_writing_plans_skill_registered_in_catalog(tmp_path: Path) -> None:
-    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.providers.fake_model import FakeModel
     from ecs_agent.skills import catalog as _catalog
     from examples.e2e.plan_and_task.main import build_plan_task_world
 
-    provider = FakeProvider(responses=["ok"])
+    provider = FakeModel(responses=["ok"])
     build_plan_task_world(provider=provider, model="fake", base_dir=tmp_path)
 
     descriptor = _catalog.lookup("writing-plans")
@@ -3389,12 +3389,12 @@ def test_billing_subscriber_subscribe_wires_event_bus(tmp_path: Path) -> None:
 
 def test_billing_subscriber_wired_in_build_plan_task_world(tmp_path: Path) -> None:
     """build_plan_task_world + wiring billing subscriber does not raise."""
-    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.providers.fake_model import FakeModel
     from ecs_agent.accounting.models import LLMInvocationEvent
     from examples.e2e.plan_and_task.billing import BillingSubscriber
     from examples.e2e.plan_and_task.main import build_plan_task_world
 
-    provider = FakeProvider(responses=["ok"])
+    provider = FakeModel(responses=["ok"])
     world, _, _, _ = build_plan_task_world(provider=provider, model="fake", base_dir=tmp_path)
 
     sub = BillingSubscriber()
@@ -3405,12 +3405,12 @@ def test_billing_subscriber_wired_in_build_plan_task_world(tmp_path: Path) -> No
 
 def test_accounting_subscriber_wired_in_main(tmp_path: Path) -> None:
     """AccountingSubscriber can be subscribed to the world event_bus without error."""
-    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.providers.fake_model import FakeModel
     from ecs_agent.accounting import AccountingSubscriber
     from ecs_agent.accounting.models import LLMInvocationEvent
     from examples.e2e.plan_and_task.main import build_plan_task_world
 
-    provider = FakeProvider(responses=["ok"])
+    provider = FakeModel(responses=["ok"])
     world, _, _, _ = build_plan_task_world(provider=provider, model="fake", base_dir=tmp_path)
 
     acc = AccountingSubscriber()
@@ -3612,11 +3612,11 @@ async def test_plan_resume_draft_qa_approved_injects_write_plan_message(
     tmp_path: Path,
 ) -> None:
     from ecs_agent.components import ConversationComponent, UserPromptConfigComponent
-    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.providers.fake_model import FakeModel
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
-    provider = FakeProvider(responses=["ok"])
+    provider = FakeModel(responses=["ok"])
     world, agent_id, _adapter_ref, _runtime_state = build_plan_task_world(
         provider=provider, model="fake", base_dir=tmp_path
     )
@@ -3651,11 +3651,11 @@ async def test_plan_resume_write_plan_phase_injects_write_plan_message(
     tmp_path: Path,
 ) -> None:
     from ecs_agent.components import ConversationComponent, UserPromptConfigComponent
-    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.providers.fake_model import FakeModel
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
-    provider = FakeProvider(responses=["ok"])
+    provider = FakeModel(responses=["ok"])
     world, agent_id, _adapter_ref, _runtime_state = build_plan_task_world(
         provider=provider, model="fake", base_dir=tmp_path
     )
@@ -3689,11 +3689,11 @@ async def test_plan_resume_plan_qa_approved_advances_to_finalized(
     tmp_path: Path,
 ) -> None:
     from ecs_agent.components import ConversationComponent, UserPromptConfigComponent
-    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.providers.fake_model import FakeModel
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
-    provider = FakeProvider(responses=["ok"])
+    provider = FakeModel(responses=["ok"])
     world, agent_id, _adapter_ref, _runtime_state = build_plan_task_world(
         provider=provider, model="fake", base_dir=tmp_path
     )
@@ -3727,11 +3727,11 @@ async def test_plan_resume_draft_interview_no_message_injected(
     tmp_path: Path,
 ) -> None:
     from ecs_agent.components import ConversationComponent, UserPromptConfigComponent
-    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.providers.fake_model import FakeModel
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
-    provider = FakeProvider(responses=["ok"])
+    provider = FakeModel(responses=["ok"])
     world, agent_id, _adapter_ref, _runtime_state = build_plan_task_world(
         provider=provider, model="fake", base_dir=tmp_path
     )
@@ -3912,11 +3912,11 @@ def test_controller_transition_sets_complete_then_active(tmp_path: Path) -> None
 
 def test_advisor_qa_subagents_inherit_readonly_tools_only(tmp_path: Path) -> None:
     from ecs_agent.components import SubagentRegistryComponent
-    from ecs_agent.providers import FakeProvider
+    from ecs_agent.providers import FakeModel
     from ecs_agent.types import CompletionResult, Message
     from examples.e2e.plan_and_task.main import build_plan_task_world
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     world, agent_id, _, _ = build_plan_task_world(
@@ -3983,12 +3983,12 @@ def test_plan_qa_prompt_contains_read_file_path_not_content() -> None:
 
 def test_plan_qa_subagent_registered_with_plan_qa_system_prompt(tmp_path: Path) -> None:
     from ecs_agent.components import SubagentRegistryComponent
-    from ecs_agent.providers import FakeProvider
+    from ecs_agent.providers import FakeModel
     from ecs_agent.types import CompletionResult, Message
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.prompts import PLAN_QA_REVIEW_SYSTEM_PROMPT, QA_SYSTEM_PROMPT
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     world, agent_id, _, _ = build_plan_task_world(
@@ -4046,11 +4046,11 @@ def test_task_main_agent_system_prompt_exists() -> None:
 
 def test_build_plan_task_world_uses_plan_main_agent_system_prompt(tmp_path: Path) -> None:
     from ecs_agent.prompts.contracts import SystemPromptConfigSpec
-    from ecs_agent.providers.fake_provider import FakeProvider
+    from ecs_agent.providers.fake_model import FakeModel
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.prompts import PLAN_MAIN_AGENT_SYSTEM_PROMPT
 
-    provider = FakeProvider(responses=["ok"])
+    provider = FakeModel(responses=["ok"])
     world, agent_id, _, _ = build_plan_task_world(
         provider=provider, model="fake", base_dir=tmp_path
     )

@@ -55,7 +55,7 @@ def test_configure_logging_filters_by_module_level(capsys) -> None:
         module_levels={"ecs_agent.providers": "WARNING"},
     )
 
-    provider_logger = get_logger("ecs_agent.providers.openai_provider")
+    provider_logger = get_logger("ecs_agent.providers.openai_model")
     system_logger = get_logger("ecs_agent.systems.reasoning")
 
     provider_logger.debug("provider_debug_hidden")

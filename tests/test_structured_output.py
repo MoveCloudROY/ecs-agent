@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, Mock, patch
 from pydantic import BaseModel
 import httpx
 
-from ecs_agent.providers.openai_provider import (
-    OpenAIProvider,
+from ecs_agent.providers.openai_model import (
+    OpenAIModel,
     pydantic_to_response_format,
 )
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
@@ -79,12 +79,12 @@ class TestPydanticToResponseFormat(unittest.TestCase):
         self.assertIn("street", result["json_schema"]["schema"]["properties"])
 
 
-class TestOpenAIProviderResponseFormat(unittest.TestCase):
-    """Test OpenAIProvider response_format parameter support."""
+class TestOpenAIModelResponseFormat(unittest.TestCase):
+    """Test OpenAIModel response_format parameter support."""
 
     def setUp(self):
         """Set up test provider."""
-        self.provider = OpenAIProvider(
+        self.provider = OpenAIModel(
             config=ProviderConfig(
                 provider_id="openai",
                 base_url="https://api.example.com/v1",
@@ -258,35 +258,35 @@ def async_test(coro):
 
 
 # Apply decorator to async test methods
-TestOpenAIProviderResponseFormat.test_response_format_none_unchanged = async_test(
-    TestOpenAIProviderResponseFormat.test_response_format_none_unchanged
+TestOpenAIModelResponseFormat.test_response_format_none_unchanged = async_test(
+    TestOpenAIModelResponseFormat.test_response_format_none_unchanged
 )
-TestOpenAIProviderResponseFormat.test_response_format_json_object_included = async_test(
-    TestOpenAIProviderResponseFormat.test_response_format_json_object_included
+TestOpenAIModelResponseFormat.test_response_format_json_object_included = async_test(
+    TestOpenAIModelResponseFormat.test_response_format_json_object_included
 )
-TestOpenAIProviderResponseFormat.test_response_format_json_schema_included = async_test(
-    TestOpenAIProviderResponseFormat.test_response_format_json_schema_included
+TestOpenAIModelResponseFormat.test_response_format_json_schema_included = async_test(
+    TestOpenAIModelResponseFormat.test_response_format_json_schema_included
 )
-TestOpenAIProviderResponseFormat.test_request_body_structure = async_test(
-    TestOpenAIProviderResponseFormat.test_request_body_structure
+TestOpenAIModelResponseFormat.test_request_body_structure = async_test(
+    TestOpenAIModelResponseFormat.test_request_body_structure
 )
-TestOpenAIProviderResponseFormat.test_with_tools_and_response_format = async_test(
-    TestOpenAIProviderResponseFormat.test_with_tools_and_response_format
+TestOpenAIModelResponseFormat.test_with_tools_and_response_format = async_test(
+    TestOpenAIModelResponseFormat.test_with_tools_and_response_format
 )
 
 
 import pytest
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.types import CompletionResult
 
 
-class TestFakeProviderResponseFormat(unittest.TestCase):
-    """Test FakeProvider response_format parameter support."""
+class TestFakeModelResponseFormat(unittest.TestCase):
+    """Test FakeModel response_format parameter support."""
 
-    def test_fake_provider_stores_response_format(self):
-        """FakeProvider should store response_format for test assertions."""
+    def test_fake_model_stores_response_format(self):
+        """FakeModel should store response_format for test assertions."""
         resp = CompletionResult(message=Message(role="assistant", content="Response"))
-        provider = FakeProvider(responses=[resp])
+        provider = FakeModel(responses=[resp])
 
         response_format = {"type": "json_object"}
 
@@ -301,10 +301,10 @@ class TestFakeProviderResponseFormat(unittest.TestCase):
 
         self.assertEqual(provider.last_response_format, {"type": "json_object"})
 
-    def test_fake_provider_protocol_conformance_with_response_format(self):
-        """FakeProvider should conform to Protocol with response_format parameter."""
+    def test_fake_model_protocol_conformance_with_response_format(self):
+        """FakeModel should conform to Protocol with response_format parameter."""
         resp = CompletionResult(message=Message(role="assistant", content="Test"))
-        provider = FakeProvider(responses=[resp])
+        provider = FakeModel(responses=[resp])
 
         response_format = {"type": "json_object", "schema": {"type": "object"}}
 

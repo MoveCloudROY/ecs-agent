@@ -22,7 +22,7 @@ from ecs_agent.types import (
 )
 
 
-class _OpenAIProviderFacade(Protocol):
+class _OpenAIModelFacade(Protocol):
     _api_key: str
     _base_url: str
     _model: str
@@ -45,7 +45,7 @@ class _OpenAIProviderFacade(Protocol):
 class OpenAIChatAdapter:
     """Adapter for OpenAI-compatible Chat Completions requests."""
 
-    def __init__(self, provider: _OpenAIProviderFacade) -> None:
+    def __init__(self, provider: _OpenAIModelFacade) -> None:
         self._provider = provider
 
     async def complete(

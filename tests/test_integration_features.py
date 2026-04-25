@@ -33,9 +33,9 @@ from ecs_agent.components import (
 from ecs_agent.conversation_tree import add_message, linearize
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import configure_logging, get_logger
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.openai_provider import OpenAIProvider
+from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.serialization import WorldSerializer
 from ecs_agent.skills.skill import Skill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
@@ -73,7 +73,7 @@ async def test_responses_api_with_real_llm() -> None:
     world = World()
 
     # Create provider with Responses API enabled (will fallback to Chat Completions if not supported)
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=ProviderConfig(
             provider_id="openai",
             base_url=base_url,
@@ -112,7 +112,7 @@ async def test_tree_conversation_with_reasoning_system() -> None:
     world = World()
 
     # Create provider with deterministic response
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="Test response 1")
@@ -211,7 +211,7 @@ None
         world = World()
         entity = world.create_entity()
 
-        provider = FakeProvider(
+        provider = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(role="assistant", content="I am a test assistant")
@@ -259,8 +259,8 @@ async def test_subagent_delegation_end_to_end(
     # Create parent entity
     parent_entity = world.create_entity()
 
-    # Create FakeProvider-based subagent config
-    subagent_config = SubagentConfig(model=FakeProvider(
+    # Create FakeModel-based subagent config
+    subagent_config = SubagentConfig(model=FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(role="assistant", content="Subagent result")
@@ -281,7 +281,7 @@ name="test-subagent",
     world.add_component(
         parent_entity,
         LLMComponent(
-            model=FakeProvider(responses=[]),
+            model=FakeModel(responses=[]),
         ),
     )
     world.add_component(
@@ -331,7 +331,7 @@ async def test_subagent_queue_saturation_respects_global_capacity(
         del args, kwargs
         return await _wait_then_complete(release_running)
 
-    blocking_provider = FakeProvider(responses=[])
+    blocking_provider = FakeModel(responses=[])
     blocking_provider.complete = AsyncMock(  # type: ignore[method-assign]
         side_effect=blocking_completion
     )
@@ -431,7 +431,7 @@ async def test_subagent_background_stream_events_are_visible_to_parent(
     world.event_bus.subscribe(SubagentStreamDeltaEvent, on_delta)
     world.event_bus.subscribe(SubagentStreamEndEvent, on_end)
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="streamed integration output")
@@ -502,7 +502,7 @@ async def test_subagent_wait_injects_notification_and_enables_explicit_reads(
     world = World()
     parent = world.create_entity()
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -618,7 +618,7 @@ async def test_subagent_queued_session_survives_restore_and_reenqueue(
 
     world = World()
     parent = world.create_entity()
-    queued_provider = FakeProvider(
+    queued_provider = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="queued done"))
         ]
@@ -763,7 +763,7 @@ async def test_enhanced_logging_in_system_execution() -> None:
     world = World()
     entity = world.create_entity()
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="Logged response")
@@ -825,7 +825,7 @@ async def test_all_new_components_serializable() -> None:
     )
 
     # SubagentRegistryComponent
-    fake_subagent_provider = FakeProvider(responses=[])
+    fake_subagent_provider = FakeModel(responses=[])
     subagent_config = SubagentConfig(
         name="test",
         model=fake_subagent_provider,

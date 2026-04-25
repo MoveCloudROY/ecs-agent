@@ -10,7 +10,7 @@ from ecs_agent.components.definitions import (
     SubagentSessionTableComponent,
 )
 from ecs_agent.core.world import World
-from ecs_agent.providers.fake_provider import FakeProvider
+from ecs_agent.providers.fake_model import FakeModel
 from ecs_agent.scratchbook.artifact_registry import ArtifactRegistry
 from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.types import CompletionResult, Message, SubagentConfig
@@ -28,7 +28,7 @@ async def test_runtime_session_id_remains_distinct_from_subagent_artifact_id(
         parent,
         SubagentRegistryComponent(
             subagents={
-                "artifact-agent": SubagentConfig(model=FakeProvider(
+                "artifact-agent": SubagentConfig(model=FakeModel(
                         responses=[
                             CompletionResult(
                                 message=Message(
@@ -85,7 +85,7 @@ async def test_foreground_subagent_artifact_record_path_points_to_records_subage
         parent,
         SubagentRegistryComponent(
             subagents={
-                "artifact-agent": SubagentConfig(model=FakeProvider(
+                "artifact-agent": SubagentConfig(model=FakeModel(
                         responses=[
                             CompletionResult(
                                 message=Message(
@@ -137,7 +137,7 @@ async def test_background_subagent_completion_persists_full_output_to_records_su
         parent,
         SubagentRegistryComponent(
             subagents={
-                "artifact-agent": SubagentConfig(model=FakeProvider(
+                "artifact-agent": SubagentConfig(model=FakeModel(
                         responses=[
                             CompletionResult(
                                 message=Message(role="assistant", content=full_result)
@@ -209,7 +209,7 @@ async def test_background_subagent_completion_strips_envelope_before_persisting_
         parent,
         SubagentRegistryComponent(
             subagents={
-                "artifact-agent": SubagentConfig(model=FakeProvider(
+                "artifact-agent": SubagentConfig(model=FakeModel(
                         responses=[
                             CompletionResult(
                                 message=Message(

@@ -9,10 +9,10 @@ This example demonstrates:
 - Running the agents to process collaboration messages
 - Printing both agents' conversations
 
-Dual-mode provider selection: uses FakeProvider by default (no API key needed),
-or switches to OpenAIProvider when LLM_API_KEY environment variable is set.
+Dual-mode provider selection: uses FakeModel by default (no API key needed),
+or switches to OpenAIModel when LLM_API_KEY environment variable is set.
 Environment variables:
-  LLM_API_KEY: Trigger for OpenAIProvider mode (if set, uses real LLM)
+  LLM_API_KEY: Trigger for OpenAIModel mode (if set, uses real LLM)
   LLM_BASE_URL: Base URL for LLM API (defaults to https://dashscope.aliyuncs.com/compatible-mode/v1)
   LLM_MODEL: Model name (defaults to qwen3.5-flash)
 """
@@ -29,9 +29,9 @@ from ecs_agent.components import (
     MessageBusSubscriptionComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers import FakeModel, OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.message_bus import MessageBusSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -49,20 +49,20 @@ async def main() -> None:
     model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
 
     # --- Create LLM providers (two separate instances) ---
-    provider_a: LLMProvider
-    provider_b: LLMProvider
+    provider_a: LLMModel
+    provider_b: LLMModel
     if api_key:
-        print(f"Using OpenAIProvider with model: {model}")
+        print(f"Using OpenAIModel with model: {model}")
         print(f"Base URL: {base_url}")
-        provider_a = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
-        provider_b = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        provider_a = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        provider_b = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
-        print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
+        print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
         print()
 
-        # Create FakeProvider for Agent A (researcher)
-        provider_a = FakeProvider(
+        # Create FakeModel for Agent A (researcher)
+        provider_a = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -73,8 +73,8 @@ async def main() -> None:
             ]
         )
 
-        # Create FakeProvider for Agent B (summarizer)
-        provider_b = FakeProvider(
+        # Create FakeModel for Agent B (summarizer)
+        provider_b = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(

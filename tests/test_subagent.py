@@ -22,7 +22,7 @@ from ecs_agent.components.definitions import (
     SubagentSessionTableComponent,
 )
 from ecs_agent.core.world import World
-from ecs_agent.providers.fake_provider import FakeProvider
+from ecs_agent.providers.fake_model import FakeModel
 from ecs_agent.scratchbook.artifact_registry import ArtifactRegistry
 from ecs_agent.serialization import WorldSerializer
 from ecs_agent.types import (
@@ -57,7 +57,7 @@ from ecs_agent.systems.subagent_wait import (
 )
 
 
-class ReasoningAndContentStreamingFakeProvider(FakeProvider):
+class ReasoningAndContentStreamingFakeModel(FakeModel):
     async def _stream_complete(
         self, result: CompletionResult
     ) -> AsyncIterator[StreamDelta]:
@@ -67,7 +67,7 @@ class ReasoningAndContentStreamingFakeProvider(FakeProvider):
         yield StreamDelta(finish_reason="stop")
 
 
-class BrokenStreamingFakeProvider(FakeProvider):
+class BrokenStreamingFakeModel(FakeModel):
     async def _stream_complete(
         self, result: CompletionResult
     ) -> AsyncIterator[StreamDelta]:
@@ -76,7 +76,7 @@ class BrokenStreamingFakeProvider(FakeProvider):
         raise RuntimeError("stream exploded")
 
 
-class RecordingFakeProvider(FakeProvider):
+class RecordingFakeModel(FakeModel):
     def __init__(self, responses: list[CompletionResult]) -> None:
         super().__init__(responses=responses)
         self.calls: list[list[Message]] = []
@@ -100,7 +100,7 @@ class RecordingFakeProvider(FakeProvider):
 
 def test_subagent_config_dataclass() -> None:
     """Verify SubagentConfig has all required fields."""
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
 
@@ -121,7 +121,7 @@ def test_subagent_config_dataclass() -> None:
 
 def test_subagent_config_defaults() -> None:
     """Verify SubagentConfig has sensible defaults."""
-    provider = FakeProvider(responses=[])
+    provider = FakeModel(responses=[])
 
     config = SubagentConfig(
         name="default-agent",
@@ -149,7 +149,7 @@ def test_subagent_registry_component_defaults() -> None:
 
 def test_subagent_registry_register_and_lookup() -> None:
     """Register a SubagentConfig and look it up by name."""
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="result"))
         ]
@@ -568,7 +568,7 @@ async def test_subagent_background_stream_true_bridges_child_stream_events_to_pa
 ):
     world = World()
     parent_entity = world.create_entity()
-    provider = ReasoningAndContentStreamingFakeProvider(
+    provider = ReasoningAndContentStreamingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     config = SubagentConfig(name="research", model=provider)
@@ -669,7 +669,7 @@ async def test_subagent_background_stream_true_bridges_child_stream_events_to_pa
 async def test_subagent_background_stream_false_keeps_bridge_dormant() -> None:
     world = World()
     parent_entity = world.create_entity()
-    provider = ReasoningAndContentStreamingFakeProvider(
+    provider = ReasoningAndContentStreamingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     config = SubagentConfig(name="research", model=provider)
@@ -743,7 +743,7 @@ async def test_subagent_background_parent_event_bus_bridge_cleans_up_after_failu
 ):
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="ignored"))
         ]
@@ -873,7 +873,7 @@ async def test_delegation_event_correlation_integrity() -> None:
     world = World()
     parent_entity = world.create_entity()
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
     )
     config = SubagentConfig(name="test-agent", model=provider)
@@ -946,7 +946,7 @@ async def test_backward_compatible_auto_registration_still_works() -> None:
     world = World()
     entity = world.create_entity()
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
     )
     config = SubagentConfig(name="test-agent", model=provider)
@@ -998,7 +998,7 @@ async def _delegate_with_policy(
     async def parent_shared_tool_handler() -> str:
         return "parent-handler"
 
-    parent_provider = FakeProvider(
+    parent_provider = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="Parent done"))
         ]
@@ -1021,7 +1021,7 @@ async def _delegate_with_policy(
             PermissionComponent(allowed_tools=["shared_tool"], denied_tools=[]),
         )
 
-    child_provider = FakeProvider(
+    child_provider = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="Child done"))
         ]
@@ -1243,7 +1243,7 @@ async def test_subagent_skills_skill_manager_inherited_tools_available() -> None
     skill_manager.install(world, parent_entity, parent_skill)
 
     # Configure child to inherit parent skill
-    child_provider = FakeProvider(
+    child_provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
     )
     config = SubagentConfig(
@@ -1343,7 +1343,7 @@ async def test_subagent_skills_skill_manager_requested_tools_available() -> None
     skill_manager.install(world, parent_entity, requested_skill)
 
     # Configure child to request skill explicitly
-    child_provider = FakeProvider(
+    child_provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
     )
     config = SubagentConfig(
@@ -1409,7 +1409,7 @@ async def test_subagent_skills_missing_skill_warn_policy() -> None:
     world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
 
     # Child config requests nonexistent skill with warn policy
-    child_provider = FakeProvider(
+    child_provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
     )
     config = SubagentConfig(
@@ -1462,7 +1462,7 @@ async def test_subagent_skills_missing_skill_error_policy() -> None:
     world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
 
     # Child config requests nonexistent skill with error policy
-    child_provider = FakeProvider(
+    child_provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
     )
     config = SubagentConfig(
@@ -1537,7 +1537,7 @@ async def test_subagent_skills_skill_manager_install_uninstall_lifecycle() -> No
     skill_manager.install(world, parent_entity, lifecycle_skill)
 
     # Child requests skill
-    child_provider = FakeProvider(
+    child_provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
     )
     config = SubagentConfig(
@@ -1865,7 +1865,7 @@ async def test_normalize_load_skills_merges_and_deduplicates(
     """SubagentSystem._normalize_load_skills merges config + load_skills and deduplicates."""
     world = World()
     system = SubagentSystem()
-    config = SubagentConfig(model=FakeProvider(
+    config = SubagentConfig(model=FakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="done"))
             ]
@@ -1881,7 +1881,7 @@ name="test",
 async def test_category_mapping_exact_match() -> None:
     """SubagentSystem._resolve_subagent_config looks up subagent from registry."""
     system = SubagentSystem()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     config = SubagentConfig(
@@ -1908,7 +1908,7 @@ async def test_category_mapping_unknown_category() -> None:
 async def test_subagent_tool_sync_happy_path() -> None:
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     config = SubagentConfig(name="quick", model=provider)
@@ -1962,7 +1962,7 @@ async def test_subagent_tool_sync_happy_path() -> None:
 async def test_subagent_tool_background_returns_session_id() -> None:
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     config = SubagentConfig(name="deep", model=provider)
@@ -2023,7 +2023,7 @@ async def test_subagent_tool_background_returns_session_id() -> None:
 async def test_subagent_handler_uses_immutable_effective_config_snapshot() -> None:
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     config = SubagentConfig(
@@ -2100,7 +2100,7 @@ async def test_subagent_tool_background_enqueue_session_records_stream() -> None
 
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     config = SubagentConfig(
@@ -2169,7 +2169,7 @@ async def test_subagent_tool_background_returns_queued_lifecycle_status_when_sch
 
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     config = SubagentConfig(name="deep", model=provider)
@@ -2247,7 +2247,7 @@ async def test_subagent_tool_background_returns_queued_lifecycle_status_when_sch
 async def test_subagent_tool_validates_parameters() -> None:
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     config = SubagentConfig(name="quick", model=provider)
@@ -2275,7 +2275,7 @@ async def test_subagent_tool_validates_parameters() -> None:
         )
 
 
-class SlowFakeProvider:
+class SlowFakeModel:
     """Test provider that simulates slow responses with configurable delay."""
 
     model_id: str = "slow-fake"
@@ -2299,7 +2299,7 @@ async def test_subagent_timeout_global_default() -> None:
     parent_entity = world.create_entity()
 
     # Provider that simulates a long-running task
-    provider = SlowFakeProvider(
+    provider = SlowFakeModel(
         delay=5.0,
         response=CompletionResult(message=Message(role="assistant", content="done")),
     )
@@ -2337,7 +2337,7 @@ async def test_subagent_timeout_per_call_override() -> None:
     parent_entity = world.create_entity()
 
     # Provider that simulates a task taking 0.3s
-    provider = SlowFakeProvider(
+    provider = SlowFakeModel(
         delay=0.3,
         response=CompletionResult(message=Message(role="assistant", content="done")),
     )
@@ -2375,7 +2375,7 @@ async def test_subagent_timeout_none_disables() -> None:
     parent_entity = world.create_entity()
 
     # Fast provider
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="success"))
         ]
@@ -2417,7 +2417,7 @@ async def test_subagent_timeout_sets_state() -> None:
     parent_entity = world.create_entity()
 
     # Provider that simulates a long-running task
-    provider = SlowFakeProvider(
+    provider = SlowFakeModel(
         delay=5.0,
         response=CompletionResult(message=Message(role="assistant", content="done")),
     )
@@ -2466,7 +2466,7 @@ async def test_completion_enqueues_parent_notification(
 
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     config = SubagentConfig(name="notify-success", model=provider)
@@ -2538,7 +2538,7 @@ async def test_failed_background_session_enqueues_parent_notification_before_com
 
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeProvider(responses=[])
+    provider = FakeModel(responses=[])
     config = SubagentConfig(name="notify-failure", model=provider)
 
     world.add_component(
@@ -2617,7 +2617,7 @@ async def test_timed_out_background_session_enqueues_parent_notification(
 
     world = World()
     parent_entity = world.create_entity()
-    provider = SlowFakeProvider(
+    provider = SlowFakeModel(
         delay=5.0,
         response=CompletionResult(message=Message(role="assistant", content="done")),
     )
@@ -2688,7 +2688,7 @@ async def test_cancelled_background_session_does_not_enqueue_notification(
 
     world = World()
     parent_entity = world.create_entity()
-    provider = SlowFakeProvider(
+    provider = SlowFakeModel(
         delay=5.0,
         response=CompletionResult(message=Message(role="assistant", content="done")),
     )
@@ -2743,7 +2743,7 @@ async def test_cancelled_background_session_does_not_enqueue_notification(
 async def test_sync_subagent_call_does_not_enqueue_parent_notification() -> None:
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     config = SubagentConfig(name="sync-agent", model=provider)
@@ -2870,7 +2870,7 @@ async def test_waiting_parent_future_is_resolved_when_background_completion_noti
 
     world = World()
     parent_entity = world.create_entity()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     config = SubagentConfig(name="notify-waiter", model=provider)
@@ -2927,7 +2927,7 @@ async def test_waiting_parent_future_is_resolved_when_background_completion_noti
 async def test_completion_notification_is_injected_before_next_reasoning_turn() -> None:
     world = World()
     entity_id = world.create_entity()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="I resumed work.")
@@ -3290,15 +3290,15 @@ def test_failure_notification_includes_error() -> None:
 
 
 async def test_subagent_retry_default_wrap() -> None:
-    """Test that non-wrapped providers are wrapped with RetryProvider by default."""
+    """Test that non-wrapped providers are wrapped with RetryModel by default."""
     from ecs_agent.providers.config import ApiFormat, ProviderConfig
-    from ecs_agent.providers.openai_provider import OpenAIProvider
+    from ecs_agent.providers.openai_model import OpenAIModel
     from ecs_agent.providers.retry_model import RetryModel as _RetryModel
 
     world = World()
     parent_entity = world.create_entity()
 
-    base_provider = OpenAIProvider(
+    base_model = OpenAIModel(
         config=ProviderConfig(
             provider_id="openai",
             base_url="http://test",
@@ -3307,7 +3307,7 @@ async def test_subagent_retry_default_wrap() -> None:
         ),
         model="test",
     )
-    config = SubagentConfig(name="test", model=base_provider)
+    config = SubagentConfig(name="test", model=base_model)
     world.add_component(
         parent_entity, SubagentRegistryComponent(subagents={"test": config})
     )
@@ -3325,13 +3325,13 @@ async def test_subagent_retry_default_wrap() -> None:
 async def test_subagent_retry_no_double_wrap() -> None:
     """Test that already-wrapped providers are not double-wrapped."""
     from ecs_agent.providers.config import ApiFormat, ProviderConfig
-    from ecs_agent.providers.openai_provider import OpenAIProvider
+    from ecs_agent.providers.openai_model import OpenAIModel
     from ecs_agent.providers.retry_model import RetryModel as _RetryModel2
 
     world = World()
     parent_entity = world.create_entity()
 
-    base_provider = OpenAIProvider(
+    base_model = OpenAIModel(
         config=ProviderConfig(
             provider_id="openai",
             base_url="http://test",
@@ -3340,7 +3340,7 @@ async def test_subagent_retry_no_double_wrap() -> None:
         ),
         model="test",
     )
-    retry_model = _RetryModel2(model=base_provider, retry_config=RetryConfig())
+    retry_model = _RetryModel2(model=base_model, retry_config=RetryConfig())
 
     config = SubagentConfig(name="test", model=retry_model)
     world.add_component(
@@ -3358,11 +3358,11 @@ async def test_subagent_retry_no_double_wrap() -> None:
 
 
 async def test_subagent_retry_fake_provider_stable() -> None:
-    """Test that FakeProvider remains unwrapped for deterministic tests."""
+    """Test that FakeModel remains unwrapped for deterministic tests."""
     world = World()
     parent_entity = world.create_entity()
 
-    fake_provider = FakeProvider(responses=[])
+    fake_provider = FakeModel(responses=[])
     config = SubagentConfig(name="test", model=fake_provider)
     world.add_component(
         parent_entity, SubagentRegistryComponent(subagents={"test": config})
@@ -3395,7 +3395,7 @@ async def test_reminder_table_updates_on_transitions() -> None:
     world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
 
     registry = SubagentRegistryComponent()
-    registry.subagents["test-agent"] = SubagentConfig(model=FakeProvider(
+    registry.subagents["test-agent"] = SubagentConfig(model=FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(role="assistant", content="Test result")
@@ -3524,7 +3524,7 @@ async def test_subagent_status_aggregate_table() -> None:
 
     # Setup registry with test agent
     registry = SubagentRegistryComponent()
-    registry.subagents["test-agent"] = SubagentConfig(model=FakeProvider(
+    registry.subagents["test-agent"] = SubagentConfig(model=FakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="Result 1"))
             ]
@@ -3596,7 +3596,7 @@ async def test_subagent_status_single_session() -> None:
     world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
 
     registry = SubagentRegistryComponent()
-    registry.subagents["test-agent"] = SubagentConfig(model=FakeProvider(
+    registry.subagents["test-agent"] = SubagentConfig(model=FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(role="assistant", content="Single result")
@@ -3708,7 +3708,7 @@ async def test_inline_content_populated_without_registry_for_small_result() -> N
         parent,
         SubagentRegistryComponent(
             subagents={
-                "test-agent": SubagentConfig(model=FakeProvider(
+                "test-agent": SubagentConfig(model=FakeModel(
                         responses=[
                             CompletionResult(
                                 message=Message(
@@ -3763,7 +3763,7 @@ async def test_inline_content_null_without_registry_for_large_result() -> None:
         parent,
         SubagentRegistryComponent(
             subagents={
-                "test-agent": SubagentConfig(model=FakeProvider(
+                "test-agent": SubagentConfig(model=FakeModel(
                         responses=[
                             CompletionResult(
                                 message=Message(role="assistant", content=full_result)
@@ -3813,7 +3813,7 @@ async def test_inline_content_still_works_with_registry(tmp_path: Any) -> None:
         parent,
         SubagentRegistryComponent(
             subagents={
-                "test-agent": SubagentConfig(model=FakeProvider(
+                "test-agent": SubagentConfig(model=FakeModel(
                         responses=[
                             CompletionResult(
                                 message=Message(
@@ -3871,7 +3871,7 @@ async def test_inline_content_is_hint_when_large_result_with_registry(
         parent,
         SubagentRegistryComponent(
             subagents={
-                "test-agent": SubagentConfig(model=FakeProvider(
+                "test-agent": SubagentConfig(model=FakeModel(
                         responses=[
                             CompletionResult(
                                 message=Message(role="assistant", content=full_result)
@@ -3937,7 +3937,7 @@ async def test_subagent_status_queued_session_reports_queue_position(
         await running_release.wait()
         return CompletionResult(message=Message(role="assistant", content="first done"))
 
-    blocking_provider = FakeProvider(responses=[])
+    blocking_provider = FakeModel(responses=[])
     blocking_provider.complete = AsyncMock(side_effect=blocking_completion)  # type: ignore[method-assign]
 
     registry = SubagentRegistryComponent()
@@ -3947,7 +3947,7 @@ async def test_subagent_status_queued_session_reports_queue_position(
         system_prompt="Test",
         skills=[],
     )
-    registry.subagents["queued-agent"] = SubagentConfig(model=FakeProvider(
+    registry.subagents["queued-agent"] = SubagentConfig(model=FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(role="assistant", content="queued done")
@@ -4052,7 +4052,7 @@ async def test_subagent_result_completed_session() -> None:
     world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
 
     registry = SubagentRegistryComponent()
-    registry.subagents["test-agent"] = SubagentConfig(model=FakeProvider(
+    registry.subagents["test-agent"] = SubagentConfig(model=FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -4126,7 +4126,7 @@ async def test_subagent_result_waits_for_queued_session_without_task_handle(
         await running_release.wait()
         return CompletionResult(message=Message(role="assistant", content="first done"))
 
-    blocking_provider = FakeProvider(responses=[])
+    blocking_provider = FakeModel(responses=[])
     blocking_provider.complete = AsyncMock(side_effect=blocking_completion)  # type: ignore[method-assign]
 
     registry = SubagentRegistryComponent()
@@ -4136,7 +4136,7 @@ async def test_subagent_result_waits_for_queued_session_without_task_handle(
         system_prompt="Test",
         skills=[],
     )
-    registry.subagents["queued-agent"] = SubagentConfig(model=FakeProvider(
+    registry.subagents["queued-agent"] = SubagentConfig(model=FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(role="assistant", content="queued result")
@@ -4225,7 +4225,7 @@ async def test_subagent_result_timeout() -> None:
 
     from unittest.mock import AsyncMock
 
-    slow_provider = FakeProvider(responses=[])
+    slow_provider = FakeModel(responses=[])
     slow_provider.complete = AsyncMock(side_effect=slow_completion)  # type: ignore[method-assign]
 
     registry = SubagentRegistryComponent()
@@ -4279,7 +4279,7 @@ async def test_subagent_result_read_method_accepts_full_and_summary() -> None:
     world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
 
     registry = SubagentRegistryComponent()
-    registry.subagents["test-agent"] = SubagentConfig(model=FakeProvider(
+    registry.subagents["test-agent"] = SubagentConfig(model=FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -4349,7 +4349,7 @@ def test_subagent_result_schema_exposes_read_method() -> None:
     world.add_component(
         parent,
         LLMComponent(
-            model=FakeProvider(responses=[]),
+            model=FakeModel(responses=[]),
             system_prompt="Test",
         ),
     )
@@ -4381,7 +4381,7 @@ async def test_subagent_result_defaults_to_full() -> None:
         parent,
         SubagentRegistryComponent(
             subagents={
-                "test-agent": SubagentConfig(model=FakeProvider(
+                "test-agent": SubagentConfig(model=FakeModel(
                         responses=[
                             CompletionResult(
                                 message=Message(
@@ -4441,7 +4441,7 @@ async def test_subagent_result_summary_returns_cached_summary() -> None:
         parent,
         SubagentRegistryComponent(
             subagents={
-                "test-agent": SubagentConfig(model=FakeProvider(
+                "test-agent": SubagentConfig(model=FakeModel(
                         responses=[
                             CompletionResult(
                                 message=Message(
@@ -4513,7 +4513,7 @@ async def test_subagent_result_summary_unavailable_returns_error() -> None:
         parent,
         SubagentRegistryComponent(
             subagents={
-                "test-agent": SubagentConfig(model=FakeProvider(
+                "test-agent": SubagentConfig(model=FakeModel(
                         responses=[
                             CompletionResult(
                                 message=Message(
@@ -4614,7 +4614,7 @@ async def test_subagent_cancel_active_session() -> None:
 
     from unittest.mock import AsyncMock
 
-    slow_provider = FakeProvider(responses=[])
+    slow_provider = FakeModel(responses=[])
     slow_provider.complete = AsyncMock(side_effect=very_slow_completion)  # type: ignore[method-assign]
 
     registry = SubagentRegistryComponent()
@@ -4697,11 +4697,11 @@ async def test_subagent_cancel_queued_session_skips_next_admission(
         started.append("third")
         return CompletionResult(message=Message(role="assistant", content="third done"))
 
-    blocking_provider = FakeProvider(responses=[])
+    blocking_provider = FakeModel(responses=[])
     blocking_provider.complete = AsyncMock(side_effect=blocking_completion)  # type: ignore[method-assign]
-    cancelled_provider = FakeProvider(responses=[])
+    cancelled_provider = FakeModel(responses=[])
     cancelled_provider.complete = AsyncMock(side_effect=cancelled_completion)  # type: ignore[method-assign]
-    third_provider = FakeProvider(responses=[])
+    third_provider = FakeModel(responses=[])
     third_provider.complete = AsyncMock(side_effect=third_completion)  # type: ignore[method-assign]
 
     registry = SubagentRegistryComponent()
@@ -4811,7 +4811,7 @@ async def test_subagent_cancel_terminal_session() -> None:
     world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
 
     registry = SubagentRegistryComponent()
-    registry.subagents["test-agent"] = SubagentConfig(model=FakeProvider(
+    registry.subagents["test-agent"] = SubagentConfig(model=FakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="Done"))
             ]
@@ -4862,7 +4862,7 @@ def test_assemble_child_world_name_follows_convention() -> None:
         LLMComponent,
     )
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     world = World(name="parent-world")
@@ -4897,7 +4897,7 @@ def test_assemble_child_world_different_calls_produce_unique_names() -> None:
         LLMComponent,
     )
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
         * 4
     )
@@ -4973,7 +4973,7 @@ async def test_subagent_resolves_skill_from_catalog_when_not_in_parent() -> None
     parent_entity = world.create_entity()
     world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
 
-    child_provider = FakeProvider(
+    child_provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
     )
     config = SubagentConfig(
@@ -5035,7 +5035,7 @@ async def test_subagent_inherits_parent_workspace_binding() -> None:
         parent_entity, WorkspaceBindingComponent(workspace_root=parent_workspace)
     )
 
-    child_provider = FakeProvider(
+    child_provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="Done"))]
     )
     config = SubagentConfig(
@@ -5084,13 +5084,13 @@ async def test_subagent_child_world_registers_system_prompt_render_system() -> N
     world.add_component(
         parent_entity,
         LLMComponent(
-            model=FakeProvider(responses=[]),
+            model=FakeModel(responses=[]),
             system_prompt="parent-prompt",
         ),
     )
     world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
 
-    config = SubagentConfig(model=FakeProvider(
+    config = SubagentConfig(model=FakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="done"))
             ]
@@ -5129,13 +5129,13 @@ async def test_subagent_child_world_has_system_prompt_config_spec() -> None:
     world.add_component(
         parent_entity,
         LLMComponent(
-            model=FakeProvider(responses=[]),
+            model=FakeModel(responses=[]),
             system_prompt="parent-prompt",
         ),
     )
     world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
 
-    config = SubagentConfig(model=FakeProvider(
+    config = SubagentConfig(model=FakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="done"))
             ]

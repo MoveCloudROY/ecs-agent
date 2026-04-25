@@ -1,7 +1,7 @@
 """End-to-end integration tests for Agent DSL pipeline.
 
 Tests full workflow: discover → load → resolve → compile → execute.
-Uses FakeProvider for deterministic, network-free testing.
+Uses FakeModel for deterministic, network-free testing.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from ecs_agent.dsl import (
     resolve_agent_specs,
 )
 from ecs_agent.dsl.schema import AgentSpec
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.types import CompletionResult, Message
@@ -53,11 +53,11 @@ def create_temp_markdown_file(directory: Path, filename: str, content: str) -> P
 
 
 def create_fake_provider_factory(responses: list[CompletionResult]):
-    """Create a provider factory that returns FakeProvider instances."""
+    """Create a provider factory that returns FakeModel instances."""
 
     def factory(model: str, system_prompt: str):
         # Each subagent gets its own model instance
-        return FakeProvider(responses=responses.copy(), model_id=model)
+        return FakeModel(responses=responses.copy(), model_id=model)
 
     return factory
 
@@ -69,7 +69,7 @@ def create_fake_provider_factory(responses: list[CompletionResult]):
 
 @pytest.mark.asyncio
 async def test_json_dsl_to_world_to_run_basic_workflow() -> None:
-    """Load JSON file with primary agent spec, compile to World, run with FakeProvider."""
+    """Load JSON file with primary agent spec, compile to World, run with FakeModel."""
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
 
@@ -124,7 +124,7 @@ async def test_json_dsl_to_world_to_run_basic_workflow() -> None:
 
 @pytest.mark.asyncio
 async def test_markdown_dsl_to_world_to_run_basic_workflow() -> None:
-    """Load Markdown file with frontmatter config, compile to World, run with FakeProvider."""
+    """Load Markdown file with frontmatter config, compile to World, run with FakeModel."""
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
 

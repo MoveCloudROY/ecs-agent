@@ -11,7 +11,7 @@ from ecs_agent.components import (
     StreamingComponent,
 )
 from ecs_agent.core import World
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.systems import reasoning as reasoning_module
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import CompletionResult, Message, StreamDelta, Usage
@@ -29,7 +29,7 @@ class _RecordingLogger:
         _ = kwargs
 
 
-class _CancelledStreamingFakeProvider(FakeProvider):
+class _CancelledStreamingFakeModel(FakeModel):
     async def _stream_complete(
         self,
         result: CompletionResult,
@@ -44,7 +44,7 @@ async def test_non_streaming_emits_single_llm_invocation_event_with_active_model
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     world = World()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="done"),
@@ -55,7 +55,7 @@ async def test_non_streaming_emits_single_llm_invocation_event_with_active_model
     logger = _RecordingLogger()
     monkeypatch.setattr(reasoning_module, "logger", logger)
 
-    active_model = FakeProvider(
+    active_model = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="done"),
@@ -104,7 +104,7 @@ async def test_non_streaming_emits_single_llm_invocation_event_with_active_model
 @pytest.mark.asyncio
 async def test_streaming_success_emits_single_complete_llm_invocation_event() -> None:
     world = World()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="AB"),
@@ -145,7 +145,7 @@ async def test_interrupted_stream_emits_single_partial_or_unknown_llm_invocation
     None
 ):
     world = World()
-    provider = _CancelledStreamingFakeProvider(
+    provider = _CancelledStreamingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="ignored"),

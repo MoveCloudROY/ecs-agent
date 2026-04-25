@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ecs_agent.providers.fake_provider import FakeProvider
+from ecs_agent.providers.fake_model import FakeModel
 from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.systems.subagent_wait import SubagentWaitSystem
@@ -21,7 +21,7 @@ DEFAULT_EMBEDDING_MODEL = "text-embedding-v3"
 DEFAULT_EMBEDDING_DIMENSION = 1024
 
 
-class _OpenAIProviderStub:
+class _OpenAIModelStub:
     model_id: str = "stub"
 
     def __init__(self, content: str = "stub response") -> None:
@@ -269,8 +269,8 @@ def _completion(content: str = "fake response") -> CompletionResult:
     return CompletionResult(message=Message(role="assistant", content=content))
 
 
-def _fake_provider(responses: int = 20, content: str = "fake response") -> FakeProvider:
-    return FakeProvider(responses=[_completion(content) for _ in range(responses)])
+def _fake_provider(responses: int = 20, content: str = "fake response") -> FakeModel:
+    return FakeModel(responses=[_completion(content) for _ in range(responses)])
 
 
 def _load_example(module_name: str) -> Any:
@@ -295,10 +295,10 @@ class TestChatAgentDualMode:
 
         with patch.dict(os.environ, {}, clear=True):
             with patch(
-                "examples.chat_agent.FakeProvider", return_value=_fake_provider()
+                "examples.chat_agent.FakeModel", return_value=_fake_provider()
             ) as fake_ctor:
                 with patch(
-                    "examples.chat_agent.OpenAIProvider", create=True
+                    "examples.chat_agent.OpenAIModel", create=True
                 ) as openai_ctor:
                     await module.main()
 
@@ -310,11 +310,11 @@ class TestChatAgentDualMode:
 
         with patch.dict(os.environ, {"LLM_API_KEY": "test-api-key"}, clear=True):
             with patch(
-                "examples.chat_agent.FakeProvider", side_effect=FakeProvider
+                "examples.chat_agent.FakeModel", side_effect=FakeModel
             ) as fake_ctor:
                 with patch(
-                    "examples.chat_agent.OpenAIProvider",
-                    return_value=_OpenAIProviderStub(),
+                    "examples.chat_agent.OpenAIModel",
+                    return_value=_OpenAIModelStub(),
                     create=True,
                 ) as openai_ctor:
                     await module.main()
@@ -330,11 +330,11 @@ class TestMultiAgentDualMode:
 
         with patch.dict(os.environ, {}, clear=True):
             with patch(
-                "examples.multi_agent.FakeProvider",
+                "examples.multi_agent.FakeModel",
                 side_effect=[_fake_provider(), _fake_provider()],
             ) as fake_ctor:
                 with patch(
-                    "examples.multi_agent.OpenAIProvider", create=True
+                    "examples.multi_agent.OpenAIModel", create=True
                 ) as openai_ctor:
                     await module.main()
 
@@ -346,11 +346,11 @@ class TestMultiAgentDualMode:
 
         with patch.dict(os.environ, {"LLM_API_KEY": "test-api-key"}, clear=True):
             with patch(
-                "examples.multi_agent.FakeProvider", side_effect=FakeProvider
+                "examples.multi_agent.FakeModel", side_effect=FakeModel
             ) as fake_ctor:
                 with patch(
-                    "examples.multi_agent.OpenAIProvider",
-                    side_effect=[_OpenAIProviderStub("a"), _OpenAIProviderStub("b")],
+                    "examples.multi_agent.OpenAIModel",
+                    side_effect=[_OpenAIModelStub("a"), _OpenAIModelStub("b")],
                     create=True,
                 ) as openai_ctor:
                     await module.main()
@@ -366,11 +366,11 @@ class TestScriptSkillDiscoveryAgentDualMode:
 
         with patch.dict(os.environ, {}, clear=True):
             with patch(
-                "examples.script_skill_discovery_agent.FakeProvider",
+                "examples.script_skill_discovery_agent.FakeModel",
                 return_value=_fake_provider(),
             ) as fake_ctor:
                 with patch(
-                    "examples.script_skill_discovery_agent.OpenAIProvider", create=True
+                    "examples.script_skill_discovery_agent.OpenAIModel", create=True
                 ) as openai_ctor:
                     await module.main()
 
@@ -382,12 +382,12 @@ class TestScriptSkillDiscoveryAgentDualMode:
 
         with patch.dict(os.environ, {"LLM_API_KEY": "test-api-key"}, clear=True):
             with patch(
-                "examples.script_skill_discovery_agent.FakeProvider",
-                side_effect=FakeProvider,
+                "examples.script_skill_discovery_agent.FakeModel",
+                side_effect=FakeModel,
             ) as fake_ctor:
                 with patch(
-                    "examples.script_skill_discovery_agent.OpenAIProvider",
-                    return_value=_OpenAIProviderStub(),
+                    "examples.script_skill_discovery_agent.OpenAIModel",
+                    return_value=_OpenAIModelStub(),
                     create=True,
                 ) as openai_ctor:
                     await module.main()
@@ -403,11 +403,11 @@ class TestPermissionAgentDualMode:
 
         with patch.dict(os.environ, {}, clear=True):
             with patch(
-                "examples.permission_agent.FakeProvider",
+                "examples.permission_agent.FakeModel",
                 return_value=_fake_provider(),
             ) as fake_ctor:
                 with patch(
-                    "examples.permission_agent.OpenAIProvider", create=True
+                    "examples.permission_agent.OpenAIModel", create=True
                 ) as openai_ctor:
                     await module.main()
 
@@ -419,11 +419,11 @@ class TestPermissionAgentDualMode:
 
         with patch.dict(os.environ, {"LLM_API_KEY": "test-api-key"}, clear=True):
             with patch(
-                "examples.permission_agent.FakeProvider", side_effect=FakeProvider
+                "examples.permission_agent.FakeModel", side_effect=FakeModel
             ) as fake_ctor:
                 with patch(
-                    "examples.permission_agent.OpenAIProvider",
-                    return_value=_OpenAIProviderStub(),
+                    "examples.permission_agent.OpenAIModel",
+                    return_value=_OpenAIModelStub(),
                     create=True,
                 ) as openai_ctor:
                     await module.main()
@@ -444,11 +444,11 @@ class TestSubagentDelegationDualMode:
         with patch.dict(os.environ, {}, clear=True):
             with patch.object(runtime_module, "_GLOBAL_SCHEDULER", None):
                 with patch(
-                    "examples.subagent_delegation.FakeProvider",
-                    side_effect=FakeProvider,
+                    "examples.subagent_delegation.FakeModel",
+                    side_effect=FakeModel,
                 ) as fake_ctor:
                     with patch(
-                        "examples.subagent_delegation.OpenAIProvider", create=True
+                        "examples.subagent_delegation.OpenAIModel", create=True
                     ) as openai_ctor:
                         with patch("sys.stdout", stdout):
                             await module.main()
@@ -458,7 +458,7 @@ class TestSubagentDelegationDualMode:
 
                 output = stdout.getvalue()
                 world, parent_id = module._build_world(
-                    parent_provider=FakeProvider(
+                    parent_provider=FakeModel(
                         responses=module._fake_parent_responses()
                     ),
                     registry=module._build_providers(
@@ -520,11 +520,11 @@ class TestSubagentDelegationDualMode:
         with patch.dict(os.environ, {"LLM_API_KEY": "test-api-key"}, clear=True):
             with patch.object(runtime_module, "_GLOBAL_SCHEDULER", None):
                 with patch(
-                    "examples.subagent_delegation.FakeProvider",
-                    side_effect=FakeProvider,
+                    "examples.subagent_delegation.FakeModel",
+                    side_effect=FakeModel,
                 ) as fake_ctor:
                     with patch(
-                        "examples.subagent_delegation.OpenAIProvider",
+                        "examples.subagent_delegation.OpenAIModel",
                         return_value=_SubagentDelegationOpenAIStub(),
                         create=True,
                     ) as openai_ctor:
@@ -571,11 +571,11 @@ class TestTreeSearchAgentDualMode:
 
         with patch.dict(os.environ, {}, clear=True):
             with patch(
-                "examples.tree_search_agent.FakeProvider",
+                "examples.tree_search_agent.FakeModel",
                 return_value=_fake_provider(content="0.75"),
             ) as fake_ctor:
                 with patch(
-                    "examples.tree_search_agent.OpenAIProvider", create=True
+                    "examples.tree_search_agent.OpenAIModel", create=True
                 ) as openai_ctor:
                     await module.main()
 
@@ -587,11 +587,11 @@ class TestTreeSearchAgentDualMode:
 
         with patch.dict(os.environ, {"LLM_API_KEY": "test-api-key"}, clear=True):
             with patch(
-                "examples.tree_search_agent.FakeProvider", side_effect=FakeProvider
+                "examples.tree_search_agent.FakeModel", side_effect=FakeModel
             ) as fake_ctor:
                 with patch(
-                    "examples.tree_search_agent.OpenAIProvider",
-                    return_value=_OpenAIProviderStub("0.75"),
+                    "examples.tree_search_agent.OpenAIModel",
+                    return_value=_OpenAIModelStub("0.75"),
                     create=True,
                 ) as openai_ctor:
                     await module.main()
@@ -607,11 +607,11 @@ class TestContextManagementAgentDualMode:
 
         with patch.dict(os.environ, {}, clear=True):
             with patch(
-                "examples.context_management_agent.FakeProvider",
+                "examples.context_management_agent.FakeModel",
                 side_effect=[_fake_provider(), _fake_provider(), _fake_provider()],
             ) as fake_ctor:
                 with patch(
-                    "examples.context_management_agent.OpenAIProvider", create=True
+                    "examples.context_management_agent.OpenAIModel", create=True
                 ) as openai_ctor:
                     await module.main()
 
@@ -623,15 +623,15 @@ class TestContextManagementAgentDualMode:
 
         with patch.dict(os.environ, {"LLM_API_KEY": "test-api-key"}, clear=True):
             with patch(
-                "examples.context_management_agent.FakeProvider",
-                side_effect=FakeProvider,
+                "examples.context_management_agent.FakeModel",
+                side_effect=FakeModel,
             ) as fake_ctor:
                 with patch(
-                    "examples.context_management_agent.OpenAIProvider",
+                    "examples.context_management_agent.OpenAIModel",
                     side_effect=[
-                        _OpenAIProviderStub("r1"),
-                        _OpenAIProviderStub("r2"),
-                        _OpenAIProviderStub("r3"),
+                        _OpenAIModelStub("r1"),
+                        _OpenAIModelStub("r2"),
+                        _OpenAIModelStub("r3"),
                     ],
                     create=True,
                 ) as openai_ctor:
@@ -648,7 +648,7 @@ class TestRAGAgentDualMode:
 
         with patch.dict(os.environ, {}, clear=True):
             with patch(
-                "examples.rag_agent.FakeProvider",
+                "examples.rag_agent.FakeModel",
                 return_value=_fake_provider(),
             ) as fake_llm_ctor:
                 with patch(
@@ -656,7 +656,7 @@ class TestRAGAgentDualMode:
                     return_value=_EmbeddingProviderStub(dimension=8),
                 ) as fake_embed_ctor:
                     with patch(
-                        "examples.rag_agent.OpenAIProvider", create=True
+                        "examples.rag_agent.OpenAIModel", create=True
                     ) as openai_ctor:
                         with patch(
                             "examples.rag_agent.OpenAIEmbeddingProvider", create=True
@@ -673,15 +673,15 @@ class TestRAGAgentDualMode:
 
         with patch.dict(os.environ, {"LLM_API_KEY": "test-api-key"}, clear=True):
             with patch(
-                "examples.rag_agent.FakeProvider", side_effect=FakeProvider
+                "examples.rag_agent.FakeModel", side_effect=FakeModel
             ) as fake_llm_ctor:
                 with patch(
                     "examples.rag_agent.FakeEmbeddingProvider",
                     side_effect=FakeEmbeddingProvider,
                 ) as fake_embed_ctor:
                     with patch(
-                        "examples.rag_agent.OpenAIProvider",
-                        return_value=_OpenAIProviderStub(),
+                        "examples.rag_agent.OpenAIModel",
+                        return_value=_OpenAIModelStub(),
                         create=True,
                     ) as openai_ctor:
                         with patch(

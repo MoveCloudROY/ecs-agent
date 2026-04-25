@@ -88,16 +88,6 @@ def get_model(
     return create_model(config, parsed.model, **kwargs)
 
 
-# Backward-compat alias
-def get_llm_provider(
-    model_id: str | ModelId,
-    *,
-    registry: ProviderRegistry,
-    api_key: str | None = None,
-) -> LLMModel:
-    return get_model(model_id, registry=registry, api_key=api_key)
-
-
 def _resolve_api_key(
     *, entry: ProviderEntry, explicit_api_key: str | None
 ) -> str | None:

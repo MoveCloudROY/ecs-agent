@@ -23,8 +23,8 @@ from ecs_agent.components import (
 )
 
 
-class MockLLMProvider:
-    """Mock LLMProvider for testing."""
+class MockLLMModel:
+    """Mock LLMModel for testing."""
 
     async def complete(self, messages, tools=None):
         pass
@@ -32,7 +32,7 @@ class MockLLMProvider:
 
 @pytest.fixture
 def mock_llm():
-    return MockLLMProvider()
+    return MockLLMModel()
 
 
 class TestLLMComponent:

@@ -7,8 +7,8 @@ This example showcases three advanced features for managing agent execution stat
 3. **Compact** — Build up a long conversation and trigger LLM-based summarization
 
 Supports dual-mode operation via environment variables:
-- Without LLM_API_KEY: Uses FakeProvider for deterministic output
-- With LLM_API_KEY: Uses OpenAIProvider with real LLM
+- Without LLM_API_KEY: Uses FakeModel for deterministic output
+- With LLM_API_KEY: Uses OpenAIModel with real LLM
 
 Environment variables (optional, for OpenAI mode):
     LLM_API_KEY       — API key for OpenAI-compatible provider
@@ -35,8 +35,8 @@ from ecs_agent.components import (
     LLMComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeProvider
-from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers import FakeModel
+from ecs_agent.providers import OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.systems.checkpoint import CheckpointSystem
 from ecs_agent.systems.compaction import CompactionSystem
@@ -46,10 +46,10 @@ from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import CompletionResult, Message, Usage
 
 
-def create_provider() -> FakeProvider | OpenAIProvider:
+def create_provider() -> FakeModel | OpenAIModel:
     """Create LLM provider based on environment variables.
 
-    Uses OpenAIProvider if LLM_API_KEY is set, otherwise FakeProvider.
+    Uses OpenAIModel if LLM_API_KEY is set, otherwise FakeModel.
     """
     api_key = os.environ.get("LLM_API_KEY", "")
     base_url = os.environ.get(
@@ -58,7 +58,7 @@ def create_provider() -> FakeProvider | OpenAIProvider:
     model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
 
     if api_key:
-        return OpenAIProvider(
+        return OpenAIModel(
             config=ProviderConfig(
                 provider_id="openai",
                 base_url=base_url,
@@ -67,7 +67,7 @@ def create_provider() -> FakeProvider | OpenAIProvider:
             ),
             model=model,
         )
-    return FakeProvider(
+    return FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -355,10 +355,10 @@ async def main() -> None:
         base_url = os.environ.get(
             "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
-        print(f"Using OpenAIProvider with model: {model}")
+        print(f"Using OpenAIModel with model: {model}")
         print(f"Base URL: {base_url}")
     else:
-        print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
+        print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
 
     await part_1_undo()

@@ -31,9 +31,9 @@ from ecs_agent.prompts.contracts import (
     SystemPromptConfigSpec,
     TriggerSpec,
 )
-from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers import FakeModel, OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.skills.discovery import discover_skills
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
@@ -85,7 +85,7 @@ async def main() -> None:
     """Run the UI Design Flow E2E example.
 
     Environment Variables:
-        LLM_API_KEY: OpenAI-compatible API key (uses FakeProvider if not set)
+        LLM_API_KEY: OpenAI-compatible API key (uses FakeModel if not set)
         LLM_BASE_URL: API base URL (default: DashScope)
         LLM_MODEL: Model name (default: qwen3.5-flash)
         DEBUG: Set to '1' or 'true' to enable debug-level logging
@@ -109,15 +109,15 @@ async def main() -> None:
     )
     model: str = os.environ.get("LLM_MODEL", "qwen3.5-flash")
 
-    provider: LLMProvider
+    provider: LLMModel
     if api_key:
-        logger.info("using_provider", provider="OpenAIProvider", model=model)
-        print(f"Using OpenAIProvider with model: {model}")
-        provider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        logger.info("using_provider", provider="OpenAIModel", model=model)
+        print(f"Using OpenAIModel with model: {model}")
+        provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
-        logger.info("using_provider", provider="FakeProvider")
-        print("No LLM_API_KEY set. Using FakeProvider for demonstration.")
-        provider = FakeProvider(
+        logger.info("using_provider", provider="FakeModel")
+        print("No LLM_API_KEY set. Using FakeModel for demonstration.")
+        provider = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(

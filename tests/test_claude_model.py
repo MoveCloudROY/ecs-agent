@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, Mock
 import httpx
 import pytest
 
-from ecs_agent.providers.claude_provider import ClaudeProvider
+from ecs_agent.providers.claude_model import ClaudeModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.types import (
     FileRefPart,
     ImageUrlPart,
@@ -60,7 +60,7 @@ def _anthropic_config(
 
 
 def test_constructor_stores_configuration() -> None:
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(
             api_key="test-key",
             base_url="https://test.anthropic.com",
@@ -76,7 +76,7 @@ def test_constructor_stores_configuration() -> None:
 
 
 def test_constructor_uses_default_base_url_and_max_tokens() -> None:
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
 
@@ -85,7 +85,7 @@ def test_constructor_uses_default_base_url_and_max_tokens() -> None:
 
 
 def test_build_messages_extracts_system_and_formats_content_blocks() -> None:
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     messages = [
@@ -104,7 +104,7 @@ def test_build_messages_extracts_system_and_formats_content_blocks() -> None:
 
 
 def test_build_messages_converts_tool_result_to_user_tool_result_block() -> None:
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     messages = [
@@ -130,7 +130,7 @@ def test_build_messages_converts_tool_result_to_user_tool_result_block() -> None
 
 def test_build_messages_delivers_summary_xml_in_system_string() -> None:
     """Test that Anthropic adapter delivers XML summary in system string."""
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
 
@@ -149,7 +149,7 @@ def test_build_messages_delivers_summary_xml_in_system_string() -> None:
 
 
 def test_build_tools_converts_parameters_to_input_schema() -> None:
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     tools = [
@@ -180,7 +180,7 @@ def test_build_tools_converts_parameters_to_input_schema() -> None:
 
 
 def test_parse_response_text_content_blocks() -> None:
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     response_data: dict[str, Any] = {
@@ -200,7 +200,7 @@ def test_parse_response_text_content_blocks() -> None:
 
 
 def test_parse_response_usage_includes_cache_fields_and_metadata() -> None:
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     response_data: dict[str, Any] = {
@@ -236,7 +236,7 @@ def test_build_messages_unsupported_multimodal_without_vision_raises(
     parts: list[ImageUrlPart | FileRefPart],
     expected_part_name: str,
 ) -> None:
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
 
@@ -251,7 +251,7 @@ def test_build_messages_unsupported_multimodal_without_vision_raises(
 
 
 def test_parse_response_tool_use_content_blocks() -> None:
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     response_data: dict[str, Any] = {
@@ -276,7 +276,7 @@ def test_parse_response_tool_use_content_blocks() -> None:
 
 
 def test_parse_response_mixed_text_and_tool_use_blocks() -> None:
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     response_data: dict[str, Any] = {
@@ -310,7 +310,7 @@ async def test_complete_non_streaming_makes_expected_request() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(
             api_key="test-key", base_url="https://api.anthropic.com"
         ),
@@ -379,7 +379,7 @@ async def test_complete_raises_on_http_status_error() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     provider._client = mock_client
@@ -391,10 +391,10 @@ async def test_complete_raises_on_http_status_error() -> None:
 
 
 def test_protocol_compliance() -> None:
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
-    assert isinstance(provider, LLMProvider)
+    assert isinstance(provider, LLMModel)
 
 
 @pytest.mark.asyncio
@@ -435,7 +435,7 @@ async def test_complete_streaming_returns_async_iterator() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     provider._client = mock_client
@@ -461,7 +461,7 @@ async def test_complete_streaming_uses_stream_request_with_stream_true() -> None
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(
             api_key="test-key", base_url="https://api.anthropic.com"
         ),
@@ -525,7 +525,7 @@ async def test_streaming_yields_text_deltas_from_content_block_delta() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     provider._client = mock_client
@@ -589,7 +589,7 @@ async def test_streaming_accumulates_tool_use_input_json_until_content_block_sto
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     provider._client = mock_client
@@ -645,7 +645,7 @@ async def test_streaming_tool_use_invalid_json_yields_partial_arguments() -> Non
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     provider._client = mock_client
@@ -681,7 +681,7 @@ async def test_streaming_handles_message_delta_finish_reason() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     provider._client = mock_client
@@ -714,7 +714,7 @@ async def test_streaming_skips_empty_lines_and_done_marker() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     provider._client = mock_client
@@ -738,7 +738,7 @@ async def test_streaming_timeout_uses_read_none_and_custom_values() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = ClaudeProvider(
+    provider = ClaudeModel(
         config=_anthropic_config(api_key="test-key"),
         connect_timeout=5.0,
         read_timeout=90.0,

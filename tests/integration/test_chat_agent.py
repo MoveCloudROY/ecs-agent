@@ -4,7 +4,7 @@ import pytest
 
 from ecs_agent.components import ConversationComponent, LLMComponent, TerminalComponent
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -13,8 +13,8 @@ from ecs_agent.types import CompletionResult, Message, ToolSchema
 
 def make_recording_fake_provider(
     responses: list[CompletionResult],
-) -> tuple[FakeProvider, dict[str, int]]:
-    provider = FakeProvider(responses=responses)
+) -> tuple[FakeModel, dict[str, int]]:
+    provider = FakeModel(responses=responses)
     call_counts = {"attempt": 0, "success": 0}
     original_complete = provider.complete
 
