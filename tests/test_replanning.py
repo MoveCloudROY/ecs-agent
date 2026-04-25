@@ -13,14 +13,14 @@ from ecs_agent.components import (
 )
 from ecs_agent.prompts.contracts import TriggerSpec
 from ecs_agent.core import World
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.systems.replanning import ReplanningSystem
 from ecs_agent.types import CompletionResult, Message, PlanRevisedEvent
 
 pytestmark = pytest.mark.asyncio
 
 
-class RecordingFakeProvider(FakeProvider):
+class RecordingFakeModel(FakeModel):
     def __init__(self, responses: list[CompletionResult]) -> None:
         super().__init__(responses=responses)
         self.calls: list[list[Message]] = []
@@ -35,7 +35,7 @@ class RecordingFakeProvider(FakeProvider):
         return await super().complete(messages, tools=None)
 
 
-class FlakyRecordingProvider(FakeProvider):
+class FlakyRecordingProvider(FakeModel):
     def __init__(self) -> None:
         super().__init__(
             responses=[
@@ -64,7 +64,7 @@ class FlakyRecordingProvider(FakeProvider):
 
 def _create_entity(
     world: World,
-    provider: FakeProvider,
+    provider: FakeModel,
     *,
     steps: list[str],
     current_step: int,
@@ -92,7 +92,7 @@ def _create_entity(
 
 async def test_replanning_skip_completed_plan() -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -119,7 +119,7 @@ async def test_replanning_skip_completed_plan() -> None:
 
 async def test_replanning_skip_no_completed_steps() -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -145,7 +145,7 @@ async def test_replanning_skip_no_completed_steps() -> None:
 
 async def test_replanning_skip_already_replanned() -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -174,7 +174,7 @@ async def test_replanning_skip_already_replanned() -> None:
 
 async def test_replanning_revises_steps() -> None:
     world = World()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -200,7 +200,7 @@ async def test_replanning_revises_steps() -> None:
 
 async def test_replanning_publishes_event() -> None:
     world = World()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -234,7 +234,7 @@ async def test_replanning_publishes_event() -> None:
 
 async def test_replanning_no_event_when_steps_unchanged() -> None:
     world = World()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -265,7 +265,7 @@ async def test_replanning_no_event_when_steps_unchanged() -> None:
 
 async def test_replanning_graceful_on_invalid_json() -> None:
     world = World()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="this is not json")
@@ -288,7 +288,7 @@ async def test_replanning_graceful_on_invalid_json() -> None:
 
 async def test_replanning_graceful_on_provider_exhausted() -> None:
     world = World()
-    provider = FakeProvider(responses=[])
+    provider = FakeModel(responses=[])
     entity_id = _create_entity(
         world,
         provider,
@@ -325,7 +325,7 @@ async def test_prompt_context_injection_is_transient_for_replanning_provider_cal
     None
 ):
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -432,7 +432,7 @@ async def test_event_trigger_injection_is_transient_for_replanning_provider_call
     None
 ):
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(

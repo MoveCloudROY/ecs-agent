@@ -9,7 +9,7 @@ calling the subagent tool handlers directly from demo code:
 
 It supports two modes:
 
-- FakeProvider mode when ``LLM_API_KEY`` is unset.
+- FakeModel mode when ``LLM_API_KEY`` is unset.
 - Real OpenAI-compatible mode (for Aliyun/Qwen or another compatible endpoint)
   when ``LLM_API_KEY`` is present.
 """
@@ -30,9 +30,9 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import configure_logging
-from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers import FakeModel, OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.subagent import SubagentSystem
@@ -114,7 +114,7 @@ PARENT_USER_PROMPT = (
 
 
 class DelayedProvider:
-    def __init__(self, provider: LLMProvider, delay_seconds: float) -> None:
+    def __init__(self, provider: LLMModel, delay_seconds: float) -> None:
         self._provider = provider
         self._delay_seconds = delay_seconds
 
@@ -152,10 +152,10 @@ async def main() -> None:
     model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
 
     if api_key:
-        print(f"Using OpenAIProvider with model: {model}")
+        print(f"Using OpenAIModel with model: {model}")
         print(f"Base URL: {base_url}")
     else:
-        print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
+        print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
     print()
 
@@ -175,7 +175,7 @@ async def main() -> None:
 
 def _build_world(
     *,
-    parent_provider: LLMProvider,
+    parent_provider: LLMModel,
     registry: SubagentRegistryComponent,
     model: str,
 ) -> tuple[World, int]:
@@ -217,9 +217,9 @@ def _build_providers(
     api_key: str,
     base_url: str,
     model: str,
-) -> tuple[LLMProvider, SubagentRegistryComponent]:
+) -> tuple[LLMModel, SubagentRegistryComponent]:
     if api_key:
-        base_provider = OpenAIProvider(
+        base_model = OpenAIModel(
             config=ProviderConfig(
                 provider_id="openai",
                 base_url=base_url,
@@ -228,11 +228,11 @@ def _build_providers(
             ),
             model=model,
         )
-        registry = _build_registry(base_provider, model=model)
-        return base_provider, registry
+        registry = _build_registry(base_model, model=model)
+        return base_model, registry
 
-    parent_provider = FakeProvider(responses=_fake_parent_responses())
-    sync_provider = FakeProvider(
+    parent_provider = FakeModel(responses=_fake_parent_responses())
+    sync_provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -246,7 +246,7 @@ def _build_providers(
         ]
     )
     slow_provider = DelayedProvider(
-        FakeProvider(
+        FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -258,7 +258,7 @@ def _build_providers(
         ),
         delay_seconds=0.2,
     )
-    queued_provider = FakeProvider(
+    queued_provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -268,7 +268,7 @@ def _build_providers(
             )
         ]
     )
-    stream_provider = FakeProvider(
+    stream_provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -306,7 +306,7 @@ def _build_providers(
     return parent_provider, registry
 
 
-def _build_registry(provider: LLMProvider, *, model: str) -> SubagentRegistryComponent:
+def _build_registry(provider: LLMModel, *, model: str) -> SubagentRegistryComponent:
     return SubagentRegistryComponent(
         subagents={
             "sync-worker": SubagentConfig(

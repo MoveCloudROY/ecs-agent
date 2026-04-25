@@ -10,13 +10,13 @@ from ecs_agent.components import (
 )
 from ecs_agent.conversation_tree import add_message, create_branch, revert_to_message
 from ecs_agent.core import World
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import CompletionResult, Message
 
 
-class RecordingFakeProvider(FakeProvider):
-    """FakeProvider that records all messages sent to it."""
+class RecordingFakeModel(FakeModel):
+    """FakeModel that records all messages sent to it."""
 
     def __init__(self, responses: list[CompletionResult]) -> None:
         super().__init__(responses=responses)
@@ -36,7 +36,7 @@ class RecordingFakeProvider(FakeProvider):
 async def test_reasoning_uses_tree_when_tree_component_exists() -> None:
     """ReasoningSystem uses linearize(tree) when ConversationTreeComponent exists."""
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="reply"))]
     )
 
@@ -70,7 +70,7 @@ async def test_reasoning_uses_tree_when_tree_component_exists() -> None:
 async def test_reasoning_falls_back_to_flat_conversation_when_no_tree() -> None:
     """ReasoningSystem uses ConversationComponent when tree is absent (backward compat)."""
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="reply"))]
     )
 
@@ -100,7 +100,7 @@ async def test_reasoning_falls_back_to_flat_conversation_when_no_tree() -> None:
 async def test_reasoning_tree_with_system_prompt() -> None:
     """ReasoningSystem prepends system prompt before tree messages."""
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
 
@@ -131,7 +131,7 @@ async def test_reasoning_tree_with_system_prompt() -> None:
 async def test_reasoning_after_revert_uses_reverted_branch_context() -> None:
     """After revert_to_message(), next reasoning uses reverted branch context."""
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="first")),
             CompletionResult(message=Message(role="assistant", content="second")),
@@ -175,7 +175,7 @@ async def test_reasoning_after_revert_uses_reverted_branch_context() -> None:
 async def test_reasoning_tree_follows_active_branch() -> None:
     """ReasoningSystem follows active branch when multiple branches exist."""
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
 

@@ -11,12 +11,12 @@ from ecs_agent.components import (
     PlanSearchComponent,
 )
 from ecs_agent.core import World
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.systems.tree_search import TreeNode, TreeSearchSystem
 from ecs_agent.types import CompletionResult, MCTSNodeScoredEvent, Message
 
 
-class RecordingFakeProvider(FakeProvider):
+class RecordingFakeModel(FakeModel):
     def __init__(self, responses: list[CompletionResult]) -> None:
         super().__init__(responses=responses)
         self.calls: list[list[Message]] = []
@@ -38,7 +38,7 @@ class RecordingFakeProvider(FakeProvider):
 
 
 def _make_world(
-    provider: RecordingFakeProvider,
+    provider: RecordingFakeModel,
     plan_search: PlanSearchComponent | None,
     include_plan: bool = False,
 ) -> tuple[World, int]:
@@ -78,7 +78,7 @@ def test_select_phase_chooses_highest_ucb1_child() -> None:
 
 @pytest.mark.asyncio
 async def test_expand_phase_limits_children_to_max_branching() -> None:
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -104,7 +104,7 @@ async def test_expand_phase_limits_children_to_max_branching() -> None:
 
 @pytest.mark.asyncio
 async def test_simulate_phase_clamps_score_to_zero_one_range() -> None:
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="1.7")),
         ]
@@ -147,7 +147,7 @@ def test_backpropagate_updates_scores_and_visits_to_root() -> None:
 
 @pytest.mark.asyncio
 async def test_depth_limit_stops_search_and_sets_best_plan() -> None:
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="first\nsecond")
@@ -171,7 +171,7 @@ async def test_depth_limit_stops_search_and_sets_best_plan() -> None:
 
 @pytest.mark.asyncio
 async def test_branching_limit_enforced_for_node_children() -> None:
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="a\nb\nc\nd\ne")
@@ -193,7 +193,7 @@ async def test_branching_limit_enforced_for_node_children() -> None:
 
 @pytest.mark.asyncio
 async def test_mutual_exclusion_skips_entity_with_existing_plan_component() -> None:
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="should not be used")
@@ -217,7 +217,7 @@ async def test_mutual_exclusion_skips_entity_with_existing_plan_component() -> N
 
 @pytest.mark.asyncio
 async def test_entity_without_plan_search_component_is_skipped() -> None:
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="unused")),
         ]
@@ -250,7 +250,7 @@ def test_extract_best_path_returns_highest_scoring_leaf_path() -> None:
 
 @pytest.mark.asyncio
 async def test_integration_populates_best_plan_and_publishes_scored_event() -> None:
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="collect data\nanswer")

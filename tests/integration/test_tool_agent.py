@@ -11,7 +11,7 @@ from ecs_agent.components import (
     ToolResultsComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers.fake_provider import FakeProvider
+from ecs_agent.providers.fake_model import FakeModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -43,7 +43,7 @@ async def test_tool_call_execution_end_to_end() -> None:
     final_response = CompletionResult(
         message=Message(role="assistant", content="The answer is 5")
     )
-    provider = FakeProvider(responses=[tool_call_response, final_response])
+    provider = FakeModel(responses=[tool_call_response, final_response])
 
     world = World()
     entity_id = world.create_entity()
@@ -92,7 +92,7 @@ async def test_tool_call_execution_end_to_end() -> None:
 
 @pytest.mark.asyncio
 async def test_unknown_tool_graceful_handling() -> None:
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(

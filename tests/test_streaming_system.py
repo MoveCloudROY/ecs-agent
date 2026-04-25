@@ -13,7 +13,7 @@ from ecs_agent.components import (
     StreamingComponent,
 )
 from ecs_agent.core import World
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import (
     CompletionResult,
@@ -42,7 +42,7 @@ class _RecordingLogger:
         self.error_calls.append((event, kwargs))
 
 
-class RecordingStreamingFakeProvider(FakeProvider):
+class RecordingStreamingFakeModel(FakeModel):
     def __init__(self, responses: list[CompletionResult]) -> None:
         super().__init__(responses=responses)
         self.calls: list[tuple[list[Message], list[ToolSchema] | None, bool]] = []
@@ -63,7 +63,7 @@ class RecordingStreamingFakeProvider(FakeProvider):
         )
 
 
-class ToolCallStreamingFakeProvider(FakeProvider):
+class ToolCallStreamingFakeModel(FakeModel):
     async def _stream_complete(
         self, result: CompletionResult
     ) -> AsyncIterator[StreamDelta]:
@@ -90,7 +90,7 @@ class ToolCallStreamingFakeProvider(FakeProvider):
         yield StreamDelta(finish_reason="tool_calls")
 
 
-class FailingStreamingFakeProvider(FakeProvider):
+class FailingStreamingFakeModel(FakeModel):
     async def _stream_complete(
         self, result: CompletionResult
     ) -> AsyncIterator[StreamDelta]:
@@ -99,7 +99,7 @@ class FailingStreamingFakeProvider(FakeProvider):
         raise RuntimeError("stream broke")
 
 
-class ReasoningContentStreamingFakeProvider(FakeProvider):
+class ReasoningContentStreamingFakeModel(FakeModel):
     async def _stream_complete(
         self, result: CompletionResult
     ) -> AsyncIterator[StreamDelta]:
@@ -112,7 +112,7 @@ class ReasoningContentStreamingFakeProvider(FakeProvider):
 @pytest.mark.asyncio
 async def test_streaming_enabled_calls_provider_with_stream_true() -> None:
     world = World()
-    provider = RecordingStreamingFakeProvider(
+    provider = RecordingStreamingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="Hello"))]
     )
     entity_id = world.create_entity()
@@ -131,7 +131,7 @@ async def test_streaming_enabled_calls_provider_with_stream_true() -> None:
 @pytest.mark.asyncio
 async def test_streaming_produces_complete_message_from_deltas() -> None:
     world = World()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="Hello world"))
         ]
@@ -154,7 +154,7 @@ async def test_streaming_produces_complete_message_from_deltas() -> None:
 @pytest.mark.asyncio
 async def test_streaming_events_emitted_in_order() -> None:
     world = World()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="OK"))]
     )
     entity_id = world.create_entity()
@@ -195,7 +195,7 @@ async def test_streaming_events_emitted_in_order() -> None:
 @pytest.mark.asyncio
 async def test_streaming_tool_call_deltas_accumulate_into_pending_tool_calls() -> None:
     world = World()
-    provider = ToolCallStreamingFakeProvider(
+    provider = ToolCallStreamingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content=""))]
     )
     entity_id = world.create_entity()
@@ -225,7 +225,7 @@ async def test_streaming_error_preserves_partial_content_and_sets_error_componen
     None
 ):
     world = World()
-    provider = FailingStreamingFakeProvider(
+    provider = FailingStreamingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="ignored"))
         ]
@@ -252,7 +252,7 @@ async def test_streaming_error_preserves_partial_content_and_sets_error_componen
 @pytest.mark.asyncio
 async def test_without_streaming_component_uses_non_streaming_path() -> None:
     world = World()
-    provider = RecordingStreamingFakeProvider(
+    provider = RecordingStreamingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="non-stream"))
         ]
@@ -272,7 +272,7 @@ async def test_without_streaming_component_uses_non_streaming_path() -> None:
 @pytest.mark.asyncio
 async def test_streaming_component_disabled_uses_non_streaming_path() -> None:
     world = World()
-    provider = RecordingStreamingFakeProvider(
+    provider = RecordingStreamingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="still non-stream")
@@ -299,7 +299,7 @@ async def test_streaming_logs_first_sse_and_first_content_delta_latency(
     from ecs_agent.systems import reasoning as reasoning_module
 
     world = World()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="Latency check"))
         ]
@@ -347,7 +347,7 @@ async def test_streaming_non_blocking_delta_publish_avoids_handler_backpressure(
     None
 ):
     world = World()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ABCD"))]
     )
 
@@ -383,7 +383,7 @@ async def test_streaming_non_blocking_delta_publish_avoids_handler_backpressure(
 @pytest.mark.asyncio
 async def test_streaming_publishes_reasoning_and_content_deltas_separately() -> None:
     world = World()
-    provider = ReasoningContentStreamingFakeProvider(
+    provider = ReasoningContentStreamingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="ignored"))
         ]
@@ -420,7 +420,7 @@ async def test_streaming_emits_reasoning_end_then_content_start_transition_event
     None
 ):
     world = World()
-    provider = ReasoningContentStreamingFakeProvider(
+    provider = ReasoningContentStreamingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="ignored"))
         ]
@@ -470,7 +470,7 @@ async def test_streaming_contract_emits_single_start_and_end_around_reasoning_an
     None
 ):
     world = World()
-    provider = ReasoningContentStreamingFakeProvider(
+    provider = ReasoningContentStreamingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="ignored"))
         ]

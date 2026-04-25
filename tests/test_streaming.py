@@ -13,9 +13,9 @@ from ecs_agent.components import (
     StreamingComponent,
 )
 from ecs_agent.core import World
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.openai_provider import OpenAIProvider
+from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import (
     CompletionResult,
@@ -80,7 +80,7 @@ async def test_non_streaming_backward_compatibility() -> None:
     mock_client.post.return_value = mock_response
     mock_client.stream = Mock()
 
-    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
+    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     result = await provider.complete(
@@ -105,7 +105,7 @@ async def test_streaming_returns_stream_delta_objects() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
+    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     stream_iter = await provider.complete(
@@ -137,7 +137,7 @@ async def test_streaming_sse_content_chunks() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
+    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     stream_iter = await provider.complete(
@@ -184,7 +184,7 @@ async def test_streaming_preserves_reasoning_content_separately_from_content() -
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
+    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     stream_iter = await provider.complete(
@@ -245,7 +245,7 @@ async def test_streaming_accumulates_tool_call_chunks_by_index() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
+    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     stream_iter = await provider.complete(
@@ -278,7 +278,7 @@ async def test_done_sentinel_stops_iteration() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
+    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     stream_iter = await provider.complete(
@@ -310,7 +310,7 @@ async def test_streaming_timeout_configuration() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(api_key="test-key", base_url="https://test.openai.com/v1")
     )
     provider._client = mock_client
@@ -344,7 +344,7 @@ async def test_streaming_timeout_uses_provider_custom_timeout() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
 
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(api_key="test-key"),
         connect_timeout=4.0,
         read_timeout=90.0,
@@ -365,20 +365,20 @@ async def test_streaming_timeout_uses_provider_custom_timeout() -> None:
     assert timeout.pool == 3.0
 
 
-# FakeProvider Streaming Tests
+# FakeModel Streaming Tests
 
 
 @pytest.mark.asyncio
-async def test_fake_provider_streams_response_as_character_deltas() -> None:
-    """FakeProvider should stream response character-by-character when stream=True."""
-    from ecs_agent.providers import FakeProvider
+async def test_fake_model_streams_response_as_character_deltas() -> None:
+    """FakeModel should stream response character-by-character when stream=True."""
+    from ecs_agent.providers import FakeModel
     from ecs_agent.types import Usage
 
     msg = Message(role="assistant", content="Hi!")
     usage = Usage(prompt_tokens=1, completion_tokens=2, total_tokens=3)
     result = CompletionResult(message=msg, usage=usage)
 
-    provider = FakeProvider(responses=[result])
+    provider = FakeModel(responses=[result])
     stream_iter = await provider.complete(
         [Message(role="user", content="hello")], stream=True
     )
@@ -395,9 +395,9 @@ async def test_fake_provider_streams_response_as_character_deltas() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fake_provider_streaming_with_tool_calls() -> None:
-    """FakeProvider streaming should preserve tool calls in final message."""
-    from ecs_agent.providers import FakeProvider
+async def test_fake_model_streaming_with_tool_calls() -> None:
+    """FakeModel streaming should preserve tool calls in final message."""
+    from ecs_agent.providers import FakeModel
     from ecs_agent.types import ToolCall, Usage
 
     tool_call = ToolCall(id="tc1", name="search", arguments={"q": "test"})
@@ -405,7 +405,7 @@ async def test_fake_provider_streaming_with_tool_calls() -> None:
     usage = Usage(prompt_tokens=5, completion_tokens=3, total_tokens=8)
     result = CompletionResult(message=msg, usage=usage)
 
-    provider = FakeProvider(responses=[result])
+    provider = FakeModel(responses=[result])
     stream_iter = await provider.complete(
         [Message(role="user", content="search")], stream=True
     )
@@ -423,16 +423,16 @@ async def test_fake_provider_streaming_with_tool_calls() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fake_provider_streaming_empty_content() -> None:
-    """FakeProvider should handle empty content gracefully."""
-    from ecs_agent.providers import FakeProvider
+async def test_fake_model_streaming_empty_content() -> None:
+    """FakeModel should handle empty content gracefully."""
+    from ecs_agent.providers import FakeModel
     from ecs_agent.types import Usage
 
     msg = Message(role="assistant", content="")
     usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
     result = CompletionResult(message=msg, usage=usage)
 
-    provider = FakeProvider(responses=[result])
+    provider = FakeModel(responses=[result])
     stream_iter = await provider.complete(
         [Message(role="user", content="hi")], stream=True
     )
@@ -445,14 +445,14 @@ async def test_fake_provider_streaming_empty_content() -> None:
     assert deltas[0].usage == usage
 
 
-class _CancelledStreamingFakeProvider(FakeProvider):
+class _CancelledStreamingFakeModel(FakeModel):
     async def _stream_complete(self, result: CompletionResult):
         _ = result
         yield StreamDelta(content="partial")
         raise asyncio.CancelledError()
 
 
-class _ChunkedStreamingFakeProvider(FakeProvider):
+class _ChunkedStreamingFakeModel(FakeModel):
     def __init__(self, responses: list[CompletionResult], chunks: list[str]) -> None:
         super().__init__(responses=responses)
         self._chunks = chunks
@@ -467,7 +467,7 @@ class _ChunkedStreamingFakeProvider(FakeProvider):
 @pytest.mark.asyncio
 async def test_streaming_partial_content_persisted_on_interrupt_cancel() -> None:
     world = World()
-    provider = _CancelledStreamingFakeProvider(
+    provider = _CancelledStreamingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="ignored"))
         ]
@@ -498,7 +498,7 @@ async def test_streaming_partial_content_persisted_on_interrupt_cancel() -> None
 @pytest.mark.asyncio
 async def test_streaming_partial_reraises_cancelled_after_interrupt_cleanup() -> None:
     world = World()
-    provider = _CancelledStreamingFakeProvider(
+    provider = _CancelledStreamingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="ignored"))
         ]
@@ -524,7 +524,7 @@ async def test_streaming_interrupt_mid_generation_preserves_partial_and_emits_st
     None
 ):
     world = World()
-    provider = _ChunkedStreamingFakeProvider(
+    provider = _ChunkedStreamingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="ignored"))
         ],
@@ -584,7 +584,7 @@ async def test_streaming_interrupt_component_preexisting_skips_streaming_safely(
     None
 ):
     world = World()
-    provider = _ChunkedStreamingFakeProvider(
+    provider = _ChunkedStreamingFakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="ignored"))
         ],

@@ -23,9 +23,9 @@ import pytest
 from ecs_agent.components import ConversationComponent, LLMComponent, ToolRegistryComponent
 from ecs_agent.components.definitions import TerminalComponent
 from ecs_agent.core import Runner, World
-from ecs_agent.providers.claude_provider import ClaudeProvider
+from ecs_agent.providers.claude_model import ClaudeModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.openai_provider import OpenAIProvider
+from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.skills import SkillManager
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -34,7 +34,7 @@ from ecs_agent.tools.builtins import BuiltinToolsSkill
 from ecs_agent.types import Message
 
 
-def _make_provider(live_api_key: str) -> OpenAIProvider | ClaudeProvider:
+def _make_provider(live_api_key: str) -> OpenAIModel | ClaudeModel:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
     base_url = os.getenv(
         "LLM_BASE_URL",
@@ -52,8 +52,8 @@ def _make_provider(live_api_key: str) -> OpenAIProvider | ClaudeProvider:
     )
 
     if api_format_str == "anthropic":
-        return ClaudeProvider(config=config, model=model)
-    return OpenAIProvider(config=config, model=model)
+        return ClaudeModel(config=config, model=model)
+    return OpenAIModel(config=config, model=model)
 
 
 def _build_world(

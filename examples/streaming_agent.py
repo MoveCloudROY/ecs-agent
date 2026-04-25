@@ -1,7 +1,7 @@
 """Streaming agent example demonstrating real-time response streaming.
 
 This example shows how to use the streaming feature:
-- Creates an OpenAIProvider (with FakeProvider fallback for testing)
+- Creates an OpenAIModel (with FakeModel fallback for testing)
 - Calls provider.complete(messages, stream=True) to get streaming deltas
 - Iterates AsyncIterator[StreamDelta] and prints content chunks in real-time
 - Shows final delta with usage stats (prompt_tokens, completion_tokens, total_tokens)
@@ -27,7 +27,7 @@ import os
 import sys
 
 from ecs_agent.logging import configure_logging
-from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers import FakeModel, OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.types import CompletionResult, Message, Usage
 
@@ -46,20 +46,20 @@ async def main() -> None:
 
     # --- Create LLM provider ---
     if api_key:
-        print(f"Using OpenAIProvider with model: {model}")
+        print(f"Using OpenAIModel with model: {model}")
         print(f"Base URL: {base_url}")
-        provider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
-        print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
+        print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
         print()
         # Create a fake provider that streams character-by-character
-        provider = FakeProvider(
+        provider = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
                         role="assistant",
-                        content="This is a streamed response from the FakeProvider. Each character arrives as a separate chunk, simulating real-time streaming from an LLM.",
+                        content="This is a streamed response from the FakeModel. Each character arrives as a separate chunk, simulating real-time streaming from an LLM.",
                     ),
                     usage=Usage(
                         prompt_tokens=15, completion_tokens=35, total_tokens=50

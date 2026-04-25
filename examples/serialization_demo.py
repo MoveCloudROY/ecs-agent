@@ -11,13 +11,13 @@ Key features:
 - Multiple component types: LLMComponent, ConversationComponent, PlanComponent, etc.
 - Non-serializable fields (provider, handlers) are handled gracefully
 - Provider re-injection on deserialization
-- No API key required (uses FakeProvider)
+- No API key required (uses FakeModel)
 
 Usage:
     python examples/serialization_demo.py
 
 Environment variables:
-    None required - uses FakeProvider for demonstration
+    None required - uses FakeModel for demonstration
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from ecs_agent.components import (
     ToolResultsComponent,
 )
 from ecs_agent.core import World
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.serialization import WorldSerializer
 from ecs_agent.types import (
     CompletionResult,
@@ -54,7 +54,7 @@ from ecs_agent.types import (
 async def main() -> None:
     """Demonstrate World serialization and deserialization."""
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="This is a response."),

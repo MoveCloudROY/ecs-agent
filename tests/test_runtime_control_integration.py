@@ -13,7 +13,7 @@ from ecs_agent.conversation_tree import (
     revert_to_message,
     get_active_leaf,
 )
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import Message, CompletionResult, InterruptionReason
 
@@ -64,14 +64,14 @@ async def test_multi_entity_model_switching_isolation():
     world = World()
     runner = Runner()
 
-    provider1 = FakeProvider(
+    provider1 = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="Model-1 response")
             )
         ]
     )
-    provider2 = FakeProvider(
+    provider2 = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(role="assistant", content="Model-2 response")
@@ -95,7 +95,7 @@ async def test_multi_entity_model_switching_isolation():
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
 
-    llm1.pending_model = FakeProvider(
+    llm1.pending_model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="switched"))],
         model_id="model-1-switched",
     )
@@ -161,7 +161,7 @@ async def test_complete_runtime_control_workflow():
     world.apply_pending_system_operations()
 
     # 3. Model switching
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="Test response"))
         ]
@@ -172,7 +172,7 @@ async def test_complete_runtime_control_workflow():
         agent, ConversationComponent(messages=[Message(role="user", content="Hello")])
     )
 
-    llm.pending_model = FakeProvider(
+    llm.pending_model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="switched response"))],
         model_id="fake-switched",
     )

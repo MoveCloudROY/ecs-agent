@@ -17,12 +17,12 @@ from ecs_agent.components import (
 )
 from ecs_agent.prompts.contracts import TriggerSpec
 from ecs_agent.core import World
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.systems.planning import PlanningSystem
 from ecs_agent.types import CompletionResult, Message, PlanStepCompletedEvent, ToolCall
 
 
-class RecordingFakeProvider(FakeProvider):
+class RecordingFakeModel(FakeModel):
     def __init__(self, responses: list[CompletionResult]) -> None:
         super().__init__(responses=responses)
         self.calls: list[list[Message]] = []
@@ -37,7 +37,7 @@ class RecordingFakeProvider(FakeProvider):
         return await super().complete(messages, tools=None)
 
 
-class FlakyRecordingProvider(FakeProvider):
+class FlakyRecordingProvider(FakeModel):
     def __init__(self) -> None:
         super().__init__(
             responses=[
@@ -63,7 +63,7 @@ class FlakyRecordingProvider(FakeProvider):
 @pytest.mark.asyncio
 async def test_process_advances_one_step_appends_response_and_publishes_event() -> None:
     world = World()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="step done"))
         ]
@@ -104,7 +104,7 @@ async def test_process_advances_one_step_appends_response_and_publishes_event() 
 @pytest.mark.asyncio
 async def test_skips_entity_when_plan_is_completed() -> None:
     world = World()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="unused"))
         ]
@@ -130,7 +130,7 @@ async def test_skips_entity_when_plan_is_completed() -> None:
 @pytest.mark.asyncio
 async def test_skips_entity_when_plan_steps_are_empty() -> None:
     world = World()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(message=Message(role="assistant", content="unused"))
         ]
@@ -153,7 +153,7 @@ async def test_skips_entity_when_plan_steps_are_empty() -> None:
 @pytest.mark.asyncio
 async def test_plan_context_is_injected_before_llm_call() -> None:
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
@@ -181,7 +181,7 @@ async def test_plan_context_is_injected_before_llm_call() -> None:
 async def test_tool_calls_attach_pending_tool_calls_component() -> None:
     world = World()
     tool_call = ToolCall(id="call-1", name="lookup", arguments={"q": "x"})
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -210,7 +210,7 @@ async def test_tool_calls_attach_pending_tool_calls_component() -> None:
 @pytest.mark.asyncio
 async def test_marks_plan_completed_after_final_step() -> None:
     world = World()
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="done"))]
     )
     entity_id = world.create_entity()
@@ -235,7 +235,7 @@ async def test_marks_plan_completed_after_final_step() -> None:
 @pytest.mark.asyncio
 async def test_provider_exhaustion_adds_terminal_component() -> None:
     world = World()
-    provider = FakeProvider(responses=[])
+    provider = FakeModel(responses=[])
     entity_id = world.create_entity()
     world.add_component(entity_id, LLMComponent(model=provider))
     world.add_component(
@@ -248,7 +248,7 @@ async def test_provider_exhaustion_adds_terminal_component() -> None:
 
     error = world.get_component(entity_id, ErrorComponent)
     terminal = world.get_component(entity_id, TerminalComponent)
-    # FakeProvider raises IndexError when empty -> caught as provider_exhausted
+    # FakeModel raises IndexError when empty -> caught as provider_exhausted
     assert terminal is not None
     assert terminal.reason == "provider_exhausted"
     assert error is None
@@ -291,7 +291,7 @@ async def test_prompt_context_injection_is_transient_for_planning_provider_call(
     None
 ):
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()
@@ -400,7 +400,7 @@ async def test_event_trigger_injection_is_transient_for_planning_provider_call()
     None
 ):
     world = World()
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
     entity_id = world.create_entity()

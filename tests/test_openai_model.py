@@ -4,9 +4,9 @@ import json
 import pytest
 import httpx
 from unittest.mock import AsyncMock, Mock
-from ecs_agent.providers.openai_provider import OpenAIProvider
+from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.types import (
     FileRefPart,
     ImageUrlPart,
@@ -34,8 +34,8 @@ def _openai_config(
 
 @pytest.mark.asyncio
 async def test_constructor_instantiation() -> None:
-    """Test OpenAIProvider can be instantiated with required parameters."""
-    provider = OpenAIProvider(
+    """Test OpenAIModel can be instantiated with required parameters."""
+    provider = OpenAIModel(
         config=_openai_config(
             api_key="test-key",
             base_url="https://test.openai.com/v1",
@@ -58,7 +58,7 @@ async def test_request_format(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(
             api_key="test-key",
             base_url="https://test.openai.com/v1",
@@ -120,7 +120,7 @@ async def test_response_parsing_content_and_usage(
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
+    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     messages = [Message(role="user", content="test")]
@@ -165,7 +165,7 @@ async def test_response_parsing_tool_calls(monkeypatch: pytest.MonkeyPatch) -> N
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
+    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     messages = [Message(role="user", content="What's the weather?")]
@@ -195,7 +195,7 @@ async def test_http_error_handling(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
+    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     messages = [Message(role="user", content="test")]
@@ -221,7 +221,7 @@ async def test_http_error_prints_response_body(
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
+    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     messages = [Message(role="user", content="test")]
@@ -242,7 +242,7 @@ async def test_network_error_prints_full_message(
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.side_effect = httpx.ConnectError("Connection refused")
 
-    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
+    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     messages = [Message(role="user", content="test")]
@@ -267,7 +267,7 @@ async def test_request_without_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
+    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     messages = [Message(role="user", content="test")]
@@ -281,9 +281,9 @@ async def test_request_without_tools(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 async def test_protocol_compliance() -> None:
-    """Test OpenAIProvider satisfies LLMProvider Protocol."""
-    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
-    assert isinstance(provider, LLMProvider)
+    """Test OpenAIModel satisfies LLMModel Protocol."""
+    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
+    assert isinstance(provider, LLMModel)
 
 
 @pytest.mark.asyncio
@@ -298,7 +298,7 @@ async def test_tool_call_messages_serialize_content_as_null() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
+    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     messages = [
@@ -338,7 +338,7 @@ async def test_assistant_message_with_content_and_tool_calls_preserves_content()
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
+    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     messages = [
@@ -370,7 +370,7 @@ async def test_convert_messages_serializes_tool_call_arguments_as_json_string() 
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
+    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     # Create message with tool call containing dict arguments
@@ -411,7 +411,7 @@ async def test_multimodal_chat_request_maps_parts_to_chat_content() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
+    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     await provider.complete(
@@ -459,7 +459,7 @@ async def test_multimodal_responses_request_maps_image_and_file_parts() -> None:
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
     provider._client = mock_client
@@ -507,7 +507,7 @@ async def test_openai_chat_adapter_delivers_system_prompt_containing_summary_xml
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIProvider(config=_openai_config(api_key="test-key"))
+    provider = OpenAIModel(config=_openai_config(api_key="test-key"))
     provider._client = mock_client
 
     summary_xml = "<chat_history_summary>Summary: X happened</chat_history_summary>"
@@ -544,7 +544,7 @@ async def test_openai_responses_adapter_delivers_summary_xml_in_instructions() -
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
     provider._client = mock_client
@@ -603,7 +603,7 @@ async def test_vision_responses_output_parses_parts_into_message_parts() -> None
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.return_value = mock_response
 
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
     provider._client = mock_client
@@ -619,7 +619,7 @@ async def test_vision_responses_output_parses_parts_into_message_parts() -> None
 async def test_invalid_api_format_string_raises_value_error() -> None:
     config = _openai_config(api_key="test-key")
     config.api_format = "invalid_api_format"
-    provider = OpenAIProvider(config=config)
+    provider = OpenAIModel(config=config)
 
     with pytest.raises(ValueError, match="Unsupported OpenAI provider api_format"):
         await provider.complete([Message(role="user", content="hello")])
@@ -627,7 +627,7 @@ async def test_invalid_api_format_string_raises_value_error() -> None:
 
 @pytest.mark.asyncio
 async def test_unsupported_api_format_raises_clear_error() -> None:
-    provider = OpenAIProvider(
+    provider = OpenAIModel(
         config=_openai_config(
             api_key="test-key",
             api_format=ApiFormat.OPENAI_EMBEDDINGS,

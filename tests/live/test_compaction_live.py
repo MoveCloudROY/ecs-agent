@@ -21,7 +21,7 @@ from ecs_agent.components.definitions import EntityRegistryComponent
 from ecs_agent.core import World
 from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.openai_provider import OpenAIProvider
+from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
@@ -29,7 +29,7 @@ from ecs_agent.types import CompletionResult, Message
 
 _registry_module = pytest.importorskip("ecs_agent.providers.registry")
 ProviderRegistry = _registry_module.ProviderRegistry
-get_llm_provider = _registry_module.get_llm_provider
+get_model = _registry_module.get_model
 
 COMPLETIONS_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 RESPONSES_URL = (
@@ -53,8 +53,8 @@ def _live_registry() -> ProviderRegistry:
     )
 
 
-def _make_manual_chat_provider(api_key: str) -> OpenAIProvider:
-    return OpenAIProvider(
+def _make_manual_chat_provider(api_key: str) -> OpenAIModel:
+    return OpenAIModel(
         config=ProviderConfig(
             provider_id="aliyun",
             base_url=COMPLETIONS_URL,
@@ -126,7 +126,7 @@ def _build_compaction_world(provider: object) -> tuple[World, EntityId]:
 async def test_live_compaction_xml_summary_visible_chat_completions(
     live_api_key: str,
 ) -> None:
-    provider = get_llm_provider(
+    provider = get_model(
         "aliyun/qwen3.5-flash",
         registry=_live_registry(),
         api_key=live_api_key,
@@ -181,7 +181,7 @@ async def test_live_compaction_xml_summary_visible_chat_completions(
 async def test_live_compaction_xml_summary_visible_responses_api(
     live_api_key: str,
 ) -> None:
-    provider = get_llm_provider(
+    provider = get_model(
         "aliyun-responses/qwen3.5-flash",
         registry=_live_registry(),
         api_key=live_api_key,
@@ -234,7 +234,7 @@ async def test_live_compaction_xml_summary_visible_responses_api(
 async def test_live_compaction_system_triggers_and_summarizes_chat(
     live_api_key: str,
 ) -> None:
-    provider = get_llm_provider(
+    provider = get_model(
         "aliyun/qwen3.5-flash",
         registry=_live_registry(),
         api_key=live_api_key,
@@ -268,7 +268,7 @@ async def test_live_compaction_system_triggers_and_summarizes_chat(
 async def test_live_compaction_system_triggers_and_summarizes_responses(
     live_api_key: str,
 ) -> None:
-    provider = get_llm_provider(
+    provider = get_model(
         "aliyun-responses/qwen3.5-flash",
         registry=_live_registry(),
         api_key=live_api_key,
@@ -300,7 +300,7 @@ async def test_live_compaction_system_triggers_and_summarizes_responses(
 
 @pytest.mark.asyncio
 async def test_live_compaction_full_history_method(live_api_key: str) -> None:
-    provider = get_llm_provider(
+    provider = get_model(
         "aliyun/qwen3.5-flash",
         registry=_live_registry(),
         api_key=live_api_key,
@@ -329,7 +329,7 @@ async def test_live_compaction_full_history_method(live_api_key: str) -> None:
 
 @pytest.mark.asyncio
 async def test_live_compaction_custom_prompt_template(live_api_key: str) -> None:
-    provider = get_llm_provider(
+    provider = get_model(
         "aliyun/qwen3.5-flash",
         registry=_live_registry(),
         api_key=live_api_key,

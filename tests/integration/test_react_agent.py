@@ -14,7 +14,7 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers.fake_provider import FakeProvider
+from ecs_agent.providers.fake_model import FakeModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.planning import PlanningSystem
@@ -47,7 +47,7 @@ def _tool_call_reply(tool_name: str, call_id: str, arguments: dict[str, str]) ->
 
 
 def _build_react_world(
-    provider: FakeProvider,
+    provider: FakeModel,
     plan_steps: list[str],
     tools: dict[str, ToolSchema] | None = None,
     handlers: dict[str, object] | None = None,
@@ -90,7 +90,7 @@ def _build_react_world(
 @pytest.mark.asyncio
 async def test_react_pure_reasoning_completes_plan() -> None:
     """Agent follows a 3-step plan with pure reasoning (no tools)."""
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             _reply("Step 1: I should gather information about the weather."),
             _reply("Step 2: Based on the data, it will rain tomorrow."),
@@ -161,7 +161,7 @@ async def test_react_thought_action_observation_loop() -> None:
         search_results.append(query)
         return "Python was created by Guido van Rossum in 1991."
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             # Step 1: LLM decides to use the search tool
             _tool_call_reply(
@@ -241,7 +241,7 @@ async def test_react_multiple_steps_with_tools() -> None:
         prices = {"AAPL": "182.50", "GOOGL": "141.80"}
         return f"${prices.get(symbol, 'N/A')}"
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             # Step 1: Look up AAPL price
             _tool_call_reply("get_price", "tc1", {"symbol": "AAPL"}),
@@ -316,7 +316,7 @@ async def test_react_tool_failure_does_not_break_plan() -> None:
     async def flaky_tool(x: str) -> str:
         raise ValueError(f"Connection timeout for {x}")
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             # Step 1: Try to use the flaky tool
             _tool_call_reply("flaky_tool", "tc_flaky", {"x": "data"}),
@@ -385,7 +385,7 @@ async def test_react_events_fire_for_all_steps() -> None:
     async def on_step(event: PlanStepCompletedEvent) -> None:
         events.append(event)
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             _tool_call_reply("calc", "tc1", {"q": "6*7"}),
             _reply("The answer to life is 42."),
@@ -433,7 +433,7 @@ async def test_react_terminates_after_plan_completion() -> None:
     The agent terminates via provider exhaustion on the ReasoningSystem side,
     or simply runs out of work and hits max_ticks.
     """
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             _reply("Done with step 1."),
         ]

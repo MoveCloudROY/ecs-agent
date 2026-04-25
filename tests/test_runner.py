@@ -16,7 +16,7 @@ from ecs_agent.components.definitions import (
 )
 from ecs_agent.core.runner import Runner
 from ecs_agent.core.world import World
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.terminal_cleanup import TerminalCleanupSystem
 from ecs_agent.types import (
@@ -96,7 +96,7 @@ class RemoveTargetSystem:
         self._has_removed = True
 
 
-class CancelledStreamingFakeProvider(FakeProvider):
+class CancelledStreamingFakeModel(FakeModel):
     async def _stream_complete(
         self, result: CompletionResult
     ) -> AsyncIterator[StreamDelta]:
@@ -105,7 +105,7 @@ class CancelledStreamingFakeProvider(FakeProvider):
         raise asyncio.CancelledError()
 
 
-class ChunkedStreamingFakeProvider(FakeProvider):
+class ChunkedStreamingFakeModel(FakeModel):
     def __init__(self, responses: list[CompletionResult], chunks: list[str]) -> None:
         super().__init__(responses=responses)
         self._chunks = chunks
@@ -346,7 +346,7 @@ class TestRunner:
     async def test_runner_graceful_interrupt_preserves_partial(
         self, world: World, runner: Runner
     ) -> None:
-        provider = CancelledStreamingFakeProvider(
+        provider = CancelledStreamingFakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="ignored"))
             ]
@@ -372,7 +372,7 @@ class TestRunner:
     async def test_runner_cancelled_error_not_misclassified(
         self, world: World, runner: Runner
     ) -> None:
-        provider = CancelledStreamingFakeProvider(
+        provider = CancelledStreamingFakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="ignored"))
             ]
@@ -395,7 +395,7 @@ class TestRunner:
     async def test_interruption_component_attached_on_graceful_stop(
         self, world: World, runner: Runner
     ) -> None:
-        provider = CancelledStreamingFakeProvider(
+        provider = CancelledStreamingFakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="ignored"))
             ]
@@ -445,7 +445,7 @@ class TestRunner:
     async def test_runner_graceful_interrupt_mid_stream_component_preserves_partial(
         self, world: World, runner: Runner
     ) -> None:
-        provider = ChunkedStreamingFakeProvider(
+        provider = ChunkedStreamingFakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="ignored"))
             ],
@@ -491,7 +491,7 @@ class TestRunner:
     async def test_reasoning_complete_stops_runner_end_of_tick_without_cleanup(
         self, world: World, runner: Runner
     ) -> None:
-        provider = FakeProvider(
+        provider = FakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="done")),
             ]
@@ -523,7 +523,7 @@ class TestRunner:
     async def test_terminal_cleanup_prevents_premature_stop_on_reasoning_complete(
         self, world: World, runner: Runner
     ) -> None:
-        provider = FakeProvider(
+        provider = FakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="done")),
                 CompletionResult(message=Message(role="assistant", content="done")),

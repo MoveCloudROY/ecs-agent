@@ -24,7 +24,7 @@ from ecs_agent.components import (
 from ecs_agent.components.definitions import KVStoreComponent
 from ecs_agent.core import Runner, World
 from ecs_agent.prompts.contracts import TriggerSpec
-from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers import OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -35,8 +35,8 @@ from ecs_agent.systems.user_prompt_normalization_system import (
 from ecs_agent.types import EntityId, Message
 
 
-def _make_provider(api_key: str, base_url: str, model: str) -> OpenAIProvider:
-    return OpenAIProvider(
+def _make_provider(api_key: str, base_url: str, model: str) -> OpenAIModel:
+    return OpenAIModel(
         config=ProviderConfig(
             provider_id="aliyun",
             base_url=base_url,

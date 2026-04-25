@@ -23,7 +23,7 @@ from ecs_agent.prompts.contracts import (
     SystemPromptConfigSpec,
     TriggerSpec,
 )
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.skills.skill import Skill
@@ -39,7 +39,7 @@ logger = get_logger(__name__)
 
 def compile_agent_specs(
     specs: dict[str, AgentSpec],
-    provider_factory: Callable[[str, str], LLMProvider],
+    provider_factory: Callable[[str, str], LLMModel],
     *,
     source_dir: Path | None = None,
 ) -> tuple[EntityId, World]:

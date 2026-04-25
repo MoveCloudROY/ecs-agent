@@ -24,7 +24,7 @@ from ecs_agent.prompts.contracts import (
     TriggerSpec,
 )
 import ecs_agent.prompts.provider as prompt_provider_module
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.prompts.registry import resolve_placeholder_values
 from ecs_agent.scratchbook import (
     ScratchbookArtifactPromptDef,
@@ -578,7 +578,7 @@ async def test_render_system_mirrors_to_llm_component() -> None:
     )
     world.add_component(
         entity_id,
-        LLMComponent(model=FakeProvider(responses=[])),
+        LLMComponent(model=FakeModel(responses=[])),
     )
 
     await SystemPromptRenderSystem().process(world)
@@ -986,7 +986,7 @@ def test_render_compaction_prompt_does_not_mutate_runtime_prompt_state() -> None
     world.add_component(
         entity_id,
         LLMComponent(
-            model=FakeProvider(responses=[]),
+            model=FakeModel(responses=[]),
             system_prompt="live llm prompt",
         ),
     )
@@ -1030,7 +1030,7 @@ async def test_system_prompt_render_system_cached_process_still_bridges_runtime_
     world.add_component(
         entity_id,
         LLMComponent(
-            model=FakeProvider(responses=[]),
+            model=FakeModel(responses=[]),
             system_prompt="stale llm prompt",
         ),
     )
@@ -1262,7 +1262,7 @@ async def test_legacy_agent_gets_xml_tail_without_explicit_placeholder() -> None
     world.add_component(
         entity_id,
         LLMComponent(
-            model=FakeProvider(responses=[]),
+            model=FakeModel(responses=[]),
             system_prompt="Legacy base",
         ),
     )
@@ -1287,7 +1287,7 @@ async def test_rerender_legacy_agent_after_summary_change_no_double_block() -> N
     world.add_component(
         entity_id,
         LLMComponent(
-            model=FakeProvider(responses=[]),
+            model=FakeModel(responses=[]),
             system_prompt="You are helpful.",
         ),
     )

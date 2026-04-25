@@ -6,8 +6,8 @@ This example shows system-level streaming (different from provider-level streami
 - Subscribes to StreamStartEvent, StreamReasoningDeltaEvent, StreamReasoningEndEvent,
   StreamContentStartEvent, StreamContentDeltaEvent, StreamEndEvent
 - Prints reasoning chunks and final content chunks in distinct phases
-- Uses OpenAIProvider with DashScope (env: LLM_API_KEY, LLM_BASE_URL, LLM_MODEL)
-- Falls back to FakeProvider for demo without API key
+- Uses OpenAIModel with DashScope (env: LLM_API_KEY, LLM_BASE_URL, LLM_MODEL)
+- Falls back to FakeModel for demo without API key
 
 Key difference from streaming_agent.py:
 - streaming_agent.py: Provider-level streaming (await provider.complete(stream=True))
@@ -23,9 +23,9 @@ import sys
 from ecs_agent.components import ConversationComponent, LLMComponent, StreamingComponent
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import configure_logging
-from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers import FakeModel, OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -55,18 +55,18 @@ async def main() -> None:
     model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
 
     # --- Create LLM provider ---
-    provider: LLMProvider
+    provider: LLMModel
     if api_key:
-        print(f"Using OpenAIProvider with model: {model}")
+        print(f"Using OpenAIModel with model: {model}")
         print(f"Base URL: {base_url}")
-        provider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
-        print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
+        print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
         print()
 
         # Create a fake provider that simulates streaming character-by-character
-        provider = FakeProvider(
+        provider = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(

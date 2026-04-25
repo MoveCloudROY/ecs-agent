@@ -31,7 +31,7 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers import OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -107,7 +107,7 @@ async def main() -> None:
     print()
 
     # --- Create LLM provider ---
-    provider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+    provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
 
     # --- Define the plan (ReAct steps) ---
     plan_steps = [

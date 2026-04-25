@@ -7,12 +7,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ecs_agent.providers.fake_provider import FakeProvider
+from ecs_agent.providers.fake_model import FakeModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.types import CompletionResult, Message
 
 
-class _OpenAIProviderStub:
+class _OpenAIModelStub:
     def __init__(self, content: str = "stub response") -> None:
         self.complete: AsyncMock = AsyncMock(
             return_value=CompletionResult(
@@ -27,8 +27,8 @@ def _completion(content: str = "fake demo response") -> CompletionResult:
 
 def _fake_provider(
     responses: int = 3, content: str = "fake demo response"
-) -> FakeProvider:
-    return FakeProvider(responses=[_completion(content) for _ in range(responses)])
+) -> FakeModel:
+    return FakeModel(responses=[_completion(content) for _ in range(responses)])
 
 
 def _load_example(module_name: str) -> Any:
@@ -43,11 +43,11 @@ async def test_prompt_normalization_demo_fake_mode_prints_rendered_markers(
 
     with patch.dict(os.environ, {}, clear=True):
         with patch(
-            "examples.prompt_normalization_demo.FakeProvider",
+            "examples.prompt_normalization_demo.FakeModel",
             return_value=_fake_provider(),
         ) as fake_ctor:
             with patch(
-                "examples.prompt_normalization_demo.OpenAIProvider",
+                "examples.prompt_normalization_demo.OpenAIModel",
                 create=True,
             ) as openai_ctor:
                 await module.main()
@@ -89,12 +89,12 @@ async def test_prompt_normalization_demo_real_mode_wiring_uses_env_vars() -> Non
         clear=True,
     ):
         with patch(
-            "examples.prompt_normalization_demo.FakeProvider",
-            side_effect=FakeProvider,
+            "examples.prompt_normalization_demo.FakeModel",
+            side_effect=FakeModel,
         ) as fake_ctor:
             with patch(
-                "examples.prompt_normalization_demo.OpenAIProvider",
-                return_value=_OpenAIProviderStub(),
+                "examples.prompt_normalization_demo.OpenAIModel",
+                return_value=_OpenAIModelStub(),
                 create=True,
             ) as openai_ctor:
                 await module.main()
@@ -119,8 +119,8 @@ async def test_prompt_normalization_demo_real_mode_env_gate() -> None:
     module = _load_example("prompt_normalization_demo")
 
     with patch(
-        "examples.prompt_normalization_demo.OpenAIProvider",
-        return_value=_OpenAIProviderStub(),
+        "examples.prompt_normalization_demo.OpenAIModel",
+        return_value=_OpenAIModelStub(),
         create=True,
     ) as openai_ctor:
         await module.main()

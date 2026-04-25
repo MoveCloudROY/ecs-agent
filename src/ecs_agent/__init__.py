@@ -50,8 +50,6 @@ from ecs_agent.types import (
     ToolTimeoutError,
     UserInputRequestedEvent,
 )
-from ecs_agent.providers.retry_model import RetryModel
-from ecs_agent.providers.retry_provider import RetryProvider  # backward-compat
 from ecs_agent.providers.embedding_provider import OpenAIEmbeddingProvider
 from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider
 from ecs_agent.tools import (
@@ -118,26 +116,24 @@ from ecs_agent.components.definitions import (
 from ecs_agent.providers import (
     ApiFormat,
     ClaudeModel,
-    ClaudeProvider,
     FakeModel,
     LLMModel,
-    LLMProvider,
     ModelId,
     OpenAIModel,
     ProviderConfig,
     ProviderEntry,
     ProviderRegistry,
+    RetryModel,
     create_model,
     format_model_id,
-    get_llm_provider,
     get_model,
     parse_model_id,
 )
 
 try:
-    from ecs_agent.providers import LiteLLMProvider
+    from ecs_agent.providers import LiteLLMModel
 except ImportError:
-    LiteLLMProvider = None  # type: ignore[assignment, misc]
+    LiteLLMModel = None  # type: ignore[assignment, misc]
 
 
 from ecs_agent.systems import (
@@ -167,7 +163,6 @@ __all__ = [
     "CheckpointRestoredEvent",
     "CheckpointSystem",
     "ClaudeModel",
-    "ClaudeProvider",
     "compile_agent_specs",
     "create_model",
     "CompactionCompleteEvent",
@@ -193,8 +188,7 @@ __all__ = [
     "FakeModel",
     "get_model",
     "LLMModel",
-    "LLMProvider",
-    "LiteLLMProvider",
+    "LiteLLMModel",
     "load_json_agents",
     "load_markdown_agent",
     "MCPConnectedEvent",
@@ -222,7 +216,6 @@ __all__ = [
     "RetryConfig",
     "OpenAIModel",
     "RetryModel",
-    "RetryProvider",
     "RunnerStateComponent",
     "SandboxConfigComponent",
     "Skill",
@@ -278,7 +271,7 @@ __all__ = [
     "sandboxed_execute",
     "scan_module",
     "parse_model_id",
-    "get_llm_provider",
+    "get_model",
     "switch_branch",
     "tool",
     "format_model_id",

@@ -1,8 +1,8 @@
 """Example demonstrating PermissionComponent and PermissionSystem with dual-mode LLM provider.
 
 This script shows how to restrict an agent's access to specific tools using
-a whitelist/blacklist policy. Supports both FakeProvider (no API key) and
-OpenAIProvider (with LLM_API_KEY) for flexible testing.
+a whitelist/blacklist policy. Supports both FakeModel (no API key) and
+OpenAIModel (with LLM_API_KEY) for flexible testing.
 """
 
 import asyncio
@@ -16,7 +16,7 @@ from ecs_agent.components import (
     PendingToolCallsComponent,
     ToolRegistryComponent,
 )
-from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers import FakeModel, OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.systems.permission import PermissionSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
@@ -33,14 +33,14 @@ async def main() -> None:
     
     # --- Create LLM provider ---
     if api_key:
-        print(f"Using OpenAIProvider with model: {model}")
+        print(f"Using OpenAIModel with model: {model}")
         print(f"Base URL: {base_url}")
-        provider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
-        print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
+        print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
         print()
-        provider = FakeProvider([])
+        provider = FakeModel([])
     
     world = World()
 

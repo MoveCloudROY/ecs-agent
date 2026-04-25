@@ -13,8 +13,8 @@ streaming telemetry see ``examples/subagent_delegation.py``.
 
 Dual-mode operation:
 
-- Without ``LLM_API_KEY``: Uses FakeProvider (no network calls needed).
-- With ``LLM_API_KEY``: Uses OpenAIProvider for real LLM interaction.
+- Without ``LLM_API_KEY``: Uses FakeModel (no network calls needed).
+- With ``LLM_API_KEY``: Uses OpenAIModel for real LLM interaction.
 """
 
 import asyncio
@@ -35,10 +35,10 @@ from ecs_agent.prompts.contracts import (
     PromptTemplateSource,
     SystemPromptConfigSpec,
 )
-from ecs_agent.providers import FakeProvider
-from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers import FakeModel
+from ecs_agent.providers import OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -82,20 +82,20 @@ async def main() -> None:
     model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
 
     if api_key:
-        print(f"Using OpenAIProvider with model: {model}")
+        print(f"Using OpenAIModel with model: {model}")
         print(f"Base URL: {base_url}")
         print()
     else:
-        print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
+        print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
         print()
 
     # ── Provider Setup ──────────────────────────────────────────────
-    manager_provider: LLMProvider
-    subagent_provider: LLMProvider
+    manager_provider: LLMModel
+    subagent_provider: LLMModel
 
     if api_key:
-        manager_provider = OpenAIProvider(
+        manager_provider = OpenAIModel(
             config=ProviderConfig(
                 provider_id="openai",
                 base_url=base_url,
@@ -104,7 +104,7 @@ async def main() -> None:
             ),
             model=model,
         )
-        subagent_provider = OpenAIProvider(
+        subagent_provider = OpenAIModel(
             config=ProviderConfig(
                 provider_id="openai",
                 base_url=base_url,
@@ -114,10 +114,10 @@ async def main() -> None:
             model=model,
         )
     else:
-        # FakeProvider for manager:
+        # FakeModel for manager:
         #   Turn 1 — call the 'subagent' tool synchronously (background=False).
         #   Turn 2 — produce a final summary once the result is available.
-        manager_provider = FakeProvider(
+        manager_provider = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -157,8 +157,8 @@ async def main() -> None:
             ]
         )
 
-        # FakeProvider for the researcher sub-agent
-        subagent_provider = FakeProvider(
+        # FakeModel for the researcher sub-agent
+        subagent_provider = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(

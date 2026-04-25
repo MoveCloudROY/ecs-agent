@@ -1,6 +1,6 @@
-"""LiteLLMProvider agent example supporting 100+ LLM providers.
+"""LiteLLMModel agent example supporting 100+ LLM providers.
 
-This example demonstrates using the LiteLLMProvider to support a wide range of LLM
+This example demonstrates using the LiteLLMModel to support a wide range of LLM
 providers with a unified interface. LiteLLM normalizes API calls to OpenAI format.
 
 Usage:
@@ -10,7 +10,7 @@ Usage:
      - LLM_MODEL: Model in format "provider/model" (e.g., "openai/gpt-4" or "anthropic/claude-3-opus-20240229")
   3. Run: uv run python examples/litellm_agent.py
 
-If litellm is not installed or API key is missing, the example gracefully falls back to FakeProvider.
+If litellm is not installed or API key is missing, the example gracefully falls back to FakeModel.
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeProvider
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers import FakeModel
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.types import CompletionResult, Message, ToolSchema
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -35,9 +35,9 @@ from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 
 
-# Try to import LiteLLMProvider; gracefully handle if litellm is not installed
+# Try to import LiteLLMModel; gracefully handle if litellm is not installed
 try:
-    from ecs_agent.providers import LiteLLMProvider
+    from ecs_agent.providers import LiteLLMModel
 
     HAS_LITELLM = True
 except (ImportError, AttributeError):
@@ -55,7 +55,7 @@ async def search_database(query: str) -> str:
 
 
 async def main() -> None:
-    """Run LiteLLMProvider agent example."""
+    """Run LiteLLMModel agent example."""
     # Check if litellm is installed
     if not HAS_LITELLM:
         print("litellm is not installed.")
@@ -67,16 +67,16 @@ async def main() -> None:
     model = os.environ.get("LLM_MODEL", "")
 
     # Decide which provider to use
-    provider: LLMProvider
+    provider: LLMModel
     if api_key and model:
-        print(f"Using LiteLLMProvider: {model}")
-        provider = LiteLLMProvider(
+        print(f"Using LiteLLMModel: {model}")
+        provider = LiteLLMModel(
             model=model,
             api_key=api_key,
         )
     else:
-        print("No API key or model specified. Using FakeProvider instead.")
-        provider = FakeProvider(
+        print("No API key or model specified. Using FakeModel instead.")
+        provider = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(

@@ -46,9 +46,9 @@ from ecs_agent.prompts.message_assembly import (
     build_keyword_registry,
     build_trigger_specs,
 )
-from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers import FakeModel, OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
@@ -65,7 +65,7 @@ from ecs_agent.types import (
 
 
 class RecordingProvider:
-    def __init__(self, provider: LLMProvider) -> None:
+    def __init__(self, provider: LLMModel) -> None:
         self._provider = provider
         self.last_messages: list[Message] = []
 
@@ -89,7 +89,7 @@ class RecordingProvider:
         )
 
 
-def _build_provider_from_env() -> tuple[LLMProvider, str, str]:
+def _build_provider_from_env() -> tuple[LLMModel, str, str]:
     api_key = os.getenv("LLM_API_KEY", "")
     base_url = os.getenv(
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -97,10 +97,10 @@ def _build_provider_from_env() -> tuple[LLMProvider, str, str]:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
 
     if api_key:
-        real_provider: LLMProvider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        real_provider: LLMModel = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
         return real_provider, model, "real"
 
-    fake_provider = FakeProvider(
+    fake_provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(
@@ -238,8 +238,8 @@ async def _run_file_template_demo() -> str:
 
 async def main() -> None:
     world = World()
-    base_provider, model, mode = _build_provider_from_env()
-    provider = RecordingProvider(base_provider)
+    base_model, model, mode = _build_provider_from_env()
+    provider = RecordingProvider(base_model)
 
     entity = world.create_entity()
     world.add_component(entity, LLMComponent(model=provider))
@@ -304,14 +304,14 @@ async def main() -> None:
             subagents={
                 "researcher": SubagentConfig(
                     name="researcher",
-                    model=base_provider,
+                    model=base_model,
                     
                     description="Research and gather information",
                     system_prompt="Research assistant",
                 ),
                 "reviewer": SubagentConfig(
                     name="reviewer",
-                    model=base_provider,
+                    model=base_model,
                     
                     description="Review and critique work products",
                     system_prompt="Review assistant",

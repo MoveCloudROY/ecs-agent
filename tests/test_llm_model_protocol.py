@@ -1,15 +1,8 @@
-"""TDD tests for LLMModel protocol and unified model abstractions.
-
-These tests are written BEFORE the implementation (RED phase).
-"""
+"""Tests for LLMModel protocol and unified model abstractions."""
 
 from __future__ import annotations
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# Protocol import tests
-# ---------------------------------------------------------------------------
 
 
 def test_llm_model_protocol_importable() -> None:
@@ -17,21 +10,15 @@ def test_llm_model_protocol_importable() -> None:
 
 
 def test_llm_model_has_model_id_in_protocol() -> None:
-    """LLMModel protocol must declare model_id as part of its interface."""
     import inspect
     from ecs_agent.providers.protocol import LLMModel
 
     members = {name for name, _ in inspect.getmembers(LLMModel)}
-    assert "model_id" in members, "LLMModel protocol must expose 'model_id'"
-
-
-def test_llm_provider_alias_still_importable() -> None:
-    """LLMProvider must remain as a backward-compat alias."""
-    from ecs_agent.providers.protocol import LLMProvider  # noqa: F401
+    assert "model_id" in members
 
 
 # ---------------------------------------------------------------------------
-# OpenAIModel (was OpenAIProvider)
+# OpenAIModel
 # ---------------------------------------------------------------------------
 
 
@@ -68,13 +55,8 @@ def test_openai_model_satisfies_llm_model_protocol() -> None:
     assert isinstance(m, LLMModel)
 
 
-def test_openai_provider_alias_still_works() -> None:
-    """OpenAIProvider must remain importable as a backward-compat alias."""
-    from ecs_agent.providers.openai_provider import OpenAIProvider  # noqa: F401
-
-
 # ---------------------------------------------------------------------------
-# ClaudeModel (was ClaudeProvider)
+# ClaudeModel
 # ---------------------------------------------------------------------------
 
 
@@ -111,12 +93,8 @@ def test_claude_model_satisfies_llm_model_protocol() -> None:
     assert isinstance(m, LLMModel)
 
 
-def test_claude_provider_alias_still_works() -> None:
-    from ecs_agent.providers.claude_provider import ClaudeProvider  # noqa: F401
-
-
 # ---------------------------------------------------------------------------
-# FakeModel (was FakeProvider)
+# FakeModel
 # ---------------------------------------------------------------------------
 
 
@@ -147,12 +125,8 @@ def test_fake_model_satisfies_llm_model_protocol() -> None:
     assert isinstance(m, LLMModel)
 
 
-def test_fake_provider_alias_still_works() -> None:
-    from ecs_agent.providers.fake_provider import FakeProvider  # noqa: F401
-
-
 # ---------------------------------------------------------------------------
-# RetryModel (was RetryProvider)
+# RetryModel
 # ---------------------------------------------------------------------------
 
 
@@ -179,12 +153,8 @@ def test_retry_model_satisfies_llm_model_protocol() -> None:
     assert isinstance(retry, LLMModel)
 
 
-def test_retry_provider_alias_still_works() -> None:
-    from ecs_agent.providers.retry_provider import RetryProvider  # noqa: F401
-
-
 # ---------------------------------------------------------------------------
-# LLMComponent: model field is now LLMModel, not str
+# LLMComponent
 # ---------------------------------------------------------------------------
 
 
@@ -218,11 +188,8 @@ def test_llm_component_pending_model_is_llm_model_or_none() -> None:
 
 
 def test_llm_component_has_no_provider_field() -> None:
-    """After refactoring, LLMComponent must NOT have a 'provider' field."""
     from ecs_agent.components.definitions import LLMComponent
     import dataclasses
 
     field_names = {f.name for f in dataclasses.fields(LLMComponent)}
-    assert "provider" not in field_names, (
-        "LLMComponent still has 'provider' field — should be removed in refactoring"
-    )
+    assert "provider" not in field_names

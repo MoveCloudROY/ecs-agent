@@ -29,10 +29,10 @@ from ecs_agent.prompts.contracts import (
     SystemPromptConfigSpec,
     TriggerSpec,
 )
-from ecs_agent.providers import OpenAIProvider
-from ecs_agent.providers.claude_provider import ClaudeProvider
+from ecs_agent.providers import OpenAIModel
+from ecs_agent.providers.claude_model import ClaudeModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.tools import BuiltinToolsSkill
 from ecs_agent.skills.manager import SkillManager
@@ -114,7 +114,7 @@ def _require_adapter(adapter: ArtifactAdapter | None) -> ArtifactAdapter:
 
 
 def build_plan_task_world(
-    provider: LLMProvider,
+    provider: LLMModel,
     model: str,
     base_dir: Path | None = None,
 ) -> tuple[World, EntityId, list[ArtifactAdapter | None], list[RuntimeState | None]]:
@@ -722,11 +722,11 @@ async def main() -> None:
         )
         sys.exit(1)
 
-    provider: LLMProvider
+    provider: LLMModel
     if api_format_str == ApiFormat.ANTHROPIC_MESSAGES:
-        logger.info("using_provider", provider="ClaudeProvider", model=model)
-        print(f"Using ClaudeProvider (Anthropic Messages API) with model: {model}")
-        provider = ClaudeProvider(
+        logger.info("using_provider", provider="ClaudeModel", model=model)
+        print(f"Using ClaudeModel (Anthropic Messages API) with model: {model}")
+        provider = ClaudeModel(
             config=ProviderConfig(
                 provider_id="anthropic",
                 base_url=base_url,
@@ -739,9 +739,9 @@ async def main() -> None:
         api_format = ApiFormat.OPENAI_RESPONSES
         if api_format_str == ApiFormat.OPENAI_CHAT_COMPLETIONS:
             api_format = ApiFormat.OPENAI_CHAT_COMPLETIONS
-        logger.info("using_provider", provider="OpenAIProvider", model=model)
-        print(f"Using OpenAIProvider with model: {model}")
-        provider = OpenAIProvider(
+        logger.info("using_provider", provider="OpenAIModel", model=model)
+        print(f"Using OpenAIModel with model: {model}")
+        provider = OpenAIModel(
             config=ProviderConfig(
                 provider_id="openai",
                 base_url=base_url,

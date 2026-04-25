@@ -19,7 +19,7 @@ Environment variables:
    LLM_MODEL     — Model name (default: qwen3.5-plus)
 
 Note: Structured output (JSON mode) requires the full response to be available at once,
-so streaming is NOT supported with response_format. This example uses FakeProvider as a
+so streaming is NOT supported with response_format. This example uses FakeModel as a
 fallback when no LLM_API_KEY is available.
 """
 
@@ -33,9 +33,9 @@ import sys
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from ecs_agent.logging import configure_logging, get_logger
-from ecs_agent.providers import OpenAIProvider
-from ecs_agent.providers.config import ApiFormat, ProviderConfig, FakeProvider
-from ecs_agent.providers.openai_provider import pydantic_to_response_format
+from ecs_agent.providers import OpenAIModel
+from ecs_agent.providers.config import ApiFormat, ProviderConfig, FakeModel
+from ecs_agent.providers.openai_model import pydantic_to_response_format
 from ecs_agent.types import CompletionResult, Message, Usage
 
 logger = get_logger(__name__)
@@ -91,9 +91,9 @@ async def main() -> None:
     if api_key:
         print(f"Using model: {model}")
         print(f"Base URL: {base_url}")
-        provider = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        provider = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
-        print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
+        print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         # Create a fake provider with a pre-configured response matching the CityInfo schema
         fake_response = CompletionResult(
             message=Message(
@@ -102,7 +102,7 @@ async def main() -> None:
             ),
             usage=Usage(prompt_tokens=50, completion_tokens=100, total_tokens=150),
         )
-        provider = FakeProvider(responses=[fake_response])
+        provider = FakeModel(responses=[fake_response])
 
     print()
 

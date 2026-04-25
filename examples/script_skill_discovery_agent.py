@@ -1,8 +1,8 @@
 """Example demonstrating file-based skill discovery with dual-mode LLM provider.
 
 This script shows how to use SkillDiscovery to automatically find and install Skill
-implementations from a filesystem path. Supports both real LLM (OpenAIProvider via
-LLM_API_KEY) and FakeProvider (default, no credentials required).
+implementations from a filesystem path. Supports both real LLM (OpenAIModel via
+LLM_API_KEY) and FakeModel (default, no credentials required).
 """
 
 import asyncio
@@ -12,7 +12,7 @@ from typing import Union
 
 from ecs_agent.core import World, Runner
 from ecs_agent.components import LLMComponent, ConversationComponent
-from ecs_agent.providers import FakeProvider, OpenAIProvider
+from ecs_agent.providers import FakeModel, OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.discovery import SkillDiscovery
@@ -56,14 +56,14 @@ async def main() -> None:
     print(f"Installed skills: {installed_names}")
     # --- Create LLM provider ---
     if api_key:
-        print(f"Using OpenAIProvider with model: {model}")
+        print(f"Using OpenAIModel with model: {model}")
         print(f"Base URL: {base_url}")
-        provider: Union[OpenAIProvider, FakeProvider] = OpenAIProvider(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        provider: Union[OpenAIModel, FakeModel] = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
     else:
-        print("No LLM_API_KEY provided. Using FakeProvider for demonstration.")
+        print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
         print()
-        provider = FakeProvider(
+        provider = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(

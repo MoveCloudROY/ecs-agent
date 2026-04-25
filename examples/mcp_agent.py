@@ -15,7 +15,7 @@ from typing import Any
 from ecs_agent import SkillManager
 from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import CompletionResult, Message, ToolCall
@@ -85,7 +85,7 @@ async def main() -> None:
     skill = MCPSkillAdapter(mock_client, server_name="weather-service")  # type: ignore[arg-type]
 
     # 3. Setup Agent and Systems
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             CompletionResult(
                 message=Message(

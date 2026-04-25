@@ -13,7 +13,7 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers.fake_provider import FakeProvider
+from ecs_agent.providers.fake_model import FakeModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.planning import PlanningSystem
@@ -48,7 +48,7 @@ def _replan_reply(revised_steps: list[str]) -> CompletionResult:
 
 
 def _build_plan_execute_world(
-    provider: FakeProvider,
+    provider: FakeModel,
     plan_steps: list[str],
     tools: dict[str, ToolSchema] | None = None,
     handlers: dict[str, object] | None = None,
@@ -121,7 +121,7 @@ async def test_plan_and_execute_with_replanning() -> None:
         call_log.append(f"analyze:{data}")
         return f"Analysis of: {data}"
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             # Tick 1: PlanningSystem step 1 → tool call
             _tool_call_reply("search", "tc1", {"query": "weather beijing"}),
@@ -192,7 +192,7 @@ async def test_plan_and_execute_with_replanning() -> None:
 async def test_plan_and_execute_no_replanning_needed() -> None:
     """All replan responses return same remaining steps. Plan completes normally."""
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             # Tick 1: PlanningSystem step 1
             _reply("Step 1 done via reasoning."),
@@ -237,7 +237,7 @@ async def test_plan_and_execute_no_replanning_needed() -> None:
 async def test_plan_and_execute_replanning_adds_steps() -> None:
     """Replanning adds extra steps. Verify total steps increased and all execute."""
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             # Tick 1: PlanningSystem step 1
             _reply("Gathered weather info: rainy."),
@@ -293,7 +293,7 @@ async def test_plan_and_execute_replanning_adds_steps() -> None:
 async def test_plan_revised_event_fired() -> None:
     """PlanRevisedEvent fires with correct old_steps and new_steps."""
 
-    provider = FakeProvider(
+    provider = FakeModel(
         responses=[
             # Tick 1: PlanningSystem step 1
             _reply("Weather is rainy."),

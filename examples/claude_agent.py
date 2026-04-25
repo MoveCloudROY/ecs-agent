@@ -1,7 +1,7 @@
-"""ClaudeProvider agent example with tool calling and streaming.
+"""ClaudeModel agent example with tool calling and streaming.
 
-This example demonstrates using the ClaudeProvider with both non-streaming and
-streaming modes. ClaudeProvider uses Anthropic's API (or DashScope compatible endpoint)
+This example demonstrates using the ClaudeModel with both non-streaming and
+streaming modes. ClaudeModel uses Anthropic's API (or DashScope compatible endpoint)
 and supports tool calling.
 
 Usage:
@@ -11,7 +11,7 @@ Usage:
      - LLM_MODEL: Model name (default: claude-3-5-haiku-latest)
   2. Run: uv run python examples/claude_agent.py
 
-Without API credentials, this example falls back to FakeProvider for demonstration.
+Without API credentials, this example falls back to FakeModel for demonstration.
 """
 
 from __future__ import annotations
@@ -27,9 +27,9 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.protocol import LLMProvider
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.types import CompletionResult, Message, ToolSchema
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -37,9 +37,9 @@ from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 
 
-# Try to import ClaudeProvider; fall back gracefully if not available
+# Try to import ClaudeModel; fall back gracefully if not available
 try:
-    from ecs_agent.providers import ClaudeProvider
+    from ecs_agent.providers import ClaudeModel
 
     HAS_CLAUDE = True
 except (ImportError, AttributeError):
@@ -67,17 +67,17 @@ async def get_time(city: str) -> str:
 
 
 async def main() -> None:
-    """Run ClaudeProvider agent example."""
+    """Run ClaudeModel agent example."""
     # Load config from environment
     api_key = os.environ.get("LLM_API_KEY", "")
     base_url = os.environ.get("LLM_BASE_URL", "https://api.anthropic.com")
     model = os.environ.get("LLM_MODEL", "claude-3-5-haiku-latest")
 
     # Decide which provider to use
-    provider: LLMProvider
+    provider: LLMModel
     if api_key and HAS_CLAUDE:
-        print(f"Using ClaudeProvider: {model}")
-        provider = ClaudeProvider(
+        print(f"Using ClaudeModel: {model}")
+        provider = ClaudeModel(
             config=ProviderConfig(
                 provider_id="anthropic",
                 base_url=base_url,
@@ -87,8 +87,8 @@ async def main() -> None:
             model=model,
         )
     else:
-        print("Using FakeProvider (no API key or ClaudeProvider unavailable)")
-        provider = FakeProvider(
+        print("Using FakeModel (no API key or ClaudeModel unavailable)")
+        provider = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(

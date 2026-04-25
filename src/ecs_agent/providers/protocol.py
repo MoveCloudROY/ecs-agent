@@ -32,6 +32,3 @@ class LLMModel(Protocol):
         """
         ...
 
-
-# Backward-compat alias
-LLMProvider = LLMModel

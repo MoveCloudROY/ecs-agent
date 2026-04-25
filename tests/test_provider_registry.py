@@ -3,10 +3,10 @@ from pathlib import Path
 import pytest
 
 from ecs_agent.providers import ApiFormat
-from ecs_agent.providers.claude_provider import ClaudeProvider
+from ecs_agent.providers.claude_model import ClaudeModel
 from ecs_agent.providers.config import ProviderEntry
-from ecs_agent.providers.openai_provider import OpenAIProvider
-from ecs_agent.providers.registry import ProviderRegistry, get_llm_provider
+from ecs_agent.providers.openai_model import OpenAIModel
+from ecs_agent.providers.registry import ProviderRegistry, get_model
 
 
 def test_provider_entry_construction_defaults_and_repr_hides_api_key() -> None:
@@ -95,7 +95,7 @@ default_max_tokens = 1234
     assert entry.default_max_tokens == 1234
 
 
-def test_get_llm_provider_explicit_api_key_returns_openai_provider() -> None:
+def test_get_model_explicit_api_key_returns_openai_provider() -> None:
     registry = ProviderRegistry.from_dict(
         {
             "aliyun": {
@@ -105,16 +105,16 @@ def test_get_llm_provider_explicit_api_key_returns_openai_provider() -> None:
         }
     )
 
-    provider = get_llm_provider(
+    provider = get_model(
         "aliyun/qwen3.5-flash",
         registry=registry,
         api_key="explicit-key",
     )
 
-    assert isinstance(provider, OpenAIProvider)
+    assert isinstance(provider, OpenAIModel)
 
 
-def test_get_llm_provider_resolves_api_key_from_env(
+def test_get_model_resolves_api_key_from_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LLM_API_KEY", "env-key")
@@ -128,12 +128,12 @@ def test_get_llm_provider_resolves_api_key_from_env(
         }
     )
 
-    provider = get_llm_provider("aliyun/qwen3.5-flash", registry=registry)
+    provider = get_model("aliyun/qwen3.5-flash", registry=registry)
 
-    assert isinstance(provider, OpenAIProvider)
+    assert isinstance(provider, OpenAIModel)
 
 
-def test_get_llm_provider_openai_responses_returns_openai_provider() -> None:
+def test_get_model_openai_responses_returns_openai_provider() -> None:
     registry = ProviderRegistry.from_dict(
         {
             "aliyun-responses": {
@@ -144,12 +144,12 @@ def test_get_llm_provider_openai_responses_returns_openai_provider() -> None:
         }
     )
 
-    provider = get_llm_provider("aliyun-responses/qwen3.5-flash", registry=registry)
+    provider = get_model("aliyun-responses/qwen3.5-flash", registry=registry)
 
-    assert isinstance(provider, OpenAIProvider)
+    assert isinstance(provider, OpenAIModel)
 
 
-def test_get_llm_provider_anthropic_messages_returns_claude_provider() -> None:
+def test_get_model_anthropic_messages_returns_claude_provider() -> None:
     registry = ProviderRegistry.from_dict(
         {
             "aliyun-anthropic": {
@@ -161,12 +161,12 @@ def test_get_llm_provider_anthropic_messages_returns_claude_provider() -> None:
         }
     )
 
-    provider = get_llm_provider("aliyun-anthropic/kimi-k2.5", registry=registry)
+    provider = get_model("aliyun-anthropic/kimi-k2.5", registry=registry)
 
-    assert isinstance(provider, ClaudeProvider)
+    assert isinstance(provider, ClaudeModel)
 
 
-def test_get_llm_provider_embeddings_format_raises_value_error() -> None:
+def test_get_model_embeddings_format_raises_value_error() -> None:
     registry = ProviderRegistry.from_dict(
         {
             "embed": {
@@ -178,10 +178,10 @@ def test_get_llm_provider_embeddings_format_raises_value_error() -> None:
     )
 
     with pytest.raises(ValueError):
-        get_llm_provider("embed/text-embedding-3-small", registry=registry)
+        get_model("embed/text-embedding-3-small", registry=registry)
 
 
-def test_get_llm_provider_missing_provider_raises_key_error() -> None:
+def test_get_model_missing_provider_raises_key_error() -> None:
     registry = ProviderRegistry.from_dict(
         {
             "openai": {
@@ -193,10 +193,10 @@ def test_get_llm_provider_missing_provider_raises_key_error() -> None:
     )
 
     with pytest.raises(KeyError):
-        get_llm_provider("missing/gpt-4o-mini", registry=registry)
+        get_model("missing/gpt-4o-mini", registry=registry)
 
 
-def test_get_llm_provider_no_api_key_resolvable_raises_value_error() -> None:
+def test_get_model_no_api_key_resolvable_raises_value_error() -> None:
     registry = ProviderRegistry.from_dict(
         {
             "openai": {
@@ -207,4 +207,4 @@ def test_get_llm_provider_no_api_key_resolvable_raises_value_error() -> None:
     )
 
     with pytest.raises(ValueError):
-        get_llm_provider("openai/gpt-4o-mini", registry=registry)
+        get_model("openai/gpt-4o-mini", registry=registry)

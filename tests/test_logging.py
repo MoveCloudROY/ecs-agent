@@ -795,10 +795,10 @@ class TestReasoningSystemLogging:
         from ecs_agent.core import World
         from ecs_agent.systems.reasoning import ReasoningSystem
         from ecs_agent.components import LLMComponent, ConversationComponent
-        from ecs_agent.providers import FakeProvider
+        from ecs_agent.providers import FakeModel
         from ecs_agent.types import Message, CompletionResult
 
-        provider = FakeProvider(
+        provider = FakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="Hello"))
             ],
@@ -837,10 +837,10 @@ class TestReasoningSystemLogging:
         from ecs_agent.core import World
         from ecs_agent.systems.reasoning import ReasoningSystem
         from ecs_agent.components import LLMComponent, ConversationComponent
-        from ecs_agent.providers import FakeProvider
+        from ecs_agent.providers import FakeModel
         from ecs_agent.types import Message, CompletionResult
 
-        provider = FakeProvider(
+        provider = FakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="Hello"))
             ],
@@ -930,10 +930,10 @@ class TestReasoningSystemLogging:
         from ecs_agent.core import World
         from ecs_agent.systems.reasoning import ReasoningSystem
         from ecs_agent.components import LLMComponent, ConversationComponent
-        from ecs_agent.providers import FakeProvider
+        from ecs_agent.providers import FakeModel
         from ecs_agent.types import Message, CompletionResult, ToolCall
 
-        provider = FakeProvider(
+        provider = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(
@@ -1316,11 +1316,11 @@ class TestPlanningLogging:
             ConversationComponent,
         )
         from ecs_agent.systems.planning import PlanningSystem
-        from ecs_agent.providers import FakeProvider
+        from ecs_agent.providers import FakeModel
         from ecs_agent.types import CompletionResult, Message
 
         world = World()
-        provider = FakeProvider(
+        provider = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(role="assistant", content="Step 1 complete")
@@ -1355,11 +1355,11 @@ class TestPlanningLogging:
             ConversationComponent,
         )
         from ecs_agent.systems.planning import PlanningSystem
-        from ecs_agent.providers import FakeProvider
+        from ecs_agent.providers import FakeModel
         from ecs_agent.types import CompletionResult, Message
 
         world = World()
-        provider = FakeProvider(
+        provider = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(role="assistant", content="Step 1 complete")
@@ -1400,7 +1400,7 @@ class TestPlanningLogging:
             ErrorComponent,
         )
         from ecs_agent.systems.planning import PlanningSystem
-        from ecs_agent.providers.protocol import LLMProvider
+        from ecs_agent.providers.protocol import LLMModel
         from ecs_agent.types import Message, ToolSchema, CompletionResult
         from typing import AsyncIterator, Any
 
@@ -1449,11 +1449,11 @@ class TestSensitiveDataPolicy:
         from ecs_agent.core import World
         from ecs_agent.components import LLMComponent, ConversationComponent
         from ecs_agent.systems.reasoning import ReasoningSystem
-        from ecs_agent.providers import FakeProvider
+        from ecs_agent.providers import FakeModel
         from ecs_agent.types import Message, CompletionResult
 
         world = World()
-        provider = FakeProvider(
+        provider = FakeModel(
             responses=[
                 CompletionResult(
                     message=Message(role="assistant", content="Secret response")
@@ -1562,12 +1562,12 @@ class TestSensitiveDataPolicy:
 
     async def test_no_api_keys_in_provider_logs(self, capsys):
         """Verify provider logging does not expose API keys or tokens."""
-        from ecs_agent.providers.openai_provider import OpenAIProvider
+        from ecs_agent.providers.openai_model import OpenAIModel
         from ecs_agent.providers.config import ApiFormat, ProviderConfig
         from ecs_agent.types import Message
 
         # Create provider with fake API key
-        provider = OpenAIProvider(
+        provider = OpenAIModel(
             config=ProviderConfig(
                 provider_id="openai",
                 base_url="https://api.openai.com/v1",
@@ -1639,11 +1639,11 @@ class TestLoggingLevelPolicy:
         from ecs_agent.core import World
         from ecs_agent.components import LLMComponent, ConversationComponent
         from ecs_agent.systems.reasoning import ReasoningSystem
-        from ecs_agent.providers import FakeProvider
+        from ecs_agent.providers import FakeModel
         from ecs_agent.types import Message, CompletionResult
 
         world = World()
-        provider = FakeProvider(
+        provider = FakeModel(
             responses=[
                 CompletionResult(message=Message(role="assistant", content="Done"))
             ]

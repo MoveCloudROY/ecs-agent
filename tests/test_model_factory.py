@@ -146,7 +146,3 @@ def test_get_model_model_id_matches_requested_model() -> None:
     m = get_model("openai/gpt-4-turbo", registry=registry)
     assert m.model_id == "gpt-4-turbo"
 
-
-def test_get_llm_provider_alias_still_works() -> None:
-    """get_llm_provider must remain as a backward-compat alias."""
-    from ecs_agent.providers.registry import get_llm_provider  # noqa: F401

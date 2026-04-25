@@ -43,7 +43,7 @@ from ecs_agent.conversation_tree import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import FORBIDDEN_FIELDS
-from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers import OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -64,8 +64,8 @@ BASE_URL = os.getenv(
 MODEL = os.getenv("LLM_MODEL", "qwen-plus")
 
 
-def _openai_provider(*, api_key: str, base_url: str, model: str) -> OpenAIProvider:
-    return OpenAIProvider(
+def _openai_provider(*, api_key: str, base_url: str, model: str) -> OpenAIModel:
+    return OpenAIModel(
         config=ProviderConfig(
             provider_id="openai",
             base_url=base_url,
@@ -96,7 +96,7 @@ def _json_events(output: str) -> list[dict[str, object]]:
 @pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
 @pytest.mark.asyncio
 async def test_real_openai_streaming_produces_deltas() -> None:
-    """Streaming ReasoningSystem with real OpenAIProvider emits StreamDelta events."""
+    """Streaming ReasoningSystem with real OpenAIModel emits StreamDelta events."""
     world = World()
     provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
@@ -139,7 +139,7 @@ async def test_real_openai_streaming_produces_deltas() -> None:
 @pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
 @pytest.mark.asyncio
 async def test_real_openai_provider_non_streaming() -> None:
-    """OpenAIProvider via DashScope returns valid CompletionResult."""
+    """OpenAIModel via DashScope returns valid CompletionResult."""
     provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     messages = [
@@ -158,7 +158,7 @@ async def test_real_openai_provider_non_streaming() -> None:
 @pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
 @pytest.mark.asyncio
 async def test_real_openai_provider_streaming() -> None:
-    """OpenAIProvider streaming returns valid StreamDelta sequence."""
+    """OpenAIModel streaming returns valid StreamDelta sequence."""
     provider = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
     messages = [
@@ -411,7 +411,7 @@ async def test_real_llm_error_logging_contracts(capsys: object) -> None:
 # ============================================================================
 
 
-def get_real_provider() -> OpenAIProvider:
+def get_real_provider() -> OpenAIModel:
     """Construct OpenAI-compatible provider from env vars."""
     api_key = os.getenv("LLM_API_KEY")
     if not api_key:
@@ -426,7 +426,7 @@ def get_real_provider() -> OpenAIProvider:
 
 
 class RecordingProvider:
-    def __init__(self, provider: OpenAIProvider) -> None:
+    def __init__(self, provider: OpenAIModel) -> None:
         self._provider = provider
         self.last_messages: list[Message] = []
 
@@ -837,7 +837,7 @@ async def test_real_llm_complete_runtime_workflow() -> None:
 @pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
 @pytest.mark.asyncio
 async def test_real_provider_smoke_with_dashscope_defaults() -> None:
-    """Smoke test: OpenAIProvider with DashScope-compatible endpoints returns non-empty response.
+    """Smoke test: OpenAIModel with DashScope-compatible endpoints returns non-empty response.
 
     This test validates that the provider can successfully communicate with
     DashScope (or any OpenAI-compatible API) using environment defaults.
@@ -903,11 +903,11 @@ async def test_real_glob_finds_files_in_workspace(tmp_path: Any) -> None:
 @pytest.mark.asyncio
 async def test_real_llm_builtin_tools_read_file_smoke(tmp_path: Any) -> None:
     from ecs_agent import BuiltinToolsSkill, SkillManager
-    from ecs_agent.providers import FakeProvider
+    from ecs_agent.providers import FakeModel
     from ecs_agent.systems.tool_execution import ToolExecutionSystem
     from ecs_agent.types import ToolCall
 
-    class RecordingFakeProvider(FakeProvider):
+    class RecordingFakeModel(FakeModel):
         def __init__(self, responses: list[CompletionResult]) -> None:
             super().__init__(responses)
             self.recorded_messages: list[list[Message]] = []
@@ -930,7 +930,7 @@ async def test_real_llm_builtin_tools_read_file_smoke(tmp_path: Any) -> None:
     note = tmp_path / "note.txt"
     note.write_text("one\ntwo\nthree\n", encoding="utf-8")
 
-    provider = RecordingFakeProvider(
+    provider = RecordingFakeModel(
         responses=[
             CompletionResult(
                 message=Message(
