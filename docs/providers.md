@@ -4,6 +4,70 @@ This document is a reference for all LLM providers in the ECS Agent framework.
 
 ---
 
+## Unified `Model(...)` Constructor
+
+The recommended way to create any LLM model is the `Model(...)` factory. It automatically selects the correct implementation class (`OpenAIModel`, `ClaudeModel`, or `LiteLLMModel`) based on the `api_format` or `model_type` argument.
+
+```python
+from ecs_agent.providers import Model
+from ecs_agent.providers.config import ApiFormat
+
+# OpenAI-compatible Chat Completions
+model = Model(
+    "qwen3.5-flash",
+    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    api_key="your-api-key",
+    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+)
+
+# OpenAI Responses API
+model = Model(
+    "qwen3.5-flash",
+    base_url="https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
+    api_key="your-api-key",
+    api_format=ApiFormat.OPENAI_RESPONSES,
+)
+
+# Anthropic Messages API
+model = Model(
+    "claude-3-5-haiku-latest",
+    base_url="https://api.anthropic.com",
+    api_key="your-api-key",
+    api_format=ApiFormat.ANTHROPIC_MESSAGES,
+)
+
+# Explicit model_type (skips api_format inference)
+from ecs_agent.providers import ModelType
+model = Model("gpt-4o", base_url="...", api_key="...", model_type=ModelType.OPENAI)
+
+# api_format as string
+model = Model("gpt-4o", base_url="...", api_key="...", api_format="openai_chat_completions")
+```
+
+### `Model(...)` Parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `model_id` | `str` | (required, positional) | Model name, e.g. `"gpt-4o"`, `"claude-3-5-haiku-latest"` |
+| `base_url` | `str` | (required) | Provider endpoint base URL |
+| `api_key` | `str` | (required) | Bearer token / API key |
+| `api_format` | `ApiFormat \| str \| None` | `None` | Wire protocol. Overrides model_type default when both are given. Conflicts raise `ValueError`. |
+| `model_type` | `str \| type \| None` | `None` | Implementation to use: `"openai"`, `"claude"`, `"litellm"`, or the class itself. Inferred from `api_format` when omitted. |
+| `provider_id` | `str` | `""` | Label stored in `ProviderConfig` (not used at runtime) |
+| `extra_headers` | `dict[str, str] \| None` | `None` | Additional HTTP headers |
+| `timeout` | `float \| None` | `None` | Global request timeout (seconds) |
+| `enable_store` | `bool` | `False` | Enable conversation storage (Responses API feature) |
+| `**kwargs` | | | Forwarded to the underlying model constructor (e.g. `connect_timeout`, `max_tokens`) |
+
+### Selection Rules
+
+- **`api_format` only**: infers `model_type` (`OPENAI_CHAT_COMPLETIONS` / `OPENAI_RESPONSES` → `openai`; `ANTHROPIC_MESSAGES` → `claude`).
+- **`model_type` only**: infers default `api_format` (`openai` → `OPENAI_CHAT_COMPLETIONS`; `claude` → `ANTHROPIC_MESSAGES`).
+- **Both given**: `api_format` overrides the model_type default. Incompatible combinations raise `ValueError` containing "conflict".
+- **Neither given**: raises `ValueError`.
+
+---
+
 ## Provider Architecture Overview
 
 The provider stack is organized around three linked concepts: a canonical model ID (`provider/model`) that carries both routing provider and API model name, a `ProviderConfig` that defines endpoint/auth/protocol settings, and event-driven accounting that measures usage and cache behavior. The Quick Start below shows the full end-to-end flow.
@@ -204,17 +268,14 @@ The `complete` method returns a `CompletionResult` when `stream=False` and an `A
 
 ```python
 from ecs_agent.components import LLMComponent
-from ecs_agent.providers import OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers import Model
+from ecs_agent.providers.config import ApiFormat
 
-model = OpenAIModel(
-    config=ProviderConfig(
-        provider_id="aliyun",
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        api_key="your-api-key",
-        api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-    ),
-    model="qwen3.5-flash",
+model = Model(
+    "qwen3.5-flash",
+    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    api_key="your-api-key",
+    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
 )
 
 # LLMComponent takes the model object directly (not a string)
