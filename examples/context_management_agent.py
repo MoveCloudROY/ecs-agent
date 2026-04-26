@@ -35,9 +35,9 @@ from ecs_agent.components import (
     LLMComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeModel
-from ecs_agent.providers import OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers import FakeModel, Model
+from ecs_agent.providers.config import ApiFormat
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.checkpoint import CheckpointSystem
 from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
@@ -46,7 +46,7 @@ from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import CompletionResult, Message, Usage
 
 
-def create_model() -> FakeModel | OpenAIModel:
+def create_model() -> FakeModel | LLMModel:
     """Create LLM model based on environment variables.
 
     Uses OpenAIModel if LLM_API_KEY is set, otherwise FakeModel.
@@ -58,14 +58,11 @@ def create_model() -> FakeModel | OpenAIModel:
     model = os.environ.get("LLM_MODEL", "qwen3.5-flash")
 
     if api_key:
-        return OpenAIModel(
-            config=ProviderConfig(
-                provider_id="openai",
-                base_url=base_url,
-                api_key=api_key,
-                api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-            ),
-            model=model,
+        return Model(
+            model,
+            base_url=base_url,
+            api_key=api_key,
+            api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
         )
     return FakeModel(
         responses=[
@@ -355,7 +352,7 @@ async def main() -> None:
         base_url = os.environ.get(
             "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
-        print(f"Using OpenAIModel with model: {model}")
+        print(f"Using model: {model}")
         print(f"Base URL: {base_url}")
     else:
         print("No LLM_API_KEY provided. Using FakeModel for demonstration.")

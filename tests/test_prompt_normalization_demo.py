@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ecs_agent.providers.fake_model import FakeModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.types import CompletionResult, Message
 
 
@@ -46,14 +46,11 @@ async def test_prompt_normalization_demo_fake_mode_prints_rendered_markers(
             "examples.prompt_normalization_demo.FakeModel",
             return_value=_fake_provider(),
         ) as fake_ctor:
-            with patch(
-                "examples.prompt_normalization_demo.OpenAIModel",
-                create=True,
-            ) as openai_ctor:
+            with patch("examples.prompt_normalization_demo.Model") as model_ctor:
                 await module.main()
 
     fake_ctor.assert_called_once()
-    openai_ctor.assert_not_called()
+    model_ctor.assert_not_called()
 
     stdout = capsys.readouterr().out
     assert "[mode] fake" in stdout
@@ -93,21 +90,18 @@ async def test_prompt_normalization_demo_real_mode_wiring_uses_env_vars() -> Non
             side_effect=FakeModel,
         ) as fake_ctor:
             with patch(
-                "examples.prompt_normalization_demo.OpenAIModel",
+                "examples.prompt_normalization_demo.Model",
                 return_value=_OpenAIModelStub(),
-                create=True,
-            ) as openai_ctor:
+            ) as model_ctor:
                 await module.main()
 
     fake_ctor.assert_not_called()
-    openai_ctor.assert_called_once()
-    kwargs = openai_ctor.call_args.kwargs
-    config = kwargs["config"]
-    assert isinstance(config, ProviderConfig)
-    assert config.api_key == "test-api-key"
-    assert config.base_url == "https://example.test/v1"
-    assert config.api_format is ApiFormat.OPENAI_CHAT_COMPLETIONS
-    assert kwargs["model"] == "example-model"
+    model_ctor.assert_called_once()
+    call = model_ctor.call_args
+    assert call.args[0] == "example-model"
+    assert call.kwargs["api_key"] == "test-api-key"
+    assert call.kwargs["base_url"] == "https://example.test/v1"
+    assert call.kwargs["api_format"] is ApiFormat.OPENAI_CHAT_COMPLETIONS
 
 
 API_KEY = os.getenv("LLM_API_KEY", "")
@@ -119,10 +113,9 @@ async def test_prompt_normalization_demo_real_mode_env_gate() -> None:
     module = _load_example("prompt_normalization_demo")
 
     with patch(
-        "examples.prompt_normalization_demo.OpenAIModel",
+        "examples.prompt_normalization_demo.Model",
         return_value=_OpenAIModelStub(),
-        create=True,
-    ) as openai_ctor:
+    ) as model_ctor:
         await module.main()
 
-    openai_ctor.assert_called_once()
+    model_ctor.assert_called_once()

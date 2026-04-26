@@ -35,9 +35,8 @@ from ecs_agent.prompts.contracts import (
     PromptTemplateSource,
     SystemPromptConfigSpec,
 )
-from ecs_agent.providers import FakeModel
-from ecs_agent.providers import OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers import FakeModel, Model
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -82,7 +81,7 @@ async def main() -> None:
     model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
 
     if api_key:
-        print(f"Using OpenAIModel with model: {model}")
+        print(f"Using model: {model}")
         print(f"Base URL: {base_url}")
         print()
     else:
@@ -95,24 +94,8 @@ async def main() -> None:
     subagent_provider: LLMModel
 
     if api_key:
-        manager_provider = OpenAIModel(
-            config=ProviderConfig(
-                provider_id="openai",
-                base_url=base_url,
-                api_key=api_key,
-                api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-            ),
-            model=model,
-        )
-        subagent_provider = OpenAIModel(
-            config=ProviderConfig(
-                provider_id="openai",
-                base_url=base_url,
-                api_key=api_key,
-                api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-            ),
-            model=model,
-        )
+        manager_provider = Model(model, base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS)
+        subagent_provider = Model(model, base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS)
     else:
         # FakeModel for manager:
         #   Turn 1 — call the 'subagent' tool synchronously (background=False).

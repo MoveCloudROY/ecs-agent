@@ -33,8 +33,8 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers import Model
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.retry_model import RetryModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -81,7 +81,7 @@ async def main() -> None:
     print()
 
     # --- Create LLM model ---
-    base_model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model, connect_timeout=connect_timeout, read_timeout=read_timeout, write_timeout=write_timeout, pool_timeout=pool_timeout)
+    base_model = Model(model, base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS, connect_timeout=connect_timeout, read_timeout=read_timeout, write_timeout=write_timeout, pool_timeout=pool_timeout)
     model = RetryModel(
         base_model,
         retry_config=RetryConfig(

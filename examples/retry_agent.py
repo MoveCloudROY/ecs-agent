@@ -34,8 +34,8 @@ import os
 import sys
 
 from ecs_agent.logging import configure_logging, get_logger
-from ecs_agent.providers import FakeModel, OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers import FakeModel, Model
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.retry_model import RetryModel
 from ecs_agent.types import CompletionResult, Message, RetryConfig, Usage
 
@@ -56,9 +56,9 @@ async def main() -> None:
 
     # --- Create base model ---
     if api_key:
-        print(f"Using OpenAIModel with model: {model}")
+        print(f"Using model: {model}")
         print(f"Base URL: {base_url}")
-        base_model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        base_model = Model(model, base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS)
     else:
         print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         # Create a fake model with a realistic response

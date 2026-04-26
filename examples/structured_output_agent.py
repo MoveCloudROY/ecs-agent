@@ -33,8 +33,8 @@ import sys
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from ecs_agent.logging import configure_logging, get_logger
-from ecs_agent.providers import OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig, FakeModel
+from ecs_agent.providers import Model
+from ecs_agent.providers.config import ApiFormat, FakeModel
 from ecs_agent.providers.openai_model import pydantic_to_response_format
 from ecs_agent.types import CompletionResult, Message, Usage
 
@@ -91,7 +91,7 @@ async def main() -> None:
     if api_key:
         print(f"Using model: {model}")
         print(f"Base URL: {base_url}")
-        model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        model = Model(model, base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS)
     else:
         print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         # Create a fake model with a pre-configured response matching the CityInfo schema

@@ -30,8 +30,8 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import configure_logging
-from ecs_agent.providers import FakeModel, OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers import FakeModel, Model
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -152,7 +152,7 @@ async def main() -> None:
     model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
 
     if api_key:
-        print(f"Using OpenAIModel with model: {model}")
+        print(f"Using model: {model}")
         print(f"Base URL: {base_url}")
     else:
         print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
@@ -219,15 +219,7 @@ def _build_providers(
     model: str,
 ) -> tuple[LLMModel, SubagentRegistryComponent]:
     if api_key:
-        base_model = OpenAIModel(
-            config=ProviderConfig(
-                provider_id="openai",
-                base_url=base_url,
-                api_key=api_key,
-                api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-            ),
-            model=model,
-        )
+        base_model = Model(model, base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS)
         registry = _build_registry(base_model)
         return base_model, registry
 

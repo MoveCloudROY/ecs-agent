@@ -27,8 +27,8 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers import FakeModel, Model
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.types import CompletionResult, Message, ToolSchema
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
@@ -37,13 +37,6 @@ from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 
 
-# Try to import ClaudeModel; fall back gracefully if not available
-try:
-    from ecs_agent.providers import ClaudeModel
-
-    HAS_CLAUDE = True
-except (ImportError, AttributeError):
-    HAS_CLAUDE = False
 
 
 async def get_weather(city: str) -> str:
@@ -75,17 +68,9 @@ async def main() -> None:
 
     # Decide which model to use
     model: LLMModel
-    if api_key and HAS_CLAUDE:
-        print(f"Using ClaudeModel: {model}")
-        model = ClaudeModel(
-            config=ProviderConfig(
-                provider_id="anthropic",
-                base_url=base_url,
-                api_key=api_key,
-                api_format=ApiFormat.ANTHROPIC_MESSAGES,
-            ),
-            model=model,
-        )
+    if api_key:
+        print(f"Using claude model: {model}")
+        model = Model(model, base_url=base_url, api_key=api_key, api_format=ApiFormat.ANTHROPIC_MESSAGES)
     else:
         print("Using FakeModel (no API key or ClaudeModel unavailable)")
         model = FakeModel(

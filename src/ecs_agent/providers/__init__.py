@@ -1,6 +1,7 @@
 """Providers module for LLM integrations."""
 
 from ecs_agent.providers.config import ApiFormat, ProviderConfig, ProviderEntry
+from ecs_agent.providers.model_constructor import Model, ModelType
 from ecs_agent.providers.model_factory import create_model
 from ecs_agent.providers.model_id import ModelId, format_model_id, parse_model_id
 from ecs_agent.providers.openai_model import OpenAIModel
@@ -18,6 +19,8 @@ except ImportError:
 
 __all__ = [
     "LLMModel",
+    "Model",
+    "ModelType",
     "OpenAIModel",
     "ClaudeModel",
     "FakeModel",

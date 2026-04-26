@@ -31,8 +31,8 @@ from ecs_agent.prompts.contracts import (
     SystemPromptConfigSpec,
     TriggerSpec,
 )
-from ecs_agent.providers import FakeModel, OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers import FakeModel, Model
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.skills.discovery import discover_skills
 from ecs_agent.skills.manager import SkillManager
@@ -111,9 +111,9 @@ async def main() -> None:
 
     model: LLMModel
     if api_key:
-        logger.info("using_model", model_class="OpenAIModel", model_name=model)
-        print(f"Using OpenAIModel with model: {model}")
-        model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        logger.info("using_model", model_name=model)
+        print(f"Using model: {model}")
+        model = Model(model, base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS)
     else:
         logger.info("using_model", model_class="FakeModel")
         print("No LLM_API_KEY set. Using FakeModel for demonstration.")

@@ -16,8 +16,8 @@ from ecs_agent.components import (
     PendingToolCallsComponent,
     ToolRegistryComponent,
 )
-from ecs_agent.providers import FakeModel, OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers import FakeModel, Model
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.systems.permission import PermissionSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import CompletionResult, Message, ToolCall, ToolSchema
@@ -33,9 +33,9 @@ async def main() -> None:
     
     # --- Create LLM model ---
     if api_key:
-        print(f"Using OpenAIModel with model: {model}")
+        print(f"Using model: {model}")
         print(f"Base URL: {base_url}")
-        model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        model = Model(model, base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS)
     else:
         print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")
