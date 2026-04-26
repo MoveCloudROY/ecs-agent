@@ -285,7 +285,7 @@ Then run any dual-mode example, for example:
 uv run python examples/chat_agent.py
 ```
 
-Provider setup, registry-based construction, supported protocols, and model ID rules are documented in [`docs/providers.md`](docs/providers.md).
+Model setup, registry-based construction, supported protocols, and model ID rules are documented in [`docs/models.md`](docs/models.md).
 
 ## Development
 
@@ -351,7 +351,7 @@ See [`docs/`](docs/) for detailed guides:
 ### Core Features
 - [Components](docs/components.md), Complete component catalog with usage examples
 - [Systems](docs/systems.md), Built-in systems and configuration details
-- [Providers](docs/providers.md), LLM provider protocol, built-in providers
+- [Models](docs/models.md), model selection, registry routing, and built-in model implementations
 - [Streaming](docs/features/streaming.md), SSE streaming setup and usage
 - [Structured Output](docs/features/structured-output.md), Pydantic schema → JSON mode
 - [Serialization](docs/features/serialization.md), World state persistence
