@@ -1,0 +1,159 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  validate-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate tag matches package versions
+        run: |
+          python - <<'PY'
+          import re
+          import tomllib
+          from pathlib import Path
+          import os
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          assert tag.startswith("v"), f"Expected version tag, got: {tag}"
+          tag_version = tag[1:]
+
+          pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          pyproject_version = pyproject["project"]["version"]
+
+          init_text = Path("src/ecs_agent/__init__.py").read_text(encoding="utf-8")
+          match = re.search(r'__version__\s*=\s*"([^"]+)"', init_text)
+          if match is None:
+              raise SystemExit("Could not find __version__ in src/ecs_agent/__init__.py")
+          init_version = match.group(1)
+
+          if tag_version != pyproject_version or tag_version != init_version:
+              raise SystemExit(
+                  f"Version mismatch: tag={tag_version}, pyproject.toml={pyproject_version}, src/ecs_agent/__init__.py={init_version}"
+              )
+          PY
+
+  test:
+    runs-on: ubuntu-latest
+    needs: validate-version
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run pytest
+        run: uv run pytest
+
+  live-tests:
+    runs-on: ubuntu-latest
+    needs: test
+    env:
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      ANTHROPIC_LIVE_API_KEY: ${{ secrets.ANTHROPIC_LIVE_API_KEY }}
+      IMAGE_URL: ${{ secrets.IMAGE_URL }}
+      LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+      LLM_MODEL: ${{ vars.LLM_MODEL }}
+      LLM_API_FORMAT: ${{ vars.LLM_API_FORMAT }}
+      ANTHROPIC_LIVE_BASE_URL: ${{ vars.ANTHROPIC_LIVE_BASE_URL }}
+      ANTHROPIC_LIVE_MODEL: ${{ vars.ANTHROPIC_LIVE_MODEL }}
+      ALIYUN_LIVE_CHAT_BASE_URL: ${{ vars.ALIYUN_LIVE_CHAT_BASE_URL }}
+      ALIYUN_LIVE_RESPONSES_BASE_URL: ${{ vars.ALIYUN_LIVE_RESPONSES_BASE_URL }}
+      ALIYUN_LIVE_MODEL: ${{ vars.ALIYUN_LIVE_MODEL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run full live test suite
+        run: uv run pytest tests/live -v
+
+  build-and-release:
+    runs-on: ubuntu-latest
+    needs: live-tests
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate release notes file
+        run: |
+          RELEASE_NOTES_PATH="docs/releases/${GITHUB_REF_NAME}.md"
+          test -f "$RELEASE_NOTES_PATH"
+          test -s "$RELEASE_NOTES_PATH"
+          printf 'RELEASE_NOTES_PATH=%s\n' "$RELEASE_NOTES_PATH" >> "$GITHUB_ENV"
+
+      - name: Install build backend
+        run: python -m pip install build
+
+      - name: Build distributions
+        run: python -m build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-artifacts
+          path: dist/*
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: ${{ env.RELEASE_NOTES_PATH }}
+          files: dist/*
+
+  publish-pypi:
+    runs-on: ubuntu-latest
+    needs: build-and-release
+    permissions:
+      id-token: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-artifacts
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
