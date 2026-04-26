@@ -1,10 +1,10 @@
 # Retry Logic
 
-Transient failures such as rate limits (HTTP 429) or temporary server issues (HTTP 5xx) are common when working with LLM APIs. The `RetryProvider` provides a transparent way to add exponential backoff and retry logic to any LLM provider.
+Transient failures such as rate limits (HTTP 429) or temporary server issues (HTTP 5xx) are common when working with LLM APIs. `RetryModel` provides a transparent way to add exponential backoff and retry logic to any `LLMModel`.
 
 ## Overview
 
-The `RetryProvider` is a wrapper that implements the same `LLMProvider` interface. It uses the `tenacity` library to handle retries with exponential backoff.
+`RetryModel` is a wrapper that implements the same `LLMModel` interface. It uses the `tenacity` library to handle retries with exponential backoff.
 
 - **Non-streaming calls**: Retried automatically based on the configuration.
 - **Streaming calls**: Bypassed directly to the base provider (not retried).
@@ -26,33 +26,39 @@ config = RetryConfig(
 ```
 
 ### Retry Criteria
-The `RetryProvider` will attempt a retry if:
+`RetryModel` will attempt a retry if:
 - It receives an `httpx.HTTPStatusError` with a status code included in `retry_status_codes`.
 - It encounters an `httpx.RequestError` (like network timeouts or connection issues).
 
 ## Usage Example
 
-Wrap any existing provider (like `OpenAIProvider`) with `RetryProvider`.
+Wrap any existing model (such as one returned by `Model(...)`) with `RetryModel`.
 
 ```python
 import asyncio
-from ecs_agent.providers import OpenAIProvider
-from ecs_agent import RetryProvider
+from ecs_agent.providers import Model
+from ecs_agent import RetryModel
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.types import Message, RetryConfig
 
 async def main():
-    base_provider = OpenAIProvider(api_key="...", model="qwen3.5-plus")
+    base_model = Model(
+        "qwen3.5-plus",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        api_key="...",
+        api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+    )
     
     # Customize retry logic to be more aggressive
     retry_config = RetryConfig(max_attempts=5, multiplier=2.0)
     
-    # Wrap the provider
-    provider = RetryProvider(base_provider, retry_config=retry_config)
+    # Wrap the model
+    model = RetryModel(base_model, retry_config=retry_config)
     
     messages = [Message(role="user", content="What is the capital of France?")]
     
     # This call will automatically retry up to 5 times on transient errors
-    result = await provider.complete(messages)
+    result = await model.complete(messages)
     print(result.message.content)
 
 if __name__ == "__main__":
