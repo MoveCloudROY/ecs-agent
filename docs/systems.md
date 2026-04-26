@@ -502,8 +502,7 @@ from ecs_agent.types import SubagentConfig
 # Configure subagents
 researcher = SubagentConfig(
     name="researcher",
-    provider=OpenAIProvider(...),
-    model="gpt-4o",
+    model=Model("gpt-4o", base_url="...", api_key="...", api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS),
     system_prompt="You are a research specialist.",
     max_ticks=10,
 )
