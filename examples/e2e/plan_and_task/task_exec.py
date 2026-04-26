@@ -6,7 +6,6 @@ import datetime
 import json
 import os
 import tempfile
-import warnings
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -387,9 +386,7 @@ class TaskExec:
         return VALID_TRANSITIONS.get(state.phase, set())
 
     def _utcnow_isoformat(self) -> str:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            return datetime.datetime.utcnow().isoformat()
+        return datetime.datetime.now(datetime.UTC).isoformat()
 
     def _write_text_atomic(self, path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

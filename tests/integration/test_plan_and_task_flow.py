@@ -268,7 +268,7 @@ def test_scratchbook_adapter_write_and_read_state_roundtrip(tmp_path: Path) -> N
     from examples.e2e.plan_and_task.state_models import RuntimeState
 
     adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id="wf-rt")
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     state = RuntimeState(
         workflow_id="wf-rt",
         phase="DRAFT_INTERVIEW",
@@ -303,7 +303,7 @@ def test_scratchbook_adapter_write_review_verdict_creates_file(tmp_path: Path) -
     verdict = ReviewVerdict(
         phase="DRAFT_ADVISOR_REVIEW",
         verdict="approved",
-        decided_at=datetime.datetime.utcnow().isoformat(),
+        decided_at=datetime.datetime.now(datetime.UTC).isoformat(),
     )
     path_str = adapter.write_review_verdict("DRAFT_ADVISOR_REVIEW", verdict)
     assert path_str
@@ -2662,7 +2662,7 @@ async def test_plan_resume_handler_restores_state_from_disk(tmp_path: Path) -> N
 
     workflow_id = "resume-test-workflow"
     adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     persisted = RuntimeState(
         workflow_id=workflow_id,
         phase="TASK_BLOCKED",
@@ -2759,7 +2759,7 @@ async def test_plan_resume_handler_marks_stale_subagents(tmp_path: Path) -> None
 
     workflow_id = "stale-subagent-workflow"
     adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     persisted = RuntimeState(
         workflow_id=workflow_id,
         phase="TASK_RUNNING",
@@ -2819,7 +2819,7 @@ async def test_plan_resume_handler_updates_scratchbook_prompt_config(
 
     workflow_id = "scratchbook-config-workflow"
     adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     persisted = RuntimeState(
         workflow_id=workflow_id,
         phase="DRAFT_INTERVIEW",
@@ -2873,7 +2873,7 @@ def test_read_state_planning_phase_does_not_require_workflow_plan(
         adapter.plan_dir.mkdir(parents=True, exist_ok=True)
         (adapter.plan_dir / "draft.md").write_text("# Draft\n", encoding="utf-8")
 
-        now = datetime.datetime.utcnow().isoformat()
+        now = datetime.datetime.now(datetime.UTC).isoformat()
         state = RuntimeState(
             workflow_id=workflow_id,
             phase=phase,
@@ -2908,7 +2908,7 @@ def test_read_state_task_execution_phase_requires_active_plan_file(
     adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
     # Do NOT write workflow_plan.md
 
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     state = RuntimeState(
         workflow_id=workflow_id,
         phase="TASK_BLOCKED",
@@ -2950,7 +2950,7 @@ async def test_plan_resume_handler_restores_planning_phase(tmp_path: Path) -> No
     (adapter.plan_dir / "draft.md").write_text("# Draft\n", encoding="utf-8")
     # Intentionally do NOT create workflow_plan.md
 
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     persisted = RuntimeState(
         workflow_id=workflow_id,
         phase="DRAFT_ADVISOR_REVIEW",
@@ -2998,7 +2998,7 @@ def test_require_plan_artifact_skipped_for_planning_phases(tmp_path: Path) -> No
         adapter.plan_dir.mkdir(parents=True, exist_ok=True)
         (adapter.plan_dir / "draft.md").write_text("# Draft\n", encoding="utf-8")
 
-        now = datetime.datetime.utcnow().isoformat()
+        now = datetime.datetime.now(datetime.UTC).isoformat()
         state = RuntimeState(
             workflow_id=workflow_id,
             phase=phase,
@@ -3508,6 +3508,44 @@ def test_provider_config_enable_store_can_be_set_true() -> None:
     )
 
     assert config.enable_store is True
+
+
+def test_plan_controller_utcnow_isoformat_is_timezone_aware() -> None:
+    import datetime
+
+    controller = PlanController()
+
+    value = controller._utcnow_isoformat()  # type: ignore[attr-defined]
+    parsed = datetime.datetime.fromisoformat(value)
+
+    assert parsed.tzinfo is not None
+    assert parsed.utcoffset() == datetime.timedelta(0)
+
+
+def test_task_exec_utcnow_isoformat_is_timezone_aware() -> None:
+    import datetime
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    executor = TaskExec(state=_make_runtime_state())
+
+    value = executor._utcnow_isoformat()  # type: ignore[attr-defined]
+    parsed = datetime.datetime.fromisoformat(value)
+
+    assert parsed.tzinfo is not None
+    assert parsed.utcoffset() == datetime.timedelta(0)
+
+
+def test_workflow_state_machine_utcnow_isoformat_is_timezone_aware() -> None:
+    import datetime
+    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+
+    machine = WorkflowStateMachine()
+
+    value = machine._utcnow_isoformat()  # type: ignore[attr-defined]
+    parsed = datetime.datetime.fromisoformat(value)
+
+    assert parsed.tzinfo is not None
+    assert parsed.utcoffset() == datetime.timedelta(0)
 
 
 def _make_state_at_phase(phase: str) -> RuntimeState:
