@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ecs_agent.providers.config import ApiFormat, ProviderConfig, ProviderEntry
-from ecs_agent.providers.model_factory import create_model
+from ecs_agent.providers.model_constructor import Model
 from ecs_agent.providers.model_id import ModelId, parse_model_id
 from ecs_agent.providers.protocol import LLMModel
 
@@ -66,15 +66,6 @@ def get_model(
             "Pass api_key explicitly or configure api_key/api_key_env in registry entry."
         )
 
-    config = ProviderConfig(
-        provider_id=parsed.provider,
-        base_url=entry.base_url,
-        api_key=resolved_api_key,
-        api_format=entry.api_format,
-        extra_headers=dict(entry.extra_headers),
-        timeout=entry.timeout,
-    )
-
     if entry.api_format in (ApiFormat.OPENAI_EMBEDDINGS, ApiFormat.OPENAI_FILES):
         raise ValueError(
             f"api_format '{entry.api_format.value}' is not supported by get_model; "
@@ -85,7 +76,16 @@ def get_model(
     if entry.api_format == ApiFormat.ANTHROPIC_MESSAGES and entry.default_max_tokens is not None:
         kwargs["max_tokens"] = entry.default_max_tokens
 
-    return create_model(config, parsed.model, **kwargs)
+    return Model(
+        parsed.model,
+        base_url=entry.base_url,
+        api_key=resolved_api_key,
+        api_format=entry.api_format,
+        provider_id=parsed.provider,
+        extra_headers=dict(entry.extra_headers),
+        timeout=entry.timeout,
+        **kwargs,
+    )
 
 
 def _resolve_api_key(
