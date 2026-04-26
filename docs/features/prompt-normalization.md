@@ -40,7 +40,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.prompts.contracts import SystemPromptConfigSpec, PromptTemplateSource
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
@@ -51,10 +51,10 @@ async def main() -> None:
     world = World()
     entity = world.create_entity()
 
-    provider = FakeProvider(responses=[
+    model = FakeModel(responses=[
         CompletionResult(message=Message(role="assistant", content="Hello!"))
     ])
-    world.add_component(entity, LLMComponent(provider=provider, model="fake"))
+    world.add_component(entity, LLMComponent(model=model))
     world.add_component(entity, ConversationComponent(
         messages=[Message(role="user", content="Hi")]
     ))

@@ -12,8 +12,8 @@ The Entity-Component-System (ECS) pattern makes LLM agents composable and testab
 *   **Multi-Agent Orchestration** — Spawn subagents for subtasks. Parent-child messaging via pub/sub. Unified delegation API.
 *   **Tree-Structured Conversations** — Branch reasoning paths, navigate multiple strategies, linearize for LLM compatibility.
 *   **Advanced Planning** — Built-in Planning & ReAct systems with dynamic replanning. MCTS optimization for complex goals.
-*   **Production Infrastructure** — 5 LLM providers, streaming tokens (SSE), checkpoint/undo, conversation compaction, tool approval.
-*   **Type-Safe & Testable** — Full type annotations, strict mypy, FakeProvider for deterministic tests, World serialization.
+*   **Production Infrastructure** — Multiple LLM model integrations, streaming tokens (SSE), checkpoint/undo, conversation compaction, tool approval.
+*   **Type-Safe & Testable** — Full type annotations, strict mypy, FakeModel for deterministic tests, World serialization.
 
 ## Documentation
 
@@ -44,7 +44,7 @@ The Entity-Component-System (ECS) pattern makes LLM agents composable and testab
 import asyncio
 from ecs_agent.core import World, Runner
 from ecs_agent.components import LLMComponent, ConversationComponent
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
@@ -52,9 +52,9 @@ from ecs_agent.types import CompletionResult, Message
 
 async def main():
     world = World()
-    provider = FakeProvider([CompletionResult(message=Message(role="assistant", content="Hello!"))])
+    model = FakeModel([CompletionResult(message=Message(role="assistant", content="Hello!"))])
     agent = world.create_entity()
-    world.add_component(agent, LLMComponent(provider=provider, model="fake", system_prompt="You are helpful."))
+    world.add_component(agent, LLMComponent(model=model, system_prompt="You are helpful."))
     world.add_component(agent, ConversationComponent(messages=[Message(role="user", content="Hi!")]))
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(MemorySystem(), priority=10)

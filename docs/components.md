@@ -5,32 +5,40 @@ This page documents all 26 core component dataclasses used in the ECS agent arch
 ## Core Agent Components
 
 ### LLMComponent
-Links an agent to an LLM provider for reasoning and planning.
+Links an agent to an LLM model implementation for reasoning and planning.
 
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `provider` | `LLMProvider` | (none) | The LLM provider instance |
-| `model` | `str` | (none) | The specific model identifier |
+| `model` | `LLMModel` | (none) | The live LLM model instance |
 | `system_prompt` | `str` | `""` | Optional system prompt override |
-| `pending_provider` | `LLMProvider | None` | `None` | Queued provider switch (applied at next request start) |
-| `pending_model` | `str | None` | `None` | Queued model switch (applied at next request start) |
+| `pending_model` | `LLMModel | None` | `None` | Queued model switch (applied at next request start) |
 
 **Used by:** `ReasoningSystem`, `PlanningSystem`, `ReplanningSystem`
 
 **Usage:**
 ```python
 from ecs_agent.components import LLMComponent
-from ecs_agent.providers.openai_provider import OpenAIProvider
+from ecs_agent.providers import Model
+from ecs_agent.providers.config import ApiFormat
 
 llm = LLMComponent(
-    provider=OpenAIProvider(api_key="..."),
-    model="gpt-4o",
+    model=Model(
+        "gpt-4o",
+        base_url="https://api.openai.com/v1",
+        api_key="...",
+        api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+    ),
     system_prompt="You are a helpful assistant."
 )
 world.add_component(agent, llm)
 
 # Queue model switch (takes effect at next LLM request)
-llm.pending_model = "gpt-3.5-turbo"
+llm.pending_model = Model(
+    "gpt-3.5-turbo",
+    base_url="https://api.openai.com/v1",
+    api_key="...",
+    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+)
 ```
 
 ### ConversationComponent
@@ -594,7 +602,7 @@ Tracks OpenAI Responses API state for multi-turn conversations.
 | :--- | :--- | :--- | :--- |
 | `previous_response_id` | `str | None` | `None` | Response ID from last API call |
 
-**Used by:** `OpenAIProvider` (when `use_responses_api=True`)
+**Used by:** `OpenAIModel` when configured for the Responses API
 
 **Usage:**
 ```python
