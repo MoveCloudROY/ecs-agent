@@ -337,6 +337,15 @@ uv run mypy src/ecs_agent/core/world.py
 - **pytest**: `asyncio_mode = "auto"`, async tests run without explicit event loop setup
 - **mypy**: `strict = true`, `python_version = "3.11"`
 
+### GitHub CI and Release
+
+- Pushes and pull requests run `uv run pytest` via GitHub Actions.
+- Tags matching `v*` trigger the release pipeline.
+- Release tags must match the package version in both `pyproject.toml` and `src/ecs_agent/__init__.py`.
+- Tagged releases run the full `tests/live/` suite before publishing.
+- Release notes are manual and versioned at `docs/releases/vX.Y.Z.md`.
+- GitHub Release body content comes directly from the matching release-notes file.
+
 ## Documentation
 
 See [`docs/`](docs/) for detailed guides:
