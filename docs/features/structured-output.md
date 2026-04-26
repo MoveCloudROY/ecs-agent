@@ -32,7 +32,8 @@ The following example shows how to use a Pydantic model to extract structured da
 ```python
 import asyncio
 from pydantic import BaseModel, Field
-from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers import Model
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.openai_provider import pydantic_to_response_format
 from ecs_agent.types import Message
 
@@ -44,7 +45,12 @@ class CityInfo(BaseModel):
     landmarks: list[str] = Field(..., description="A list of famous landmarks")
 
 async def main():
-    provider = OpenAIProvider(api_key="...", model="qwen3.5-plus")
+    model = Model(
+        "qwen3.5-plus",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        api_key="...",
+        api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+    )
     
     # 2. Convert to response_format
     response_format = pydantic_to_response_format(CityInfo)
@@ -52,7 +58,7 @@ async def main():
     messages = [Message(role="user", content="Tell me about Tokyo.")]
     
     # 3. Call the provider with response_format
-    result = await provider.complete(messages, response_format=response_format)
+    result = await model.complete(messages, response_format=response_format)
     
     # 4. Parse the JSON content back into the model
     json_str = result.message.content
