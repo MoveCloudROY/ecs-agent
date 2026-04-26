@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime
-import warnings
 
 from ecs_agent.logging import get_logger
 
@@ -123,6 +122,4 @@ class WorkflowStateMachine:
         state.phase = phase
 
     def _utcnow_isoformat(self) -> str:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            return datetime.datetime.utcnow().isoformat()
+        return datetime.datetime.now(datetime.UTC).isoformat()
