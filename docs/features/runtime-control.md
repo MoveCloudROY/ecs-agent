@@ -93,12 +93,11 @@ await runner.run(world, max_ticks=1, start_tick=2)
 
 ## Per-Entity Model Switching
 
-Dynamic provider and model updates for individual entities with in-flight request stability.
+Dynamic model updates for individual entities with in-flight request stability.
 
 ### Fields
 
-- `LLMComponent.pending_model: str | None` — Queued model switch (applied at next request start)
-- `LLMComponent.pending_provider: LLMProvider | None` — Queued provider switch (applied at next request start)
+- `LLMComponent.pending_model: LLMModel | None` — Queued model switch (applied at next request start)
 
 ### Behavior
 
@@ -110,19 +109,29 @@ Dynamic provider and model updates for individual entities with in-flight reques
 
 ```python
 from ecs_agent.components import LLMComponent
-from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers import Model
+from ecs_agent.providers.config import ApiFormat
 
 world = World()
 agent = world.create_entity()
 
-provider = OpenAIProvider(api_key="...", base_url="...", model="gpt-4")
-llm = LLMComponent(provider=provider, model="gpt-4")
+llm = LLMComponent(model=Model(
+    "gpt-4",
+    base_url="https://api.openai.com/v1",
+    api_key="...",
+    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+))
 world.add_component(agent, llm)
 
 # ... agent generates with gpt-4 ...
 
 # Queue model switch
-llm.pending_model = "gpt-3.5-turbo"
+llm.pending_model = Model(
+    "gpt-3.5-turbo",
+    base_url="https://api.openai.com/v1",
+    api_key="...",
+    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+)
 
 # Next generation uses gpt-3.5-turbo
 # (sampled at reasoning start, stable for entire request)
