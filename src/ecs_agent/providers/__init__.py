@@ -2,7 +2,6 @@
 
 from ecs_agent.providers.config import ApiFormat, ProviderConfig, ProviderEntry
 from ecs_agent.providers.model_constructor import Model, ModelType
-from ecs_agent.providers.model_factory import create_model
 from ecs_agent.providers.model_id import ModelId, format_model_id, parse_model_id
 from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.providers.openai_files import OpenAIFilesService
@@ -26,7 +25,6 @@ __all__ = [
     "FakeModel",
     "RetryModel",
     "LiteLLMModel",
-    "create_model",
     "get_model",
     "ApiFormat",
     "ProviderConfig",
