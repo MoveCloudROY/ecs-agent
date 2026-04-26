@@ -29,7 +29,7 @@ from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import EntityId, Message
 
 
-def create_provider(model: str, system_prompt: str) -> LLMModel:
+def create_model(model: str, system_prompt: str) -> LLMModel:
     """Create an OpenAIModel from environment variables.
 
     Args:
@@ -107,7 +107,7 @@ async def main() -> None:
     #   - SubagentSystem + SubagentSessionTableComponent (when subagents present)
     print("\nCompiling agent specs into ECS World...")
     specs = resolve_agent_specs([spec, researcher_spec])
-    primary_entity, world = compile_agent_specs(specs, model_factory=create_provider)
+    primary_entity, world = compile_agent_specs(specs, model_factory=create_model)
     print(f"Created primary entity: {primary_entity}")
 
     # Add conversation with user's research question

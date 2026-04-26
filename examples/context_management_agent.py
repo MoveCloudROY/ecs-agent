@@ -46,7 +46,7 @@ from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import CompletionResult, Message, Usage
 
 
-def create_provider() -> FakeModel | OpenAIModel:
+def create_model() -> FakeModel | OpenAIModel:
     """Create LLM model based on environment variables.
 
     Uses OpenAIModel if LLM_API_KEY is set, otherwise FakeModel.
@@ -117,7 +117,7 @@ async def part_1_undo() -> None:
 
     # Create world and agent
     world = World()
-    model = create_provider()
+    model = create_model()
 
     agent_id = world.create_entity()
     world.add_component(
@@ -178,7 +178,7 @@ async def part_2_resume() -> None:
 
     # Create initial world and agent
     world = World()
-    model = create_provider()
+    model = create_model()
 
     agent_id = world.create_entity()
     world.add_component(
@@ -259,7 +259,7 @@ async def part_3_compact() -> None:
 
     # Create world with many initial messages to trigger compaction
     world = World()
-    model = create_provider()
+    model = create_model()
 
     agent_id = world.create_entity()
 
