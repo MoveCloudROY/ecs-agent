@@ -6,13 +6,13 @@ Overview of the included examples for the ECS-based LLM Agent framework.
 
 | Example Name | Description | API Key Required? | Key Features |
 | :--- | :--- | :--- | :--- |
-| [Simple Chat Agent](#simple-chat-agent) | Minimal single-agent chat with FakeProvider | No | World + LLMComponent + Runner |
+| [Simple Chat Agent](#simple-chat-agent) | Minimal single-agent chat with FakeModel | No | World + LLMComponent + Runner |
 | [Tool-Using Agent](#tool-using-agent) | LLM calls a tool, system executes it | No | ToolRegistryComponent, ToolExecutionSystem |
 | [Multi-Agent Collaboration](#multi-agent-collaboration) | Two agents exchange messages | No | MessageBus components, MessageBusSystem |
 | [ReAct Pattern Agent](#react-pattern-agent) | PlanningSystem drives multi-step plan | Yes (OpenAI) | PlanningSystem, ToolExecutionSystem |
-| [Plan-and-Execute Agent](#plan-and-execute-with-replanning) | Dynamic replanning based on results | Yes (OpenAI) | ReplanningSystem, RetryProvider |
+| [Plan-and-Execute Agent](#plan-and-execute-with-replanning) | Dynamic replanning based on results | Yes (OpenAI) | ReplanningSystem, RetryModel |
 | [Streaming Responses](#streaming-responses) | Real-time response streaming | Optional | stream=True, Delta iteration |
-| [Retry with Backoff](#retry-with-exponential-backoff) | Automatic retries for transient errors | Optional | RetryProvider, RetryConfig |
+| [Retry with Backoff](#retry-with-exponential-backoff) | Automatic retries for transient errors | Optional | RetryModel, RetryConfig |
 | [Structured Output](#structured-output-with-pydantic) | JSON mode with Pydantic validation | Optional | pydantic_to_response_format |
 | [World Serialization](#world-serialization) | Save/load world state to/from JSON | No | WorldSerializer.save/load |
 | [Tool Approval Agent](#tool-approval-agent) | Policy-based tool call approval flow | No | ToolApprovalComponent, ToolApprovalSystem |
@@ -20,23 +20,23 @@ Overview of the included examples for the ECS-based LLM Agent framework.
 | [Tree Search Agent](#tree-search-agent) | MCTS planning for complex goals | No | PlanSearchComponent, TreeSearchSystem |
 | [RAG Agent](#rag-agent) | Vector search retrieval-augmented generation | No | RAGTriggerComponent, RAGSystem |
 | [Sub-Agent Delegation](#sub-agent-delegation) | Parent agent delegates to child agents | No | Subagent components, MessageBusSystem |
-| [Claude Agent](#claude-agent) | Native Anthropic Claude provider | Yes (Anthropic) | ClaudeProvider |
-| [LiteLLM Agent](#litellm-agent) | Unified access to 100+ LLM providers | Yes (varies) | LiteLLMProvider |
+| [Claude Agent](#claude-agent) | Anthropic-compatible model example | Yes (Anthropic) | ClaudeModel |
+| [LiteLLM Agent](#litellm-agent) | Unified access to 100+ LLM providers | Yes (varies) | Model(..., model_type="litellm") |
 | [System Streaming](#system-streaming) | System-level streaming with events | Optional | StreamingComponent, StreamStartEvent |
 | [Context Management](#context-management) | Checkpoint, undo, and compaction demo | Optional | CheckpointSystem, CompactionSystem |
 
 ---
 
-## Dual-Mode Provider Selection
+## Dual-Mode Model Selection
 
-Nine examples support **dual-mode execution** — automatically switching between `FakeProvider` (default) and `OpenAIProvider` (with API credentials) based on environment variables.
+Nine examples support **dual-mode execution** — automatically switching between `FakeModel` (default) and a real model built with `Model(...)` (with API credentials) based on environment variables.
 
 ### What is Dual-Mode?
 
 Dual-mode examples work in two ways:
 
-1. **Fake Mode (No API Key)**: Uses `FakeProvider` with pre-scripted responses. Perfect for testing, demos, and learning without incurring API costs.
-2. **Real Mode (With API Key)**: Uses `OpenAIProvider` to call your LLM API. Set environment variables to activate real mode.
+1. **Fake Mode (No API Key)**: Uses `FakeModel` with pre-scripted responses. Perfect for testing, demos, and learning without incurring API costs.
+2. **Real Mode (With API Key)**: Uses `Model(...)` to call your LLM API. Set environment variables to activate real mode.
 
 ### Supported Examples
 
@@ -58,7 +58,7 @@ Control dual-mode behavior with these environment variables:
 
 | Variable | Purpose | Default | Example |
 | :--- | :--- | :--- | :--- |
-| `LLM_API_KEY` | **Trigger for real mode.** If set, activates `OpenAIProvider`. If unset, uses `FakeProvider`. | Unset (fake mode) | `sk-...` |
+| `LLM_API_KEY` | **Trigger for real mode.** If set, activates `Model(...)`. If unset, uses `FakeModel`. | Unset (fake mode) | `sk-...` |
 | `LLM_BASE_URL` | API endpoint (OpenAI-compatible) | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `https://api.openai.com/v1` |
 | `LLM_MODEL` | LLM model name | `qwen3.5-flash` | `gpt-4o-mini` |
 | `EMBEDDING_MODEL` | Embedding model (RAG only) | `text-embedding-v3` | `text-embedding-3-small` |
@@ -90,7 +90,7 @@ uv run python examples/chat_agent.py
 
 ### Simple Chat Agent
 - **File:** `examples/chat_agent.py`
-- **What it demonstrates:** Basic agent setup using the ECS pattern with a `FakeProvider`.
+- **What it demonstrates:** Basic agent setup using the ECS pattern with a `FakeModel`.
 - **Run:** `python examples/chat_agent.py`
 - **Pattern:** `World` + entity + `LLMComponent` + `ConversationComponent` + `ReasoningSystem` + `MemorySystem` + `ErrorHandlingSystem` + `Runner`.
 
@@ -98,7 +98,7 @@ uv run python examples/chat_agent.py
 ```python
 # Create Agent Entity
 agent_id = world.create_entity()
-world.add_component(agent_id, LLMComponent(provider=provider, model="fake"))
+world.add_component(agent_id, LLMComponent(model=model))
 world.add_component(agent_id, ConversationComponent(messages=[Message(role="user", content="Hello!")]))
 
 # Register Systems
@@ -115,7 +115,7 @@ Conversation:
   assistant: Hello! I'm doing great, thank you for asking! How can I help you today?
 ```
 
-> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
+> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeModel`, or set `LLM_API_KEY` to use `Model(...)`. See [Dual-Mode Model Selection](#dual-mode-model-selection) for details.
 
 ---
 
@@ -179,7 +179,7 @@ Agent B (summarizer) conversation:
   assistant: Thank you! I'll summarize the key findings for you.
 ```
 
-> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
+> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeModel`, or set `LLM_API_KEY` to use `Model(...)`. See [Dual-Mode Model Selection](#dual-mode-model-selection) for details.
 
 ---
 
@@ -258,12 +258,12 @@ Running ReAct agent with 5-step plan...
 - **What it demonstrates:** Dynamic replanning where the agent revises its plan after each step.
 - **Run:** `uv run python examples/plan_and_execute_agent.py`
 - **Required Env:** `LLM_API_KEY`, timeouts, and retries.
-- **Pattern:** `PlanningSystem` + `ToolExecutionSystem` + `ReplanningSystem` + `RetryProvider` + `PlanRevisedEvent`.
+- **Pattern:** `PlanningSystem` + `ToolExecutionSystem` + `ReplanningSystem` + `RetryModel` + `PlanRevisedEvent`.
 
 #### Key Code
 ```python
 # Wrap provider with retry logic
-provider = RetryProvider(base_provider, retry_config=RetryConfig(max_attempts=3))
+model = RetryModel(base_model, retry_config=RetryConfig(max_attempts=3))
 
 # Register systems including ReplanningSystem
 world.register_system(PlanningSystem(priority=0), priority=0)
@@ -330,7 +330,7 @@ Tokens used:
 - **File:** `examples/retry_agent.py`
 - **What it demonstrates:** Automatic retries for transient HTTP errors like 429 or 500.
 - **Run:** `uv run python examples/retry_agent.py`
-- **Pattern:** `RetryProvider` wrapping a base provider with a custom `RetryConfig`.
+- **Pattern:** `RetryModel` wrapping a base model with a custom `RetryConfig`.
 
 #### Key Code
 ```python
@@ -344,7 +344,7 @@ retry_config = RetryConfig(
 )
 
 # Wrap provider
-provider = RetryProvider(base_provider, retry_config=retry_config)
+model = RetryModel(base_model, retry_config=retry_config)
 ```
 
 #### Expected Output
@@ -412,7 +412,7 @@ Landmarks:
 - **Run:** `uv run python examples/skill_agent.py`
 - **Pattern:** `Skill` + `SkillManager` + `ReasoningSystem`.
 
-> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
+> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeModel`, or set `LLM_API_KEY` to use `Model(...)`. See [Dual-Mode Model Selection](#dual-mode-model-selection) for details.
 
 ---
 
@@ -422,7 +422,7 @@ Landmarks:
 - **Run:** `uv run python examples/tree_search_agent.py`
 - **Pattern:** `PlanSearchComponent` + `TreeSearchSystem`.
 
-> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
+> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeModel`, or set `LLM_API_KEY` to use `Model(...)`. See [Dual-Mode Model Selection](#dual-mode-model-selection) for details.
 ---
 
 ### RAG Agent
@@ -431,7 +431,7 @@ Landmarks:
 - **Run:** `uv run python examples/rag_agent.py`
 - **Pattern:** `RAGTriggerComponent` + `RAGSystem` + `EmbeddingComponent` + `VectorStoreComponent`.
 
-> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` + `EMBEDDING_MODEL` + `EMBEDDING_DIMENSION` to use real embedding providers. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
+> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeModel`, or set `LLM_API_KEY` + `EMBEDDING_MODEL` + `EMBEDDING_DIMENSION` to use real embedding providers. See [Dual-Mode Model Selection](#dual-mode-model-selection) for details.
 ---
 
 ### Sub-Agent Delegation
@@ -456,15 +456,15 @@ world.register_system(SubagentSystem(priority=-1), priority=-1)
 world.register_system(SubagentWaitSystem(priority=-5), priority=-5)
 ```
 
-> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
+> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeModel`, or set `LLM_API_KEY` to use `Model(...)`. See [Dual-Mode Model Selection](#dual-mode-model-selection) for details.
 
 ---
 
 ### Claude Agent
 - **File:** `examples/claude_agent.py`
-- **What it demonstrates:** Native usage of the Anthropic Claude provider.
+- **What it demonstrates:** Anthropic-compatible usage through the unified model interface.
 - **Run:** `uv run python examples/claude_agent.py`
-- **Pattern:** `ClaudeProvider`.
+- **Pattern:** `ClaudeModel` via `Model(..., api_format=ApiFormat.ANTHROPIC_MESSAGES)`.
 
 ---
 
@@ -472,7 +472,7 @@ world.register_system(SubagentWaitSystem(priority=-5), priority=-5)
 - **File:** `examples/litellm_agent.py`
 - **What it demonstrates:** Unified access to 100+ LLM providers.
 - **Run:** `uv run python examples/litellm_agent.py`
-- **Pattern:** `LiteLLMProvider`.
+- **Pattern:** `Model(..., model_type="litellm")`.
 
 ---
 
@@ -490,7 +490,7 @@ world.register_system(SubagentWaitSystem(priority=-5), priority=-5)
 - **Run:** `uv run python examples/context_management_agent.py`
 - **Pattern:** `CheckpointSystem` + `CompactionSystem` + `CheckpointComponent` + `CompactionConfigComponent`.
 
-> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeProvider`, or set `LLM_API_KEY` to use `OpenAIProvider`. See [Dual-Mode Provider Selection](#dual-mode-provider-selection) for details.
+> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeModel`, or set `LLM_API_KEY` to use `Model(...)`. See [Dual-Mode Model Selection](#dual-mode-model-selection) for details.
 
 ---
 
@@ -512,7 +512,7 @@ The Agent DSL examples demonstrate how to define agents declaratively using JSON
 ```python
 spec_list = load_json_agents(Path("examples/agents_config.json"))
 specs = resolve_agent_specs(spec_list)
-primary_entity, world = compile_agent_specs(specs, provider_factory=create_provider)
+primary_entity, world = compile_agent_specs(specs, model_factory=create_model)
 
 # Compiler auto-wires subagent infrastructure when subagents are present:
 #   ToolRegistryComponent, SubagentSessionTableComponent, SubagentSystem
@@ -521,7 +521,7 @@ world.register_system(ToolExecutionSystem(priority=5), priority=5)
 await Runner().run(world, max_ticks=10)
 ```
 
-> **Requires `LLM_API_KEY`**: Unlike most examples, the DSL examples use real LLM providers only. Set `LLM_API_KEY` (and optionally `LLM_BASE_URL`, `LLM_MODEL`) before running.
+> **Requires `LLM_API_KEY`**: Unlike most examples, the DSL examples use real LLM models only. Set `LLM_API_KEY` (and optionally `LLM_BASE_URL`, `LLM_MODEL`) before running.
 
 ---
 
@@ -539,7 +539,7 @@ spec = load_markdown_agent(Path("examples/assistant.md"))
 researcher_spec = load_markdown_agent(Path("examples/researcher.md"))
 
 specs = resolve_agent_specs([spec, researcher_spec])
-primary_entity, world = compile_agent_specs(specs, provider_factory=create_provider)
+primary_entity, world = compile_agent_specs(specs, model_factory=create_model)
 
 # Compiler auto-wires subagent infrastructure when subagents are present:
 #   ToolRegistryComponent, SubagentSessionTableComponent, SubagentSystem
