@@ -49,7 +49,7 @@ Let's build a simple chat agent using a mock provider. This allows you to test t
 import asyncio
 from ecs_agent.core import World, Runner
 from ecs_agent.components import LLMComponent, ConversationComponent
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
@@ -60,9 +60,9 @@ async def main():
     # The World acts as the container for all entities and systems.
     world = World()
 
-    # 2. Create a FakeProvider with pre-configured responses
+    # 2. Create a FakeModel with pre-configured responses
     # This simulates an LLM response for testing purposes.
-    provider = FakeProvider([
+    model = FakeModel([
         CompletionResult(
             message=Message(role="assistant", content="Hello! I'm doing great, how can I help you today?")
         )
@@ -71,7 +71,7 @@ async def main():
     # 3. Create an entity and add LLMComponent + ConversationComponent
     # We define our agent as an entity with specific behavioral components.
     agent = world.create_entity()
-    world.add_component(agent, LLMComponent(provider=provider, model="fake", system_prompt="You are a helpful assistant."))
+    world.add_component(agent, LLMComponent(model=model, system_prompt="You are a helpful assistant."))
     world.add_component(agent, ConversationComponent(messages=[Message(role="user", content="Hello, how are you?")]))
 
     # 4. Register systems
@@ -99,7 +99,7 @@ if __name__ == "__main__":
 ### Breakdown
 
 1.  **World Creation**: Everything lives inside a `World` instance.
-2.  **Mock Provider**: `FakeProvider` bypasses real network calls, making it perfect for CI/CD or initial development.
+2.  **Mock Model**: `FakeModel` bypasses real network calls, making it perfect for CI/CD or initial development.
 3.  **Entity Configuration**: We add an `LLMComponent` to handle model settings and a `ConversationComponent` to store the chat history.
 4.  **System Registration**: 
     *   `ReasoningSystem` triggers the LLM call.
