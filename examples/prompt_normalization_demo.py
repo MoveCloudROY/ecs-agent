@@ -46,8 +46,8 @@ from ecs_agent.prompts.message_assembly import (
     build_keyword_registry,
     build_trigger_specs,
 )
-from ecs_agent.providers import FakeModel, OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers import FakeModel, Model
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -97,7 +97,7 @@ def _build_provider_from_env() -> tuple[LLMModel, str, str]:
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
 
     if api_key:
-        real_provider: LLMModel = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        real_provider: LLMModel = Model(model, base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS)
         return real_provider, model, "real"
 
     fake_provider = FakeModel(

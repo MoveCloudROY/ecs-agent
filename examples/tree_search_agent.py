@@ -38,8 +38,8 @@ from ecs_agent.components import (
     PlanSearchComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeModel, OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers import FakeModel, Model
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.systems.tree_search import TreeSearchSystem
 from ecs_agent.types import CompletionResult, Message
 
@@ -134,9 +134,9 @@ async def main() -> None:
 
     # Create model with pre-defined responses (FakeModel) or real LLM
     if api_key:
-        print(f"Using OpenAIModel with model: {model}")
+        print(f"Using model: {model}")
         print(f"Base URL: {base_url}")
-        model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        model = Model(model, base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS)
     else:
         print("No LLM_API_KEY set. Using FakeModel for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")

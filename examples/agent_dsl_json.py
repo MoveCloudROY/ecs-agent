@@ -18,8 +18,8 @@ from ecs_agent.components import ConversationComponent, OwnerComponent
 from ecs_agent.core import Runner, World
 from ecs_agent.dsl import compile_agent_specs, load_json_agents, resolve_agent_specs
 from ecs_agent.logging import configure_logging
-from ecs_agent.providers import OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers import Model
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -29,14 +29,14 @@ from ecs_agent.types import EntityId, Message
 
 
 def create_model(model: str, system_prompt: str) -> LLMModel:
-    """Create an OpenAIModel from environment variables.
+    """Create a model from environment variables.
 
     Args:
         model: Model identifier (e.g., "qwen3.5-flash")
         system_prompt: System prompt for the model (unused at construction time)
 
     Returns:
-        OpenAIModel configured from environment.
+        LLMModel configured from environment.
     """
     api_key = os.environ.get("LLM_API_KEY", "")
     base_url = os.environ.get(
@@ -48,7 +48,7 @@ def create_model(model: str, system_prompt: str) -> LLMModel:
             "Set LLM_API_KEY (and optionally LLM_BASE_URL, LLM_MODEL) to run this example."
         )
         raise SystemExit(1)
-    return OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+    return Model(model, base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS)
 
 
 def _print_conversation(label: str, entity_id: EntityId, world: World) -> None:

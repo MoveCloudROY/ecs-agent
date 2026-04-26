@@ -29,9 +29,8 @@ from ecs_agent.prompts.contracts import (
     SystemPromptConfigSpec,
     TriggerSpec,
 )
-from ecs_agent.providers import OpenAIModel
-from ecs_agent.providers.claude_model import ClaudeModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers import Model
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.tools import BuiltinToolsSkill
@@ -723,32 +722,21 @@ async def main() -> None:
 
     model: LLMModel
     if api_format_str == ApiFormat.ANTHROPIC_MESSAGES:
-        logger.info("using_model", model_class="ClaudeModel", model_name=model)
-        print(f"Using ClaudeModel (Anthropic Messages API) with model: {model}")
-        model = ClaudeModel(
-            config=ProviderConfig(
-                provider_id="anthropic",
-                base_url=base_url,
-                api_key=api_key,
-                api_format=ApiFormat.ANTHROPIC_MESSAGES,
-            ),
-            model=model,
-        )
+        logger.info("using_model", model_name=model, api_format="anthropic_messages")
+        print(f"Using Anthropic Messages API with model: {model}")
+        model = Model(model, base_url=base_url, api_key=api_key, api_format=ApiFormat.ANTHROPIC_MESSAGES)
     else:
         api_format = ApiFormat.OPENAI_RESPONSES
         if api_format_str == ApiFormat.OPENAI_CHAT_COMPLETIONS:
             api_format = ApiFormat.OPENAI_CHAT_COMPLETIONS
-        logger.info("using_model", model_class="OpenAIModel", model_name=model)
-        print(f"Using OpenAIModel with model: {model}")
-        model = OpenAIModel(
-            config=ProviderConfig(
-                provider_id="openai",
-                base_url=base_url,
-                api_key=api_key,
-                api_format=api_format,
-                enable_store=api_format == ApiFormat.OPENAI_RESPONSES,
-            ),
-            model=model,
+        logger.info("using_model", model_name=model, api_format=api_format)
+        print(f"Using model: {model}")
+        model = Model(
+            model,
+            base_url=base_url,
+            api_key=api_key,
+            api_format=api_format,
+            enable_store=api_format == ApiFormat.OPENAI_RESPONSES,
         )
 
     world, agent_id, _, _ = build_plan_task_world(

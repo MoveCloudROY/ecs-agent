@@ -16,8 +16,8 @@ from pathlib import Path
 from ecs_agent import BuiltinToolsSkill, SkillManager
 from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeModel, OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers import FakeModel, Model
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import CompletionResult, Message, ToolCall
@@ -36,7 +36,7 @@ async def main() -> None:
         # 1. Setup Provider (Use OpenAI if key is present, otherwise Fake)
         api_key = os.getenv("LLM_API_KEY")
         if api_key:
-            model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"), api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=os.getenv("LLM_MODEL", "qwen3.5-flash"))
+            model = Model(os.getenv("LLM_MODEL", "qwen3.5-flash"), base_url=os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"), api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS)
         else:
             # Fake responses for the demo
             model = FakeModel(

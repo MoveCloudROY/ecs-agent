@@ -10,7 +10,7 @@ import pytest
 
 from ecs_agent.providers.fake_model import FakeModel
 from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.systems.subagent_wait import SubagentWaitSystem
 from ecs_agent.types import CompletionResult, Message
 from ecs_agent.types import ToolCall
@@ -277,15 +277,13 @@ def _load_example(module_name: str) -> Any:
     return importlib.import_module(f"examples.{module_name}")
 
 
-def _assert_openai_defaults(openai_ctor: Any, expected_count: int) -> None:
-    assert openai_ctor.call_count == expected_count
-    for call in openai_ctor.call_args_list:
-        config = call.kwargs["config"]
-        assert isinstance(config, ProviderConfig)
-        assert config.api_key == "test-api-key"
-        assert config.base_url == DEFAULT_BASE_URL
-        assert config.api_format is ApiFormat.OPENAI_CHAT_COMPLETIONS
-        assert call.kwargs["model"] == DEFAULT_MODEL
+def _assert_model_defaults(model_ctor: Any, expected_count: int) -> None:
+    assert model_ctor.call_count == expected_count
+    for call in model_ctor.call_args_list:
+        assert call.args[0] == DEFAULT_MODEL
+        assert call.kwargs["api_key"] == "test-api-key"
+        assert call.kwargs["base_url"] == DEFAULT_BASE_URL
+        assert call.kwargs["api_format"] is ApiFormat.OPENAI_CHAT_COMPLETIONS
 
 
 @pytest.mark.asyncio
@@ -297,13 +295,12 @@ class TestChatAgentDualMode:
             with patch(
                 "examples.chat_agent.FakeModel", return_value=_fake_provider()
             ) as fake_ctor:
-                with patch(
-                    "examples.chat_agent.OpenAIModel", create=True
-                ) as openai_ctor:
+                with patch("examples.chat_agent.Model"
+                ) as model_ctor:
                     await module.main()
 
         fake_ctor.assert_called_once()
-        openai_ctor.assert_not_called()
+        model_ctor.assert_not_called()
 
     async def test_real_mode(self) -> None:
         module = _load_example("chat_agent")
@@ -312,15 +309,14 @@ class TestChatAgentDualMode:
             with patch(
                 "examples.chat_agent.FakeModel", side_effect=FakeModel
             ) as fake_ctor:
-                with patch(
-                    "examples.chat_agent.OpenAIModel",
+                with patch("examples.chat_agent.Model",
                     return_value=_OpenAIModelStub(),
                     create=True,
-                ) as openai_ctor:
+                ) as model_ctor:
                     await module.main()
 
         fake_ctor.assert_not_called()
-        _assert_openai_defaults(openai_ctor, expected_count=1)
+        _assert_model_defaults(model_ctor, expected_count=1)
 
 
 @pytest.mark.asyncio
@@ -333,13 +329,12 @@ class TestMultiAgentDualMode:
                 "examples.multi_agent.FakeModel",
                 side_effect=[_fake_provider(), _fake_provider()],
             ) as fake_ctor:
-                with patch(
-                    "examples.multi_agent.OpenAIModel", create=True
-                ) as openai_ctor:
+                with patch("examples.multi_agent.Model"
+                ) as model_ctor:
                     await module.main()
 
         assert fake_ctor.call_count == 2
-        openai_ctor.assert_not_called()
+        model_ctor.assert_not_called()
 
     async def test_real_mode(self) -> None:
         module = _load_example("multi_agent")
@@ -348,15 +343,14 @@ class TestMultiAgentDualMode:
             with patch(
                 "examples.multi_agent.FakeModel", side_effect=FakeModel
             ) as fake_ctor:
-                with patch(
-                    "examples.multi_agent.OpenAIModel",
+                with patch("examples.multi_agent.Model",
                     side_effect=[_OpenAIModelStub("a"), _OpenAIModelStub("b")],
                     create=True,
-                ) as openai_ctor:
+                ) as model_ctor:
                     await module.main()
 
         fake_ctor.assert_not_called()
-        _assert_openai_defaults(openai_ctor, expected_count=2)
+        _assert_model_defaults(model_ctor, expected_count=2)
 
 
 @pytest.mark.asyncio
@@ -369,13 +363,12 @@ class TestScriptSkillDiscoveryAgentDualMode:
                 "examples.script_skill_discovery_agent.FakeModel",
                 return_value=_fake_provider(),
             ) as fake_ctor:
-                with patch(
-                    "examples.script_skill_discovery_agent.OpenAIModel", create=True
-                ) as openai_ctor:
+                with patch("examples.script_skill_discovery_agent.Model"
+                ) as model_ctor:
                     await module.main()
 
         fake_ctor.assert_called_once()
-        openai_ctor.assert_not_called()
+        model_ctor.assert_not_called()
 
     async def test_real_mode(self) -> None:
         module = _load_example("script_skill_discovery_agent")
@@ -385,15 +378,14 @@ class TestScriptSkillDiscoveryAgentDualMode:
                 "examples.script_skill_discovery_agent.FakeModel",
                 side_effect=FakeModel,
             ) as fake_ctor:
-                with patch(
-                    "examples.script_skill_discovery_agent.OpenAIModel",
+                with patch("examples.script_skill_discovery_agent.Model",
                     return_value=_OpenAIModelStub(),
                     create=True,
-                ) as openai_ctor:
+                ) as model_ctor:
                     await module.main()
 
         fake_ctor.assert_not_called()
-        _assert_openai_defaults(openai_ctor, expected_count=1)
+        _assert_model_defaults(model_ctor, expected_count=1)
 
 
 @pytest.mark.asyncio
@@ -406,13 +398,12 @@ class TestPermissionAgentDualMode:
                 "examples.permission_agent.FakeModel",
                 return_value=_fake_provider(),
             ) as fake_ctor:
-                with patch(
-                    "examples.permission_agent.OpenAIModel", create=True
-                ) as openai_ctor:
+                with patch("examples.permission_agent.Model"
+                ) as model_ctor:
                     await module.main()
 
         fake_ctor.assert_called_once()
-        openai_ctor.assert_not_called()
+        model_ctor.assert_not_called()
 
     async def test_real_mode(self) -> None:
         module = _load_example("permission_agent")
@@ -421,15 +412,14 @@ class TestPermissionAgentDualMode:
             with patch(
                 "examples.permission_agent.FakeModel", side_effect=FakeModel
             ) as fake_ctor:
-                with patch(
-                    "examples.permission_agent.OpenAIModel",
+                with patch("examples.permission_agent.Model",
                     return_value=_OpenAIModelStub(),
                     create=True,
-                ) as openai_ctor:
+                ) as model_ctor:
                     await module.main()
 
         fake_ctor.assert_not_called()
-        _assert_openai_defaults(openai_ctor, expected_count=1)
+        _assert_model_defaults(model_ctor, expected_count=1)
 
 
 @pytest.mark.asyncio
@@ -447,14 +437,13 @@ class TestSubagentDelegationDualMode:
                     "examples.subagent_delegation.FakeModel",
                     side_effect=FakeModel,
                 ) as fake_ctor:
-                    with patch(
-                        "examples.subagent_delegation.OpenAIModel", create=True
-                    ) as openai_ctor:
+                    with patch("examples.subagent_delegation.Model"
+                    ) as model_ctor:
                         with patch("sys.stdout", stdout):
                             await module.main()
 
                 assert fake_ctor.call_count == 5
-                openai_ctor.assert_not_called()
+                model_ctor.assert_not_called()
 
                 output = stdout.getvalue()
                 world, parent_id = module._build_world(
@@ -523,16 +512,15 @@ class TestSubagentDelegationDualMode:
                     "examples.subagent_delegation.FakeModel",
                     side_effect=FakeModel,
                 ) as fake_ctor:
-                    with patch(
-                        "examples.subagent_delegation.OpenAIModel",
+                    with patch("examples.subagent_delegation.Model",
                         return_value=_SubagentDelegationOpenAIStub(),
                         create=True,
-                    ) as openai_ctor:
+                    ) as model_ctor:
                         with patch("sys.stdout", stdout):
                             await module.main()
 
         fake_ctor.assert_not_called()
-        _assert_openai_defaults(openai_ctor, expected_count=1)
+        _assert_model_defaults(model_ctor, expected_count=1)
 
         output = stdout.getvalue()
         assert "TOOL CALL HISTORY" in output
@@ -574,13 +562,12 @@ class TestTreeSearchAgentDualMode:
                 "examples.tree_search_agent.FakeModel",
                 return_value=_fake_provider(content="0.75"),
             ) as fake_ctor:
-                with patch(
-                    "examples.tree_search_agent.OpenAIModel", create=True
-                ) as openai_ctor:
+                with patch("examples.tree_search_agent.Model"
+                ) as model_ctor:
                     await module.main()
 
         fake_ctor.assert_called_once()
-        openai_ctor.assert_not_called()
+        model_ctor.assert_not_called()
 
     async def test_real_mode(self) -> None:
         module = _load_example("tree_search_agent")
@@ -589,15 +576,14 @@ class TestTreeSearchAgentDualMode:
             with patch(
                 "examples.tree_search_agent.FakeModel", side_effect=FakeModel
             ) as fake_ctor:
-                with patch(
-                    "examples.tree_search_agent.OpenAIModel",
+                with patch("examples.tree_search_agent.Model",
                     return_value=_OpenAIModelStub("0.75"),
                     create=True,
-                ) as openai_ctor:
+                ) as model_ctor:
                     await module.main()
 
         fake_ctor.assert_not_called()
-        _assert_openai_defaults(openai_ctor, expected_count=1)
+        _assert_model_defaults(model_ctor, expected_count=1)
 
 
 @pytest.mark.asyncio
@@ -610,13 +596,12 @@ class TestContextManagementAgentDualMode:
                 "examples.context_management_agent.FakeModel",
                 side_effect=[_fake_provider(), _fake_provider(), _fake_provider()],
             ) as fake_ctor:
-                with patch(
-                    "examples.context_management_agent.OpenAIModel", create=True
-                ) as openai_ctor:
+                with patch("examples.context_management_agent.Model"
+                ) as model_ctor:
                     await module.main()
 
         assert fake_ctor.call_count == 3
-        openai_ctor.assert_not_called()
+        model_ctor.assert_not_called()
 
     async def test_real_mode(self) -> None:
         module = _load_example("context_management_agent")
@@ -626,19 +611,18 @@ class TestContextManagementAgentDualMode:
                 "examples.context_management_agent.FakeModel",
                 side_effect=FakeModel,
             ) as fake_ctor:
-                with patch(
-                    "examples.context_management_agent.OpenAIModel",
+                with patch("examples.context_management_agent.Model",
                     side_effect=[
                         _OpenAIModelStub("r1"),
                         _OpenAIModelStub("r2"),
                         _OpenAIModelStub("r3"),
                     ],
                     create=True,
-                ) as openai_ctor:
+                ) as model_ctor:
                     await module.main()
 
         fake_ctor.assert_not_called()
-        _assert_openai_defaults(openai_ctor, expected_count=3)
+        _assert_model_defaults(model_ctor, expected_count=3)
 
 
 @pytest.mark.asyncio
@@ -655,9 +639,8 @@ class TestRAGAgentDualMode:
                     "examples.rag_agent.FakeEmbeddingProvider",
                     return_value=_EmbeddingProviderStub(dimension=8),
                 ) as fake_embed_ctor:
-                    with patch(
-                        "examples.rag_agent.OpenAIModel", create=True
-                    ) as openai_ctor:
+                    with patch("examples.rag_agent.Model"
+                    ) as model_ctor:
                         with patch(
                             "examples.rag_agent.OpenAIEmbeddingProvider", create=True
                         ) as openai_embed_ctor:
@@ -665,7 +648,7 @@ class TestRAGAgentDualMode:
 
         fake_llm_ctor.assert_called_once()
         fake_embed_ctor.assert_called_once()
-        openai_ctor.assert_not_called()
+        model_ctor.assert_not_called()
         openai_embed_ctor.assert_not_called()
 
     async def test_real_mode(self) -> None:
@@ -679,11 +662,10 @@ class TestRAGAgentDualMode:
                     "examples.rag_agent.FakeEmbeddingProvider",
                     side_effect=FakeEmbeddingProvider,
                 ) as fake_embed_ctor:
-                    with patch(
-                        "examples.rag_agent.OpenAIModel",
+                    with patch("examples.rag_agent.Model",
                         return_value=_OpenAIModelStub(),
                         create=True,
-                    ) as openai_ctor:
+                    ) as model_ctor:
                         with patch(
                             "examples.rag_agent.OpenAIEmbeddingProvider",
                             return_value=_EmbeddingProviderStub(),
@@ -697,7 +679,7 @@ class TestRAGAgentDualMode:
 
         fake_llm_ctor.assert_not_called()
         fake_embed_ctor.assert_not_called()
-        _assert_openai_defaults(openai_ctor, expected_count=1)
+        _assert_model_defaults(model_ctor, expected_count=1)
         assert openai_embed_ctor.call_count == 1
         embed_call = openai_embed_ctor.call_args
         assert embed_call.kwargs["api_key"] == "test-api-key"

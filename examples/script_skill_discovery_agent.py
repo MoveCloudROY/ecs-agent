@@ -8,12 +8,12 @@ LLM_API_KEY) and FakeModel (default, no credentials required).
 import asyncio
 import os
 from pathlib import Path
-from typing import Union
 
 from ecs_agent.core import World, Runner
 from ecs_agent.components import LLMComponent, ConversationComponent
-from ecs_agent.providers import FakeModel, OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers import FakeModel, Model
+from ecs_agent.providers.config import ApiFormat
+from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.discovery import SkillDiscovery
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -56,9 +56,9 @@ async def main() -> None:
     print(f"Installed skills: {installed_names}")
     # --- Create LLM model ---
     if api_key:
-        print(f"Using OpenAIModel with model: {model}")
+        print(f"Using model: {model}")
         print(f"Base URL: {base_url}")
-        model: Union[OpenAIModel, FakeModel] = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        model: LLMModel = Model(model, base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS)
     else:
         print("No LLM_API_KEY provided. Using FakeModel for demonstration.")
         print("To use a real API, set LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL.")

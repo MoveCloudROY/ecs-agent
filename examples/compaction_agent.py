@@ -32,8 +32,8 @@ from ecs_agent.components import (
 from ecs_agent.components.definitions import CurrentCompactionSummaryComponent
 from ecs_agent.core import World
 from ecs_agent.prompts.message_assembly import apply_outbound_budget
-from ecs_agent.providers import FakeModel, OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers import FakeModel, Model
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
@@ -70,18 +70,15 @@ def _get_model_name() -> str:
     return "fake"
 
 
-def _create_openai_provider() -> OpenAIModel:
-    """Build OpenAIModel from environment variables."""
-    return OpenAIModel(
-        config=ProviderConfig(
-            provider_id="openai",
-            base_url=os.environ.get(
-                "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-            ),
-            api_key=os.environ["LLM_API_KEY"],
-            api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+def _create_openai_provider() -> LLMModel:
+    """Build an LLMModel from environment variables."""
+    return Model(
+        os.environ.get("LLM_MODEL", "qwen3.5-flash"),
+        base_url=os.environ.get(
+            "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
         ),
-        model=os.environ.get("LLM_MODEL", "qwen3.5-flash"),
+        api_key=os.environ["LLM_API_KEY"],
+        api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
     )
 
 
@@ -539,7 +536,7 @@ async def main() -> None:
     print("=" * 70)
 
     if os.environ.get("LLM_API_KEY", ""):
-        print(f"Using OpenAIModel with model: {_get_model_name()}")
+        print(f"Using model: {_get_model_name()}")
         print(
             "Base URL: "
             f"{os.environ.get('LLM_BASE_URL', 'https://dashscope.aliyuncs.com/compatible-mode/v1')}"

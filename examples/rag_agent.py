@@ -25,8 +25,8 @@ from ecs_agent.components import (
     VectorStoreComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeModel, OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers import FakeModel, Model
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.embedding_provider import OpenAIEmbeddingProvider
 from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider
 from ecs_agent.providers.vector_store import InMemoryVectorStore
@@ -53,8 +53,8 @@ async def main() -> None:
 
     # --- Create LLM model (dual-mode) ---
     if api_key:
-        print(f"Using OpenAIModel with model: {model}")
-        model = OpenAIModel(config=ProviderConfig(provider_id="openai", base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS), model=model)
+        print(f"Using model: {model}")
+        model = Model(model, base_url=base_url, api_key=api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS)
     else:
         print("No LLM_API_KEY set. Using FakeModel for demonstration.")
         model = FakeModel(
