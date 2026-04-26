@@ -587,8 +587,11 @@ async def test_plan_task_cli_automation() -> None:
     )
 
     output = result.stdout.decode("utf-8", errors="replace")
-    assert "OpenAIModel" in output, (
-        f"Expected OpenAIModel indication in output. Got:\n{output}"
+    assert (
+        "Using model:" in output
+        or "Using Anthropic Messages API with model:" in output
+    ), (
+        f"Expected model selection indication in output. Got:\n{output}"
     )
 
 
