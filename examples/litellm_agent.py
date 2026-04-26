@@ -1,7 +1,8 @@
-"""LiteLLMModel agent example supporting 100+ LLM providers.
+"""Model(...) + LiteLLM agent example supporting 100+ LLM providers.
 
-This example demonstrates using the LiteLLMModel to support a wide range of LLM
-providers with a unified interface. LiteLLM normalizes API calls to OpenAI format.
+This example demonstrates using the unified Model(...) constructor with
+``model_type="litellm"`` to support a wide range of LLM providers through the
+LiteLLM integration layer. LiteLLM normalizes API calls to OpenAI format.
 
 Usage:
   1. Install litellm: pip install litellm
@@ -26,7 +27,7 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import FakeModel
+from ecs_agent.providers import FakeModel, Model, ModelType
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.types import CompletionResult, Message, ToolSchema
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
@@ -35,9 +36,9 @@ from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 
 
-# Try to import LiteLLMModel; gracefully handle if litellm is not installed
+# Probe whether the LiteLLM integration is available.
 try:
-    from ecs_agent.providers import LiteLLMModel
+    import litellm  # noqa: F401
 
     HAS_LITELLM = True
 except (ImportError, AttributeError):
@@ -55,7 +56,7 @@ async def search_database(query: str) -> str:
 
 
 async def main() -> None:
-    """Run LiteLLMModel agent example."""
+    """Run LiteLLM-backed Model(...) agent example."""
     # Check if litellm is installed
     if not HAS_LITELLM:
         print("litellm is not installed.")
@@ -69,10 +70,12 @@ async def main() -> None:
     # Decide which model to use
     model: LLMModel
     if api_key and model:
-        print(f"Using LiteLLMModel: {model}")
-        model = LiteLLMModel(
-            model=model,
+        print(f"Using Model(..., model_type=\"litellm\"): {model}")
+        model = Model(
+            model,
+            base_url=os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1"),
             api_key=api_key,
+            model_type=ModelType.LITELLM,
         )
     else:
         print("No API key or model specified. Using FakeModel instead.")
@@ -86,7 +89,6 @@ async def main() -> None:
                 )
             ]
         )
-        model = "fake"
 
     # Create World
     world = World()

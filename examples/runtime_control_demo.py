@@ -3,7 +3,7 @@
 Demonstrates:
 1. Entity registry (register_entity, resolve_entity, list_entities_by_tag)
 2. Dynamic system lifecycle (register, remove, replace)
-3. Per-entity model switching (pending_provider, pending_model)
+3. Per-entity model switching (pending_model)
 4. Graceful interruption (InterruptionComponent, partial content)
 5. Conversation tree revert (revert_to_message, tree-aware reasoning)
 """

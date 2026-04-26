@@ -8,7 +8,7 @@ This example is split into four self-contained parts:
 
 It supports dual-mode execution:
 - Without ``LLM_API_KEY``: uses ``FakeModel`` and runs deterministically
-- With ``LLM_API_KEY``: uses ``OpenAIModel`` with a real OpenAI-compatible API
+- With ``LLM_API_KEY``: uses ``Model(...)`` with a real OpenAI-compatible API
 
 Environment variables for real-LLM mode:
     LLM_API_KEY   - API key for the OpenAI-compatible model
@@ -70,7 +70,7 @@ def _get_model_name() -> str:
     return "fake"
 
 
-def _create_openai_provider() -> LLMModel:
+def _create_real_model() -> LLMModel:
     """Build an LLMModel from environment variables."""
     return Model(
         os.environ.get("LLM_MODEL", "qwen3.5-flash"),
@@ -170,10 +170,10 @@ def _subscribe_compaction_events(world: World) -> None:
     world.event_bus.subscribe(CompactionCompleteEvent, _on_compaction)
 
 
-def _create_provider(summary_responses: list[str]) -> LLMModel:
+def _create_demo_model(summary_responses: list[str]) -> LLMModel:
     """Create a real or fake model for the demo part."""
     if os.environ.get("LLM_API_KEY", ""):
-        return _create_openai_provider()
+        return _create_real_model()
     return FakeModel(
         responses=[_make_summary_response(text) for text in summary_responses]
     )
@@ -291,7 +291,7 @@ async def part_1_full_history() -> None:
     print("=" * 70)
 
     world = World()
-    model = _create_provider(
+    model = _create_demo_model(
         [
             "Summary: The conversation covered ML basics, supervised versus unsupervised learning, neural networks, transformers, and why token counts matter."
         ]
@@ -346,7 +346,7 @@ async def part_2_predrop_then_compact() -> None:
     print("=" * 70)
 
     world = World()
-    model = _create_provider(
+    model = _create_demo_model(
         [
             "Summary: The tool-heavy conversation narrowed down training-cost analysis and kept the decision-relevant guidance while dropping bulky tool transcripts first."
         ]
@@ -411,7 +411,7 @@ async def part_3_custom_prompt() -> None:
     print("=" * 70)
 
     world = World()
-    model = _create_provider(
+    model = _create_demo_model(
         [
             "- ML learns patterns from examples.\n- Neural networks and transformers were compared as layered architectures for representation learning.\n- Token counts matter for context limits, cost, and latency."
         ]
@@ -475,7 +475,7 @@ async def part_4_repeated_compaction() -> None:
             ]
         )
         if not os.environ.get("LLM_API_KEY")
-        else _create_openai_provider()
+        else _create_real_model()
     )
     agent_id = world.create_entity()
     starting_messages = _build_long_conversation()
