@@ -11,12 +11,12 @@ __version__: str = "0.1.0"
 The following types and classes are re-exported for convenience:
 
 - `Message`, `CompletionResult`, `ToolSchema`, `EntityId`, `StreamDelta`, `RetryConfig`, `ApprovalPolicy`, `ToolTimeoutError`, `MessageBusEnvelope` from `ecs_agent.types`
-- `RetryProvider` from `ecs_agent.providers.retry_provider`
+- `RetryModel` from `ecs_agent.providers.retry_model`
 - `WorldSerializer` from `ecs_agent.serialization`
 - `configure_logging`, `get_logger` from `ecs_agent.logging`
 - `StreamingComponent`, `CheckpointComponent`, `CompactionConfigComponent`, `ConversationArchiveComponent`, `RunnerStateComponent`, `UserInputComponent` from `ecs_agent.components`
-- `ClaudeProvider` from `ecs_agent.providers.claude_provider`
-- `LiteLLMProvider` from `ecs_agent.providers.litellm_provider`
+- `ClaudeModel` from `ecs_agent.providers.claude_model`
+- `LiteLLMModel` from `ecs_agent.providers.litellm_model`
 - `OpenAIEmbeddingProvider`, `FakeEmbeddingProvider` from `ecs_agent.providers`
 - `MessageBusSystem`, `RAGSystem`, `TreeSearchSystem`, `ToolApprovalSystem`, `CheckpointSystem`, `CompactionSystem`, `UserInputSystem`, `TerminalCleanupSystem`, `SubagentSystem` from `ecs_agent.systems`
 - `StreamStartEvent`, `StreamReasoningDeltaEvent`, `StreamReasoningEndEvent`, `StreamContentStartEvent`, `StreamContentDeltaEvent`, `StreamEndEvent`, `CheckpointCreatedEvent`, `CheckpointRestoredEvent`, `CompactionCompleteEvent`, `ToolApprovalRequestedEvent`, `ToolApprovedEvent`, `ToolDeniedEvent`, `RAGRetrievalCompletedEvent`, `UserInputRequestedEvent`, `MCTSNodeScoredEvent`, `MessageBusPublishedEvent`, `MessageBusDeliveredEvent`, `MessageBusResponseEvent`, `MessageBusTimeoutEvent` from `ecs_agent.types`
@@ -386,7 +386,7 @@ class Runner:
     async def run(self, world: World, max_ticks: int | None = 100, start_tick: int = 0) -> None: ...
     def save_checkpoint(self, world: World, path: str | Path) -> None: ...
     @classmethod
-    def load_checkpoint(cls, path: str | Path, providers: dict[str, LLMProvider], tool_handlers: dict[str, Callable]) -> tuple[World, int]: ...
+    def load_checkpoint(cls, path: str | Path, providers: dict[str, LLMModel], tool_handlers: dict[str, Callable]) -> tuple[World, int]: ...
 ```
 
 ### EventBus
@@ -419,7 +419,7 @@ class Query:
 
 All components are implemented as `@dataclass(slots=True)`.
 
- `LLMComponent(provider: LLMProvider, model: str, system_prompt: str = "")`
+ `LLMComponent(model: LLMModel, system_prompt: str = "")`
  `ConversationComponent(messages: list[Message], max_messages: int = 100)`
  `KVStoreComponent(store: dict[str, Any])`
  `ToolRegistryComponent(tools: dict[str, ToolSchema], handlers: dict[str, Callable[..., Awaitable[str]]])`
@@ -531,7 +531,7 @@ class RAGSystem(priority: int = -10):
 class CheckpointSystem:
     async def process(self, world: World) -> None: ...
     @staticmethod
-    def undo(world: World, providers: dict[str, LLMProvider], tool_handlers: dict[str, Callable]) -> None: ...
+    def undo(world: World, providers: dict[str, LLMModel], tool_handlers: dict[str, Callable]) -> None: ...
 ```
 
 ### CompactionSystem
@@ -570,10 +570,10 @@ class SubagentSystem(priority: int = -1, default_timeout: float | None = None):
 
 ## ecs_agent.providers
 
-### LLMProvider (Protocol)
+### LLMModel (Protocol)
 
 ```python
-class LLMProvider(Protocol):
+class LLMModel(Protocol):
     async def complete(
         self,
         messages: list[Message],
@@ -583,10 +583,10 @@ class LLMProvider(Protocol):
     ) -> CompletionResult | AsyncIterator[StreamDelta]: ...
 ```
 
-### OpenAIProvider
+### OpenAIModel
 
 ```python
-class OpenAIProvider:
+class OpenAIModel:
     def __init__(
         self,
         api_key: str,
@@ -599,27 +599,27 @@ class OpenAIProvider:
     ): ...
 ```
 
-### FakeProvider
+### FakeModel
 
 ```python
-class FakeProvider:
+class FakeModel:
     def __init__(self, responses: list[CompletionResult]): ...
 ```
 
-### RetryProvider
+### RetryModel
 
 ```python
-class RetryProvider:
+class RetryModel:
     def __init__(
         self,
-        provider: LLMProvider,
+    model: LLMModel,
         retry_config: RetryConfig | None = None,
     ): ...
 ```
-### ClaudeProvider
+### ClaudeModel
 
 ```python
-class ClaudeProvider:
+class ClaudeModel:
     def __init__(
         self,
         api_key: str,
@@ -633,10 +633,10 @@ class ClaudeProvider:
     ): ...
 ```
 
-### LiteLLMProvider
+### LiteLLMModel
 
 ```python
-class LiteLLMProvider:
+class LiteLLMModel:
     def __init__(
         self,
         model: str,
@@ -667,7 +667,7 @@ class WorldSerializer:
     @staticmethod
     def from_dict(
         data: dict[str, Any],
-        providers: dict[str, LLMProvider],
+        providers: dict[str, LLMModel],
         tool_handlers: dict[str, Callable],
     ) -> World: ...
     
@@ -677,7 +677,7 @@ class WorldSerializer:
     @staticmethod
     def load(
         path: str | Path,
-        providers: dict[str, LLMProvider],
+        providers: dict[str, LLMModel],
         tool_handlers: dict[str, Callable],
     ) -> World: ...
 ```
@@ -923,7 +923,7 @@ resolved = resolve_agent_specs(specs)
 ```python
 def compile_agent_specs(
     specs: list[AgentSpec],
-    factory: Callable[[AgentSpec], tuple[EntityId, LLMProvider]]
+    factory: Callable[[AgentSpec], tuple[EntityId, LLMModel]]
 ) -> World:
     ...
 ```
@@ -932,7 +932,7 @@ Compile agent specifications into an ECS World. Creates entities for agents with
 
 **Parameters:**
 - `specs` — List of AgentSpec to compile
-- `factory` — Callback `(spec) -> (entity_id, provider)` that creates entity and instantiates LLM provider
+- `factory` — Callback `(spec) -> (entity_id, model)` that creates entity and instantiates the LLM model
 
 **Returns:**
 World instance with compiled entities and components
@@ -944,13 +944,19 @@ World instance with compiled entities and components
 ```python
 from ecs_agent.dsl import compile_agent_specs
 from ecs_agent.core import World
-from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers import Model
+from ecs_agent.providers.config import ApiFormat
 
 def my_factory(spec: AgentSpec):
     world_temp = World()
     entity = world_temp.create_entity()
-    provider = OpenAIProvider(api_key="sk-xxx", model=spec.model)
-    return entity, provider
+    model = Model(
+        spec.model,
+        base_url="https://api.openai.com/v1",
+        api_key="sk-xxx",
+        api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+    )
+    return entity, model
 
 world = compile_agent_specs(specs, my_factory)
 ```

@@ -160,10 +160,15 @@ resolved = resolve_agent_specs(specs)
 # Returns: {'assistant': AgentSpec(...), 'researcher': AgentSpec(...)}
 
 # 4. Compile to ECS World
-def provider_factory(model: str, system_prompt: str):
-    return OpenAIProvider(api_key="...", model=model)
+def model_factory(model: str, system_prompt: str):
+    return Model(
+        model,
+        base_url="https://api.openai.com/v1",
+        api_key="...",
+        api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+    )
 
-primary_entity, world = compile_agent_specs(resolved, provider_factory)
+primary_entity, world = compile_agent_specs(resolved, model_factory)
 # Returns: (EntityId, World) with components attached
 ```
 
@@ -451,7 +456,7 @@ from pathlib import Path
 
 primary_entity, world = compile_agent_specs(
     resolved,
-    provider_factory,
+    model_factory,
     source_dir=Path("./examples"),  # skill paths resolved relative to this
 )
 ```
@@ -531,10 +536,12 @@ compile_agent_specs({
 
 ```python
 import asyncio
+import json
 from pathlib import Path
 from ecs_agent.dsl import discover_agent_sources, load_json_agents, resolve_agent_specs, compile_agent_specs
 from ecs_agent.core import Runner
-from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers import Model
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.components import ConversationComponent
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -561,10 +568,15 @@ for source in sources:
 
 resolved = resolve_agent_specs(specs)
 
-def provider_factory(model: str, system_prompt: str):
-    return OpenAIProvider(api_key="your-key", model=model)
+def model_factory(model: str, system_prompt: str):
+    return Model(
+        model,
+        base_url="https://api.openai.com/v1",
+        api_key="your-key",
+        api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+    )
 
-primary_entity, world = compile_agent_specs(resolved, provider_factory)
+primary_entity, world = compile_agent_specs(resolved, model_factory)
 
 # Add conversation and systems
 world.add_component(
@@ -619,7 +631,7 @@ sources = discover_agent_sources("./agents")
 specs = [load_markdown_agent(s) for s in sources]
 resolved = resolve_agent_specs(specs)
 
-primary_entity, world = compile_agent_specs(resolved, provider_factory)
+primary_entity, world = compile_agent_specs(resolved, model_factory)
 
 # SubagentRegistryComponent now populated with 'researcher' config
 registry = world.get_component(primary_entity, SubagentRegistryComponent)
@@ -715,11 +727,11 @@ class AgentSpec:
 - Returns dict mapping agent names to specs
 - Raises `ValueError` for empty agent names
 
-**compile_agent_specs(specs, provider_factory, *, source_dir: Path | None = None) → tuple[EntityId, World]**
+**compile_agent_specs(specs, model_factory, *, source_dir: Path | None = None) → tuple[EntityId, World]**
 - Compiles agent specs into ECS World with components
 - Creates exactly one runnable primary entity
 - Subagents populate `SubagentRegistryComponent`
-- `provider_factory: Callable[[str, str], LLMProvider]` creates providers
+- `model_factory: Callable[[str, str], LLMModel]` creates models
 - `source_dir`: Optional base directory for resolving skill paths; required when `skills` are declared
 - Raises `ValueError` if zero or multiple primaries
 
