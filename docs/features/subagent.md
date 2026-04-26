@@ -16,7 +16,7 @@ Subagent delegation provides:
 - **Scheduler & Concurrency**: Process-global FIFO queue with configurable concurrency limits and automatic re-enqueuing on world restore.
 - **Control Tools**: Tools to query status (including queue position), retrieve results (explicit wait-based), and cancel background sessions (atomic for queued tasks). Includes `subagent_wait` for non-polling workflows.
 - **Timeout Policy**: Per-call timeout overrides with global fallback and automated handling.
-- **Retry Reliability**: Transparent `RetryProvider` wrapping for transient LLM failures.
+- **Retry Reliability**: Transparent `RetryModel` wrapping for transient LLM failures.
 
 
 ## Core Components
@@ -27,12 +27,11 @@ Define subagent profiles:
 
 ```python
 from ecs_agent.types import SubagentConfig
-from ecs_agent.providers import FakeProvider
+from ecs_agent.providers import FakeModel
 
 researcher_config = SubagentConfig(
     name="researcher",
-    provider=FakeProvider(responses=[...]),
-    model="gpt-4o",
+    model=FakeModel(responses=[...]),
     system_prompt="You are a research specialist. Provide detailed, factual information.",
     max_ticks=10,
     skills=[],  # Skill names to load and install on this subagent
@@ -60,8 +59,7 @@ To suppress the auto-append for a specific placeholder, simply include it yourse
 ```python
 SubagentConfig(
     name="researcher",
-    provider=provider,
-    model="gpt-4o",
+    model=model,
     system_prompt=(
         "You are a research specialist.\n\n"
         "## My Tools\n${_installed_tools}"  # prevents auto-append of tools section
@@ -221,7 +219,7 @@ world.add_component(
 # Add LLM and conversation
 world.add_component(
     parent,
-    LLMComponent(provider=your_provider, model="gpt-4o"),
+    LLMComponent(model=your_model),
 )
 world.add_component(
     parent,
@@ -434,7 +432,7 @@ Parent LLM:
 
 ### Retry and Reliability
 
-By default, all subagent LLM providers are wrapped in a `RetryProvider` using a standard `RetryConfig`. This handles transient network errors and rate limits automatically. `FakeProvider` used in tests is exempt from this wrapping to maintain deterministic behavior.
+By default, all subagent LLM models are wrapped in a `RetryModel` using a standard `RetryConfig`. This handles transient network errors and rate limits automatically. `FakeModel` used in tests is exempt from this wrapping to maintain deterministic behavior.
 ## Events
 
 ### DelegationStartedEvent

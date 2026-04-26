@@ -162,7 +162,7 @@ except Exception as exc:
 
 Core systems (`Runner`, `World`, `ReasoningSystem`, `ToolExecutionSystem`, `CheckpointSystem`, `PlanningSystem`) use structured logging internally. This provides a clear, unified view of system operations without needing to manually add logs to every component.
 
-For provider-level logging, see the individual provider implementations (`OpenAIProvider`, `ClaudeProvider`, `RetryProvider`) which emit HTTP request/response metadata at DEBUG level.
+For model-implementation logging, see the individual model implementations (`OpenAIModel`, `ClaudeModel`, `RetryModel`) which emit HTTP request/response metadata at DEBUG level.
 
 ## Testing & Verification
 
