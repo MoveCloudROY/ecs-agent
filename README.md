@@ -34,25 +34,24 @@ import os
 
 from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import OpenAIModel
+from ecs_agent.providers import Model
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.types import Message
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers.config import ApiFormat
 
 
 async def main() -> None:
     world = World(name="my-agent")  # optional name — appears in all log events
 
-    # Create a model (any OpenAI-compatible API works)
-    config = ProviderConfig(
-        provider_id="openai",
+    # Create a model — works with any OpenAI-compatible or Anthropic API
+    model = Model(
+        os.getenv("LLM_MODEL", "gpt-4o"),
         base_url=os.getenv("LLM_BASE_URL", "https://api.openai.com/v1"),
         api_key=os.environ["LLM_API_KEY"],
         api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
     )
-    model = OpenAIModel(config=config, model=os.getenv("LLM_MODEL", "gpt-4o"))
 
     # Create an agent entity and attach components
     agent = world.create_entity()
