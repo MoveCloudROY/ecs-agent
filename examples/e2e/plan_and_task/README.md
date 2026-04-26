@@ -140,7 +140,7 @@ uv run pytest tests/integration/test_plan_and_task_flow.py -k "artifacts"
 
 ### Real-LLM acceptance tests
 
-Requires `LLM_API_KEY`. Verifies the controller and task execution with a real provider:
+Requires `LLM_API_KEY`. Verifies the controller and task execution with a real model:
 
 ```bash
 LLM_API_KEY="$LLM_API_KEY" \
@@ -155,9 +155,9 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py -v
 - `LLM_BASE_URL`: API base URL (defaults to DashScope Responses API: `https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1`).
 - `LLM_MODEL`: Model ID (defaults to `qwen3.5-flash`).
 - `LLM_API_FORMAT`: Provider/format selector. Accepted values:
-  - `openai_responses` (default) — OpenAI Responses API via `OpenAIProvider` (enables `enable_store=True` for prefix caching)
-  - `openai_chat_completions` — OpenAI Chat Completions API via `OpenAIProvider`
-  - `anthropic_messages` — Anthropic Messages API via `ClaudeProvider` (also works with Kimi-compatible Anthropic endpoints)
+  - `openai_responses` (default) — OpenAI Responses API via `OpenAIModel` (enables `enable_store=True` for prefix caching)
+  - `openai_chat_completions` — OpenAI Chat Completions API via `OpenAIModel`
+  - `anthropic_messages` — Anthropic Messages API via `ClaudeModel` (also works with Kimi-compatible Anthropic endpoints)
 - `PLAN_TASK_INTERACTIVE`: Set to `0` to disable interactive stdin.
 - `DEBUG`: Set to `1` to enable debug logging. All `plan_task_*` structured log events will appear on stderr via structlog.
 
@@ -166,13 +166,13 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py -v
 ```bash
 DEBUG=1 \
   LLM_API_FORMAT=anthropic_messages \
-  LLM_BASE_URL=https://cc2.caaa.tech \
+  LLM_BASE_URL=https://api.anthropic.com \
   LLM_API_KEY=sk-... \
   LLM_MODEL=kimi-for-coding \
   uv run python examples/e2e/plan_and_task/main.py
 ```
 
-The `ClaudeProvider` appends `/v1/messages` to `LLM_BASE_URL`, so the actual endpoint called is `https://cc2.caaa.tech/v1/messages`. Anthropic cache stats (`cache_read_input_tokens`, `cache_creation_input_tokens`) are normalized and surfaced as `plan_task_llm_cache_stats` events with `cache_hit_rate`.
+The `ClaudeModel` appends `/v1/messages` to `LLM_BASE_URL`, so the actual endpoint called is `https://api.anthropic.com/v1/messages`. Anthropic cache stats (`cache_read_input_tokens`, `cache_creation_input_tokens`) are normalized and surfaced as `plan_task_llm_cache_stats` events with `cache_hit_rate`.
 
 ### Log Events (observable with `DEBUG=1`)
 

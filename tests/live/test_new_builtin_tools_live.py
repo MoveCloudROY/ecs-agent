@@ -2,7 +2,7 @@
 
 Run with real credentials:
     Anthropic-compatible (kimi):
-        LLM_BASE_URL=https://cc2.caaa.tech
+        LLM_BASE_URL=https://api.anthropic.com
         LLM_API_KEY=<key>
         LLM_MODEL=kimi-for-coding
         LLM_API_FORMAT=anthropic  (optional, defaults to openai)
