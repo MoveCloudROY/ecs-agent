@@ -1,6 +1,12 @@
-# Providers
+# Models and Provider Configuration
 
-This document is a reference for all LLM providers in the ECS Agent framework.
+This guide covers how ECS Agent selects, constructs, and configures LLM models.
+
+The high-level rule is simple:
+
+- Use `Model(...)` when you already know the endpoint settings.
+- Use `get_model("provider/model", registry=...)` when you want registry-based routing.
+- Drop down to `ProviderConfig` and concrete model classes only when you need lower-level control.
 
 ---
 
@@ -68,9 +74,9 @@ model = Model("gpt-4o", base_url="...", api_key="...", api_format="openai_chat_c
 
 ---
 
-## Provider Architecture Overview
+## Model Selection Overview
 
-The provider stack is organized around three linked concepts: a canonical model ID (`provider/model`) that carries both routing provider and API model name, a `ProviderConfig` that defines endpoint/auth/protocol settings, and event-driven accounting that measures usage and cache behavior. The Quick Start below shows the full end-to-end flow.
+The model stack is organized around three linked concepts: a canonical model ID (`provider/model`) that carries both routing provider and API model name, a `ProviderConfig` that defines endpoint/auth/protocol settings, and event-driven accounting that measures usage and cache behavior. The quick start below shows the full end-to-end flow.
 
 ### Quick Start
 
@@ -103,9 +109,9 @@ subscriber.subscribe(world.event_bus)
 
 ---
 
-## Provider Registry
+## Registry-based Model Selection
 
-`ProviderRegistry` maps provider IDs to endpoint/auth/protocol configs. `get_model` uses it to construct the right model type automatically.
+`ProviderRegistry` maps provider IDs to endpoint/auth/protocol configs. `get_model` resolves a `provider/model` identifier and delegates final construction to the unified `Model(...)` entry point.
 
 ### TOML Configuration
 
@@ -150,7 +156,7 @@ registry = ProviderRegistry.from_dict({
 ```python
 from ecs_agent.providers.registry import get_model
 
-# Resolves provider ID → ProviderEntry → ProviderConfig → correct LLMModel instance
+# Resolves provider ID → ProviderEntry → Model(...) → correct LLMModel instance
 model = get_model("aliyun/qwen3.5-flash", registry=registry)
 
 # Override API key at call time

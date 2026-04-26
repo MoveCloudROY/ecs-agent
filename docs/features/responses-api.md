@@ -140,6 +140,6 @@ This ensures zero-configuration compatibility across providers.
 
 ## See Also
 
-- [OpenAI Provider](../providers.md#openai-provider) — Full provider documentation
+- [OpenAIModel](../models.md#openaimodel) — Full OpenAI-compatible model documentation
 - [Streaming](./streaming.md) — SSE streaming details
 - [Components](../components.md#responsesapistatecomponent) — Component reference

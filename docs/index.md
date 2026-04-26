@@ -22,7 +22,7 @@ The Entity-Component-System (ECS) pattern makes LLM agents composable and testab
 *   [Core Concepts](core-concepts.md)
 *   [Components](components.md)
 *   [Systems](systems.md)
-*   [Providers](providers.md)
+*   [Models](models.md)
 *   [Features]
     *   [Streaming](features/streaming.md)
     *   [Retry](features/retry.md)
