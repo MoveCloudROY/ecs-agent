@@ -81,7 +81,7 @@ from ecs_agent.types import Message          # internal
 
 | Element | Convention | Example |
 |---------|-----------|---------|
-| Classes | PascalCase | `OpenAIProvider`, `ErrorHandlingSystem` |
+| Classes | PascalCase | `OpenAIModel`, `ErrorHandlingSystem` |
 | Functions/methods | snake_case | `create_entity`, `add_component` |
 | Constants | UPPER_SNAKE | (none currently; use when needed) |
 | Private attrs | `_` prefix | `self._client`, `self._components` |
