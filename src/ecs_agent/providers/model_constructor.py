@@ -74,7 +74,7 @@ def _resolve_model_type(model_type: str | type | None) -> str | None:
     if model_type is ClaudeModel:
         return ModelType.CLAUDE
     try:
-        from ecs_agent.providers.litellm_model import LiteLLMModel  # type: ignore[import-untyped]
+        from ecs_agent.providers.litellm_model import LiteLLMModel
 
         if model_type is LiteLLMModel:
             return ModelType.LITELLM
@@ -179,7 +179,7 @@ def Model(
     # LiteLLM path — does not use ProviderConfig
     if resolved_type == ModelType.LITELLM:
         try:
-            from ecs_agent.providers.litellm_model import LiteLLMModel  # type: ignore[import-untyped]
+            from ecs_agent.providers.litellm_model import LiteLLMModel
         except ImportError as exc:
             raise ImportError(
                 "litellm must be installed to use model_type='litellm'. "
