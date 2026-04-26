@@ -12,7 +12,7 @@ The agent acts as a UI design expert that can:
 
 ## Features
 
-- **Dual-Mode Provider**: Seamlessly switches between `FakeProvider` (for testing/offline development) and `OpenAIProvider` (for real LLM inference).
+- **Dual-Mode Model**: Seamlessly switches between `FakeModel` (for testing/offline development) and `Model(...)` / `OpenAIModel` (for real LLM inference).
 - **Interactive Input**: Real-time async stdin handling using `UserInputSystem` and `UserInputRequestedEvent`.
 - **Skill-Based Capabilities**: Extends agent behavior using `MarkdownSkill` to install specialized tools.
 - **Agent-Authored, Path-Safe Artifacts**: Artifacts are created lazily by agent `write_file` tool calls, with workspace-bounded path traversal protection.
@@ -27,7 +27,7 @@ The agent acts as a UI design expert that can:
    ```
 
 2. **Environment Variables**:
-   To use a real LLM, set the following environment variables. If `LLM_API_KEY` is not set, the example will fall back to `FakeProvider`.
+   To use a real LLM, set the following environment variables. If `LLM_API_KEY` is not set, the example will fall back to `FakeModel`.
    - `LLM_API_KEY`: Your OpenAI-compatible API key.
    - `LLM_BASE_URL`: API base URL (defaults to DashScope).
    - `LLM_MODEL`: The model to use (defaults to `LLM_MODEL=qwen3.5-flash`).
@@ -41,7 +41,7 @@ The agent acts as a UI design expert that can:
 Run the entry point to start an interactive session. The agent will read its initial prompt from `assets/prompt.txt`.
 
 ```bash
-# Using FakeProvider (No API key needed)
+# Using FakeModel (No API key needed)
 uv run python main.py
 
 # Using Real LLM

@@ -75,10 +75,10 @@ Artifacts are created entirely by agent tool execution via `BuiltinToolsSkill` (
 
 The implementation is verified through a tiered testing approach in `tests/integration/test_ui_design_flow.py`:
 
-1. **Deterministic E2E (FakeProvider)**: Validates the entire system loop, system priorities, and event-driven input using a mocked LLM.
+1. **Deterministic E2E (FakeModel)**: Validates the entire system loop, system priorities, and event-driven input using a mocked LLM.
 2. **Error Boundary Tests**: Ensures the orchestrator handles missing prompt files or invalid skill paths gracefully without crashing.
 3. **CLI Automation Tests**: Uses `subprocess` to verify that the example can be run as a standalone script with piped input.
-4. **Real-LLM Gated Tests**: Optional integration tests using `OpenAIProvider` (DashScope/OpenAI-compatible). Skipped automatically when `LLM_API_KEY` is absent. When run, installs both markdown skills and `BuiltinToolsSkill` in an isolated `tmp_path` workspace, then asserts tool execution evidence (conversation `tool` messages) and artifact mutation (`ui-design/nano-banana-prompts.md` written to disk).
+4. **Real-LLM Gated Tests**: Optional integration tests using `Model(...)` with an OpenAI-compatible backend. Skipped automatically when `LLM_API_KEY` is absent. When run, installs both markdown skills and `BuiltinToolsSkill` in an isolated `tmp_path` workspace, then asserts tool execution evidence (conversation `tool` messages) and artifact mutation (`ui-design/nano-banana-prompts.md` written to disk).
 
 ## Known Limitations & Future Work
 
