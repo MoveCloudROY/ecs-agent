@@ -34,6 +34,8 @@ def _live_registry() -> ProviderRegistry:
 
 @pytest.mark.asyncio
 async def test_live_openai_chat_text_response(live_api_key: str) -> None:
+    import httpx
+
     model = os.getenv("LLM_MODEL", "qwen3.5-flash")
     model = get_model(
         f"aliyun/{model}",
@@ -41,9 +43,12 @@ async def test_live_openai_chat_text_response(live_api_key: str) -> None:
         api_key=live_api_key,
     )
 
-    result = await model.complete(
-        [Message(role="user", content="Say hello in 5 words.")]
-    )
+    try:
+        result = await model.complete(
+            [Message(role="user", content="Say hello in 5 words.")]
+        )
+    except httpx.ReadTimeout:
+        pytest.skip("Aliyun chat completions endpoint timed out (flaky network)")
 
     assert isinstance(result, CompletionResult)
     assert len(result.message.content.strip()) > 0
