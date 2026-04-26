@@ -1,10 +1,10 @@
 # Streaming
 
-The ECS-based LLM Agent framework supports real-time response streaming for providers that implement it (like `OpenAIProvider`). Streaming allows you to process and display the LLM's response as it is being generated, rather than waiting for the entire completion to finish.
+The ECS-based LLM Agent framework supports real-time response streaming for models that implement it (such as `OpenAIModel`). Streaming allows you to process and display the LLM's response as it is being generated, rather than waiting for the entire completion to finish.
 
 ## API Reference
 
-To enable streaming, set `stream=True` when calling `provider.complete()`. This changes the return type from `CompletionResult` to an `AsyncIterator[StreamDelta]`.
+To enable streaming, set `stream=True` when calling `model.complete()`. This changes the return type from `CompletionResult` to an `AsyncIterator[StreamDelta]`.
 
 ```python
 async def complete(
@@ -22,7 +22,7 @@ Each chunk emitted by the iterator is a `StreamDelta` object with the following 
 
 - `content: str | None`: The partial text content of the response.
 - `reasoning_content: str | None`: The streamed reasoning/thinking text when provider exposes it.
-- `tool_calls: list[ToolCall] | None`: Partial tool calls (accumulated by `OpenAIProvider`).
+- `tool_calls: list[ToolCall] | None`: Partial tool calls (accumulated by `OpenAIModel`).
 - `finish_reason: str | None`: The reason why the generation stopped (e.g., `"stop"`, `"tool_calls"`).
 - `usage: Usage | None`: Usage statistics, typically only provided in the final delta.
 
@@ -32,14 +32,20 @@ The following pattern demonstrates how to consume a streamed response in real-ti
 
 ```python
 import sys
-from ecs_agent.providers import OpenAIProvider
+from ecs_agent.providers import Model
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.types import Message
 
-provider = OpenAIProvider(api_key="...", model="qwen3.5-plus")
+model = Model(
+    "qwen3.5-plus",
+    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    api_key="...",
+    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+)
 messages = [Message(role="user", content="Tell me a short story.")]
 
-# Call provider with streaming enabled
-delta_iterator = await provider.complete(messages, stream=True)
+# Call model with streaming enabled
+delta_iterator = await model.complete(messages, stream=True)
 
 async for delta in delta_iterator:
     if delta.content:
@@ -55,22 +61,22 @@ async for delta in delta_iterator:
 
 ## Provider Implementation Details
 
-### OpenAIProvider
-The `OpenAIProvider` uses real Server-Sent Events (SSE) streaming. It automatically accumulates partial tool call arguments from the stream, allowing you to see the full tool call in the final delta when the `finish_reason` is `"tool_calls"`.
+### OpenAIModel
+`OpenAIModel` uses real Server-Sent Events (SSE) streaming. It automatically accumulates partial tool call arguments from the stream, allowing you to see the full tool call in the final delta when the `finish_reason` is `"tool_calls"`.
 
-### FakeProvider
-The `FakeProvider` simulates streaming by emitting the full response character-by-character (or chunk-by-chunk) with small delays, which is useful for testing UI/UX without consuming API credits.
+### FakeModel
+`FakeModel` simulates streaming by emitting the full response character-by-character (or chunk-by-chunk) with small delays, which is useful for testing UI/UX without consuming API credits.
 
 ## Caveats
 
 - **Structured Output**: Streaming is NOT compatible with `response_format` (JSON mode). If you need structured output, you must use non-streaming calls.
-- **RetryProvider**: The `RetryProvider` does NOT retry streaming calls. If a streaming connection fails halfway, the error is passed through to the consumer.
+- **RetryModel**: `RetryModel` does NOT retry streaming calls. If a streaming connection fails halfway, the error is passed through to the consumer.
 - **Tool Calls**: While tool calls are streamed, they are usually only useful once the full arguments have been accumulated.
 See [`examples/streaming_system_agent.py`](../../examples/streaming_system_agent.py) for a complete demo.
 
 ## System-Level Streaming
 
-In addition to direct provider-level streaming, the framework supports system-level streaming through the `ReasoningSystem` and `StreamingComponent`.
+In addition to direct model-level streaming, the framework supports system-level streaming through the `ReasoningSystem` and `StreamingComponent`.
 
 ### Setup
 
@@ -84,7 +90,7 @@ world.add_component(agent, StreamingComponent(enabled=True))
 
 When an entity has `StreamingComponent(enabled=True)`, the `ReasoningSystem` automatically:
 
-1. Calls `provider.complete(stream=True)` instead of the standard call.
+1. Calls `model.complete(stream=True)` instead of the standard call.
 2. Publishes `StreamStartEvent(entity_id)`.
 3. Publishes `StreamReasoningDeltaEvent(entity_id, reasoning_delta)` for reasoning chunks (if present).
 4. Publishes `StreamReasoningEndEvent(entity_id)` when reasoning phase ends.
