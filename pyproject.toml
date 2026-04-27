@@ -5,8 +5,38 @@ build-backend = "hatchling.build"
 [project]
 name = "ecs-agent"
 version = "0.1.0"
-description = "ECS-based LLM Agent framework"
+description = "Entity-Component-System architecture for composable AI agents"
+readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.11"
+authors = [
+    { name = "MoveCloudROY", email = "MoveCloudROY@users.noreply.github.com" },
+]
+keywords = [
+    "agent",
+    "llm",
+    "ecs",
+    "entity-component-system",
+    "ai",
+    "openai",
+    "anthropic",
+    "multi-agent",
+    "async",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+    "Framework :: AsyncIO",
+]
 dependencies = [
     "httpx>=0.24.0",
     "tenacity>=8.2.0",
@@ -14,6 +44,13 @@ dependencies = [
     "pydantic>=2.0.0",
     "PyYAML>=6.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/MoveCloudROY/ecs-agent"
+Repository = "https://github.com/MoveCloudROY/ecs-agent"
+"Bug Tracker" = "https://github.com/MoveCloudROY/ecs-agent/issues"
+Documentation = "https://github.com/MoveCloudROY/ecs-agent/tree/main/docs"
+Changelog = "https://github.com/MoveCloudROY/ecs-agent/tree/main/docs/releases"
 
 [project.optional-dependencies]
 dev = [
