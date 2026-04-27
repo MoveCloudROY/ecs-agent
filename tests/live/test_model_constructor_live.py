@@ -25,8 +25,8 @@ from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.model_constructor import Model
 from ecs_agent.types import CompletionResult, Message
 
-_ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_LIVE_BASE_URL", "https://cc2.caaa.tech")
-_ANTHROPIC_MODEL = os.getenv("ANTHROPIC_LIVE_MODEL", "kimi-for-coding")
+_ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_LIVE_BASE_URL") or "https://cc2.caaa.tech"
+_ANTHROPIC_MODEL = os.getenv("ANTHROPIC_LIVE_MODEL") or "kimi-for-coding"
 
 _ALIYUN_CHAT_BASE_URL = os.getenv(
     "ALIYUN_LIVE_CHAT_BASE_URL",
@@ -38,7 +38,7 @@ _ALIYUN_RESPONSES_BASE_URL = (
         "https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
     )
 )
-_ALIYUN_MODEL = os.getenv("ALIYUN_LIVE_MODEL", "qwen3.5-flash")
+_ALIYUN_MODEL = os.getenv("ALIYUN_LIVE_MODEL") or "qwen3.5-flash"
 
 _GREETING = "Say 'hello world' in exactly those two words and nothing else."
 

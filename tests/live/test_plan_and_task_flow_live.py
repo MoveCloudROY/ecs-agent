@@ -59,7 +59,7 @@ def live_model(live_api_key: str) -> OpenAIModel:
     base_url = os.getenv(
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
-    model = os.getenv("LLM_MODEL", "qwen3.5-flash")
+    model = os.getenv("LLM_MODEL") or "qwen3.5-flash"
     config = ProviderConfig(
         provider_id="openai",
         base_url=base_url,
@@ -235,8 +235,8 @@ _ANTHROPIC_SKIP = pytest.mark.skipif(
 
 @pytest.fixture
 def anthropic_model(live_api_key: str) -> ClaudeModel:
-    base_url = os.getenv("LLM_BASE_URL", "https://api.anthropic.com")
-    model = os.getenv("LLM_MODEL", "claude-3-5-haiku-20241022")
+    base_url = os.getenv("LLM_BASE_URL") or "https://api.anthropic.com"
+    model = os.getenv("LLM_MODEL") or "claude-3-5-haiku-20241022"
     config = ProviderConfig(
         provider_id="anthropic",
         base_url=base_url,

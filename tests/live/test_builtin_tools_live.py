@@ -24,7 +24,7 @@ from ecs_agent.types import Message
 
 
 def _make_provider(live_api_key: str) -> OpenAIModel:
-    model = os.getenv("LLM_MODEL", "qwen3.5-flash")
+    model = os.getenv("LLM_MODEL") or "qwen3.5-flash"
     base_url = os.getenv(
         "LLM_BASE_URL",
         "https://dashscope.aliyuncs.com/compatible-mode/v1",

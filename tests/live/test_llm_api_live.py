@@ -36,7 +36,7 @@ def _live_registry() -> ProviderRegistry:
 async def test_live_openai_chat_text_response(live_api_key: str) -> None:
     import httpx
 
-    model = os.getenv("LLM_MODEL", "qwen3.5-flash")
+    model = os.getenv("LLM_MODEL") or "qwen3.5-flash"
     model = get_model(
         f"aliyun/{model}",
         registry=_live_registry(),
@@ -58,7 +58,7 @@ async def test_live_openai_chat_text_response(live_api_key: str) -> None:
 async def test_live_openai_responses_text_response(live_api_key: str) -> None:
     import httpx
 
-    model = os.getenv("LLM_MODEL", "qwen3.5-flash")
+    model = os.getenv("LLM_MODEL") or "qwen3.5-flash"
     model = get_model(
         f"aliyun-responses/{model}",
         registry=_live_registry(),
@@ -80,7 +80,7 @@ async def test_live_openai_responses_text_response(live_api_key: str) -> None:
 async def test_live_openai_responses_vision_response(
     live_api_key: str, live_image_url: str
 ) -> None:
-    model = os.getenv("LLM_MODEL", "qwen3-vl-flash")
+    model = os.getenv("LLM_MODEL") or "qwen3-vl-flash"
     model = get_model(
         f"aliyun-vision/{model}",
         registry=_live_registry(),
@@ -105,7 +105,7 @@ async def test_live_openai_responses_vision_response(
 
 @pytest.mark.asyncio
 async def test_live_anthropic_messages_text_response(live_api_key: str) -> None:
-    model = os.getenv("LLM_MODEL", "kimi-k2.5")
+    model = os.getenv("LLM_MODEL") or "kimi-k2.5"
     model = get_model(
         f"aliyun-anthropic/{model}",
         registry=_live_registry(),

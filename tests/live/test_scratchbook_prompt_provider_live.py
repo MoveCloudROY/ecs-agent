@@ -65,7 +65,7 @@ def _build_scratchbook_prompt_config() -> ScratchbookPromptConfig:
 def _make_provider(
     api_key: str, base_url: str, api_format: ApiFormat
 ) -> OpenAIModel:
-    model = os.getenv("LLM_MODEL", "qwen3.5-flash")
+    model = os.getenv("LLM_MODEL") or "qwen3.5-flash"
     return OpenAIModel(
         config=ProviderConfig(
             provider_id="aliyun",

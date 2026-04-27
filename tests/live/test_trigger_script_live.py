@@ -52,7 +52,7 @@ async def test_live_script_action_rewrites_prompt_before_llm(live_api_key: str) 
     base_url = os.getenv(
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
-    model = os.getenv("LLM_MODEL", "qwen3.5-flash")
+    model = os.getenv("LLM_MODEL") or "qwen3.5-flash"
     model = _make_provider(api_key=live_api_key, base_url=base_url, model=model)
 
     async def tag_handler(
@@ -113,7 +113,7 @@ async def test_live_script_action_world_mutation_persists(live_api_key: str) -> 
     base_url = os.getenv(
         "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
-    model = os.getenv("LLM_MODEL", "qwen3.5-flash")
+    model = os.getenv("LLM_MODEL") or "qwen3.5-flash"
     model = _make_provider(api_key=live_api_key, base_url=base_url, model=model)
 
     async def store_handler(

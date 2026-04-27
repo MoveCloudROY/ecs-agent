@@ -35,7 +35,7 @@ from ecs_agent.types import Message
 
 
 def _make_provider(live_api_key: str) -> OpenAIModel | ClaudeModel:
-    model = os.getenv("LLM_MODEL", "qwen3.5-flash")
+    model = os.getenv("LLM_MODEL") or "qwen3.5-flash"
     base_url = os.getenv(
         "LLM_BASE_URL",
         "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -74,7 +74,7 @@ def _build_world(
     manager = SkillManager()
     manager.install(world, agent, skill)
 
-    resolved_model = model or os.getenv("LLM_MODEL", "qwen3.5-flash")
+    resolved_model = model or os.getenv("LLM_MODEL") or "qwen3.5-flash"
     model_model = getattr(model, "model", None) or getattr(model, "_model", resolved_model)
     world.add_component(
         agent,
