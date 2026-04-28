@@ -11,6 +11,7 @@ from ecs_agent.components import (
     LLMComponent,
     RenderedSystemPromptComponent,
     SystemPromptComponent,
+    WorkflowBindingComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
@@ -24,6 +25,7 @@ from ecs_agent.prompts.registry import resolve_placeholder_values
 from ecs_agent.scratchbook.prompt_definition import ScratchbookPromptConfig
 from ecs_agent.scratchbook.prompt_provider import ScratchbookPromptPlaceholderProvider
 from ecs_agent.types import EntityId
+from ecs_agent.workflows.prompt_provider import WorkflowPromptPlaceholderProvider
 
 _BUILTIN_PLACEHOLDER_PROVIDERS: list[BuiltinPlaceholderProvider] = [
     InventoryPlaceholderProvider(),
@@ -330,6 +332,9 @@ def _iter_placeholder_providers(
     scratchbook_provider = _resolve_entity_scratchbook_provider(world, entity_id)
     if scratchbook_provider is not None:
         providers.append(scratchbook_provider)
+    workflow_provider = _resolve_entity_workflow_provider(world, entity_id)
+    if workflow_provider is not None:
+        providers.append(workflow_provider)
     return providers
 
 
@@ -341,6 +346,16 @@ def _resolve_entity_scratchbook_provider(
     if config is None:
         return None
     return ScratchbookPromptPlaceholderProvider(config)
+
+
+def _resolve_entity_workflow_provider(
+    world: World,
+    entity_id: EntityId,
+) -> BuiltinPlaceholderProvider | None:
+    binding = world.get_component(entity_id, WorkflowBindingComponent)
+    if binding is None:
+        return None
+    return WorkflowPromptPlaceholderProvider()
 
 
 def _bridge_rendered_prompt(world: World, entity_id: EntityId, rendered: str) -> None:
