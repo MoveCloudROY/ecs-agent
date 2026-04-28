@@ -28,6 +28,7 @@ from ecs_agent.types import (
 
 if TYPE_CHECKING:
     from ecs_agent.core.world import World
+    from ecs_agent.workflows.compiler import CompiledWorkflow
 
 ScriptHandler = Callable[["World", EntityId, str], Awaitable[str | None]]
 
@@ -304,6 +305,47 @@ class RunnerStateComponent:
     current_tick: int
     is_paused: bool = False
     checkpoint_path: str | None = None
+
+
+@dataclass(slots=True)
+class WorkflowDefinitionComponent:
+    """Holds the compiled workflow definition for an entity."""
+
+    compiled: "CompiledWorkflow"
+
+
+@dataclass(slots=True)
+class WorkflowRuntimeComponent:
+    """Holds the mutable runtime workflow state for an entity."""
+
+    current_state_id: str
+    transition_history: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class WorkflowBindingComponent:
+    """Binds an agent key to the workflow for this entity."""
+
+    agent_key: str
+
+
+@dataclass(slots=True)
+class WorkflowGateSnapshotComponent:
+    """Records the last evaluated gate snapshot (for debugging/logging)."""
+
+    state_id: str
+    evaluated_at_tick: int
+    matched_transition_id: str | None = None
+
+
+@dataclass(slots=True)
+class WorkflowLastTransitionComponent:
+    """Records the most recent committed transition (for history / exact-once semantics)."""
+
+    from_state_id: str
+    to_state_id: str
+    transition_id: str
+    tick: int
 
 
 @dataclass(slots=True)
