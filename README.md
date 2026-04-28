@@ -110,6 +110,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **`SystemPromptConfigSpec`** — Declare system prompts as `${name}` placeholder templates with static strings, callable resolvers, or file paths as sources.
 - **`SystemPromptRenderSystem`** — ECS system (recommended priority -20) that resolves all `${name}` placeholders and writes a `RenderedSystemPromptComponent` for LLM callers.
 - **`UserPromptNormalizationSystem`** — ECS system (recommended priority -10) that injects trigger templates into outbound user messages and writes a `RenderedUserPromptComponent`. Slash-command skill context and ContextPool entries are injected later at call-time by `prepare_outbound_messages()`.
+- **Workflow State & Gates** — Declarative state machine DSL for building stateful agents. Define states, prompt profiles, and transition gates (`has`, `field`, `all_of`, etc.) that drive behavior over multiple ticks.
 - **Built-in Placeholders** — `${_installed_tools}`, `${_installed_skills}`, `${_installed_mcps}`, `${_installed_subagents}` automatically expand to the current inventory.
 - **Provider Extension Seam** — A synchronous, narrow provider protocol (`BuiltinPlaceholderProvider`) for injecting domain-specific context into system prompts. Used by the scratchbook prompt provider.
 - **Callable Placeholders** — Pass a `() -> str` callable as a placeholder resolver for dynamic content; must be side-effect-free and return a string.
@@ -251,6 +252,7 @@ The `examples/` directory contains runnable demos for the major patterns in the 
 | [`mcp_agent.py`](examples/mcp_agent.py) | MCP server integration and namespaced tool usage |
 | [`agent_dsl_json.py`](examples/agent_dsl_json.py) | Load multi-agent configuration from JSON file using Agent DSL (dual-mode) |
 | [`agent_dsl_markdown.py`](examples/agent_dsl_markdown.py) | Load primary agent + subagent from Markdown files using Agent DSL; demonstrates placeholders, triggers, skills, and subagent registry (dual-mode) |
+| [`workflow_agent.py`](examples/workflow_agent.py) | Workflow DSL: two-phase writing assistant with gate-driven `DRAFT→REVIEW→DONE` transitions, prompt profiles, and `@tool`-registered handlers (dual-mode) |
 | [`examples/e2e/plan_and_task/`](examples/e2e/plan_and_task/) | Interactive plan→review→execute workflow; recoverable state machine, review-gated planning, artifact persistence, and slash-command dispatch |
 
 
@@ -366,6 +368,7 @@ See [`docs/`](docs/) for detailed guides:
 - [Serialization](docs/features/serialization.md), World state persistence
 - [Logging](docs/features/logging.md), structlog integration
 - [Retry](docs/features/retry.md), RetryModel configuration
+- [Workflow DSL](docs/features/workflows.md), Declarative state machine and transition gates
 
 ### Agent Capabilities
 - [Context Management](docs/features/context-management.md), Checkpoint, undo, and compaction

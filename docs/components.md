@@ -730,3 +730,56 @@ from pathlib import Path
 world.add_component(agent, WorkspaceBindingComponent(workspace_root=Path("/workspace")))
 # When a subagent is spawned, it inherits this binding by default (InheritancePolicy).
 ```
+
+## Workflow Components
+
+### WorkflowDefinitionComponent
+Holds the compiled workflow definition for an entity. This component is NOT serialized by design.
+
+| Name | Type | Description |
+| :--- | :--- | :--- |
+| `compiled` | `CompiledWorkflow` | The frozen, validated workflow model |
+
+**Used by:** `WorkflowStateSystem`, `WorkflowPromptPlaceholderProvider`
+
+### WorkflowRuntimeComponent
+Holds the mutable runtime workflow state for an entity. This component IS serialized.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `current_state_id` | `str` | (required) | The ID of the active workflow state |
+| `transition_history` | `list[str]` | `[]` | History of committed transition IDs |
+
+**Used by:** `WorkflowStateSystem`, `WorkflowPromptPlaceholderProvider`
+
+### WorkflowBindingComponent
+Binds an agent key to the workflow for this entity. This component IS serialized.
+
+| Name | Type | Description |
+| :--- | :--- | :--- |
+| `agent_key` | `str` | The key used to look up prompt profiles |
+
+**Used by:** `WorkflowPromptPlaceholderProvider`
+
+### WorkflowGateSnapshotComponent
+Records the last evaluated gate snapshot for debugging and logging. This component IS serialized.
+
+| Name | Type | Description |
+| :--- | :--- | :--- |
+| `state_id` | `str` | The state ID being evaluated |
+| `evaluated_at_tick` | `int` | The tick number of evaluation |
+| `matched_transition_id` | `str | None` | The ID of the matched transition, if any |
+
+**Added by:** `WorkflowStateSystem`
+
+### WorkflowLastTransitionComponent
+Records the most recent committed transition for history and exact-once semantics. This component IS serialized.
+
+| Name | Type | Description |
+| :--- | :--- | :--- |
+| `from_state_id` | `str` | The source state ID |
+| `to_state_id` | `str` | The target state ID |
+| `transition_id` | `str` | The ID of the committed transition |
+| `tick` | `int` | The tick number when the transition occurred |
+
+**Added by:** `WorkflowStateSystem`

@@ -23,6 +23,7 @@ The workflow follows a structured lifecycle:
 - **Log Truncation** — Structured log fields `last_user_prompt`, `prompt_text` (user normalization), and `prompt_text` (system render) are truncated to 200 characters to keep logs readable without losing signal.
 - **ECS Core**: Uses `SystemPromptRenderSystem`, `UserPromptNormalizationSystem`, `ReasoningSystem`, `ToolExecutionSystem`, and `MemorySystem`.
 - **Prompt Configuration**: The planner entity declares `SystemPromptConfigSpec` with `DRAFT_INTERVIEW_SYSTEM_PROMPT`, and `SystemPromptRenderSystem` bridges the rendered value into `LLMComponent.system_prompt` before reasoning.
+- **Workflow DSL**: Uses `install_workflow` and `WorkflowStateSystem` (priority -25) to manage the phase graph and automatic prompt-profile selection via `${_workflow_state_prompt}`.
 - **State Machine**: Explicit phase transitions managed by `WorkflowStateMachine`.
 - **Artifacts**: Durable persistence of plans, state, and execution evidence via `PlanTaskScratchbookAdapter`.
 - **Controller**: `PlanController` manages the high-level workflow logic and review gates.

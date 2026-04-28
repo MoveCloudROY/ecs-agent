@@ -23,6 +23,7 @@ The table below summarizes the recommended priorities for each system. Priority 
 | RAGSystem | -10 | Retrieves context via vector search before reasoning. |
 | SystemPromptRenderSystem | -20 | Resolves `${name}` placeholders from `SystemPromptConfigSpec` and produces a cached `RenderedSystemPromptComponent` on first render. |
 | UserPromptNormalizationSystem | -10 | Injects trigger templates into user messages and produces `RenderedUserPromptComponent`. ContextPool injection happens later at call-time. |
+| WorkflowStateSystem | -25 | Evaluates workflow gates and commits transitions. |
 | SubagentWaitSystem | -5 | Handles `subagent_wait` tool and background session notifications. |
 | PromptContextCollectorSystem | 0 | Collects tool/subagent results into the context pool. |
 | ToolApprovalSystem | -5 | Filters pending tool calls before execution. |
@@ -131,6 +132,31 @@ world.add_component(entity, UserPromptConfigComponent(
     triggers={"@test": "Use testing best practices."}
 ))
 world.register_system(UserPromptNormalizationSystem(), priority=-10)
+```
+
+---
+
+## 1c. WorkflowStateSystem
+
+The `WorkflowStateSystem` evaluates declarative gate expressions against an entity's components and commits state transitions in the workflow graph.
+
+- **Constructor**: `__init__(self, priority: int = -25)`
+- **Queries**: `WorkflowDefinitionComponent`, `WorkflowRuntimeComponent`
+- **Produces**: `WorkflowLastTransitionComponent`, `WorkflowGateSnapshotComponent`
+- **Recommended Priority**: -25
+
+### Behavior
+The system iterates through all transitions defined for the entity's current state in the `WorkflowDefinitionComponent`. It evaluates each transition's gate expression (e.g., `has(C)`, `field(C, "attr") == value`). 
+
+- If exactly one transition matches, the system updates `WorkflowRuntimeComponent.current_state_id`, appends the transition ID to `transition_history`, and attaches a `WorkflowLastTransitionComponent`.
+- If zero transitions match, it is a no-op (state remains unchanged).
+- If more than one transition matches simultaneously, the system attaches an `ErrorComponent` and a `TerminalComponent` with the reason `workflow_ambiguous_transition`.
+
+### Usage Example
+```python
+from ecs_agent.systems.workflow_state import WorkflowStateSystem
+
+world.register_system(WorkflowStateSystem(priority=-25), priority=-25)
 ```
 
 ---
