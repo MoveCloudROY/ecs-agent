@@ -149,14 +149,14 @@ def _make_openai_responses_model(api_key: str) -> OpenAIModel:
 
 
 def _make_anthropic_model(api_key: str) -> OpenAIModel:
-    base_url = os.getenv("LLM_BASE_URL", "https://cc2.caaa.tech")
-    model_name = os.getenv("LLM_MODEL", "kimi-for-coding")
+    base_url = os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    model_name = os.getenv("LLM_MODEL", "qwen3.5-flash")
     return OpenAIModel(
         config=ProviderConfig(
             provider_id="live-anthropic",
             base_url=base_url,
             api_key=api_key,
-            api_format=ApiFormat.ANTHROPIC_MESSAGES,
+            api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
         ),
         model=model_name,
     )
@@ -206,7 +206,7 @@ async def test_live_chat_workflow_profile_change_updates_prompt(
     await SystemPromptRenderSystem().process(world)
     rendered_intro = world.get_component(eid, RenderedSystemPromptComponent)
     assert rendered_intro is not None
-    assert "INTRO_OK" in rendered_intro.system_prompt
+    assert "INTRO_OK" in rendered_intro.text
 
     world.add_component(eid, PhaseAdvanceMarker())
     await WorkflowStateSystem().process(world)
@@ -214,7 +214,7 @@ async def test_live_chat_workflow_profile_change_updates_prompt(
 
     rendered_advanced = world.get_component(eid, RenderedSystemPromptComponent)
     assert rendered_advanced is not None
-    assert "ADVANCED_OK" in rendered_advanced.system_prompt
+    assert "ADVANCED_OK" in rendered_advanced.text
 
     runner = Runner()
     try:
@@ -242,7 +242,7 @@ async def test_live_chat_workflow_shared_profile_no_prompt_churn(
     await SystemPromptRenderSystem().process(world)
     rendered_a = world.get_component(eid, RenderedSystemPromptComponent)
     assert rendered_a is not None
-    prompt_a = rendered_a.system_prompt
+    prompt_a = rendered_a.text
 
     world.add_component(eid, PhaseAdvanceMarker())
     await WorkflowStateSystem().process(world)
@@ -250,7 +250,7 @@ async def test_live_chat_workflow_shared_profile_no_prompt_churn(
 
     rendered_b = world.get_component(eid, RenderedSystemPromptComponent)
     assert rendered_b is not None
-    assert rendered_b.system_prompt == prompt_a, (
+    assert rendered_b.text == prompt_a, (
         "Shared profile: prompt must not change when state changes but profile stays the same"
     )
 
@@ -279,7 +279,7 @@ async def test_live_responses_workflow_profile_change_updates_prompt(
     await SystemPromptRenderSystem().process(world)
     rendered_intro = world.get_component(eid, RenderedSystemPromptComponent)
     assert rendered_intro is not None
-    assert "INTRO_OK" in rendered_intro.system_prompt
+    assert "INTRO_OK" in rendered_intro.text
 
     world.add_component(eid, PhaseAdvanceMarker())
     await WorkflowStateSystem().process(world)
@@ -287,7 +287,7 @@ async def test_live_responses_workflow_profile_change_updates_prompt(
 
     rendered_advanced = world.get_component(eid, RenderedSystemPromptComponent)
     assert rendered_advanced is not None
-    assert "ADVANCED_OK" in rendered_advanced.system_prompt
+    assert "ADVANCED_OK" in rendered_advanced.text
 
     runner = Runner()
     try:
@@ -315,7 +315,7 @@ async def test_live_responses_workflow_shared_profile_no_prompt_churn(
     await SystemPromptRenderSystem().process(world)
     rendered_a = world.get_component(eid, RenderedSystemPromptComponent)
     assert rendered_a is not None
-    prompt_a = rendered_a.system_prompt
+    prompt_a = rendered_a.text
 
     world.add_component(eid, PhaseAdvanceMarker())
     await WorkflowStateSystem().process(world)
@@ -323,7 +323,7 @@ async def test_live_responses_workflow_shared_profile_no_prompt_churn(
 
     rendered_b = world.get_component(eid, RenderedSystemPromptComponent)
     assert rendered_b is not None
-    assert rendered_b.system_prompt == prompt_a
+    assert rendered_b.text == prompt_a
 
     runner = Runner()
     try:
@@ -350,7 +350,7 @@ async def test_live_anthropic_workflow_profile_change_updates_prompt(
     await SystemPromptRenderSystem().process(world)
     rendered_intro = world.get_component(eid, RenderedSystemPromptComponent)
     assert rendered_intro is not None
-    assert "INTRO_OK" in rendered_intro.system_prompt
+    assert "INTRO_OK" in rendered_intro.text
 
     world.add_component(eid, PhaseAdvanceMarker())
     await WorkflowStateSystem().process(world)
@@ -358,7 +358,7 @@ async def test_live_anthropic_workflow_profile_change_updates_prompt(
 
     rendered_advanced = world.get_component(eid, RenderedSystemPromptComponent)
     assert rendered_advanced is not None
-    assert "ADVANCED_OK" in rendered_advanced.system_prompt
+    assert "ADVANCED_OK" in rendered_advanced.text
 
     runner = Runner()
     try:
@@ -386,7 +386,7 @@ async def test_live_anthropic_workflow_shared_profile_no_prompt_churn(
     await SystemPromptRenderSystem().process(world)
     rendered_a = world.get_component(eid, RenderedSystemPromptComponent)
     assert rendered_a is not None
-    prompt_a = rendered_a.system_prompt
+    prompt_a = rendered_a.text
 
     world.add_component(eid, PhaseAdvanceMarker())
     await WorkflowStateSystem().process(world)
@@ -394,7 +394,7 @@ async def test_live_anthropic_workflow_shared_profile_no_prompt_churn(
 
     rendered_b = world.get_component(eid, RenderedSystemPromptComponent)
     assert rendered_b is not None
-    assert rendered_b.system_prompt == prompt_a
+    assert rendered_b.text == prompt_a
 
     runner = Runner()
     try:
