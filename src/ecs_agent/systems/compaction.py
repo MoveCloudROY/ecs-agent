@@ -230,7 +230,7 @@ class CompactionSystem:
                 summary_model=config.summary_model,
             )
 
-        return llm_component.model
+        return cast(LLMModel, llm_component.model)
 
     def _resolve_provider_registry(
         self,
