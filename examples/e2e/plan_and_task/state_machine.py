@@ -5,29 +5,17 @@ from __future__ import annotations
 import datetime
 
 from ecs_agent.logging import get_logger
+from ecs_agent.workflows.compiler import compile_workflow
 
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
 )
 from examples.e2e.plan_and_task.state_models import RuntimeState
+from examples.e2e.plan_and_task.workflow_spec import PLAN_TASK_WORKFLOW_SPEC
 
 logger = get_logger(__name__)
 
-VALID_TRANSITIONS: dict[str, set[str]] = {
-    "IDLE": {"DRAFT_INTERVIEW"},
-    "DRAFT_INTERVIEW": {"DRAFT_ADVISOR_REVIEW", "DRAFT_QA_REVIEW"},
-    "DRAFT_ADVISOR_REVIEW": {"DRAFT_QA_REVIEW", "DRAFT_INTERVIEW"},
-    "DRAFT_QA_REVIEW": {"WRITE_PLAN", "DRAFT_INTERVIEW"},
-    "WRITE_PLAN": {"PLAN_QA_REVIEW"},
-    "PLAN_QA_REVIEW": {"PLAN_FINALIZED", "WRITE_PLAN"},
-    "PLAN_FINALIZED": {"TASK_READY"},
-    "TASK_READY": {"TASK_RUNNING"},
-    "TASK_RUNNING": {"TASK_COMPLETED", "TASK_BLOCKED", "TASK_REPLAN", "TASK_ABORTED"},
-    "TASK_BLOCKED": {"TASK_RUNNING", "TASK_REPLAN", "TASK_ABORTED"},
-    "TASK_REPLAN": {"DRAFT_INTERVIEW", "DRAFT_ADVISOR_REVIEW", "TASK_RUNNING"},
-    "TASK_COMPLETED": set(),
-    "TASK_ABORTED": set(),
-}
+_COMPILED_WORKFLOW = compile_workflow(PLAN_TASK_WORKFLOW_SPEC)
 
 _TERMINAL_PHASES: frozenset[str] = frozenset({"TASK_COMPLETED", "TASK_ABORTED"})
 
@@ -48,7 +36,8 @@ class WorkflowStateMachine:
         Raises:
             ValueError: If the transition is invalid.
         """
-        allowed = VALID_TRANSITIONS.get(state.phase, set())
+        transitions = _COMPILED_WORKFLOW.transitions_by_state.get(state.phase, ())
+        allowed = {transition.target_state_id for transition in transitions}
         if to_phase not in allowed:
             raise ValueError(f"Invalid transition: {state.phase} → {to_phase}")
         state.phase = to_phase
@@ -113,7 +102,7 @@ class WorkflowStateMachine:
 
         This is an administrative-only bypass for exceptional recovery scenarios, such as
         marking in-flight tasks as blocked after a restart. Normal phase transitions must
-        use the transition() method, which validates against VALID_TRANSITIONS.
+        use the transition() method, which validates against the compiled workflow transition graph.
 
         Args:
             state: Current runtime state to modify.

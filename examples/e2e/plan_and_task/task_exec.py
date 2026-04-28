@@ -27,8 +27,8 @@ from examples.e2e.plan_and_task.state_models import (
     TaskRecord,
 )
 from examples.e2e.plan_and_task.state_machine import (
-    VALID_TRANSITIONS,
     WorkflowStateMachine,
+    _COMPILED_WORKFLOW,
 )
 
 logger = get_logger(__name__)
@@ -383,7 +383,7 @@ class TaskExec:
         return state
 
     def _allowed_transitions(self, state: RuntimeState) -> set[str]:
-        return VALID_TRANSITIONS.get(state.phase, set())
+        return {t.target_state_id for t in _COMPILED_WORKFLOW.transitions_by_state.get(state.phase, ())}
 
     def _utcnow_isoformat(self) -> str:
         return datetime.datetime.now(datetime.UTC).isoformat()
