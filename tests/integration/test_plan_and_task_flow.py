@@ -2333,7 +2333,6 @@ async def test_derive_workflow_id_falls_back_on_empty_response() -> None:
 
 async def test_derive_workflow_id_falls_back_on_provider_error() -> None:
     from ecs_agent.providers.fake_model import FakeModel
-    from ecs_agent.types import CompletionResult, Message
     from examples.e2e.plan_and_task.runtime import (
         derive_workflow_id_from_llm,
         slug_from_description,
@@ -2357,7 +2356,7 @@ def test_plan_interview_system_prompt_contains_revise_instruction() -> None:
     assert "advisor" in prompt_lower, "Prompt must mention calling advisor again"
 
 
-def test_plan_interview_system_prompt_contains_blocked_instruction() -> None:
+def test_plan_interview_system_prompt_contains_blocked_instruction_duplicate() -> None:
     from examples.e2e.plan_and_task.prompts import PLAN_INTERVIEW_SYSTEM_PROMPT
 
     assert "blocked" in PLAN_INTERVIEW_SYSTEM_PROMPT.lower(), (
@@ -2365,7 +2364,7 @@ def test_plan_interview_system_prompt_contains_blocked_instruction() -> None:
     )
 
 
-def test_plan_interview_system_prompt_gates_qa_on_advisor_approval() -> None:
+def test_plan_interview_system_prompt_gates_qa_on_advisor_approval_duplicate() -> None:
     from examples.e2e.plan_and_task.prompts import PLAN_INTERVIEW_SYSTEM_PROMPT
 
     prompt_lower = PLAN_INTERVIEW_SYSTEM_PROMPT.lower()
@@ -2377,7 +2376,7 @@ def test_plan_interview_system_prompt_gates_qa_on_advisor_approval() -> None:
     )
 
 
-def test_controller_advisor_revise_state_stays_in_advisor_review(
+def test_controller_advisor_revise_state_stays_in_advisor_review_duplicate(
     tmp_path: Path,
 ) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
@@ -2398,7 +2397,7 @@ def test_controller_advisor_revise_state_stays_in_advisor_review(
     assert state.phase != "DRAFT_QA_REVIEW"
 
 
-def test_controller_advisor_revise_followed_by_approved_allows_qa(
+def test_controller_advisor_revise_followed_by_approved_allows_qa_duplicate(
     tmp_path: Path,
 ) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
@@ -2450,7 +2449,7 @@ def test_controller_advisor_multiple_verdicts_upsert_keeps_latest(
     assert advisor_verdicts[0].verdict == "approved"
 
 
-def test_controller_missing_approved_reviews_uses_last_verdict(
+def test_controller_missing_approved_reviews_uses_last_verdict_duplicate(
     tmp_path: Path,
 ) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
@@ -3599,8 +3598,6 @@ def test_reconcile_write_plan_triggers_plan_writer(tmp_path: Path) -> None:
 
 
 def test_reconcile_plan_qa_approved_advances_to_finalized(tmp_path: Path) -> None:
-    from examples.e2e.plan_and_task.controller import ResumeAction
-
     ctrl = PlanController()
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
     state = _make_state_at_phase("PLAN_QA_REVIEW")
@@ -3613,8 +3610,6 @@ def test_reconcile_plan_qa_approved_advances_to_finalized(tmp_path: Path) -> Non
 
 
 def test_reconcile_draft_qa_revise_returns_no_triggers(tmp_path: Path) -> None:
-    from examples.e2e.plan_and_task.controller import ResumeAction
-
     ctrl = PlanController()
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
     state = _make_state_at_phase("DRAFT_QA_REVIEW")
@@ -4090,7 +4085,6 @@ def test_build_plan_task_world_uses_plan_main_agent_system_prompt(tmp_path: Path
     from ecs_agent.prompts.contracts import SystemPromptConfigSpec
     from ecs_agent.providers.fake_model import FakeModel
     from examples.e2e.plan_and_task.main import build_plan_task_world
-    from examples.e2e.plan_and_task.prompts import PLAN_MAIN_AGENT_SYSTEM_PROMPT
 
     model = FakeModel(responses=["ok"])
     world, agent_id, _, _ = build_plan_task_world(
@@ -4099,7 +4093,62 @@ def test_build_plan_task_world_uses_plan_main_agent_system_prompt(tmp_path: Path
 
     spec = world.get_component(agent_id, SystemPromptConfigSpec)
     assert spec is not None
-    assert spec.template_source.inline == PLAN_MAIN_AGENT_SYSTEM_PROMPT
+    assert spec.template_source.inline == "${_workflow_state_prompt}"
+
+
+def test_workflow_spec_compiles_successfully() -> None:
+    """PLAN_TASK_WORKFLOW_SPEC compiles without errors."""
+    from ecs_agent.workflows.compiler import compile_workflow
+    from examples.e2e.plan_and_task.workflow_spec import PLAN_TASK_WORKFLOW_SPEC
+
+    compiled = compile_workflow(PLAN_TASK_WORKFLOW_SPEC)
+
+    assert compiled.workflow_id == "plan-task"
+    assert compiled.initial_state_id == "IDLE"
+    assert "IDLE" in compiled.state_ids
+    assert "TASK_RUNNING" in compiled.state_ids
+
+
+def test_workflow_planning_states_bind_plan_main_profile() -> None:
+    """Planning states must bind to plan_main profile for agent key 'main'."""
+    from ecs_agent.workflows.compiler import compile_workflow
+    from examples.e2e.plan_and_task.workflow_spec import PLAN_TASK_WORKFLOW_SPEC
+
+    compiled = compile_workflow(PLAN_TASK_WORKFLOW_SPEC)
+    planning_states = [
+        "IDLE",
+        "DRAFT_INTERVIEW",
+        "DRAFT_ADVISOR_REVIEW",
+        "DRAFT_QA_REVIEW",
+        "WRITE_PLAN",
+        "PLAN_QA_REVIEW",
+        "PLAN_FINALIZED",
+        "TASK_READY",
+    ]
+
+    for state_id in planning_states:
+        bindings = compiled.bindings_by_state.get(state_id, {})
+        assert bindings.get("main") == "plan_main", (
+            f"{state_id} must bind to plan_main"
+        )
+
+
+def test_workflow_state_system_installed_in_world(tmp_path: Path) -> None:
+    """build_plan_task_world installs workflow component + WorkflowStateSystem."""
+    from ecs_agent.components import WorkflowBindingComponent, WorkflowRuntimeComponent
+    from ecs_agent.providers.fake_model import FakeModel
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    model = FakeModel(responses=["ok"])
+    world, agent_id, _, _ = build_plan_task_world(model=model, base_dir=tmp_path)
+
+    runtime = world.get_component(agent_id, WorkflowRuntimeComponent)
+    assert runtime is not None
+    assert runtime.current_state_id == "IDLE"
+
+    binding = world.get_component(agent_id, WorkflowBindingComponent)
+    assert binding is not None
+    assert binding.agent_key == "main"
 
 
 @pytest.mark.asyncio
@@ -4107,13 +4156,14 @@ async def test_task_start_swaps_system_prompt(tmp_path: Path) -> None:
     from ecs_agent.components import (
         ConversationComponent,
         RenderedSystemPromptComponent,
+        WorkflowRuntimeComponent,
     )
     from ecs_agent.prompts.contracts import SystemPromptConfigSpec
+    from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
     from ecs_agent.systems.user_prompt_normalization_system import (
         UserPromptNormalizationSystem,
     )
     from ecs_agent.types import Message
-    from examples.e2e.plan_and_task.prompts import TASK_MAIN_AGENT_SYSTEM_PROMPT
 
     world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
@@ -4129,10 +4179,14 @@ async def test_task_start_swaps_system_prompt(tmp_path: Path) -> None:
     conversation.messages.append(Message(role="user", content="/task:start"))
 
     await UserPromptNormalizationSystem().process(world)
+    await SystemPromptRenderSystem().process(world)
 
     spec = world.get_component(agent_id, SystemPromptConfigSpec)
     assert spec is not None
-    assert spec.template_source.inline == TASK_MAIN_AGENT_SYSTEM_PROMPT
+    assert spec.template_source.inline == "${_workflow_state_prompt}"
+    workflow_runtime = world.get_component(agent_id, WorkflowRuntimeComponent)
+    assert workflow_runtime is not None
+    assert workflow_runtime.current_state_id == "TASK_RUNNING"
     rendered = world.get_component(agent_id, RenderedSystemPromptComponent)
     assert rendered is not None
     assert "task execution main agent" in rendered.text
@@ -4149,13 +4203,14 @@ async def test_task_resume_swaps_system_prompt(tmp_path: Path) -> None:
     from ecs_agent.components import (
         ConversationComponent,
         RenderedSystemPromptComponent,
+        WorkflowRuntimeComponent,
     )
     from ecs_agent.prompts.contracts import SystemPromptConfigSpec
+    from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
     from ecs_agent.systems.user_prompt_normalization_system import (
         UserPromptNormalizationSystem,
     )
     from ecs_agent.types import Message
-    from examples.e2e.plan_and_task.prompts import TASK_MAIN_AGENT_SYSTEM_PROMPT
 
     world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
@@ -4181,10 +4236,14 @@ async def test_task_resume_swaps_system_prompt(tmp_path: Path) -> None:
     conversation.messages.append(Message(role="user", content="/task:resume"))
 
     await UserPromptNormalizationSystem().process(world)
+    await SystemPromptRenderSystem().process(world)
 
     spec = world.get_component(agent_id, SystemPromptConfigSpec)
     assert spec is not None
-    assert spec.template_source.inline == TASK_MAIN_AGENT_SYSTEM_PROMPT
+    assert spec.template_source.inline == "${_workflow_state_prompt}"
+    workflow_runtime = world.get_component(agent_id, WorkflowRuntimeComponent)
+    assert workflow_runtime is not None
+    assert workflow_runtime.current_state_id == "TASK_RUNNING"
     rendered = world.get_component(agent_id, RenderedSystemPromptComponent)
     assert rendered is not None
     assert "task execution main agent" in rendered.text
