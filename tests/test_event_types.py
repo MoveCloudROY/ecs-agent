@@ -52,12 +52,17 @@ class TestToolExecutionCompletedEvent:
             tool_call_id="tc1",
             result="Execution successful",
             success=True,
+            tool_name="search",
+            duration_seconds=0.125,
         )
 
         assert event.entity_id == entity_id
         assert event.tool_call_id == "tc1"
         assert event.result == "Execution successful"
         assert event.success is True
+        assert event.tool_name == "search"
+        assert event.status == "success"
+        assert event.duration_seconds == 0.125
 
     def test_instantiate_with_success_false(self) -> None:
         """Tool execution completed event with success=false."""
@@ -70,6 +75,7 @@ class TestToolExecutionCompletedEvent:
         )
 
         assert event.success is False
+        assert event.status == "error"
         assert "Error" in event.result
 
 

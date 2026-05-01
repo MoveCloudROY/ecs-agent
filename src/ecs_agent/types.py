@@ -2,11 +2,11 @@
 
 import asyncio
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
-from datetime import datetime, timezone
 from typing import Any, Literal, NewType, cast, get_args
 
-from ecs_agent.accounting.models import LLMInvocationEvent, UsageRecord
+from ecs_agent.accounting.models import LLMInvocationEvent, LLMRetryEvent, UsageRecord
 
 EntityId = NewType("EntityId", int)
 SystemHandle = NewType("SystemHandle", str)
@@ -58,6 +58,7 @@ class ToolResultCachedEvent:
     entity_id: EntityId
     tool_call_id: str
     artifact_path: str
+    status: str = "cached"
 
 
 @dataclass(slots=True)
@@ -137,6 +138,70 @@ class ToolSchema:
 
 Usage = UsageRecord
 
+RunnerLifecycleStatus = Literal[
+    "success",
+    "terminal_component",
+    "max_ticks",
+    "interruption_component",
+    "error",
+]
+SystemExecutionStatus = Literal["success", "error"]
+ToolExecutionStatus = Literal["success", "error"]
+
+
+@dataclass(slots=True)
+class RunStartedEvent:
+    """Event emitted when a runner starts processing a world."""
+
+    max_ticks: int | None
+    start_tick: int
+    active_entities: int
+
+
+@dataclass(slots=True)
+class RunnerTickStartedEvent:
+    """Event emitted when a runner tick starts."""
+
+    tick: int
+    active_entities: int
+
+
+@dataclass(slots=True)
+class RunnerTickCompletedEvent:
+    """Event emitted when a runner tick completes."""
+
+    tick: int
+    status: RunnerLifecycleStatus
+    duration_seconds: float
+    active_entities: int
+
+
+@dataclass(slots=True)
+class RunCompletedEvent:
+    """Event emitted when a runner stops processing a world."""
+
+    status: RunnerLifecycleStatus
+    reason: str
+    duration_seconds: float
+    ticks: int
+    active_entities: int
+
+
+@dataclass(slots=True)
+class SystemExecutionStartedEvent:
+    """Event emitted when a system execution starts."""
+
+    system: str
+
+
+@dataclass(slots=True)
+class SystemExecutionCompletedEvent:
+    """Event emitted when a system execution completes."""
+
+    system: str
+    status: SystemExecutionStatus
+    duration_seconds: float
+
 
 @dataclass(slots=True)
 class CompletionResult:
@@ -173,6 +238,8 @@ class PlanStepCompletedEvent:
     entity_id: EntityId
     step_index: int
     step_description: str
+    operation: str = "execute"
+    status: str = "success"
 
 
 @dataclass(slots=True)
@@ -182,6 +249,8 @@ class PlanRevisedEvent:
     entity_id: EntityId
     old_steps: list[str]
     new_steps: list[str]
+    operation: str = "revise"
+    status: str = "success"
 
 
 @dataclass(slots=True)
@@ -256,6 +325,8 @@ class ToolApprovedEvent:
 
     entity_id: EntityId
     tool_call_id: str
+    tool_name: str = ""
+    policy: str = "unknown"
 
 
 @dataclass(slots=True)
@@ -265,6 +336,7 @@ class ToolDeniedEvent:
     entity_id: EntityId
     tool_call_id: str
     reason: str
+    tool_name: str = ""
 
 
 @dataclass(slots=True)
@@ -274,6 +346,8 @@ class MCTSNodeScoredEvent:
     entity_id: EntityId
     node_id: int
     score: float
+    phase: str = "score"
+    status: str = "success"
 
 
 @dataclass(slots=True)
@@ -282,6 +356,9 @@ class StreamStartEvent:
 
     entity_id: EntityId
     timestamp: float
+    provider_id: str = "unknown"
+    model: str = "unknown"
+    operation: str = "completion"
 
 
 @dataclass(slots=True)
@@ -290,6 +367,10 @@ class StreamContentDeltaEvent:
 
     entity_id: EntityId
     delta: str
+    provider_id: str = "unknown"
+    model: str = "unknown"
+    operation: str = "completion"
+    first_delta_seconds: float | None = None
 
 
 @dataclass(slots=True)
@@ -298,6 +379,10 @@ class StreamReasoningDeltaEvent:
 
     entity_id: EntityId
     reasoning_delta: str
+    provider_id: str = "unknown"
+    model: str = "unknown"
+    operation: str = "completion"
+    first_delta_seconds: float | None = None
 
 
 @dataclass(slots=True)
@@ -320,6 +405,12 @@ class StreamEndEvent:
 
     entity_id: EntityId
     timestamp: float
+    provider_id: str = "unknown"
+    model: str = "unknown"
+    operation: str = "completion"
+    status: str = "success"
+    duration_seconds: float | None = None
+    first_delta_seconds: float | None = None
 
 
 @dataclass(slots=True)
@@ -362,6 +453,8 @@ class CheckpointCreatedEvent:
     entity_id: EntityId
     checkpoint_id: int
     timestamp: float
+    operation: str = "save"
+    status: str = "success"
 
 
 @dataclass(slots=True)
@@ -371,6 +464,8 @@ class CheckpointRestoredEvent:
     entity_id: EntityId
     checkpoint_id: int
     timestamp: float
+    operation: str = "restore"
+    status: str = "success"
 
 
 @dataclass(slots=True)
@@ -380,6 +475,8 @@ class CompactionCompleteEvent:
     entity_id: EntityId
     original_tokens: int
     compacted_tokens: int
+    operation: str = "compact"
+    status: str = "success"
 
 
 @dataclass(slots=True)
@@ -420,6 +517,12 @@ class ToolExecutionCompletedEvent:
     tool_call_id: str
     result: str
     success: bool
+    tool_name: str = ""
+    status: ToolExecutionStatus = "success"
+    duration_seconds: float | None = None
+
+    def __post_init__(self) -> None:
+        self.status = "success" if self.success else "error"
 
 
 @dataclass(slots=True)
@@ -669,6 +772,8 @@ class DelegationStartedEvent:
     correlation_id: str
     traceparent: str
     child_world_name: str | None = None
+    phase: str = "running"
+    status: str = "running"
 
 
 @dataclass(slots=True)
@@ -683,6 +788,8 @@ class DelegationCompletedEvent:
     correlation_id: str = ""
     traceparent: str = ""
     child_world_name: str | None = None
+    phase: str = "completed"
+    status: str = ""
 
 
 @dataclass(slots=True)
@@ -797,6 +904,7 @@ __all__ = [
     "InheritancePolicy",
     "InterruptionReason",
     "LLMInvocationEvent",
+    "LLMRetryEvent",
     "MCPConnectedEvent",
     "MCPDisconnectedEvent",
     "MCPToolCallEvent",
@@ -815,6 +923,11 @@ __all__ = [
     "RAGRetrievalCompletedEvent",
     "ResponsesAPICallEvent",
     "RetryConfig",
+    "RunCompletedEvent",
+    "RunnerLifecycleStatus",
+    "RunnerTickCompletedEvent",
+    "RunnerTickStartedEvent",
+    "RunStartedEvent",
     "RevertRequest",
     "RevertResult",
     "ScratchbookRef",
@@ -834,6 +947,9 @@ __all__ = [
     "SubagentStreamEndEvent",
     "SubagentStreamStartEvent",
     "SubagentSessionRecord",
+    "SystemExecutionCompletedEvent",
+    "SystemExecutionStartedEvent",
+    "SystemExecutionStatus",
     "SystemHandle",
     "ToolApprovalRequestedEvent",
     "ToolApprovedEvent",
@@ -841,6 +957,7 @@ __all__ = [
     "ToolDeniedEvent",
     "ToolExecutionCompletedEvent",
     "ToolExecutionStartedEvent",
+    "ToolExecutionStatus",
     "ToolSchema",
     "ToolTimeoutError",
     "Usage",
