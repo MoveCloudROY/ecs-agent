@@ -25,6 +25,7 @@ from ecs_agent.types import (
     ToolCall,
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
+    ToolResultCachedEvent,
 )
 
 logger = get_logger(__name__)
@@ -69,6 +70,7 @@ class ToolExecutionSystem:
                 )
 
             for tool_call in pending.tool_calls:
+                start_time = time.monotonic()
                 await world.event_bus.publish(
                     ToolExecutionStartedEvent(
                         entity_id=entity_id,
@@ -90,6 +92,8 @@ class ToolExecutionSystem:
                         tool_call_id=tool_call.id,
                         result=result,
                         success=success,
+                        tool_name=tool_call.name,
+                        duration_seconds=time.monotonic() - start_time,
                     )
                 )
 
@@ -259,6 +263,13 @@ class ToolExecutionSystem:
             entity_id=entity_id,
             tool_call_id=tool_call.id,
             artifact_path=artifact_path,
+        )
+        await world.event_bus.publish(
+            ToolResultCachedEvent(
+                entity_id=entity_id,
+                tool_call_id=tool_call.id,
+                artifact_path=artifact_path,
+            )
         )
 
     def _estimate_conversation_tokens(

@@ -11,7 +11,7 @@ from ecs_agent.components import (
 from ecs_agent.core import World
 from ecs_agent.scratchbook import ArtifactRegistry
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
-from ecs_agent.types import Message, ToolCall, ToolSchema
+from ecs_agent.types import Message, ToolCall, ToolExecutionCompletedEvent, ToolSchema
 
 
 @pytest.mark.asyncio
@@ -84,6 +84,49 @@ async def test_process_executes_pending_tool_calls_and_appends_tool_messages() -
         "call-1": "sunny in Paris",
         "call-2": "10:00 in UTC",
     }
+
+
+@pytest.mark.asyncio
+async def test_process_publishes_tool_completion_duration_and_status() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    completed: list[ToolExecutionCompletedEvent] = []
+
+    async def ping() -> str:
+        return "pong"
+
+    async def on_completed(event: ToolExecutionCompletedEvent) -> None:
+        completed.append(event)
+
+    world.event_bus.subscribe(ToolExecutionCompletedEvent, on_completed)
+    world.add_component(entity_id, ConversationComponent(messages=[]))
+    world.add_component(
+        entity_id,
+        ToolRegistryComponent(
+            tools={
+                "ping": ToolSchema(
+                    name="ping",
+                    description="Ping",
+                    parameters={"type": "object"},
+                )
+            },
+            handlers={"ping": ping},
+        ),
+    )
+    world.add_component(
+        entity_id,
+        PendingToolCallsComponent(
+            tool_calls=[ToolCall(id="call-1", name="ping", arguments={})]
+        ),
+    )
+
+    await ToolExecutionSystem().process(world)
+
+    assert len(completed) == 1
+    assert completed[0].tool_name == "ping"
+    assert completed[0].status == "success"
+    assert completed[0].duration_seconds is not None
+    assert completed[0].duration_seconds >= 0
 
 
 @pytest.mark.asyncio
