@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 from ecs_agent.logging import STANDARD_EVENT_NAMES, get_logger
-from ecs_agent.types import SystemHandle
+from ecs_agent.types import (
+    SystemExecutionCompletedEvent,
+    SystemExecutionStartedEvent,
+    SystemHandle,
+)
 
 if TYPE_CHECKING:
     from ecs_agent.core.world import World
@@ -129,22 +133,39 @@ class SystemExecutor:
         """Execute a single system with logging and error handling."""
         system_name = f"{system.__class__.__module__}.{system.__class__.__name__}"
         logger.info(STANDARD_EVENT_NAMES["SYSTEM_START"], system=system_name)
+        await world.event_bus.publish(SystemExecutionStartedEvent(system=system_name))
 
         start_time = time.monotonic()
         try:
             await system.process(world)
-            duration_ms = (time.monotonic() - start_time) * 1000
+            duration_seconds = time.monotonic() - start_time
+            duration_ms = duration_seconds * 1000
             logger.info(
                 STANDARD_EVENT_NAMES["SYSTEM_COMPLETE"],
                 system=system_name,
                 duration_ms=duration_ms,
             )
+            await world.event_bus.publish(
+                SystemExecutionCompletedEvent(
+                    system=system_name,
+                    status="success",
+                    duration_seconds=duration_seconds,
+                )
+            )
         except Exception as exc:
-            duration_ms = (time.monotonic() - start_time) * 1000
+            duration_seconds = time.monotonic() - start_time
+            duration_ms = duration_seconds * 1000
             logger.error(
                 STANDARD_EVENT_NAMES["SYSTEM_ERROR"],
                 system=system_name,
                 exception=str(exc),
                 duration_ms=duration_ms,
+            )
+            await world.event_bus.publish(
+                SystemExecutionCompletedEvent(
+                    system=system_name,
+                    status="error",
+                    duration_seconds=duration_seconds,
+                )
             )
             raise

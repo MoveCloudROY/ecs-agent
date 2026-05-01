@@ -26,6 +26,10 @@ from ecs_agent.types import (
     Message,
     StreamDelta,
     StreamContentDeltaEvent,
+    RunCompletedEvent,
+    RunStartedEvent,
+    RunnerTickCompletedEvent,
+    RunnerTickStartedEvent,
     SystemHandle,
 )
 
@@ -170,6 +174,14 @@ class TerminalReasonAuditSystem:
         self.observed.append((runner_state.current_tick, sorted(reasons)))
 
 
+class FailingRunnerSystem:
+    """Test system that raises a normal exception during runner processing."""
+
+    async def process(self, world: World) -> None:
+        _ = world
+        raise RuntimeError("sensitive backend detail")
+
+
 class TestRunner:
     """Test Runner behavior."""
 
@@ -192,6 +204,82 @@ class TestRunner:
         await runner.run(world, max_ticks=5)
 
         assert counter.run_count > 0
+
+    @pytest.mark.asyncio
+    async def test_run_publishes_lifecycle_events(
+        self, world: World, runner: Runner
+    ) -> None:
+        """Runner publishes run and tick lifecycle events with durations."""
+        events: list[object] = []
+
+        async def on_run_started(event: RunStartedEvent) -> None:
+            events.append(event)
+
+        async def on_tick_started(event: RunnerTickStartedEvent) -> None:
+            events.append(event)
+
+        async def on_tick_completed(event: RunnerTickCompletedEvent) -> None:
+            events.append(event)
+
+        async def on_run_completed(event: RunCompletedEvent) -> None:
+            events.append(event)
+
+        world.event_bus.subscribe(RunStartedEvent, on_run_started)
+        world.event_bus.subscribe(RunnerTickStartedEvent, on_tick_started)
+        world.event_bus.subscribe(RunnerTickCompletedEvent, on_tick_completed)
+        world.event_bus.subscribe(RunCompletedEvent, on_run_completed)
+        world.register_system(TerminateAtTickSystem(terminate_at_tick=1), priority=0)
+
+        await runner.run(world, max_ticks=5)
+
+        assert [type(event) for event in events] == [
+            RunStartedEvent,
+            RunnerTickStartedEvent,
+            RunnerTickCompletedEvent,
+            RunCompletedEvent,
+        ]
+        assert isinstance(events[0], RunStartedEvent)
+        assert events[0].max_ticks == 5
+        assert isinstance(events[2], RunnerTickCompletedEvent)
+        assert events[2].status == "terminal_component"
+        assert events[2].duration_seconds >= 0
+        assert isinstance(events[3], RunCompletedEvent)
+        assert events[3].status == "terminal_component"
+        assert events[3].ticks == 1
+
+    @pytest.mark.asyncio
+    async def test_run_publishes_error_lifecycle_events_before_reraising(
+        self, world: World, runner: Runner
+    ) -> None:
+        """Runner emits bounded error lifecycle events before re-raising."""
+        tick_events: list[RunnerTickCompletedEvent] = []
+        run_events: list[RunCompletedEvent] = []
+
+        async def on_tick_completed(event: RunnerTickCompletedEvent) -> None:
+            tick_events.append(event)
+
+        async def on_run_completed(event: RunCompletedEvent) -> None:
+            run_events.append(event)
+
+        world.event_bus.subscribe(RunnerTickCompletedEvent, on_tick_completed)
+        world.event_bus.subscribe(RunCompletedEvent, on_run_completed)
+        world.register_system(FailingRunnerSystem(), priority=0)
+
+        with pytest.raises(ExceptionGroup):
+            await runner.run(world, max_ticks=5)
+
+        assert len(tick_events) == 1
+        assert tick_events[0].status == "error"
+        assert tick_events[0].tick == 0
+        assert tick_events[0].duration_seconds >= 0
+        assert tick_events[0].active_entities >= 1
+
+        assert len(run_events) == 1
+        assert run_events[0].status == "error"
+        assert run_events[0].reason == "exception"
+        assert run_events[0].ticks == 0
+        assert run_events[0].duration_seconds >= 0
+        assert run_events[0].active_entities >= 1
 
     @pytest.mark.asyncio
     async def test_run_stops_on_terminal_component(

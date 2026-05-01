@@ -11,7 +11,13 @@ from ecs_agent.components.definitions import (
     RunnerStateComponent,
     TerminalComponent,
 )
-from ecs_agent.types import EntityId
+from ecs_agent.types import (
+    RunCompletedEvent,
+    RunStartedEvent,
+    RunnerLifecycleStatus,
+    RunnerTickCompletedEvent,
+    RunnerTickStartedEvent,
+)
 from ecs_agent.core.world import World
 from ecs_agent.logging import STANDARD_EVENT_NAMES, get_logger
 from ecs_agent.serialization import WorldSerializer
@@ -49,6 +55,14 @@ class Runner:
             start_tick=start_tick,
             world_name=world.name,
         )
+        run_start_time = time.monotonic()
+        await world.event_bus.publish(
+            RunStartedEvent(
+                max_ticks=max_ticks,
+                start_tick=start_tick,
+                active_entities=self._active_entity_count(world),
+            )
+        )
 
         # Create or update RunnerStateComponent
         runner_state_entities = list(world.query(RunnerStateComponent))
@@ -65,10 +79,23 @@ class Runner:
                 entity_id = world.create_entity()
                 world.add_component(entity_id, TerminalComponent(reason="max_ticks"))
                 logger.info(STANDARD_EVENT_NAMES["RUN_COMPLETE"], reason="max_ticks", world_name=world.name)
+                await self._publish_run_completed(
+                    world=world,
+                    status="max_ticks",
+                    reason="max_ticks",
+                    start_time=run_start_time,
+                    ticks=tick - start_tick,
+                )
                 return
 
             logger.debug(STANDARD_EVENT_NAMES["TICK_START"], tick=tick, world_name=world.name)
             tick_start_time = time.monotonic()
+            await world.event_bus.publish(
+                RunnerTickStartedEvent(
+                    tick=tick,
+                    active_entities=self._active_entity_count(world),
+                )
+            )
             interrupted_before_tick = self._has_top_level_component(
                 world, InterruptionComponent
             )
@@ -77,9 +104,6 @@ class Runner:
                 world.apply_pending_system_operations()
                 await world.process()
             except asyncio.CancelledError:
-                interrupted_after_cancellation = self._has_top_level_component(
-                    world, InterruptionComponent
-                )
                 if interrupted_before_tick:
                     # Pre-existing interruption — intentional stop, swallow CancelledError
                     logger.info(
@@ -87,9 +111,34 @@ class Runner:
                         reason="interruption_component",
                         world_name=world.name,
                     )
+                    await self._publish_run_completed(
+                        world=world,
+                        status="interruption_component",
+                        reason="interruption_component",
+                        start_time=run_start_time,
+                        ticks=tick - start_tick,
+                    )
                     return
                 # CancelledError arrived from outside (e.g. asyncio.wait_for timeout)
                 # — re-raise so the caller's timeout handler fires correctly
+                raise
+            except Exception:
+                tick_duration_ms = (time.monotonic() - tick_start_time) * 1000
+                await world.event_bus.publish(
+                    RunnerTickCompletedEvent(
+                        tick=tick,
+                        status="error",
+                        duration_seconds=tick_duration_ms / 1000,
+                        active_entities=self._active_entity_count(world),
+                    )
+                )
+                await self._publish_run_completed(
+                    world=world,
+                    status="error",
+                    reason="exception",
+                    start_time=run_start_time,
+                    ticks=tick - start_tick,
+                )
                 raise
 
             interrupted_after_tick = self._has_top_level_component(
@@ -105,14 +154,32 @@ class Runner:
                 duration_ms=tick_duration_ms,
                 world_name=world.name,
             )
+            has_terminal = self._has_top_level_component(world, TerminalComponent)
+            tick_status: RunnerLifecycleStatus = (
+                "terminal_component" if has_terminal else "success"
+            )
+            await world.event_bus.publish(
+                RunnerTickCompletedEvent(
+                    tick=tick,
+                    status=tick_status,
+                    duration_seconds=tick_duration_ms / 1000,
+                    active_entities=self._active_entity_count(world),
+                )
+            )
 
             tick += 1
             runner_state.current_tick = tick
 
-            has_terminal = self._has_top_level_component(world, TerminalComponent)
             if has_terminal:
                 logger.info(
                     STANDARD_EVENT_NAMES["RUN_COMPLETE"], reason="terminal_component", world_name=world.name
+                )
+                await self._publish_run_completed(
+                    world=world,
+                    status="terminal_component",
+                    reason="terminal_component",
+                    start_time=run_start_time,
+                    ticks=tick - start_tick,
                 )
                 return
 
@@ -122,6 +189,28 @@ class Runner:
         component_type: type[TerminalComponent] | type[InterruptionComponent],
     ) -> bool:
         return any(True for _ in world.query(component_type))
+
+    def _active_entity_count(self, world: World) -> int:
+        return len(world._entity_ids)
+
+    async def _publish_run_completed(
+        self,
+        *,
+        world: World,
+        status: RunnerLifecycleStatus,
+        reason: str,
+        start_time: float,
+        ticks: int,
+    ) -> None:
+        await world.event_bus.publish(
+            RunCompletedEvent(
+                status=status,
+                reason=reason,
+                duration_seconds=time.monotonic() - start_time,
+                ticks=ticks,
+                active_entities=self._active_entity_count(world),
+            )
+        )
 
     def save_checkpoint(self, world: World, path: str | Path) -> None:
         """Save world state and runner state to checkpoint file.
