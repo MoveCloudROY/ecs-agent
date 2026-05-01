@@ -131,6 +131,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **Context Management** — Checkpoints (undo/resume), conversation compaction (XML system-prompt summaries), and memory windowing.
 - **Tool Ecosystem** — Auto-discovery via `@tool` decorator, manual approval flows, secure `bwrap` sandboxing, and composable skills.
 - **MCP Integration** — Connect to external MCP tool servers via stdio, SSE, or HTTP transports with namespaced tool mapping.
+- **Prometheus Metrics** — Install low-cardinality runtime, LLM, tool, streaming, and runtime-control metrics on any `World` and expose them via render, ASGI/WSGI, or a standalone `/metrics` server.
 
 ## Architecture
 
@@ -289,6 +290,42 @@ uv run python examples/chat_agent.py
 
 Model setup, registry-based construction, supported protocols, and model ID rules are documented in [`docs/models.md`](docs/models.md).
 
+## Prometheus Metrics
+
+Install metrics on a `World` before running agents, then expose the same private registry through whichever deployment shape fits your service:
+
+```python
+from ecs_agent.core import Runner, World
+from ecs_agent.metrics import (
+    install_prometheus_metrics,
+    make_metrics_asgi_app,
+    make_metrics_wsgi_app,
+    render_metrics,
+    start_metrics_server,
+)
+
+world = World()
+metrics = install_prometheus_metrics(world)
+
+# Direct scrape payload for tests, CLIs, or custom handlers.
+body = render_metrics(metrics)
+
+# Framework adapters.
+asgi_app = make_metrics_asgi_app(metrics)  # mount at /metrics in an ASGI app
+wsgi_app = make_metrics_wsgi_app(metrics)  # mount at /metrics in a WSGI app
+
+# Standalone endpoint helper.
+handle = start_metrics_server(9100, addr="127.0.0.1", metrics=metrics)
+try:
+    await Runner().run(world, max_ticks=3)
+finally:
+    handle.close(timeout=5)
+```
+
+The exposition uses `ecs_agent_*` metric families such as `ecs_agent_runs_total`, `ecs_agent_llm_invocations_total`, `ecs_agent_tool_calls_total`, and `ecs_agent_stream_events_total`. Labels are intentionally low-cardinality (`status`, `system`, `provider`, `model`, `operation`, `tool`, and similar bounded values); IDs, raw prompts/responses, tool arguments/results, paths, API keys, and tokens are never accepted as labels. See [`docs/features/metrics.md`](docs/features/metrics.md) for the complete metric contract, endpoint modes, install/uninstall behavior, and live smoke test instructions.
+
+To try the feature in real dashboards, run the local Prometheus + Grafana demo in [`examples/prometheus/`](examples/prometheus/). It exposes ecs-agent metrics at `127.0.0.1:9100/metrics`, starts Prometheus and Grafana with Docker Compose, and provisions an `ecs-agent Overview` dashboard at `http://localhost:3000`.
+
 ## Development
 
 ### Tests
@@ -318,6 +355,11 @@ LLM_API_KEY="$LLM_API_KEY" \
 
 LLM_API_KEY="$LLM_API_KEY" \
   uv run pytest tests/live/test_compaction_live.py -v
+
+LLM_API_KEY="$LLM_API_KEY" \
+  LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
+  LLM_MODEL=qwen3.5-flash \
+  uv run pytest tests/live/test_prometheus_metrics_live.py -v
 ```
 
 See `tests/live/` for the available live suites.
@@ -364,6 +406,7 @@ See [`docs/`](docs/) for detailed guides:
 - [Systems](docs/systems.md), Built-in systems and configuration details
 - [Models](docs/models.md), model selection, registry routing, and built-in model implementations
 - [Streaming](docs/features/streaming.md), SSE streaming setup and usage
+- [Prometheus Metrics](docs/features/metrics.md), low-cardinality metrics and `/metrics` exposure helpers
 - [Structured Output](docs/features/structured-output.md), Pydantic schema → JSON mode
 - [Serialization](docs/features/serialization.md), World state persistence
 - [Logging](docs/features/logging.md), structlog integration
