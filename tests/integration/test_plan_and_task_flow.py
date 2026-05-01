@@ -1787,6 +1787,31 @@ async def test_trigger_plan_start_handler_creates_state(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_plan_start_trigger_is_not_reprocessed_for_same_user_message(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent.components import ConversationComponent
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+    from ecs_agent.types import Message
+
+    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.append(Message(role="user", content="/plan:start Build demo"))
+
+    system = UserPromptNormalizationSystem()
+
+    await system.process(world)
+    first_state = runtime_state[0]
+    await system.process(world)
+
+    assert first_state is not None
+    assert runtime_state[0] is first_state
+
+
+@pytest.mark.asyncio
 async def test_trigger_plan_status_handler_returns_status_string(
     tmp_path: Path,
 ) -> None:
