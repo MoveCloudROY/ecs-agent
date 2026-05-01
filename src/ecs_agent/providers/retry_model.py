@@ -11,6 +11,8 @@ from tenacity import (
     wait_exponential,
 )
 
+from ecs_agent.accounting.models import LLMRetryEvent
+from ecs_agent.core.event_bus import EventBus
 from ecs_agent.logging import get_logger
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.types import (
@@ -32,10 +34,22 @@ class RetryModel:
     ) -> None:
         self._model = model
         self._retry_config = retry_config or RetryConfig()
+        self._event_bus: EventBus | None = None
 
     @property
     def model_id(self) -> str:
         return self._model.model_id
+
+    @property
+    def provider_id(self) -> str:
+        provider_id = getattr(self._model, "provider_id", None)
+        if isinstance(provider_id, str) and provider_id:
+            return provider_id
+        return type(self._model).__name__
+
+    def set_event_bus(self, event_bus: EventBus) -> None:
+        """Attach the current world's EventBus for retry observation events."""
+        self._event_bus = event_bus
 
     async def complete(
         self,
@@ -64,7 +78,7 @@ class RetryModel:
                 max=self._retry_config.max_wait,
             ),
             retry=retry_condition,
-            before_sleep=self._log_retry_attempt,
+            before_sleep=self._record_retry_attempt,
             reraise=True,
         ):
             with attempt:
@@ -84,7 +98,7 @@ class RetryModel:
             return exc.response.status_code in self._retry_config.retry_status_codes
         return isinstance(exc, httpx.RequestError)
 
-    def _log_retry_attempt(self, retry_state: RetryCallState) -> None:
+    async def _record_retry_attempt(self, retry_state: RetryCallState) -> None:
         if retry_state.outcome is None or not retry_state.outcome.failed:
             return
         error = retry_state.outcome.exception()
@@ -96,3 +110,24 @@ class RetryModel:
             error=str(error),
             wait_seconds=retry_state.upcoming_sleep,
         )
+        if self._event_bus is None:
+            return
+        await self._event_bus.publish(
+            LLMRetryEvent(
+                provider_id=self.provider_id,
+                model=self.model_id,
+                reason=self._retry_reason(error),
+                attempt=retry_state.attempt_number,
+            )
+        )
+
+    def _retry_reason(self, exc: BaseException) -> str:
+        if isinstance(exc, httpx.HTTPStatusError):
+            if exc.response is not None:
+                return f"http_{exc.response.status_code}"
+            return "unknown"
+        if isinstance(exc, httpx.TimeoutException):
+            return "timeout"
+        if isinstance(exc, httpx.RequestError):
+            return "request_error"
+        return "unknown"
