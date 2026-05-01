@@ -7,9 +7,13 @@ import uuid
 from typing import Any
 
 from ecs_agent.accounting.models import (
-    LLMInvocationEvent,
     StreamCompleteness,
     UsageRecord,
+)
+from ecs_agent.accounting.instrumentation import (
+    attach_retry_event_bus,
+    publish_llm_invocation_event,
+    resolve_provider_id,
 )
 from ecs_agent.logging import get_logger
 from ecs_agent.components import (
@@ -161,12 +165,15 @@ class ReasoningSystem:
             )
 
             invocation_event_published = False
+            invocation_started_at = time.monotonic()
             try:
+                attach_retry_event_bus(active_model, world.event_bus)
                 if streaming_enabled:
                     result = await self._process_streaming(
                         world,
                         entity_id,
                         active_model,
+                        provider_id,
                         conversation,
                         messages,
                         tools,
@@ -205,6 +212,10 @@ class ReasoningSystem:
                     usage=result.usage,
                     stream_completeness=StreamCompleteness.COMPLETE,
                     request_id=result.response_id,
+                    operation="reasoning",
+                    status="success",
+                    streaming=streaming_enabled,
+                    duration_seconds=time.monotonic() - invocation_started_at,
                 )
                 invocation_event_published = True
 
@@ -260,6 +271,21 @@ class ReasoningSystem:
                         TerminalComponent(reason="reasoning_complete"),
                     )
             except (IndexError, StopIteration):
+                if not invocation_event_published:
+                    await self._publish_llm_invocation_event(
+                        world=world,
+                        entity_id=entity_id,
+                        provider_id=provider_id,
+                        model=active_model.model_id,
+                        usage=None,
+                        stream_completeness=StreamCompleteness.UNKNOWN,
+                        request_id=None,
+                        operation="reasoning",
+                        status="error",
+                        streaming=streaming_enabled,
+                        duration_seconds=time.monotonic() - invocation_started_at,
+                    )
+                    invocation_event_published = True
                 world.add_component(
                     entity_id,
                     TerminalComponent(reason="provider_exhausted"),
@@ -280,6 +306,10 @@ class ReasoningSystem:
                         usage=None,
                         stream_completeness=stream_completeness,
                         request_id=None,
+                        operation="reasoning",
+                        status="cancelled",
+                        streaming=streaming_enabled,
+                        duration_seconds=time.monotonic() - invocation_started_at,
                     )
                     invocation_event_published = True
                 if world.get_component(entity_id, InterruptionComponent) is None:
@@ -307,6 +337,10 @@ class ReasoningSystem:
                         usage=None,
                         stream_completeness=stream_completeness,
                         request_id=None,
+                        operation="reasoning",
+                        status="error",
+                        streaming=streaming_enabled,
+                        duration_seconds=time.monotonic() - invocation_started_at,
                     )
                     invocation_event_published = True
                 logger.error(
@@ -325,10 +359,7 @@ class ReasoningSystem:
                 )
 
     def _resolve_provider_id(self, active_model: LLMModel) -> str:
-        provider_id = getattr(active_model, "provider_id", None)
-        if isinstance(provider_id, str) and provider_id:
-            return provider_id
-        return type(active_model).__name__
+        return resolve_provider_id(active_model)
 
     def _usage_to_usage_record(
         self,
@@ -367,22 +398,23 @@ class ReasoningSystem:
         usage: Usage | None,
         stream_completeness: StreamCompleteness,
         request_id: str | None,
+        operation: str,
+        status: str,
+        streaming: bool,
+        duration_seconds: float | None,
     ) -> None:
-        usage_record = self._usage_to_usage_record(
-            usage=usage,
+        await publish_llm_invocation_event(
+            event_bus=world.event_bus,
+            entity_id=entity_id,
             provider_id=provider_id,
             model=model,
+            usage=usage,
             stream_completeness=stream_completeness,
-        )
-        await world.event_bus.publish(
-            LLMInvocationEvent(
-                entity_id=int(entity_id),
-                provider_id=provider_id,
-                model=model,
-                usage=usage_record,
-                cost=None,
-                request_id=request_id,
-            )
+            request_id=request_id,
+            operation=operation,
+            status=status,
+            streaming=streaming,
+            duration_seconds=duration_seconds,
         )
 
     async def _process_streaming(
@@ -390,6 +422,7 @@ class ReasoningSystem:
         world: World,
         entity_id: EntityId,
         active_model: LLMModel,
+        provider_id: str,
         conversation: ConversationComponent | None,
         messages: list[Message],
         tools: list[ToolSchema] | None,
@@ -420,12 +453,20 @@ class ReasoningSystem:
         stream_started_at = time.perf_counter()
         first_sse_seen = False
         first_content_delta_seen = False
+        first_delta_seconds: float | None = None
         reasoning_phase_active = False
         reasoning_end_emitted = False
         response_id: str | None = None
+        stream_status = "success"
 
         await world.event_bus.publish(
-            StreamStartEvent(entity_id=entity_id, timestamp=time.time())
+            StreamStartEvent(
+                entity_id=entity_id,
+                timestamp=time.time(),
+                provider_id=provider_id,
+                model=active_model.model_id,
+                operation="reasoning",
+            )
         )
         stream_start_published_at = time.perf_counter()
 
@@ -456,6 +497,10 @@ class ReasoningSystem:
                     )
 
                 if delta.reasoning_content is not None:
+                    delta_first_delta_seconds: float | None = None
+                    if first_delta_seconds is None:
+                        first_delta_seconds = time.perf_counter() - stream_start_published_at
+                        delta_first_delta_seconds = first_delta_seconds
                     reasoning_chunks.append(delta.reasoning_content)
                     reasoning_phase_active = True
                     if non_blocking_delta_publish:
@@ -463,12 +508,20 @@ class ReasoningSystem:
                             world=world,
                             entity_id=entity_id,
                             reasoning_delta=delta.reasoning_content,
+                            provider_id=provider_id,
+                            model=active_model.model_id,
+                            operation="reasoning",
+                            first_delta_seconds=delta_first_delta_seconds,
                         )
                     else:
                         await world.event_bus.publish(
                             StreamReasoningDeltaEvent(
                                 entity_id=entity_id,
                                 reasoning_delta=delta.reasoning_content,
+                                provider_id=provider_id,
+                                model=active_model.model_id,
+                                operation="reasoning",
+                                first_delta_seconds=delta_first_delta_seconds,
                             )
                         )
 
@@ -486,9 +539,15 @@ class ReasoningSystem:
                         )
 
                     content_chunks.append(delta.content)
+                    delta_first_delta_seconds = None
                     if not first_content_delta_seen:
                         first_content_delta_seen = True
                         first_content_delta_at = time.perf_counter()
+                        if first_delta_seconds is None:
+                            first_delta_seconds = (
+                                first_content_delta_at - stream_start_published_at
+                            )
+                            delta_first_delta_seconds = first_delta_seconds
                         logger.info(
                             "reasoning_stream_first_content_delta",
                             entity_id=int(entity_id),
@@ -522,12 +581,20 @@ class ReasoningSystem:
                             world=world,
                             entity_id=entity_id,
                             delta_content=delta.content,
+                            provider_id=provider_id,
+                            model=active_model.model_id,
+                            operation="reasoning",
+                            first_delta_seconds=delta_first_delta_seconds,
                         )
                     else:
                         await world.event_bus.publish(
                             StreamContentDeltaEvent(
                                 entity_id=entity_id,
                                 delta=delta.content,
+                                provider_id=provider_id,
+                                model=active_model.model_id,
+                                operation="reasoning",
+                                first_delta_seconds=delta_first_delta_seconds,
                             )
                         )
 
@@ -542,6 +609,7 @@ class ReasoningSystem:
                 if world.get_component(entity_id, InterruptionComponent) is not None:
                     raise asyncio.CancelledError()
         except asyncio.CancelledError:
+            stream_status = "cancelled"
             partial_message = Message(
                 role="assistant",
                 content="".join(content_chunks),
@@ -571,6 +639,7 @@ class ReasoningSystem:
                 interruption.metadata.update(partial_metadata)
             raise
         except Exception:
+            stream_status = "error"
             partial_message = Message(
                 role="assistant",
                 content="".join(content_chunks),
@@ -582,7 +651,16 @@ class ReasoningSystem:
             raise
         finally:
             await world.event_bus.publish(
-                StreamEndEvent(entity_id=entity_id, timestamp=time.time())
+                StreamEndEvent(
+                    entity_id=entity_id,
+                    timestamp=time.time(),
+                    provider_id=provider_id,
+                    model=active_model.model_id,
+                    operation="reasoning",
+                    status=stream_status,
+                    duration_seconds=time.perf_counter() - stream_start_published_at,
+                    first_delta_seconds=first_delta_seconds,
+                )
             )
 
         return CompletionResult(
@@ -637,10 +715,21 @@ class ReasoningSystem:
         world: World,
         entity_id: EntityId,
         delta_content: str,
+        provider_id: str,
+        model: str,
+        operation: str,
+        first_delta_seconds: float | None,
     ) -> None:
         task = asyncio.create_task(
             world.event_bus.publish(
-                StreamContentDeltaEvent(entity_id=entity_id, delta=delta_content)
+                StreamContentDeltaEvent(
+                    entity_id=entity_id,
+                    delta=delta_content,
+                    provider_id=provider_id,
+                    model=model,
+                    operation=operation,
+                    first_delta_seconds=first_delta_seconds,
+                )
             )
         )
         task.add_done_callback(
@@ -674,12 +763,20 @@ class ReasoningSystem:
         world: World,
         entity_id: EntityId,
         reasoning_delta: str,
+        provider_id: str,
+        model: str,
+        operation: str,
+        first_delta_seconds: float | None,
     ) -> None:
         task = asyncio.create_task(
             world.event_bus.publish(
                 StreamReasoningDeltaEvent(
                     entity_id=entity_id,
                     reasoning_delta=reasoning_delta,
+                    provider_id=provider_id,
+                    model=model,
+                    operation=operation,
+                    first_delta_seconds=first_delta_seconds,
                 )
             )
         )
