@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 
+from ecs_agent.accounting.instrumentation import complete_with_llm_invocation_event
 from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
@@ -113,7 +114,13 @@ class ReplanningSystem:
                 world.add_component(entity_id, context_reservation)
 
             try:
-                result = await llm_component.model.complete(messages)
+                result = await complete_with_llm_invocation_event(
+                    event_bus=world.event_bus,
+                    entity_id=entity_id,
+                    model=llm_component.model,
+                    messages=messages,
+                    operation="replanning",
+                )
                 if not isinstance(result, CompletionResult):
                     raise RuntimeError(
                         "Provider returned stream iterator in non-streaming mode"

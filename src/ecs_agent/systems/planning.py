@@ -16,6 +16,7 @@ from ecs_agent.components import (
     TerminalComponent,
     ToolRegistryComponent,
 )
+from ecs_agent.accounting.instrumentation import complete_with_llm_invocation_event
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.prompts.message_assembly import (
@@ -98,7 +99,14 @@ class PlanningSystem:
             start_time = time.monotonic()
             try:
                 logger.info("planning_request", message_count=len(messages))
-                result = await llm_component.model.complete(messages, tools=tools)
+                result = await complete_with_llm_invocation_event(
+                    event_bus=world.event_bus,
+                    entity_id=entity_id,
+                    model=llm_component.model,
+                    messages=messages,
+                    tools=tools,
+                    operation="planning",
+                )
                 if not isinstance(result, CompletionResult):
                     raise RuntimeError(
                         "Provider returned stream iterator in non-streaming mode"
