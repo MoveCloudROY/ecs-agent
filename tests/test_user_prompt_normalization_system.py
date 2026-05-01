@@ -77,6 +77,205 @@ async def test_trigger_replace_action() -> None:
     assert rendered_text == "Replacement prompt"
 
 
+async def test_script_trigger_runs_once_for_same_latest_user_message() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="/plan:start demo")]),
+    )
+
+    calls: list[str] = []
+
+    async def plan_handler(
+        _world: World,
+        _entity_id: int,
+        user_text: str,
+    ) -> str:
+        calls.append(user_text)
+        return f"handled {len(calls)}"
+
+    world.add_component(
+        entity_id,
+        UserPromptConfigComponent(
+            triggers=[
+                TriggerSpec(
+                    pattern="/plan:start",
+                    match_mode="prefix",
+                    action="script",
+                    content="plan_handler",
+                )
+            ],
+            script_handlers={"plan_handler": plan_handler},
+        ),
+    )
+
+    system = UserPromptNormalizationSystem()
+
+    await system.process(world)
+    await system.process(world)
+
+    rendered = world.get_component(entity_id, RenderedUserPromptComponent)
+    assert calls == ["/plan:start demo"]
+    assert rendered is not None
+    assert rendered.text == "handled 1"
+
+
+async def test_script_trigger_runs_again_for_repeated_command_message() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    conversation = ConversationComponent(
+        messages=[Message(role="user", content="/plan:start demo")]
+    )
+    world.add_component(entity_id, conversation)
+
+    calls: list[str] = []
+
+    async def plan_handler(
+        _world: World,
+        _entity_id: int,
+        user_text: str,
+    ) -> str:
+        calls.append(user_text)
+        return f"handled {len(calls)}"
+
+    world.add_component(
+        entity_id,
+        UserPromptConfigComponent(
+            triggers=[
+                TriggerSpec(
+                    pattern="/plan:start",
+                    match_mode="prefix",
+                    action="script",
+                    content="plan_handler",
+                )
+            ],
+            script_handlers={"plan_handler": plan_handler},
+        ),
+    )
+
+    system = UserPromptNormalizationSystem()
+
+    await system.process(world)
+    conversation.messages.append(Message(role="user", content="/plan:start demo"))
+    await system.process(world)
+
+    rendered = world.get_component(entity_id, RenderedUserPromptComponent)
+    assert calls == ["/plan:start demo", "/plan:start demo"]
+    assert rendered is not None
+    assert rendered.text == "handled 2"
+
+
+async def test_script_trigger_reprocesses_when_equal_priority_order_changes() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="/cmd demo")]),
+    )
+
+    calls: list[str] = []
+
+    async def first_handler(
+        _world: World,
+        _entity_id: int,
+        _user_text: str,
+    ) -> str:
+        calls.append("first")
+        return "first"
+
+    async def second_handler(
+        _world: World,
+        _entity_id: int,
+        _user_text: str,
+    ) -> str:
+        calls.append("second")
+        return "second"
+
+    first_trigger = TriggerSpec(
+        pattern="/cmd",
+        match_mode="prefix",
+        action="script",
+        content="first_handler",
+    )
+    second_trigger = TriggerSpec(
+        pattern="/cmd",
+        match_mode="prefix",
+        action="script",
+        content="second_handler",
+    )
+    config = UserPromptConfigComponent(
+        triggers=[first_trigger, second_trigger],
+        script_handlers={
+            "first_handler": first_handler,
+            "second_handler": second_handler,
+        },
+    )
+    world.add_component(entity_id, config)
+
+    system = UserPromptNormalizationSystem()
+
+    await system.process(world)
+    config.triggers = [second_trigger, first_trigger]
+    await system.process(world)
+
+    rendered = world.get_component(entity_id, RenderedUserPromptComponent)
+    assert calls == ["first", "second"]
+    assert rendered is not None
+    assert rendered.text == "second"
+
+
+async def test_script_trigger_reprocesses_when_handler_mapping_changes() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="/cmd demo")]),
+    )
+
+    calls: list[str] = []
+
+    async def original_handler(
+        _world: World,
+        _entity_id: int,
+        _user_text: str,
+    ) -> str:
+        calls.append("original")
+        return "original"
+
+    async def replacement_handler(
+        _world: World,
+        _entity_id: int,
+        _user_text: str,
+    ) -> str:
+        calls.append("replacement")
+        return "replacement"
+
+    config = UserPromptConfigComponent(
+        triggers=[
+            TriggerSpec(
+                pattern="/cmd",
+                match_mode="prefix",
+                action="script",
+                content="handler",
+            )
+        ],
+        script_handlers={"handler": original_handler},
+    )
+    world.add_component(entity_id, config)
+
+    system = UserPromptNormalizationSystem()
+
+    await system.process(world)
+    config.script_handlers["handler"] = replacement_handler
+    await system.process(world)
+
+    rendered = world.get_component(entity_id, RenderedUserPromptComponent)
+    assert calls == ["original", "replacement"]
+    assert rendered is not None
+    assert rendered.text == "replacement"
+
+
 async def test_no_user_message_skips() -> None:
     world = World()
     entity_id = world.create_entity()

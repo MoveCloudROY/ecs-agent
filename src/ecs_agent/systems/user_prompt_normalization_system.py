@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 
 from ecs_agent.components import (
@@ -62,10 +63,11 @@ class UserPromptNormalizationSystem:
                 self._clear_rendered_user_prompt(world=world, entity_id=entity_id)
                 continue
 
-            raw_user_text = self._find_last_user_text(conversation_messages)
-            if raw_user_text is None:
+            last_user_message = self._find_last_user_message(conversation_messages)
+            if last_user_message is None:
                 self._clear_rendered_user_prompt(world=world, entity_id=entity_id)
                 continue
+            last_user_index, raw_user_text = last_user_message
 
             prompt_config = world.get_component(entity_id, UserPromptConfigComponent)
 
@@ -74,6 +76,22 @@ class UserPromptNormalizationSystem:
                 if prompt_config is not None and prompt_config.triggers
                 else None
             )
+            trigger_key = self._build_trigger_key(
+                trigger_specs,
+                prompt_config=prompt_config,
+            )
+            source_fingerprint = self._fingerprint_text(raw_user_text)
+            rendered_user_prompt = world.get_component(
+                entity_id, RenderedUserPromptComponent
+            )
+            if (
+                rendered_user_prompt is not None
+                and rendered_user_prompt.source_fingerprint == source_fingerprint
+                and rendered_user_prompt.trigger_key == trigger_key
+                and rendered_user_prompt.source_message_index == last_user_index
+            ):
+                continue
+
             normalized_text = await self._apply_triggers(
                 world=world,
                 entity_id=entity_id,
@@ -93,7 +111,12 @@ class UserPromptNormalizationSystem:
 
             world.add_component(
                 entity_id,
-                RenderedUserPromptComponent(text=normalized_text),
+                RenderedUserPromptComponent(
+                    text=normalized_text,
+                    source_fingerprint=source_fingerprint,
+                    trigger_key=trigger_key,
+                    source_message_index=last_user_index,
+                ),
             )
 
     @staticmethod
@@ -216,11 +239,48 @@ class UserPromptNormalizationSystem:
         return spec.content
 
     @staticmethod
-    def _find_last_user_text(messages: list[Message]) -> str | None:
-        for message in reversed(messages):
+    def _find_last_user_message(messages: list[Message]) -> tuple[int, str] | None:
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
             if message.role == "user":
-                return message.content
+                return index, message.content
         return None
+
+    @staticmethod
+    def _build_trigger_key(
+        trigger_specs: list[TriggerSpec] | None,
+        *,
+        prompt_config: UserPromptConfigComponent | None,
+    ) -> str | None:
+        if not trigger_specs:
+            return None
+        return "\n".join(
+            (
+                f"{spec.pattern!r}\0{spec.match_mode}\0{spec.action}\0"
+                f"{spec.content!r}\0{spec.priority}\0"
+                f"{UserPromptNormalizationSystem._handler_signature(spec, prompt_config)}"
+            )
+            for spec in sorted(
+                trigger_specs,
+                key=lambda spec: -spec.priority,
+            )
+        )
+
+    @staticmethod
+    def _handler_signature(
+        spec: TriggerSpec,
+        prompt_config: UserPromptConfigComponent | None,
+    ) -> str:
+        if spec.action != "script" or prompt_config is None:
+            return ""
+        handler = prompt_config.script_handlers.get(spec.content)
+        if handler is None:
+            return "missing"
+        return f"{handler.__module__}.{handler.__qualname__}:{id(handler)}"
+
+    @staticmethod
+    def _fingerprint_text(text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _resolve_conversation_messages(
