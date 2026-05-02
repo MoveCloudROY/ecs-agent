@@ -160,7 +160,7 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py -v
   - `openai_chat_completions` — OpenAI Chat Completions API via `OpenAIModel`
   - `anthropic_messages` — Anthropic Messages API via `ClaudeModel` (also works with Kimi-compatible Anthropic endpoints)
 - `PLAN_TASK_INTERACTIVE`: Set to `0` to disable interactive stdin.
-- `DEBUG`: Set to `1` to enable debug logging. All `plan_task_*` structured log events will appear on stderr via structlog.
+- `DEBUG`: Set to `1` to make this example call `configure_logging()` with debug logging. All `plan_task_*` structured log events will then appear on stderr via structlog.
 
 ### Anthropic / Kimi Example
 
@@ -176,6 +176,8 @@ DEBUG=1 \
 The `ClaudeModel` appends `/v1/messages` to `LLM_BASE_URL`, so the actual endpoint called is `https://api.anthropic.com/v1/messages`. Anthropic cache stats (`cache_read_input_tokens`, `cache_creation_input_tokens`) are normalized and surfaced as `plan_task_llm_cache_stats` events with `cache_hit_rate`.
 
 ### Log Events (observable with `DEBUG=1`)
+
+This example explicitly enables logging in `main.py` when `DEBUG=1`; the base `ecs-agent` library remains silent until `configure_logging()` is called.
 
 | Event | Level | File | Description |
 |-------|-------|------|-------------|
