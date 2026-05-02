@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 import shutil
+import signal
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -18,6 +21,26 @@ def _has_bwrap() -> bool:
     if _BWRAP_AVAILABLE is None:
         _BWRAP_AVAILABLE = shutil.which("bwrap") is not None
     return _BWRAP_AVAILABLE
+
+
+async def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
+    if process.returncode is not None:
+        return
+
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGTERM)
+
+    try:
+        await asyncio.wait_for(process.wait(), timeout=1.0)
+        return
+    except asyncio.TimeoutError:
+        pass
+
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGKILL)
+
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(process.wait(), timeout=1.0)
 
 
 async def bwrap_execute(command: str, timeout: float = 30.0) -> str:
@@ -41,18 +64,24 @@ async def bwrap_execute(command: str, timeout: float = 30.0) -> str:
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
     else:
         process = await asyncio.create_subprocess_shell(
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
 
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
+        await _terminate_process_group(process)
         return f"Error: command timed out after {timeout}s"
+    except asyncio.CancelledError:
+        await _terminate_process_group(process)
+        raise
 
     output = stdout.decode().strip()
     error_output = stderr.decode().strip()
