@@ -15,7 +15,8 @@ The primary way to interact with the logging system is through `configure_loggin
 
 ### Enhanced Features
 
-- **Environment Variable Control**: Set `ECS_AGENT_LOG_LEVEL` to configure log level without code changes
+- **Silent by Default**: Importing and using `ecs-agent` as a library does not emit logs until you explicitly call `configure_logging()`
+- **Environment Variable Control**: `ECS_AGENT_LOG_LEVEL` supplies the default level used by `configure_logging()` when `level=` is omitted
 - **Caller Information**: Automatically captures file, function, and line number for each log entry
 - **Exception Formatting**: Pretty-prints exceptions with full tracebacks
 - **Per-Module Log Levels**: Fine-grained control over logging verbosity per module
@@ -79,7 +80,7 @@ All tests in `tests/test_logging.py::TestSensitiveDataPolicy` verify these guard
 
 ### Environment Variable Configuration
 
-The simplest way to control log level is via the `ECS_AGENT_LOG_LEVEL` environment variable:
+`ecs-agent` is silent by default. The `ECS_AGENT_LOG_LEVEL` environment variable does **not** enable output by itself; it only affects the level chosen by an explicit `configure_logging()` call:
 
 ```bash
 # Set log level to DEBUG for verbose output
@@ -93,16 +94,16 @@ python your_agent.py
 
 Supported values (case-insensitive): `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
 
-If not set, defaults to `ERROR`.
+If not set, explicit configuration defaults to `ERROR`.
 
 ### Programmatic Configuration
 
-You can also configure logging explicitly in your code. Explicit parameters override environment variables.
+You can also configure logging explicitly in your code. Explicit parameters override environment variables, and calling `configure_logging()` is what turns logging on.
 
 ```python
 from ecs_agent.logging import configure_logging, get_logger
 
-# Configure with per-module levels and explicit base level
+# ecs-agent is silent until you opt in here.
 configure_logging(
     json_output=False,
     level="INFO",  # Overrides ECS_AGENT_LOG_LEVEL if set
@@ -160,7 +161,7 @@ except Exception as exc:
 
 ## Internal Usage
 
-Core systems (`Runner`, `World`, `ReasoningSystem`, `ToolExecutionSystem`, `CheckpointSystem`, `PlanningSystem`) use structured logging internally. This provides a clear, unified view of system operations without needing to manually add logs to every component.
+Core systems (`Runner`, `World`, `ReasoningSystem`, `ToolExecutionSystem`, `CheckpointSystem`, `PlanningSystem`) use structured logging internally. Those events stay silent until `configure_logging()` is called, including setup-time events emitted before `Runner.run()` such as `entity_created` and `component_added`.
 
 For model-implementation logging, see the individual model implementations (`OpenAIModel`, `ClaudeModel`, `RetryModel`) which emit HTTP request/response metadata at DEBUG level.
 

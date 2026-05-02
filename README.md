@@ -34,6 +34,7 @@ import os
 
 from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.core import Runner, World
+from ecs_agent.logging import configure_logging
 from ecs_agent.providers import Model
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.memory import MemorySystem
@@ -43,7 +44,9 @@ from ecs_agent.providers.config import ApiFormat
 
 
 async def main() -> None:
-    world = World(name="my-agent")  # optional name — appears in all log events
+    configure_logging(level="INFO")  # Optional: ecs-agent stays silent until you opt in.
+
+    world = World(name="my-agent")  # optional name — appears in log events once logging is configured
 
     # Create a model — works with any OpenAI-compatible or Anthropic API
     model = Model(
@@ -87,7 +90,7 @@ asyncio.run(main())
 ### Composition-First Architecture
 Mix 35+ components to build custom agents without inheritance bloat. The Entity-Component-System (ECS) pattern keeps logic and data strictly separated, making agents modular, serializable, and easy to test. Fully type-safe with strict mypy and `dataclass(slots=True)`.
 
-- **Named Worlds** — Pass `name="my-agent"` to `World(name=...)` to tag every log event (`entity_created`, `component_added`, `run_start`, `tick_start`, etc.) with `world_name`. Child worlds spawned by `SubagentSystem` are automatically named `<subagent_name>-<hex8>` for end-to-end log correlation across nested agent calls.
+- **Named Worlds** — Pass `name="my-agent"` to `World(name=...)` to tag every log event (`entity_created`, `component_added`, `run_start`, `tick_start`, etc.) with `world_name` once logging is enabled via `configure_logging()`. Child worlds spawned by `SubagentSystem` are automatically named `<subagent_name>-<hex8>` for end-to-end log correlation across nested agent calls.
 ### Multi-Agent Orchestration
 - **Subagent Delegation** — Spawn child agents for subtasks with skill and permission inheritance. Control the `queued/running/succeeded/failed` lifecycle via a process-global FIFO scheduler.
 - **MessageBus** — Parent-child and sibling messaging via pub/sub or request-response patterns.
