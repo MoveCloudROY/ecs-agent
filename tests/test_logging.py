@@ -11,6 +11,10 @@ import structlog
 from ecs_agent.logging import configure_logging, get_logger
 
 
+def _captured_log_output(captured: object) -> str:
+    return str(getattr(captured, "err", "") or getattr(captured, "out", ""))
+
+
 def _json_events(output: str) -> list[dict[str, object]]:
     """Parse JSON events from logging output."""
     events: list[dict[str, object]] = []
@@ -27,6 +31,18 @@ def _json_events(output: str) -> list[dict[str, object]]:
 class TestConfigureLogging:
     """Tests for configure_logging function."""
 
+    def test_logging_is_silent_by_default_without_configure_logging(self, capsys) -> None:
+        logger = get_logger("silent_default")
+
+        logger.debug("debug_hidden")
+        logger.info("info_hidden")
+        logger.warning("warning_hidden")
+        logger.error("error_hidden")
+
+        captured = capsys.readouterr()
+        assert _captured_log_output(captured) == ""
+        assert captured.err == ""
+
     def test_configure_logging_console_mode(self, capsys):
         """Test configure_logging with console (dev) output mode."""
         configure_logging(json_output=False, level="INFO")
@@ -35,9 +51,9 @@ class TestConfigureLogging:
         logger.info("hello", key="value")
 
         captured = capsys.readouterr()
-        assert "hello" in captured.out
-        assert "key" in captured.out
-        assert "value" in captured.out
+        assert "hello" in _captured_log_output(captured)
+        assert "key" in _captured_log_output(captured)
+        assert "value" in _captured_log_output(captured)
 
     def test_configure_logging_json_mode(self, capsys):
         """Test configure_logging with JSON (prod) output mode."""
@@ -47,7 +63,7 @@ class TestConfigureLogging:
         logger.info("hello", key="value")
 
         captured = capsys.readouterr()
-        lines = captured.out.strip().split("\n")
+        lines = _captured_log_output(captured).strip().split("\n")
 
         # Find JSON line (should be last non-empty line)
         for line in reversed(lines):
@@ -67,8 +83,8 @@ class TestConfigureLogging:
         logger.info("info_msg")
 
         captured = capsys.readouterr()
-        assert "debug_msg" in captured.out
-        assert "info_msg" in captured.out
+        assert "debug_msg" in _captured_log_output(captured)
+        assert "info_msg" in _captured_log_output(captured)
 
     def test_configure_logging_level_warning(self, capsys):
         """Test configure_logging respects WARNING level."""
@@ -78,7 +94,7 @@ class TestConfigureLogging:
         logger.warning("warning_msg")
 
         captured = capsys.readouterr()
-        assert "warning_msg" in captured.out
+        assert "warning_msg" in _captured_log_output(captured)
 
     def test_configure_logging_refreshes_existing_module_loggers(self, capsys):
         import ecs_agent.core.world as world_module
@@ -87,7 +103,7 @@ class TestConfigureLogging:
         world_module.logger.debug("debug_should_not_appear")
         world_module.logger.error("error_should_appear")
 
-        events = _json_events(capsys.readouterr().out)
+        events = _json_events(_captured_log_output(capsys.readouterr()))
         assert any(e.get("event") == "error_should_appear" for e in events)
         assert not any(e.get("event") == "debug_should_not_appear" for e in events)
 
@@ -101,7 +117,7 @@ class TestGetLogger:
 
         logger = get_logger("test_module")
         assert logger is not None
-        assert hasattr(logger, "msg")
+        assert hasattr(logger, "bind")
         assert hasattr(logger, "info")
         assert hasattr(logger, "debug")
         assert hasattr(logger, "warning")
@@ -115,7 +131,7 @@ class TestGetLogger:
         logger.info("test_event")
 
         captured = capsys.readouterr()
-        assert "test_event" in captured.out
+        assert "test_event" in _captured_log_output(captured)
 
     def test_get_logger_multiple_calls_same_name(self):
         """Test get_logger returns consistent loggers for same name."""
@@ -140,7 +156,7 @@ class TestLoggingOutput:
         logger.info("json_test", field1="value1", field2=42)
 
         captured = capsys.readouterr()
-        lines = [line for line in captured.out.strip().split("\n") if line]
+        lines = [line for line in _captured_log_output(captured).strip().split("\n") if line]
 
         for line in lines:
             parsed = json.loads(line)
@@ -155,7 +171,7 @@ class TestLoggingOutput:
         logger.info("timestamp_test")
 
         captured = capsys.readouterr()
-        lines = [line for line in captured.out.strip().split("\n") if line]
+        lines = [line for line in _captured_log_output(captured).strip().split("\n") if line]
 
         for line in reversed(lines):
             parsed = json.loads(line)
@@ -173,7 +189,7 @@ class TestLoggingOutput:
         logger.warning("warning_test")
 
         captured = capsys.readouterr()
-        lines = [line for line in captured.out.strip().split("\n") if line]
+        lines = [line for line in _captured_log_output(captured).strip().split("\n") if line]
 
         levels_found = []
         for line in lines:
@@ -191,8 +207,8 @@ class TestLoggingOutput:
         logger.info("console_event", detail="test_detail")
 
         captured = capsys.readouterr()
-        assert "console_event" in captured.out
-        assert "test_detail" in captured.out
+        assert "console_event" in _captured_log_output(captured)
+        assert "test_detail" in _captured_log_output(captured)
 
     def test_structured_fields_in_output(self, capsys):
         """Test structured fields are included in log output."""
@@ -202,7 +218,7 @@ class TestLoggingOutput:
         logger.info("struct_test", user_id=123, action="read")
 
         captured = capsys.readouterr()
-        lines = [line for line in captured.out.strip().split("\n") if line]
+        lines = [line for line in _captured_log_output(captured).strip().split("\n") if line]
 
         for line in reversed(lines):
             parsed = json.loads(line)
@@ -224,7 +240,7 @@ class TestLoggingIntegration:
         logger.info("context_test")
 
         captured = capsys.readouterr()
-        lines = [line for line in captured.out.strip().split("\n") if line]
+        lines = [line for line in _captured_log_output(captured).strip().split("\n") if line]
 
         for line in reversed(lines):
             parsed = json.loads(line)
@@ -243,8 +259,8 @@ class TestLoggingIntegration:
         logger2.info("from_module2")
 
         captured = capsys.readouterr()
-        assert "from_module1" in captured.out
-        assert "from_module2" in captured.out
+        assert "from_module1" in _captured_log_output(captured)
+        assert "from_module2" in _captured_log_output(captured)
 
     def test_error_level_logging(self, capsys):
         """Test error level logging."""
@@ -254,7 +270,7 @@ class TestLoggingIntegration:
         logger.error("error_event", error_code=500)
 
         captured = capsys.readouterr()
-        lines = [line for line in captured.out.strip().split("\n") if line]
+        lines = [line for line in _captured_log_output(captured).strip().split("\n") if line]
 
         for line in reversed(lines):
             parsed = json.loads(line)
@@ -282,7 +298,7 @@ class TestBusLogging:
         )
 
         captured = capsys.readouterr()
-        lines = [line for line in captured.out.strip().split("\n") if line]
+        lines = [line for line in _captured_log_output(captured).strip().split("\n") if line]
 
         for line in reversed(lines):
             parsed = json.loads(line)
@@ -309,7 +325,7 @@ class TestBusLogging:
         )
 
         captured = capsys.readouterr()
-        lines = [line for line in captured.out.strip().split("\n") if line]
+        lines = [line for line in _captured_log_output(captured).strip().split("\n") if line]
 
         for line in reversed(lines):
             parsed = json.loads(line)
@@ -336,7 +352,7 @@ class TestBusLogging:
         )
 
         captured = capsys.readouterr()
-        lines = [line for line in captured.out.strip().split("\n") if line]
+        lines = [line for line in _captured_log_output(captured).strip().split("\n") if line]
 
         for line in reversed(lines):
             parsed = json.loads(line)
@@ -363,7 +379,7 @@ class TestBusLogging:
         )
 
         captured = capsys.readouterr()
-        lines = [line for line in captured.out.strip().split("\n") if line]
+        lines = [line for line in _captured_log_output(captured).strip().split("\n") if line]
 
         for line in reversed(lines):
             parsed = json.loads(line)
@@ -389,7 +405,7 @@ class TestBusLogging:
         )
 
         captured = capsys.readouterr()
-        lines = [line for line in captured.out.strip().split("\n") if line]
+        lines = [line for line in _captured_log_output(captured).strip().split("\n") if line]
 
         for line in reversed(lines):
             parsed = json.loads(line)
@@ -414,7 +430,7 @@ class TestEventContract:
         # Use standard event name from contract
         logger.info(STANDARD_EVENT_NAMES["SYSTEM_START"])
 
-        events = _json_events(capsys.readouterr().out)
+        events = _json_events(_captured_log_output(capsys.readouterr()))
         event = events[-1]
 
         # Event name must be snake_case
@@ -434,7 +450,7 @@ class TestEventContract:
         # Log entity operation with required fields
         logger.info("entity_created", entity_id=42)
 
-        events = _json_events(capsys.readouterr().out)
+        events = _json_events(_captured_log_output(capsys.readouterr()))
         event = events[-1]
 
         # Entity operations must include entity_id
@@ -452,7 +468,7 @@ class TestEventContract:
         # Log system operation with required fields
         logger.info("system_start", system="ReasoningSystem")
 
-        events = _json_events(capsys.readouterr().out)
+        events = _json_events(_captured_log_output(capsys.readouterr()))
         event = events[-1]
 
         # System operations must include system name
@@ -470,7 +486,7 @@ class TestEventContract:
         # Log tick event with required fields
         logger.debug("tick_start", tick=5)
 
-        events = _json_events(capsys.readouterr().out)
+        events = _json_events(_captured_log_output(capsys.readouterr()))
         event = events[-1]
 
         # Tick events must include tick number
@@ -488,7 +504,7 @@ class TestEventContract:
         # Log completion event with required fields
         logger.info("system_complete", system="ReasoningSystem", duration_ms=123.45)
 
-        events = _json_events(capsys.readouterr().out)
+        events = _json_events(_captured_log_output(capsys.readouterr()))
         event = events[-1]
 
         # Completion events must include duration
@@ -506,7 +522,7 @@ class TestEventContract:
         # Log result event with required fields
         logger.info("tool_result", success=True)
 
-        events = _json_events(capsys.readouterr().out)
+        events = _json_events(_captured_log_output(capsys.readouterr()))
         event = events[-1]
 
         # Result events must include success flag
@@ -524,7 +540,7 @@ class TestEventContract:
         # Log failure event with required fields
         logger.error("tool_failed", success=False, reason="Network timeout")
 
-        events = _json_events(capsys.readouterr().out)
+        events = _json_events(_captured_log_output(capsys.readouterr()))
         event = events[-1]
 
         # Failure events must include reason
@@ -547,7 +563,7 @@ class TestLevelPolicy:
         assert LEVEL_POLICY["high_frequency"] == "DEBUG"
         logger.debug("component_read", entity_id=1)
 
-        events = _json_events(capsys.readouterr().out)
+        events = _json_events(_captured_log_output(capsys.readouterr()))
         event = events[-1]
 
         assert event["event"] == "component_read"
@@ -564,7 +580,7 @@ class TestLevelPolicy:
         assert LEVEL_POLICY["lifecycle"] == "INFO"
         logger.info("system_start", system="ReasoningSystem")
 
-        events = _json_events(capsys.readouterr().out)
+        events = _json_events(_captured_log_output(capsys.readouterr()))
         event = events[-1]
 
         assert event["event"] == "system_start"
@@ -581,7 +597,7 @@ class TestLevelPolicy:
         assert LEVEL_POLICY["anomalies"] == "WARNING"
         logger.warning("retry_attempt", attempt=3, max_retries=3)
 
-        events = _json_events(capsys.readouterr().out)
+        events = _json_events(_captured_log_output(capsys.readouterr()))
         event = events[-1]
 
         assert event["event"] == "retry_attempt"
@@ -598,7 +614,7 @@ class TestLevelPolicy:
         assert LEVEL_POLICY["failures"] == "ERROR"
         logger.error("tool_failed", reason="Network timeout")
 
-        events = _json_events(capsys.readouterr().out)
+        events = _json_events(_captured_log_output(capsys.readouterr()))
         event = events[-1]
 
         assert event["event"] == "tool_failed"
@@ -618,7 +634,7 @@ class TestSensitiveDataPolicy:
         # Log message event with metadata only
         logger.info("message_received", role="user", length=42)
 
-        events = _json_events(capsys.readouterr().out)
+        events = _json_events(_captured_log_output(capsys.readouterr()))
         event = events[-1]
 
         # Raw content must be absent
@@ -637,7 +653,7 @@ class TestSensitiveDataPolicy:
         # Log tool call with metadata only
         logger.info("tool_called", tool_name="bash", argument_count=3)
 
-        events = _json_events(capsys.readouterr().out)
+        events = _json_events(_captured_log_output(capsys.readouterr()))
         event = events[-1]
 
         # Raw arguments must be absent
@@ -658,7 +674,7 @@ class TestSensitiveDataPolicy:
             "provider_configured", model="gpt-4", base_url="https://api.openai.com"
         )
 
-        events = _json_events(capsys.readouterr().out)
+        events = _json_events(_captured_log_output(capsys.readouterr()))
         event = events[-1]
 
         # API keys must be absent
@@ -677,7 +693,7 @@ class TestSensitiveDataPolicy:
         # Log auth event with metadata only
         logger.info("auth_success", user_id="user123")
 
-        events = _json_events(capsys.readouterr().out)
+        events = _json_events(_captured_log_output(capsys.readouterr()))
         event = events[-1]
 
         # Tokens must be absent
@@ -695,7 +711,7 @@ class TestSensitiveDataPolicy:
         # Log checkpoint event with metadata only
         logger.info("checkpoint_saved", checkpoint_id="ckpt-123", size_bytes=4096)
 
-        events = _json_events(capsys.readouterr().out)
+        events = _json_events(_captured_log_output(capsys.readouterr()))
         event = events[-1]
 
         # Full payloads must be absent
@@ -727,7 +743,7 @@ class TestWorldComponentLogging:
         store.add(entity, comp)
 
         captured = capsys.readouterr()
-        output = captured.out
+        output = _captured_log_output(captured)
 
         # Check for component_store_add event
         events = _json_events(output)
@@ -757,7 +773,7 @@ class TestWorldComponentLogging:
         results = query.get(MissingComponent)
 
         captured = capsys.readouterr()
-        output = captured.out
+        output = _captured_log_output(captured)
 
         # Check for query_executed event with no matches
         events = _json_events(output)
@@ -815,7 +831,7 @@ class TestReasoningSystemLogging:
         system = ReasoningSystem()
         await system.process(world)
 
-        captured = capsys.readouterr().out
+        captured = _captured_log_output(capsys.readouterr())
 
         # Check for reasoning_start event
         events = _json_events(captured)
@@ -857,7 +873,7 @@ class TestReasoningSystemLogging:
         system = ReasoningSystem()
         await system.process(world)
 
-        captured = capsys.readouterr().out
+        captured = _captured_log_output(capsys.readouterr())
 
         # Check for reasoning_complete event
         events = _json_events(captured)
@@ -910,7 +926,7 @@ class TestReasoningSystemLogging:
         error_comp = world.get_component(entity, ErrorComponent)
         assert error_comp is not None
 
-        captured = capsys.readouterr().out
+        captured = _captured_log_output(capsys.readouterr())
 
         # Check for reasoning_error event
         events = _json_events(captured)
@@ -963,7 +979,7 @@ class TestReasoningSystemLogging:
         system = ReasoningSystem()
         await system.process(world)
 
-        captured = capsys.readouterr().out
+        captured = _captured_log_output(capsys.readouterr())
 
         # Verify sensitive strings are NOT in output
         assert "secret-data" not in captured
@@ -1020,7 +1036,7 @@ class TestToolExecutionLogging:
         await system.process(world)
 
         captured = capsys.readouterr()
-        lines = [line for line in captured.out.strip().split("\n") if line.strip()]
+        lines = [line for line in _captured_log_output(captured).strip().split("\n") if line.strip()]
         events = [json.loads(line) for line in lines]
         tool_called_events = [e for e in events if e.get("event") == "tool_called"]
 
@@ -1076,7 +1092,7 @@ class TestToolExecutionLogging:
         await system.process(world)
 
         captured = capsys.readouterr()
-        lines = [line for line in captured.out.strip().split("\n") if line.strip()]
+        lines = [line for line in _captured_log_output(captured).strip().split("\n") if line.strip()]
         events = [json.loads(line) for line in lines]
         tool_result_events = [e for e in events if e.get("event") == "tool_result"]
 
@@ -1137,7 +1153,7 @@ class TestToolExecutionLogging:
         await system.process(world)
 
         captured = capsys.readouterr()
-        lines = [line for line in captured.out.strip().split("\n") if line.strip()]
+        lines = [line for line in _captured_log_output(captured).strip().split("\n") if line.strip()]
         events = [json.loads(line) for line in lines]
         tool_failed_events = [e for e in events if e.get("event") == "tool_failed"]
 
@@ -1189,7 +1205,7 @@ class TestToolExecutionLogging:
         await system.process(world)
 
         captured = capsys.readouterr()
-        lines = [line for line in captured.out.strip().split("\n") if line.strip()]
+        lines = [line for line in _captured_log_output(captured).strip().split("\n") if line.strip()]
         events = [json.loads(line) for line in lines]
         tool_failed_events = [e for e in events if e.get("event") == "tool_failed"]
 
@@ -1220,7 +1236,7 @@ class TestCheckpointLogging:
         await system.process(world)
 
         captured = capsys.readouterr()
-        events = _json_events(captured.out)
+        events = _json_events(_captured_log_output(captured))
         saved_events = [e for e in events if e.get("event") == "checkpoint_saved"]
 
         assert len(saved_events) >= 1, "checkpoint_saved event not found"
@@ -1254,7 +1270,7 @@ class TestCheckpointLogging:
             pass  # Expected
 
         captured = capsys.readouterr()
-        events = _json_events(captured.out)
+        events = _json_events(_captured_log_output(captured))
         error_events = [
             e for e in events if e.get("event") == "checkpoint_restore_failed"
         ]
@@ -1292,7 +1308,7 @@ class TestCheckpointLogging:
         await CheckpointSystem.undo(world, providers={}, tool_handlers={})
 
         captured = capsys.readouterr()
-        events = _json_events(captured.out)
+        events = _json_events(_captured_log_output(captured))
         restored_events = [e for e in events if e.get("event") == "checkpoint_restored"]
 
         assert len(restored_events) >= 1, "checkpoint_restored event not found"
@@ -1309,6 +1325,8 @@ class TestPlanningLogging:
 
     async def test_planning_request_logged(self, capsys):
         """Test PlanningSystem logs planning_request event."""
+        configure_logging(json_output=True, level="INFO")
+
         from ecs_agent.core import World
         from ecs_agent.components import (
             PlanComponent,
@@ -1339,7 +1357,7 @@ class TestPlanningLogging:
         await system.process(world)
 
         captured = capsys.readouterr()
-        events = _json_events(captured.out)
+        events = _json_events(_captured_log_output(captured))
         request_events = [e for e in events if e.get("event") == "planning_request"]
 
         assert len(request_events) >= 1, "planning_request event not found"
@@ -1348,6 +1366,8 @@ class TestPlanningLogging:
 
     async def test_planning_step_completed_logged(self, capsys):
         """Test PlanningSystem logs planning_step_completed event."""
+        configure_logging(json_output=True, level="INFO")
+
         from ecs_agent.core import World
         from ecs_agent.components import (
             PlanComponent,
@@ -1378,7 +1398,7 @@ class TestPlanningLogging:
         await system.process(world)
 
         captured = capsys.readouterr()
-        events = _json_events(captured.out)
+        events = _json_events(_captured_log_output(captured))
         completed_events = [
             e for e in events if e.get("event") == "planning_step_completed"
         ]
@@ -1392,6 +1412,8 @@ class TestPlanningLogging:
 
     async def test_planning_error_logged(self, capsys):
         """Test PlanningSystem logs planning_error event on exception."""
+        configure_logging(json_output=True, level="ERROR")
+
         from ecs_agent.core import World
         from ecs_agent.components import (
             PlanComponent,
@@ -1433,7 +1455,7 @@ class TestPlanningLogging:
         assert error_comp is not None
 
         captured = capsys.readouterr()
-        events = _json_events(captured.out)
+        events = _json_events(_captured_log_output(captured))
         error_events = [e for e in events if e.get("event") == "planning_error"]
         # This test expects planning_error event to be logged
         assert len(error_events) >= 1, "planning_error event not found"
@@ -1479,7 +1501,7 @@ class TestSensitiveDataPolicy:
         await system.process(world)
 
         captured = capsys.readouterr()
-        events = _json_events(captured.out)
+        events = _json_events(_captured_log_output(captured))
 
         # Check that no event contains the secret message content
         for event in events:
@@ -1546,7 +1568,7 @@ class TestSensitiveDataPolicy:
         await system.process(world)
 
         captured = capsys.readouterr()
-        events = _json_events(captured.out)
+        events = _json_events(_captured_log_output(captured))
 
         # Check that no event contains the secret argument value
         for event in events:
@@ -1584,7 +1606,7 @@ class TestSensitiveDataPolicy:
             pass  # Expected to fail without real endpoint
 
         captured = capsys.readouterr()
-        events = _json_events(captured.out)
+        events = _json_events(_captured_log_output(captured))
 
         # Check that API key is never in logs
         for event in events:
@@ -1617,7 +1639,7 @@ class TestSensitiveDataPolicy:
         await system.process(world)
 
         captured = capsys.readouterr()
-        events = _json_events(captured.out)
+        events = _json_events(_captured_log_output(captured))
 
         # Check that no event contains the full serialized world state
         for event in events:
@@ -1636,6 +1658,8 @@ class TestLoggingLevelPolicy:
 
     async def test_reasoning_completion_uses_info_level(self, capsys):
         """Verify reasoning completion events use INFO level."""
+        configure_logging(json_output=True, level="INFO")
+
         from ecs_agent.core import World
         from ecs_agent.components import LLMComponent, ConversationComponent
         from ecs_agent.systems.reasoning import ReasoningSystem
@@ -1659,7 +1683,7 @@ class TestLoggingLevelPolicy:
         await system.process(world)
 
         captured = capsys.readouterr()
-        events = _json_events(captured.out)
+        events = _json_events(_captured_log_output(captured))
 
         # Find reasoning completion event
         completion_events = [
@@ -1670,6 +1694,8 @@ class TestLoggingLevelPolicy:
 
     async def test_tool_execution_error_uses_error_level(self, capsys):
         """Verify tool execution errors use ERROR level."""
+        configure_logging(json_output=True, level="ERROR")
+
         from ecs_agent.core import World
         from ecs_agent.components import (
             PendingToolCallsComponent,
@@ -1701,7 +1727,7 @@ class TestLoggingLevelPolicy:
         await system.process(world)
 
         captured = capsys.readouterr()
-        events = _json_events(captured.out)
+        events = _json_events(_captured_log_output(captured))
 
         # Find tool error event
         error_events = [e for e in events if e.get("event") == "tool_failed"]
@@ -1710,6 +1736,8 @@ class TestLoggingLevelPolicy:
 
     async def test_checkpoint_saved_uses_info_level(self, capsys):
         """Verify checkpoint save events use INFO level."""
+        configure_logging(json_output=True, level="INFO")
+
         from ecs_agent.core import World
         from ecs_agent.components import CheckpointComponent
         from ecs_agent.systems.checkpoint import CheckpointSystem
@@ -1722,7 +1750,7 @@ class TestLoggingLevelPolicy:
         await system.process(world)
 
         captured = capsys.readouterr()
-        events = _json_events(captured.out)
+        events = _json_events(_captured_log_output(captured))
 
         saved_events = [e for e in events if e.get("event") == "checkpoint_saved"]
         assert len(saved_events) >= 1
