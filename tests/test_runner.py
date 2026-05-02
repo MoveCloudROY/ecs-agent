@@ -30,6 +30,10 @@ from ecs_agent.types import (
 )
 
 
+def _captured_log_output(captured: object) -> str:
+    return str(getattr(captured, "err", "") or getattr(captured, "out", ""))
+
+
 class CounterSystem:
     """Test system that counts how many times it runs."""
 
@@ -192,6 +196,50 @@ class TestRunner:
         await runner.run(world, max_ticks=5)
 
         assert counter.run_count > 0
+
+    @pytest.mark.asyncio
+    async def test_runner_run_is_silent_without_configure_logging(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        world = World(name="silent-runner")
+
+        await Runner().run(world, max_ticks=1)
+
+        captured = capsys.readouterr()
+        assert _captured_log_output(captured) == ""
+        assert captured.err == ""
+
+    @pytest.mark.asyncio
+    async def test_runner_only_emits_post_config_logs_after_preconfig_setup(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import json
+        from ecs_agent.logging import STANDARD_EVENT_NAMES, configure_logging
+
+        world = World(name="mixed-runner")
+        entity = world.create_entity()
+        world.add_component(entity, ConversationComponent(messages=[]))
+
+        configure_logging(json_output=True, level="INFO")
+
+        await Runner().run(world, max_ticks=1)
+
+        events = [
+            json.loads(line)
+            for line in _captured_log_output(capsys.readouterr()).strip().split("\n")
+            if line.strip().startswith("{")
+        ]
+        names = [str(event.get("event")) for event in events]
+
+        assert STANDARD_EVENT_NAMES["RUN_START"] in names
+        assert STANDARD_EVENT_NAMES["RUN_COMPLETE"] in names
+        assert STANDARD_EVENT_NAMES["ENTITY_CREATED"] not in names
+        assert not any(
+            event.get("event") == STANDARD_EVENT_NAMES["COMPONENT_ADDED"]
+            and event.get("entity_id") == entity
+            and event.get("component_type") == "ConversationComponent"
+            for event in events
+        )
 
     @pytest.mark.asyncio
     async def test_run_stops_on_terminal_component(
@@ -583,7 +631,7 @@ class TestRunnerLogging:
         captured = capsys.readouterr()
         # Parse only JSON lines (filter out console-formatted debug lines from pre-configured modules)
         events = []
-        for line in captured.out.strip().split("\n"):
+        for line in _captured_log_output(captured).strip().split("\n"):
             if line.strip() and line.strip().startswith("{"):
                 events.append(json.loads(line))
         run_start_events = [
@@ -625,7 +673,7 @@ class TestRunnerLogging:
         captured = capsys.readouterr()
         # Parse only JSON lines
         events = []
-        for line in captured.out.strip().split("\n"):
+        for line in _captured_log_output(captured).strip().split("\n"):
             if line.strip() and line.strip().startswith("{"):
                 events.append(json.loads(line))
         run_complete_events = [
@@ -666,7 +714,7 @@ class TestRunnerLogging:
         captured = capsys.readouterr()
         # Parse only JSON lines
         events = []
-        for line in captured.out.strip().split("\n"):
+        for line in _captured_log_output(captured).strip().split("\n"):
             if line.strip() and line.strip().startswith("{"):
                 events.append(json.loads(line))
         tick_start_events = [
@@ -715,7 +763,7 @@ class TestRunnerLogging:
         captured = capsys.readouterr()
         # Parse only JSON lines
         events = []
-        for line in captured.out.strip().split("\n"):
+        for line in _captured_log_output(captured).strip().split("\n"):
             if line.strip() and line.strip().startswith("{"):
                 events.append(json.loads(line))
         tick_complete_events = [
@@ -738,7 +786,7 @@ async def test_runner_run_start_log_includes_world_name(capsys: pytest.CaptureFi
     await runner.run(world, max_ticks=1)
     captured = capsys.readouterr()
     events = []
-    for line in captured.out.strip().split("\n"):
+    for line in _captured_log_output(captured).strip().split("\n"):
         if line.strip() and line.strip().startswith("{"):
             events.append(json.loads(line))
     run_start = next(e for e in events if e.get("event") == STANDARD_EVENT_NAMES["RUN_START"])
@@ -754,7 +802,7 @@ async def test_runner_run_complete_log_includes_world_name(capsys: pytest.Captur
     await runner.run(world, max_ticks=1)
     captured = capsys.readouterr()
     events = []
-    for line in captured.out.strip().split("\n"):
+    for line in _captured_log_output(captured).strip().split("\n"):
         if line.strip() and line.strip().startswith("{"):
             events.append(json.loads(line))
     run_complete = next(e for e in events if e.get("event") == STANDARD_EVENT_NAMES["RUN_COMPLETE"])
@@ -770,7 +818,7 @@ async def test_runner_tick_log_includes_world_name(capsys: pytest.CaptureFixture
     await runner.run(world, max_ticks=2)
     captured = capsys.readouterr()
     events = []
-    for line in captured.out.strip().split("\n"):
+    for line in _captured_log_output(captured).strip().split("\n"):
         if line.strip() and line.strip().startswith("{"):
             events.append(json.loads(line))
     tick_events = [e for e in events if e.get("event") in (STANDARD_EVENT_NAMES["TICK_START"], STANDARD_EVENT_NAMES["TICK_COMPLETE"])]
