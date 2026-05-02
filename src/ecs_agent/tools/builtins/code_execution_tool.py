@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
+import signal
 import sys
 import tempfile
 from pathlib import Path
@@ -14,6 +17,26 @@ from ecs_agent.tools.discovery import tool
 logger = get_logger(__name__)
 
 _SUPPORTED_LANGUAGES = frozenset({"python"})
+
+
+async def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
+    if process.returncode is not None:
+        return
+
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGTERM)
+
+    try:
+        await asyncio.wait_for(process.wait(), timeout=1.0)
+        return
+    except asyncio.TimeoutError:
+        pass
+
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGKILL)
+
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(process.wait(), timeout=1.0)
 
 
 @tool(
@@ -49,17 +72,20 @@ async def code_execution(
             str(tmp_path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
         try:
             stdout_b, stderr_b = await asyncio.wait_for(
                 process.communicate(), timeout=timeout
             )
         except asyncio.TimeoutError as exc:
-            process.kill()
-            await process.wait()
+            await _terminate_process_group(process)
             raise ValueError(
                 f"Code execution timed out after {timeout}s"
             ) from exc
+        except asyncio.CancelledError:
+            await _terminate_process_group(process)
+            raise
 
         stdout = stdout_b.decode("utf-8", errors="replace")
         stderr = stderr_b.decode("utf-8", errors="replace")
