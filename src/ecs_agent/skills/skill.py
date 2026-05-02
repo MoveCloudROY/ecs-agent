@@ -4,7 +4,6 @@ Loads skills from SKILL.md files with YAML frontmatter.
 """
 
 import asyncio
-import copy
 import logging
 import json
 import re
@@ -26,6 +25,7 @@ from ecs_agent.types import EntityId, ToolSchema
 
 logger = get_logger(__name__)
 _stdlib_logger = logging.getLogger(__name__)
+_stdlib_logger.addHandler(logging.NullHandler())
 
 _NAME_RE = re.compile(r"[a-z0-9-]{1,64}")
 

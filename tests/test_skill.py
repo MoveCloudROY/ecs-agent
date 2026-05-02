@@ -1,6 +1,8 @@
 """Tests for Skill (markdown-based skill) parser."""
 
 import logging
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -422,6 +424,28 @@ def test_markdown_skill_contract_invalid_yaml_skips_skill_without_raising(
 
         assert skills == []
         assert any("yaml" in record.getMessage().lower() for record in caplog.records)
+
+
+def test_skill_stdlib_warning_is_silent_without_configure_logging() -> None:
+    repo_root = Path(__file__).resolve().parent.parent
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import ecs_agent.skills.skill as skill_module; "
+                'skill_module._stdlib_logger.warning("stdlib_warning_should_be_silent")'
+            ),
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+    assert result.stderr == ""
 
 
 def test_markdown_skill_contract_optional_frontmatter_defaults_persist_in_metadata() -> (
