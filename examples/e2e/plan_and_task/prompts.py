@@ -141,13 +141,13 @@ def build_qa_prompt(draft_path: str, advisor_verdict: str) -> str:
     )
 
 
-def build_write_plan_prompt(draft_path: str) -> str:
+def build_write_plan_prompt(draft_path: str, plan_path: str) -> str:
     return (
         "You have a fully-reviewed draft. Now produce a structured workflow plan.\n\n"
         "Steps:\n"
         f"1. Read the draft: read_file(file_path=\"{draft_path}\")\n"
         "2. Decompose the draft into tasks following the format spec below.\n"
-        "3. Write the plan: write_file(file_path=\"workflow_plan.md\", content=<plan>)\n\n"
+        "3. Write the plan: write_file(file_path=\"{plan_path}\", content=<plan>)\n\n"
         "Do not ask questions — produce the plan now.\n\n"
         + _WORKFLOW_PLAN_FORMAT
     )
