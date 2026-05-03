@@ -115,6 +115,39 @@ async def test_tool_calls_attach_pending_tool_calls_component() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pending_tool_calls_block_follow_up_reasoning() -> None:
+    world = World()
+    tool_call = ToolCall(id="call-1", name="get_weather", arguments={"city": "Paris"})
+    model = RecordingFakeModel(
+        responses=[
+            CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="",
+                    tool_calls=[tool_call],
+                )
+            ),
+            CompletionResult(message=Message(role="assistant", content="should not run")),
+        ]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Need weather")]),
+    )
+
+    system = ReasoningSystem()
+    await system.process(world)
+    await system.process(world)
+
+    assert len(model.calls) == 1
+    pending = world.get_component(entity_id, PendingToolCallsComponent)
+    assert pending is not None
+    assert pending.tool_calls == [tool_call]
+
+
+@pytest.mark.asyncio
 async def test_system_prompt_component_is_prepended_to_messages() -> None:
     world = World()
     model = RecordingFakeModel(
@@ -134,6 +167,26 @@ async def test_system_prompt_component_is_prepended_to_messages() -> None:
     sent_messages, _ = model.calls[0]
     assert sent_messages[0] == Message(role="system", content="You are concise")
     assert sent_messages[1] == Message(role="user", content="Hello")
+
+
+@pytest.mark.asyncio
+async def test_empty_conversation_does_not_call_provider() -> None:
+    world = World()
+    model = RecordingFakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(entity_id, SystemPromptComponent(content="You are concise"))
+    world.add_component(entity_id, ConversationComponent(messages=[]))
+
+    await ReasoningSystem().process(world)
+
+    assert model.calls == []
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages == []
+    assert world.get_component(entity_id, ErrorComponent) is None
 
 
 @pytest.mark.asyncio

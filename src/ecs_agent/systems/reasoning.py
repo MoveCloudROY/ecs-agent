@@ -67,6 +67,8 @@ class ReasoningSystem:
         for entity_id, (llm_component,) in world.query(LLMComponent):
             if world.has_component(entity_id, InterruptionComponent):
                 continue
+            if world.has_component(entity_id, PendingToolCallsComponent):
+                continue
             # Skip parent-world delegation stubs — they are tracked records,
             # not runnable agents. ReasoningSystem must not infer over them.
             if world.has_component(entity_id, ChildStubComponent):
@@ -134,6 +136,8 @@ class ReasoningSystem:
                 system_prompt=system_prompt_text,
                 current_tick=current_tick,
             )
+            if not any(message.role != "system" for message in messages):
+                continue
             if context_reservation is not None:
                 world.add_component(entity_id, context_reservation)
 
