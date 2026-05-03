@@ -624,6 +624,8 @@ class WorldSerializer:
             parts=parts,
             tool_calls=tool_calls,
             tool_call_id=data.get("tool_call_id"),
+            reasoning_content=data.get("reasoning_content"),
+            reasoning_signature=data.get("reasoning_signature"),
             compaction_metadata=data.get("compaction_metadata"),
         )
 
@@ -653,6 +655,12 @@ class WorldSerializer:
 
         if message.compaction_metadata is not None:
             serialized["compaction_metadata"] = message.compaction_metadata
+
+        if message.reasoning_content is not None:
+            serialized["reasoning_content"] = message.reasoning_content
+
+        if message.reasoning_signature is not None:
+            serialized["reasoning_signature"] = message.reasoning_signature
 
         return serialized
 

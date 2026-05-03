@@ -128,6 +128,124 @@ def test_build_messages_converts_tool_result_to_user_tool_result_block() -> None
     ]
 
 
+def test_build_messages_replays_assistant_thinking_before_tool_use() -> None:
+    model = ClaudeModel(
+        config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
+    )
+    messages = [
+        Message(
+            role="assistant",
+            content="",
+            tool_calls=[
+                ToolCall(
+                    id="call_123",
+                    name="get_weather",
+                    arguments={"city": "San Francisco"},
+                )
+            ],
+            reasoning_content="Need the weather data before answering.",
+            reasoning_signature="sig_123",
+        ),
+        Message(role="tool", content="22C and sunny", tool_call_id="call_123"),
+    ]
+
+    system, anthropic_messages = model._build_messages(messages)
+
+    assert system is None
+    assert anthropic_messages == [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "Need the weather data before answering.",
+                    "signature": "sig_123",
+                },
+                {
+                    "type": "tool_use",
+                    "id": "call_123",
+                    "name": "get_weather",
+                    "input": {"city": "San Francisco"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_123",
+                    "content": "22C and sunny",
+                }
+            ],
+        },
+    ]
+
+
+def test_build_messages_groups_parallel_tool_results_after_assistant_tool_use() -> None:
+    model = ClaudeModel(
+        config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
+    )
+    messages = [
+        Message(
+            role="assistant",
+            content="",
+            tool_calls=[
+                ToolCall(
+                    id="call_123",
+                    name="get_weather",
+                    arguments={"city": "San Francisco"},
+                ),
+                ToolCall(
+                    id="call_456",
+                    name="get_time",
+                    arguments={"timezone": "America/Los_Angeles"},
+                ),
+            ],
+        ),
+        Message(role="tool", content="22C and sunny", tool_call_id="call_123"),
+        Message(role="tool", content="10:30 AM", tool_call_id="call_456"),
+    ]
+
+    system, anthropic_messages = model._build_messages(messages)
+
+    assert system is None
+    assert anthropic_messages == [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "call_123",
+                    "name": "get_weather",
+                    "input": {"city": "San Francisco"},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "call_456",
+                    "name": "get_time",
+                    "input": {"timezone": "America/Los_Angeles"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_123",
+                    "content": "22C and sunny",
+                },
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_456",
+                    "content": "10:30 AM",
+                },
+            ],
+        },
+    ]
+
+
 def test_build_messages_delivers_summary_xml_in_system_string() -> None:
     """Test that Anthropic adapter delivers XML summary in system string."""
     model = ClaudeModel(
@@ -273,6 +391,63 @@ def test_parse_response_tool_use_content_blocks() -> None:
     assert result.message.tool_calls == [
         ToolCall(id="toolu_456", name="get_weather", arguments={"city": "SF"})
     ]
+
+
+def test_parse_response_preserves_thinking_block_for_replay() -> None:
+    model = ClaudeModel(
+        config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
+    )
+    response_data: dict[str, Any] = {
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": "Need the weather tool result first.",
+                "signature": "sig_456",
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_456",
+                "name": "get_weather",
+                "input": {"city": "SF"},
+            },
+        ]
+    }
+
+    result = model._parse_response(response_data)
+
+    assert result.reasoning_content == "Need the weather tool result first."
+    assert result.message.reasoning_content == "Need the weather tool result first."
+    assert result.message.reasoning_signature == "sig_456"
+    assert result.message.tool_calls == [
+        ToolCall(id="toolu_456", name="get_weather", arguments={"city": "SF"})
+    ]
+
+
+def test_parse_response_preserves_empty_thinking_block_for_replay() -> None:
+    model = ClaudeModel(
+        config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
+    )
+    response_data: dict[str, Any] = {
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": "",
+                "signature": "sig_empty",
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_empty",
+                "name": "lookup",
+                "input": {"q": "weather"},
+            },
+        ]
+    }
+
+    result = model._parse_response(response_data)
+
+    assert result.reasoning_content == ""
+    assert result.message.reasoning_content == ""
+    assert result.message.reasoning_signature == "sig_empty"
 
 
 def test_parse_response_mixed_text_and_tool_use_blocks() -> None:
