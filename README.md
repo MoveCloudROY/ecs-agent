@@ -256,7 +256,7 @@ The `examples/` directory contains runnable demos for the major patterns in the 
 | [`agent_dsl_json.py`](examples/agent_dsl_json.py) | Load multi-agent configuration from JSON file using Agent DSL (dual-mode) |
 | [`agent_dsl_markdown.py`](examples/agent_dsl_markdown.py) | Load primary agent + subagent from Markdown files using Agent DSL; demonstrates placeholders, triggers, skills, and subagent registry (dual-mode) |
 | [`workflow_agent.py`](examples/workflow_agent.py) | Workflow DSL: two-phase writing assistant with gate-driven `DRAFT→REVIEW→DONE` transitions, prompt profiles, and `@tool`-registered handlers (dual-mode) |
-| [`examples/e2e/plan_and_task/`](examples/e2e/plan_and_task/) | Interactive plan→review→execute workflow; recoverable state machine, review-gated planning, artifact persistence, and slash-command dispatch |
+| [`examples/e2e/plan_and_task/`](examples/e2e/plan_and_task/) | Interactive plan→review→execute workflow; recoverable state machine, review-gated planning, artifact persistence, slash-command dispatch, and framework-native auto compaction across main/subagent runs |
 
 
 Run any example:
