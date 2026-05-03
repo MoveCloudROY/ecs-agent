@@ -147,7 +147,7 @@ def build_write_plan_prompt(draft_path: str, plan_path: str) -> str:
         "Steps:\n"
         f"1. Read the draft: read_file(file_path=\"{draft_path}\")\n"
         "2. Decompose the draft into tasks following the format spec below.\n"
-        "3. Write the plan: write_file(file_path=\"{plan_path}\", content=<plan>)\n\n"
+        f"3. Write the plan: write_file(file_path=\"{plan_path}\", content=<plan>)\n\n"
         "Do not ask questions — produce the plan now.\n\n"
         + _WORKFLOW_PLAN_FORMAT
     )
@@ -328,6 +328,7 @@ Your job is to execute tasks from `workflow_plan.md` one at a time.
 Always focus on the current task only. Use the plan, the current task state, and scratchbook artifacts
 to decide the next concrete action. Do not jump ahead to future tasks unless a replan explicitly requires it.
 
+
 ## Task Execution Flow
 
 - `TASK_RUNNING` — execute the current task, gather evidence, and drive the task toward completion.
@@ -337,7 +338,7 @@ to decide the next concrete action. Do not jump ahead to future tasks unless a r
 
 ## Execution Rules
 
-1. Read `workflow_plan.md` and any relevant scratchbook artifacts before taking action.
+1. Read `workflow_plan.md`, `task_queue.json` and any relevant scratchbook artifacts before taking action.
 2. Execute only the active task identified by the runtime state.
 3. Keep outputs concrete: commands run, files changed, evidence produced, and blockers encountered.
 4. If the task is blocked, clearly state what is blocking progress and what unblocks it.

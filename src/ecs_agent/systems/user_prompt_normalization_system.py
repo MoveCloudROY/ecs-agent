@@ -100,6 +100,12 @@ class UserPromptNormalizationSystem:
                 prompt_config=prompt_config,
             )
 
+            updated_source_index = last_user_index
+            updated_messages = self._resolve_conversation_messages(world, entity_id)
+            updated_last_user_message = self._find_last_user_message(updated_messages)
+            if updated_last_user_message is not None:
+                updated_source_index, _ = updated_last_user_message
+
             logger.debug(
                 "user_prompt_normalized",
                 entity_id=entity_id,
@@ -115,7 +121,7 @@ class UserPromptNormalizationSystem:
                     text=normalized_text,
                     source_fingerprint=source_fingerprint,
                     trigger_key=trigger_key,
-                    source_message_index=last_user_index,
+                    source_message_index=updated_source_index,
                 ),
             )
 
