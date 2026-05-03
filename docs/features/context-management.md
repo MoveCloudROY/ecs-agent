@@ -46,8 +46,8 @@ The `CompactionSystem` reduces conversation length by summarizing older messages
   - `threshold_tokens: int` — Token count threshold triggering compaction (estimated as `word_count * 1.3`)
   - `summary_model: str | None` — *(deprecated)* Legacy model override; prefer `summary_model_id`
   - `compaction_method: CompactionMethod` — Strategy for selecting messages to summarize (default: `"full_history"`). Options:
-    - `"full_history"` — Summarize ALL non-system messages; no messages retained (result: `[system_msg]`)
-    - `"predrop_then_compact"` — Drop droppable context (tool results) via `ContextBudgetConfig` first, then summarize everything
+    - `"full_history"` — Summarize all non-system messages, then retain only the original system message (if any) and a minimal last-user continuation anchor (if any)
+    - `"predrop_then_compact"` — Drop droppable context (tool results) via `ContextBudgetConfig` before summarization, then retain only the original system message (if any) and the last-user continuation anchor (if any)
   - `summary_model_id: str | None` — Canonical `provider/model` ID for routing the summary call to a different provider. Requires a `ProviderRegistry` on the entity (see below).
   - `compaction_prompt_template: str | None` — Custom prompt template for the summarization call. If `None`, uses the built-in `DEFAULT_COMPACTION_PROMPT`.
 
@@ -79,7 +79,7 @@ The user asked about Python list comprehensions. We discussed syntax and perform
 
 This block is appended to the end of the effective system prompt. This approach ensures the LLM receives the summary as high-priority context without polluting the conversation history with artificial messages.
 
-The `MemorySystem` applies trailing-window truncation: it keeps the system message and the most recent `max_messages` messages. Since all compaction strategies leave only `[system_msg]` after compaction, the window naturally handles the post-compaction state.
+The `MemorySystem` applies trailing-window truncation: it keeps the system message and the most recent `max_messages` messages. Since compaction leaves only the original system message plus a minimal user continuation anchor, the window naturally handles the post-compaction state while preserving a valid non-system message for runnable agents.
 
 ### Events
 
@@ -91,7 +91,7 @@ The `MemorySystem` applies trailing-window truncation: it keeps the system messa
 2. When the estimate exceeds `threshold_tokens`, the configured `compaction_method` selects which messages to summarize.
 3. The selected messages are formatted as `role: content` lines and sent to the summary provider.
 4. The summary is stored in `CurrentCompactionSummaryComponent.summary` and `ConversationArchiveComponent.archived_summaries`.
-5. Summarized messages are removed from `ConversationComponent.messages`.
+5. Summarized messages are removed from `ConversationComponent.messages`, leaving only the original system message (if any) and a minimal last-user continuation anchor (if any). Matching rendered user prompts are preferred for the anchor so slash-command script results do not re-trigger after compaction.
 6. The `SystemPromptRenderSystem` renders the summary into the system prompt XML block on the next tick.
 7. A `CompactionCompleteEvent` is published with `original_tokens` and `compacted_tokens`.
 
@@ -130,6 +130,8 @@ world.add_component(agent, CompactionConfigComponent(
 world.add_component(agent, ConversationArchiveComponent())
 world.register_system(CompactionSystem(), priority=20)
 ```
+
+The `examples/e2e/plan_and_task` workflow uses this exact infrastructure rather than a custom summarizer: the main world installs `CompactionConfigComponent`, `ConversationArchiveComponent`, and `CompactionSystem(priority=-30)`, and child subagent worlds inherit the same compaction config while maintaining their own archives. When that workflow starts or resumes a different persisted session, it also clears any stale summary/rendered-prompt state before the next tick so an old `<chat_history_summary>` block cannot leak into the new workflow phase.
 
 ## Resume from Checkpoint
 
