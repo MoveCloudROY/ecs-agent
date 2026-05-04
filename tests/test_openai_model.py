@@ -4,6 +4,7 @@ import json
 import pytest
 import httpx
 from unittest.mock import AsyncMock, Mock
+from ecs_agent.logging import configure_logging
 from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.protocol import LLMModel
@@ -16,6 +17,10 @@ from ecs_agent.types import (
 )
 
 COMPACTION_SENTINEL = "[COMPACTION SUMMARY]\n"
+
+
+def _captured_log_output(captured: object) -> str:
+    return str(getattr(captured, "err", "") or getattr(captured, "out", ""))
 
 
 def _openai_config(
@@ -209,6 +214,8 @@ async def test_http_error_prints_response_body(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Test HTTP error prints status code and full response body."""
+    configure_logging(json_output=False, level="ERROR")
+
     mock_response = Mock(spec=httpx.Response)
     mock_response.status_code = 400
     mock_response.text = (
@@ -230,8 +237,9 @@ async def test_http_error_prints_response_body(
         await model.complete(messages)
 
     captured = capsys.readouterr()
-    assert "400" in captured.out
-    assert "Invalid model" in captured.out
+    output = _captured_log_output(captured)
+    assert "400" in output
+    assert "Invalid model" in output
 
 
 @pytest.mark.asyncio
@@ -239,6 +247,8 @@ async def test_network_error_prints_full_message(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Test connection/timeout errors print full error details."""
+    configure_logging(json_output=False, level="ERROR")
+
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.post.side_effect = httpx.ConnectError("Connection refused")
 
@@ -251,7 +261,7 @@ async def test_network_error_prints_full_message(
         await model.complete(messages)
 
     captured = capsys.readouterr()
-    assert "Connection refused" in captured.out
+    assert "Connection refused" in _captured_log_output(captured)
 
 
 @pytest.mark.asyncio

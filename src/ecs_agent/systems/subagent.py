@@ -11,8 +11,10 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from ecs_agent.components import (
+    CompactionConfigComponent,
     ChildStubComponent,
     ConversationComponent,
+    ConversationArchiveComponent,
     LLMComponent,
     OwnerComponent,
     PermissionComponent,
@@ -34,6 +36,7 @@ from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills import catalog as _skill_catalog
 from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
+from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
@@ -69,6 +72,7 @@ from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.providers.retry_model import RetryModel
 
 logger = get_logger(__name__)
+_SUBAGENT_COMPACTION_PRIORITY = -30
 
 _PUBLISH_COMPLETION_EVENT: ContextVar[bool] = ContextVar(
     "_PUBLISH_COMPLETION_EVENT",
@@ -1873,6 +1877,23 @@ class SubagentSystem:
                         ),
                     )
 
+        parent_compaction = parent_world.get_component(
+            parent_entity, CompactionConfigComponent
+        )
+        if parent_compaction is not None:
+            child_world.add_component(
+                child_world_entity_id,
+                replace(parent_compaction),
+            )
+            child_world.add_component(
+                child_world_entity_id,
+                ConversationArchiveComponent(),
+            )
+
+        if parent_compaction is not None:
+            child_world.register_system(
+                CompactionSystem(), priority=_SUBAGENT_COMPACTION_PRIORITY
+            )
         child_world.register_system(
             SystemPromptRenderSystem(priority=-20), priority=-20
         )

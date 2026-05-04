@@ -1,5 +1,7 @@
 import asyncio
 import shutil
+import signal
+from collections.abc import Awaitable, Callable
 
 import pytest
 
@@ -12,14 +14,21 @@ from ecs_agent.types import EntityId, ToolSchema
 
 class _FakeProcess:
     def __init__(
-        self, stdout: bytes = b"", stderr: bytes = b"", returncode: int = 0
+        self, stdout: bytes = b"", stderr: bytes = b"", returncode: int | None = None
     ) -> None:
         self._stdout = stdout
         self._stderr = stderr
         self.returncode = returncode
+        self.pid = 4321
+        self.wait_called = False
 
     async def communicate(self) -> tuple[bytes, bytes]:
         return self._stdout, self._stderr
+
+    async def wait(self) -> int:
+        self.wait_called = True
+        self.returncode = 0
+        return 0
 
 
 @pytest.mark.asyncio
@@ -32,9 +41,11 @@ async def test_bwrap_execute_falls_back_to_shell_when_unavailable(
         command: str,
         stdout: int,
         stderr: int,
+        start_new_session: bool,
     ) -> _FakeProcess:
         _ = stdout
         _ = stderr
+        _ = start_new_session
         calls.append(command)
         return _FakeProcess(stdout=b"ok\n")
 
@@ -53,9 +64,12 @@ async def test_bwrap_execute_uses_bwrap_when_available(
 ) -> None:
     calls: list[tuple[object, ...]] = []
 
-    async def fake_exec(*args: object, stdout: int, stderr: int) -> _FakeProcess:
+    async def fake_exec(
+        *args: object, stdout: int, stderr: int, start_new_session: bool
+    ) -> _FakeProcess:
         _ = stdout
         _ = stderr
+        _ = start_new_session
         calls.append(args)
         return _FakeProcess(stdout=b"wrapped\n")
 
@@ -68,6 +82,48 @@ async def test_bwrap_execute_uses_bwrap_when_available(
     assert len(calls) == 1
     assert calls[0][0] == "bwrap"
     assert calls[0][-3:] == ("sh", "-c", "echo wrapped")
+
+
+@pytest.mark.asyncio
+async def test_bwrap_execute_timeout_terminates_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _FakeProcess()
+    kill_calls: list[tuple[int, int]] = []
+
+    async def fake_exec(
+        *args: object, stdout: int, stderr: int, start_new_session: bool
+    ) -> _FakeProcess:
+        _ = args
+        _ = stdout
+        _ = stderr
+        _ = start_new_session
+        return process
+
+    call_count = 0
+
+    async def fake_wait_for(awaitable: object, timeout: float) -> object:
+        nonlocal call_count
+        _ = timeout
+        call_count += 1
+        if call_count == 1:
+            await awaitable  # type: ignore[misc]
+            raise asyncio.TimeoutError
+        return await awaitable  # type: ignore[misc]
+
+    def fake_killpg(pid: int, sig: int) -> None:
+        kill_calls.append((pid, sig))
+
+    monkeypatch.setattr("ecs_agent.tools.bwrap_sandbox._BWRAP_AVAILABLE", True)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(asyncio, "wait_for", fake_wait_for)
+    monkeypatch.setattr("ecs_agent.tools.bwrap_sandbox.os.killpg", fake_killpg)
+
+    result = await bwrap_execute("sleep 10", timeout=0.1)
+
+    assert result == "Error: command timed out after 0.1s"
+    assert kill_calls == [(process.pid, signal.SIGTERM)]
+    assert process.wait_called is True
 
 
 @pytest.mark.skipif(not shutil.which("bwrap"), reason="bwrap not installed")
@@ -161,7 +217,9 @@ class _Skill:
     name = "sandbox-skill"
     description = "sandbox skill"
 
-    def tools(self) -> dict[str, tuple[ToolSchema, object]]:
+    def tools(
+        self,
+    ) -> dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]]:
         async def bash_tool(command: str) -> str:
             return f"raw:{command}"
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from ecs_agent.components import (
@@ -9,6 +11,7 @@ from ecs_agent.components import (
     ConversationArchiveComponent,
     ConversationComponent,
     LLMComponent,
+    RenderedUserPromptComponent,
     RenderedSystemPromptComponent,
     SubagentNotificationQueueComponent,
     SubagentSessionTableComponent,
@@ -70,6 +73,10 @@ class RegistryBackedRecordingFakeModel(RecordingFakeModel):
 
 def _message(content: str, role: str = "user") -> Message:
     return Message(role=role, content=content)
+
+
+def _fingerprint(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def _subagent_session(
@@ -208,12 +215,12 @@ async def test_compaction_triggers_when_threshold_exceeded() -> None:
     current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
     assert conversation is not None
     assert len(model.calls) == 1
-    assert len(conversation.messages) == 0
+    assert conversation.messages == [Message(role="user", content="alpha beta gamma delta")]
     assert current_summary == CurrentCompactionSummaryComponent(summary="brief")
 
 
 @pytest.mark.asyncio
-async def test_compaction_full_history_method_replaces_all_non_system_history() -> None:
+async def test_compaction_full_history_method_preserves_system_and_user_anchor() -> None:
     world = World()
     model = RecordingFakeModel(
         responses=[
@@ -249,6 +256,7 @@ async def test_compaction_full_history_method_replaces_all_non_system_history() 
     assert conversation is not None
     assert [(message.role, message.content) for message in conversation.messages] == [
         ("system", "You are a strict assistant"),
+        ("user", "new-3"),
     ]
     assert current_summary == CurrentCompactionSummaryComponent(summary="full summary")
 
@@ -331,14 +339,143 @@ async def test_compaction_predrop_then_compact_uses_budgeted_view_without_mutati
     conversation = world.get_component(entity_id, ConversationComponent)
     current_summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
     assert conversation is not None
-    assert conversation.messages[0].role == "system"
     assert conversation.messages == [
         Message(role="system", content="You are a strict assistant"),
+        Message(role="user", content="keep me"),
     ]
     assert current_summary == CurrentCompactionSummaryComponent(
         summary="budgeted summary"
     )
     assert original_messages[1].tool_calls is not None
+
+
+@pytest.mark.asyncio
+async def test_compaction_preserves_last_user_anchor_without_system_message() -> None:
+    world = World()
+    model = RecordingFakeModel(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="summary"))
+        ]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[
+                _message("old request"),
+                _message("old answer", role="assistant"),
+                _message("continue the active task"),
+            ]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        CompactionConfigComponent(
+            threshold_tokens=1,
+            compaction_method="predrop_then_compact",
+        ),
+    )
+
+    await CompactionSystem().process(world)
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages == [
+        Message(role="user", content="continue the active task")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_compaction_prefers_rendered_user_prompt_for_retained_anchor() -> None:
+    world = World()
+    model = RecordingFakeModel(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="summary"))
+        ]
+    )
+    entity_id = world.create_entity()
+    raw_resume_command = "/task:resume web-novel-writing-assistant"
+    rendered_resume_prompt = "Task resumed: continue T03-work-management"
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[
+                _message("older context"),
+                _message("older response", role="assistant"),
+                _message(raw_resume_command),
+            ]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        RenderedUserPromptComponent(
+            text=rendered_resume_prompt,
+            source_fingerprint=_fingerprint(raw_resume_command),
+            source_message_index=2,
+        ),
+    )
+    world.add_component(
+        entity_id,
+        CompactionConfigComponent(
+            threshold_tokens=1,
+            compaction_method="predrop_then_compact",
+        ),
+    )
+
+    await CompactionSystem().process(world)
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages == [
+        Message(role="user", content=rendered_resume_prompt)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_compaction_ignores_stale_rendered_user_prompt_for_anchor() -> None:
+    world = World()
+    model = RecordingFakeModel(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="summary"))
+        ]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[
+                _message("older command"),
+                _message("older response", role="assistant"),
+                _message("continue with current task"),
+            ]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        RenderedUserPromptComponent(
+            text="stale rendered command result",
+            source_fingerprint=_fingerprint("older command"),
+            source_message_index=0,
+        ),
+    )
+    world.add_component(
+        entity_id,
+        CompactionConfigComponent(
+            threshold_tokens=1,
+            compaction_method="predrop_then_compact",
+        ),
+    )
+
+    await CompactionSystem().process(world)
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages == [
+        Message(role="user", content="continue with current task")
+    ]
 
 
 @pytest.mark.asyncio

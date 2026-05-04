@@ -7,6 +7,11 @@ from dataclasses import dataclass
 import pytest
 
 from ecs_agent.core import EventBus
+from ecs_agent.logging import configure_logging
+
+
+def _captured_log_output(captured: object) -> str:
+    return str(getattr(captured, "err", "") or getattr(captured, "out", ""))
 
 
 @dataclass(slots=True)
@@ -131,6 +136,7 @@ async def test_handler_exception_isolated_from_other_handlers() -> None:
 async def test_handler_exception_is_logged_without_raising(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    configure_logging(json_output=False, level="ERROR")
     bus = EventBus()
 
     async def bad_handler(event: SampleEvent) -> None:
@@ -142,8 +148,9 @@ async def test_handler_exception_is_logged_without_raising(
     await bus.publish(SampleEvent(value=1))
     captured = capsys.readouterr()
 
-    assert "event_bus_subscriber_error" in captured.out
-    assert "boom" in captured.out
+    output = _captured_log_output(captured)
+    assert "event_bus_subscriber_error" in output
+    assert "boom" in output
 
 
 @pytest.mark.asyncio

@@ -438,11 +438,11 @@ Compresses conversation history by summarizing older messages using the entity's
 - **Constructor**: `__init__(self)` (no parameters)
 - **Queries**: `CompactionConfigComponent`, `LLMComponent`, `ConversationComponent`
 - **Optional Components**: `ConversationArchiveComponent`
-- **Modifies**: `ConversationComponent.messages` (replaces all non-system messages with `[system_msg]` after compaction), `ConversationArchiveComponent.archived_summaries`.
+- **Modifies**: `ConversationComponent.messages` (replaces summarized history with `[system_msg?] + [last_user_anchor?]` after compaction), `ConversationArchiveComponent.archived_summaries`.
 - **Events Published**: `CompactionCompleteEvent`.
 
 ### Behavior
-The system estimates token count using `word_count * 1.3`. When the estimate exceeds `CompactionConfigComponent.threshold_tokens`, the configured `compaction_method` selects which messages to summarize. Both `full_history` and `predrop_then_compact` result in `retained_messages = []`, so after compaction `conversation.messages = [system_msg]`. The summary is archived in `ConversationArchiveComponent` and stored in `CurrentCompactionSummaryComponent` for injection into the system prompt via `SystemPromptRenderSystem`.
+The system estimates token count using `word_count * 1.3`. When the estimate exceeds `CompactionConfigComponent.threshold_tokens`, the configured `compaction_method` selects which messages to summarize. `full_history` summarizes all non-system messages; `predrop_then_compact` first applies outbound-budget pruning to the summary input. After summarization, live conversation history is rebuilt from the original system message (if present) plus a minimal last-user continuation anchor (if present). If a matching `RenderedUserPromptComponent` exists for that last raw user message, its rendered text is used as the anchor so script-trigger prompts do not re-run after compaction. The summary is archived in `ConversationArchiveComponent` and stored in `CurrentCompactionSummaryComponent` for injection into the system prompt via `SystemPromptRenderSystem`.
 
 ### Usage Example
 ```python

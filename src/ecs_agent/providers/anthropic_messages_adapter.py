@@ -73,24 +73,32 @@ class AnthropicMessagesAdapter:
         system_messages: list[str] = []
         anthropic_messages: list[dict[str, Any]] = []
 
-        for msg in messages:
+        index = 0
+        while index < len(messages):
+            msg = messages[index]
             if msg.role == "system":
                 system_messages.append(msg.content)
+                index += 1
                 continue
 
             if msg.role == "tool":
-                if msg.tool_call_id is None:
-                    raise ValueError("Tool message requires tool_call_id")
+                tool_result_blocks: list[dict[str, Any]] = []
+                while index < len(messages) and messages[index].role == "tool":
+                    tool_message = messages[index]
+                    if tool_message.tool_call_id is None:
+                        raise ValueError("Tool message requires tool_call_id")
+                    tool_result_blocks.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_message.tool_call_id,
+                            "content": tool_message.content,
+                        }
+                    )
+                    index += 1
                 anthropic_messages.append(
                     {
                         "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": msg.tool_call_id,
-                                "content": msg.content,
-                            }
-                        ],
+                        "content": tool_result_blocks,
                     }
                 )
                 continue
@@ -114,6 +122,7 @@ class AnthropicMessagesAdapter:
                     "content": content_blocks,
                 }
             )
+            index += 1
 
         system_prompt = "\n\n".join(system_messages) if system_messages else None
         return system_prompt, anthropic_messages
@@ -139,6 +148,8 @@ class AnthropicMessagesAdapter:
         content_blocks = response_data.get("content", [])
         message_content_parts: list[str] = []
         tool_calls: list[ToolCall] = []
+        reasoning_content: str | None = None
+        reasoning_signature: str | None = None
 
         for block in content_blocks:
             block_type = block.get("type")
@@ -146,6 +157,13 @@ class AnthropicMessagesAdapter:
                 text = block.get("text")
                 if isinstance(text, str):
                     message_content_parts.append(text)
+            elif block_type == "thinking":
+                thinking_text = block.get("thinking")
+                if isinstance(thinking_text, str):
+                    reasoning_content = thinking_text
+                signature = block.get("signature")
+                if isinstance(signature, str):
+                    reasoning_signature = signature
             elif block_type == "tool_use":
                 tool_calls.append(
                     ToolCall(
@@ -166,8 +184,14 @@ class AnthropicMessagesAdapter:
             role="assistant",
             content="".join(message_content_parts),
             tool_calls=tool_calls or None,
+            reasoning_content=reasoning_content,
+            reasoning_signature=reasoning_signature,
         )
-        return CompletionResult(message=message, usage=usage)
+        return CompletionResult(
+            message=message,
+            usage=usage,
+            reasoning_content=reasoning_content,
+        )
 
     def _build_content_blocks(self, msg: Message) -> list[dict[str, Any]]:
         content_blocks: list[dict[str, Any]] = []
@@ -195,6 +219,15 @@ class AnthropicMessagesAdapter:
                     raise ValueError(
                         "Unsupported multimodal part for Anthropic messages endpoint: FileRefPart"
                     )
+
+        if msg.reasoning_content is not None:
+            thinking_block: dict[str, Any] = {
+                "type": "thinking",
+                "thinking": msg.reasoning_content,
+            }
+            if msg.reasoning_signature is not None:
+                thinking_block["signature"] = msg.reasoning_signature
+            content_blocks.append(thinking_block)
 
         if msg.content:
             content_blocks.append({"type": "text", "text": msg.content})

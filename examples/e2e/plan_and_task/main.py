@@ -13,8 +13,12 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from ecs_agent.components import (
+    CompactionConfigComponent,
     ConversationComponent,
+    ConversationArchiveComponent,
+    CurrentCompactionSummaryComponent,
     LLMComponent,
+    RenderedSystemPromptComponent,
     SubagentRegistryComponent,
     SubagentSessionTableComponent,
     ToolRegistryComponent,
@@ -33,11 +37,11 @@ from ecs_agent.providers import Model
 from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems import WorkflowStateSystem
+from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.tools import BuiltinToolsSkill
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.discovery import discover_skills
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
@@ -51,6 +55,7 @@ from ecs_agent.types import (
     InheritancePolicy,
     Message,
     SubagentConfig,
+    CompactionMethod,
 )
 
 from ecs_agent.accounting import AccountingSubscriber
@@ -72,6 +77,7 @@ from examples.e2e.plan_and_task.runtime import (
     setup_interactive_input,
     derive_workflow_id_from_llm,
 )
+from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
 from examples.e2e.plan_and_task.state_models import RuntimeState
 from examples.e2e.plan_and_task.workflow_spec import PLAN_TASK_WORKFLOW_SPEC
 
@@ -81,6 +87,9 @@ _VERDICT_PATTERN = _re.compile(r"\b(approved|revise|blocked)\b", _re.IGNORECASE)
 
 _WORKFLOW_BASE_DIR = Path(__file__).parent
 _SKILLS_DIR = Path(__file__).parent / ".claude" / "skills"
+_PLAN_TASK_COMPACTION_PRIORITY = -30
+_DEFAULT_COMPACTION_THRESHOLD_TOKENS = 12_000
+_DEFAULT_COMPACTION_METHOD: CompactionMethod = "predrop_then_compact"
 
 
 def _extract_verdict_from_result(result: str) -> str:
@@ -95,6 +104,42 @@ def _extract_verdict_from_result(result: str) -> str:
 
 def _format_status(payload: dict[str, object]) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _install_auto_compaction(
+    world: World,
+    entity_id: EntityId,
+    *,
+    threshold_tokens: int,
+    compaction_method: CompactionMethod,
+) -> None:
+    world.add_component(
+        entity_id,
+        CompactionConfigComponent(
+            threshold_tokens=threshold_tokens,
+            compaction_method=compaction_method,
+        ),
+    )
+    world.add_component(entity_id, ConversationArchiveComponent())
+
+
+def _reset_compaction_state(world: World, entity_id: EntityId) -> None:
+    world.remove_component(entity_id, CurrentCompactionSummaryComponent)
+    world.add_component(entity_id, ConversationArchiveComponent())
+    world.remove_component(entity_id, RenderedSystemPromptComponent)
+
+
+def _reset_workflow_boundary_state(
+    world: World, entity_id: EntityId, *, preserve_user_text: str | None = None
+) -> None:
+    _reset_compaction_state(world, entity_id)
+    conversation = world.get_component(entity_id, ConversationComponent)
+    if conversation is not None:
+        conversation.messages.clear()
+        if preserve_user_text is not None:
+            conversation.messages.append(
+                Message(role="user", content=preserve_user_text)
+            )
 
 
 def _require_state(state: RuntimeState | None) -> RuntimeState:
@@ -116,6 +161,9 @@ def _require_adapter(adapter: ArtifactAdapter | None) -> ArtifactAdapter:
 def build_plan_task_world(
     model: LLMModel,
     base_dir: Path | None = None,
+    *,
+    compaction_threshold_tokens: int = _DEFAULT_COMPACTION_THRESHOLD_TOKENS,
+    compaction_method: CompactionMethod = _DEFAULT_COMPACTION_METHOD,
 ) -> tuple[World, EntityId, list[ArtifactAdapter | None], list[RuntimeState | None]]:
     discover_skills([_SKILLS_DIR])
 
@@ -127,6 +175,12 @@ def build_plan_task_world(
         LLMComponent(model=model),
     )
     world.add_component(agent_id, ConversationComponent(messages=[]))
+    _install_auto_compaction(
+        world,
+        agent_id,
+        threshold_tokens=compaction_threshold_tokens,
+        compaction_method=compaction_method,
+    )
     world.add_component(
         agent_id,
         SystemPromptConfigSpec(
@@ -217,14 +271,60 @@ def build_plan_task_world(
             conv.messages.append(Message(role="user", content=trigger_text))
 
 
-    def _load_workflow(w: World, eid: EntityId, workflow_id: str) -> RuntimeState:
+    def _load_workflow(
+        w: World,
+        eid: EntityId,
+        workflow_id: str,
+        *,
+        preserve_user_text: str | None = None,
+    ) -> RuntimeState:
         new_adapter = ArtifactAdapter(base_dir=_base_dir, workflow_id=workflow_id)
         state = new_adapter.read_state()
-        new_adapter.mark_stale_subagents(state)
+        state = WorkflowStateMachine().handle_restart(state, new_adapter)
         adapter_ref[0] = new_adapter
         runtime_state[0] = state
+        _reset_workflow_boundary_state(
+            w,
+            eid,
+            preserve_user_text=preserve_user_text,
+        )
         w.add_component(eid, build_scratchbook_prompt_config(workflow_id))
         _sync_workflow_state(w, eid, state.phase)
+        return state
+
+    def _workflow_id_from_command(user_text: str) -> str:
+        parts = user_text.strip().split(None, 1)
+        return parts[1].strip() if len(parts) > 1 else ""
+
+    def _ensure_task_workflow_loaded(
+        w: World,
+        eid: EntityId,
+        user_text: str,
+        *,
+        command_name: str,
+    ) -> RuntimeState:
+        if runtime_state[0] is not None:
+            return runtime_state[0]
+
+        workflow_id = _workflow_id_from_command(user_text)
+        if not workflow_id:
+            raise ValueError(
+                "No active workflow state. "
+                f"Provide a workflow_id: {command_name} <workflow_id>, "
+                "or start a new workflow with /plan:start <description>."
+            )
+        state = _load_workflow(
+            w,
+            eid,
+            workflow_id,
+            preserve_user_text=user_text,
+        )
+        logger.info(
+            "plan_task_task_command_auto_loaded_state",
+            command=command_name,
+            workflow_id=workflow_id,
+            phase=state.phase,
+        )
         return state
 
     async def _on_delegation_completed(event: DelegationCompletedEvent) -> None:
@@ -270,7 +370,10 @@ def build_plan_task_world(
                         draft_path = str(
                             (adapter.plan_dir / "draft.md").relative_to(adapter.base_dir)
                         )
-                        trigger_msg = build_write_plan_prompt(draft_path)
+                        plan_path = str(
+                            (adapter.plan_dir / "workflow_plan.md").relative_to(adapter.base_dir)
+                        )
+                        trigger_msg = build_write_plan_prompt(draft_path, plan_path)
                         conv.messages.append(
                             Message(role="user", content=trigger_msg)
                         )
@@ -313,14 +416,20 @@ def build_plan_task_world(
                 await derive_workflow_id_from_llm(description, model)
                 or description[:40].strip()
             )
-            adapter_ref[0] = ArtifactAdapter(
+            adapter = ArtifactAdapter(
                 base_dir=_base_dir,
                 workflow_id=derived_id,
+            )
+            adapter_ref[0] = adapter
+            _reset_workflow_boundary_state(
+                _world,
+                _entity_id,
+                preserve_user_text=user_text,
             )
             _world.add_component(
                 _entity_id, build_scratchbook_prompt_config(derived_id)
             )
-            runtime_state[0] = controller.handle_plan_start(adapter_ref[0], description)
+            runtime_state[0] = controller.handle_plan_start(adapter, description)
             _sync_workflow_state(_world, _entity_id, _require_state(runtime_state[0]).phase)
             status = controller.get_plan_status(_require_state(runtime_state[0]))
             logger.info(
@@ -380,19 +489,16 @@ def build_plan_task_world(
                 return None
 
             if runtime_state[0] is None:
-                parts = _user_text.strip().split(None, 1)
-                workflow_id = parts[1].strip() if len(parts) > 1 else ""
-                if not workflow_id:
-                    raise ValueError(
-                        "No active workflow state. "
-                        "Provide a workflow_id: /task:start <workflow_id>, "
-                        "or start a new workflow with /plan:start <description>."
-                    )
-                _load_workflow(_world, _entity_id, workflow_id)
+                loaded_state = _ensure_task_workflow_loaded(
+                    _world,
+                    _entity_id,
+                    _user_text,
+                    command_name="/task:start",
+                )
                 logger.info(
                     "plan_task_task_start_auto_loaded_state",
-                    workflow_id=workflow_id,
-                    phase=_require_state(runtime_state[0]).phase,
+                    workflow_id=loaded_state.workflow_id,
+                    phase=loaded_state.phase,
                 )
 
             current = _require_state(runtime_state[0])
@@ -456,6 +562,12 @@ def build_plan_task_world(
         try:
             if runtime_state[0] is not None and runtime_state[0].phase == "TASK_RUNNING":
                 return None
+            _ensure_task_workflow_loaded(
+                _world,
+                _entity_id,
+                _user_text,
+                command_name="/task:resume",
+            )
             runtime_state[0] = controller.handle_task_resume(
                 _require_state(runtime_state[0]), _require_adapter(adapter_ref[0])
             )
@@ -528,8 +640,14 @@ def build_plan_task_world(
         if not workflow_id:
             return "Error: /plan:resume requires a non-empty workflow_id."
         try:
-            state = _load_workflow(_world, _entity_id, workflow_id)
+            state = _load_workflow(
+                _world,
+                _entity_id,
+                workflow_id,
+                preserve_user_text=user_text,
+            )
             actions = controller.reconcile_after_resume(state, _require_adapter(adapter_ref[0]))
+            _sync_workflow_state(_world, _entity_id, state.phase)
             for action in actions:
                 if action == ResumeAction.TRIGGER_PLAN_WRITER:
                     conv = _world.get_component(_entity_id, ConversationComponent)
@@ -538,8 +656,11 @@ def build_plan_task_world(
                         draft_path = str(
                             (loaded_adapter.plan_dir / "draft.md").relative_to(loaded_adapter.base_dir)
                         )
+                        plan_path = str(
+                            (loaded_adapter.plan_dir / "workflow_plan.md").relative_to(loaded_adapter.base_dir)
+                        )
                         conv.messages.append(
-                            Message(role="user", content=build_write_plan_prompt(draft_path))
+                            Message(role="user", content=build_write_plan_prompt(draft_path, plan_path))
                         )
                         logger.info(
                             "plan_task_auto_trigger_plan_writer",
@@ -573,7 +694,10 @@ def build_plan_task_world(
             draft_path = str(
                 (adapter.plan_dir / "draft.md").relative_to(adapter.base_dir)
             )
-            return build_write_plan_prompt(draft_path)
+            plan_path = str(
+                (adapter.plan_dir / "workflow_plan.md").relative_to(adapter.base_dir)
+            )
+            return build_write_plan_prompt(draft_path, plan_path)
         except ValueError as exc:
             logger.warning("plan_task_command_error", command="plan_write", exception=str(exc))
             return f"Error: {exc}"
@@ -694,6 +818,9 @@ def build_plan_task_world(
     install_workflow(world, agent_id, PLAN_TASK_WORKFLOW_SPEC, agent_key="main")
 
     world.register_system(WorkflowStateSystem(priority=-25), priority=-25)
+    world.register_system(
+        CompactionSystem(), priority=_PLAN_TASK_COMPACTION_PRIORITY
+    )
     world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
     world.register_system(UserPromptNormalizationSystem(priority=-10), priority=-10)
     subagent_system = SubagentSystem(priority=-1)
@@ -702,7 +829,6 @@ def build_plan_task_world(
     subagent_system.install_subagent_control_tools(world, agent_id)
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     return world, agent_id, adapter_ref, runtime_state
@@ -720,7 +846,7 @@ async def main() -> None:
         "LLM_BASE_URL",
         "https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
     )
-    model: str = os.environ.get("LLM_MODEL", "qwen3.6-flash")
+    model_name: str = os.environ.get("LLM_MODEL", "qwen3.6-flash")
     api_format_str: str = os.environ.get("LLM_API_FORMAT", "openai_responses")
 
     if not api_key:
@@ -730,19 +856,23 @@ async def main() -> None:
         )
         sys.exit(1)
 
-    model: LLMModel
     if api_format_str == ApiFormat.ANTHROPIC_MESSAGES:
-        logger.info("using_model", model_name=model, api_format="anthropic_messages")
-        print(f"Using Anthropic Messages API with model: {model}")
-        model = Model(model, base_url=base_url, api_key=api_key, api_format=ApiFormat.ANTHROPIC_MESSAGES)
+        logger.info("using_model", model_name=model_name, api_format="anthropic_messages")
+        print(f"Using Anthropic Messages API with model: {model_name}")
+        llm_model: LLMModel = Model(
+            model_name,
+            base_url=base_url,
+            api_key=api_key,
+            api_format=ApiFormat.ANTHROPIC_MESSAGES,
+        )
     else:
         api_format = ApiFormat.OPENAI_RESPONSES
         if api_format_str == ApiFormat.OPENAI_CHAT_COMPLETIONS:
             api_format = ApiFormat.OPENAI_CHAT_COMPLETIONS
-        logger.info("using_model", model_name=model, api_format=api_format)
-        print(f"Using model: {model}")
-        model = Model(
-            model,
+        logger.info("using_model", model_name=model_name, api_format=api_format)
+        print(f"Using model: {model_name}")
+        llm_model = Model(
+            model_name,
             base_url=base_url,
             api_key=api_key,
             api_format=api_format,
@@ -750,7 +880,7 @@ async def main() -> None:
         )
 
     world, agent_id, _, _ = build_plan_task_world(
-        model=model,
+        model=llm_model,
         base_dir=_WORKFLOW_BASE_DIR,
     )
 

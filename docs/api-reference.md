@@ -716,9 +716,16 @@ class WorldSerializer:
 ## ecs_agent.logging
 
 ```python
-def configure_logging(json_output: bool = False, level: str = "INFO") -> None: ...
+def configure_logging(
+    json_output: bool = False,
+    level: str | None = None,
+    module_levels: dict[str, str] | None = None,
+    colors: bool = True,
+) -> None: ...
 def get_logger(name: str) -> BoundLogger: ...
 ```
+
+`ecs-agent` logging is silent until `configure_logging()` is called. If `level` is `None`, the function reads `ECS_AGENT_LOG_LEVEL`; otherwise it defaults to `ERROR`.
 ---
 
 ## ecs_agent.tools

@@ -1,6 +1,6 @@
 # Plan and Task E2E Example
 
-This example demonstrates an interactive plan→review→execute workflow using the ECS-based LLM Agent framework. It features a robust state machine, review-gated planning, artifact persistence, and recovery semantics.
+This example demonstrates an interactive plan→review→execute workflow using the ECS-based LLM Agent framework. It features a robust state machine, review-gated planning, artifact persistence, recovery semantics, and framework-native auto compaction for both the main agent and spawned subagents.
 
 ## Overview
 
@@ -13,14 +13,17 @@ The workflow follows a structured lifecycle:
 
 ## Architecture
 
-- **Built-in Tools** — The main agent has `read_file`, `write_file`, `edit_file`, `bash`, and `glob` tools pre-installed via `BuiltinToolsSkill`, workspace-bound to the example directory. `edit_file` uses hash-anchored `edits_json` only: supply a `pos` of `"N#HASH"` obtained from a prior `read_file` call. The main agent has unrestricted access to all these tools.
+- **Built-in Tools** — The main agent has `read_file`, `write_file`, `edit_file`, `bash`, and `glob` tools pre-installed via `BuiltinToolsSkill`, workspace-bound to the example directory. `edit_file` uses a hash-anchored interface: supply `op`, `pos`, optional `end`, and `content`, with `pos`/`end` in `"N#HASH"` format obtained from a prior `read_file` call. The main agent has unrestricted access to all these tools.
 - **Subagent Tool Permissions** — `advisor`, `qa`, and `plan_qa` review subagents inherit only `read_file` and `glob` (read-only) via `InheritancePolicy(inherit_tools=["read_file", "glob"], inherit_permissions=True)`. They cannot write files or run shell commands. `plan_writer` inherits `read_file`, `write_file`, `edit_file`, and `glob` since it must produce the final plan document.
 - **Two Distinct QA Subagents** — Draft QA (`qa`) and Plan QA (`plan_qa`) are registered as separate subagents with separate system prompts and separate state machine transition paths:
   - `qa` uses `QA_SYSTEM_PROMPT` (draft review lens) and routes `DelegationCompletedEvent` → `controller.handle_qa_review()` → `DRAFT_QA_REVIEW` verdict.
   - `plan_qa` uses `PLAN_QA_REVIEW_SYSTEM_PROMPT` (final plan review lens) and routes `DelegationCompletedEvent` → `controller.handle_plan_qa_review()` → `PLAN_QA_REVIEW` verdict.
   - The planner system prompt calls `subagent(category="qa", ...)` for draft review and `subagent(category="plan_qa", ...)` for plan review.
 - **Review Prompts via File Path** — When invoking `advisor`, `qa`, `plan_qa`, or `plan_writer` subagents for review, the prompt passes the artifact file path (e.g. `scratchbook/<workflow_id>/plan/draft.md`) rather than embedding the file content inline. The subagent reads the file itself using `read_file`, avoiding prompt token bloat.
-- **Log Truncation** — Structured log fields `last_user_prompt`, `prompt_text` (user normalization), and `prompt_text` (system render) are truncated to 200 characters to keep logs readable without losing signal.
+- **Auto Compaction** — `build_plan_task_world(...)` installs `CompactionConfigComponent(threshold_tokens=12_000, compaction_method="predrop_then_compact")`, `ConversationArchiveComponent`, and `CompactionSystem` at priority `-30` so compaction runs before workflow prompt rendering and before reasoning. `SystemPromptRenderSystem` then injects the current summary into the effective system prompt as `<chat_history_summary>...</chat_history_summary>` XML.
+- **Subagent Compaction Inheritance** — Child worlds created by `SubagentSystem` inherit the parent `CompactionConfigComponent`, receive their own `ConversationArchiveComponent`, and register `CompactionSystem` at the same priority. Long-running review and task subagents therefore compact independently without requiring plan-and-task-specific special cases.
+- **Workflow Reset Safety** — `/plan:start`, `/plan:resume`, and `/task:start <workflow_id>` clear stale `CurrentCompactionSummaryComponent`, reset archived summaries, and invalidate `RenderedSystemPromptComponent` before restoring or switching workflow state. This prevents an old summary from leaking into a newly loaded workflow phase.
+- **Log Truncation** — Structured log fields `last_user_prompt` and user-normalization `prompt_text` are truncated to 200 characters to keep logs readable without losing signal. System-prompt render logs still report `prompt_length`, but the rendered prompt text itself is not truncated in this example.
 - **ECS Core**: Uses `SystemPromptRenderSystem`, `UserPromptNormalizationSystem`, `ReasoningSystem`, `ToolExecutionSystem`, and `MemorySystem`.
 - **Prompt Configuration**: The planner entity declares `SystemPromptConfigSpec` with `DRAFT_INTERVIEW_SYSTEM_PROMPT`, and `SystemPromptRenderSystem` bridges the rendered value into `LLMComponent.system_prompt` before reasoning.
 - **Workflow DSL**: Uses `install_workflow` and `WorkflowStateSystem` (priority -25) to manage the phase graph and automatic prompt-profile selection via `${_workflow_state_prompt}`.
@@ -131,6 +134,7 @@ uv run pytest tests/integration/test_plan_and_task_flow.py -v
 ```
 
 - `uv run pytest tests/integration/test_plan_and_task_flow.py -k "subagent"` — verifies subagent component wiring
+- `uv run pytest tests/integration/test_plan_and_task_flow.py -k "compaction or stale_compaction_state" -v` — verifies main-agent auto compaction, subagent inheritance, and stale-summary reset on workflow switch/resume
 
 ### Specific test filters
 
@@ -150,6 +154,16 @@ LLM_MODEL=qwen3.5-flash \
 uv run pytest tests/live/test_plan_and_task_flow_live.py -v
 ```
 
+To exercise the new compaction path against an Anthropic-compatible endpoint:
+
+```bash
+LLM_API_FORMAT=anthropic_messages \
+LLM_BASE_URL=https://cc2.caaa.tech \
+LLM_API_KEY="$LLM_API_KEY" \
+LLM_MODEL=glm-5.1 \
+uv run pytest tests/live/test_plan_and_task_flow_live.py::test_anthropic_plan_task_auto_compaction_summarizes_context -v
+```
+
 ## Environment Variables
 
 - `LLM_API_KEY`: API key for the chosen provider.
@@ -160,7 +174,7 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py -v
   - `openai_chat_completions` — OpenAI Chat Completions API via `OpenAIModel`
   - `anthropic_messages` — Anthropic Messages API via `ClaudeModel` (also works with Kimi-compatible Anthropic endpoints)
 - `PLAN_TASK_INTERACTIVE`: Set to `0` to disable interactive stdin.
-- `DEBUG`: Set to `1` to enable debug logging. All `plan_task_*` structured log events will appear on stderr via structlog.
+- `DEBUG`: Set to `1` to make this example call `configure_logging()` with debug logging. All `plan_task_*` structured log events will then appear on stderr via structlog.
 
 ### Anthropic / Kimi Example
 
@@ -176,6 +190,8 @@ DEBUG=1 \
 The `ClaudeModel` appends `/v1/messages` to `LLM_BASE_URL`, so the actual endpoint called is `https://api.anthropic.com/v1/messages`. Anthropic cache stats (`cache_read_input_tokens`, `cache_creation_input_tokens`) are normalized and surfaced as `plan_task_llm_cache_stats` events with `cache_hit_rate`.
 
 ### Log Events (observable with `DEBUG=1`)
+
+This example explicitly enables logging in `main.py` when `DEBUG=1`; the base `ecs-agent` library remains silent until `configure_logging()` is called.
 
 | Event | Level | File | Description |
 |-------|-------|------|-------------|
@@ -217,14 +233,16 @@ The `ClaudeModel` appends `/v1/messages` to `LLM_BASE_URL`, so the actual endpoi
 
 ## Implementation Details
 
-- **Testable World Factory**: `build_plan_task_world(provider, model, base_dir)` is a public function that returns `(world, agent_id, adapter_ref, runtime_state)`, enabling direct world setup in tests without running the CLI. `adapter_ref` is a `list[ArtifactAdapter | None]` — starts as `[None]` and is populated in-place by the `/plan:start` handler after the workflow ID is derived.
+- **Testable World Factory**: `build_plan_task_world(model, base_dir=None, *, compaction_threshold_tokens=..., compaction_method=...)` is a public function that returns `(world, agent_id, adapter_ref, runtime_state)`, enabling direct world setup in tests without running the CLI. `adapter_ref` is a `list[ArtifactAdapter | None]` — starts as `[None]` and is populated in-place by the `/plan:start` handler after the workflow ID is derived.
+- **Framework-Native Auto Compaction**: `build_plan_task_world(...)` accepts `compaction_threshold_tokens` and `compaction_method`, installs `CompactionConfigComponent`, initializes `ConversationArchiveComponent`, and registers `CompactionSystem()` at priority `-30`. The example reuses the shared framework compaction pipeline rather than maintaining a bespoke plan-and-task summarizer.
 - **workflow_id Auto-Derivation**: `/plan:start <description>` calls `derive_workflow_id_from_llm()` to ask the LLM to generate a short, meaningful English slug from the description (e.g., `"writing-assistant-multi-agent"`). Falls back to `slug_from_description()` on provider error or invalid output. The derived ID controls the scratchbook directory for all subsequent operations in that session.
-- **Progressive Draft Editing**: The planning interview fills `draft.md` one section at a time using `read_file` (to get LINE#HASH annotated content) + `edit_file(edits_json=...)` (hash-anchored). The LLM reads the file first to capture `N#HASH` references, then replaces exactly the placeholder line. Full-file rewrites via `write_file` are explicitly prohibited by the system prompt.
+- **Progressive Draft Editing**: The planning interview fills `draft.md` one section at a time using `read_file` (to get LINE#HASH annotated content) plus hash-anchored `edit_file(op=..., pos=..., end=..., content=...)` calls. The LLM reads the file first to capture `N#HASH` references, then replaces exactly the placeholder line or range. Full-file rewrites via `write_file` are explicitly prohibited by the system prompt.
 - **Atomic Writes**: All artifact updates use atomic file operations to prevent corruption.
 - **Circuit Breaker**: `TaskExec` implements a retry budget to prevent infinite loops on failing tasks.
-- **Review Gating**: Finalization is strictly blocked until both `PLAN_ADVISOR_REVIEW` and `PLAN_QA_REVIEW` have `approved` verdicts.
+- **Review Gating**: Finalization is strictly blocked until `DRAFT_ADVISOR_REVIEW`, `DRAFT_QA_REVIEW`, and `PLAN_QA_REVIEW` all have `approved` verdicts.
 - **Advisor Retry Loop**: When the advisor returns `revise` or `blocked`, the system prompt instructs the planner LLM to apply the feedback to `draft.md` via `edit_file` and re-call the advisor. Only an `approved` advisor verdict unlocks the QA step. Non-approved verdicts for a phase replace any prior non-approved verdict (upsert semantics). Once a phase reaches `approved`, that verdict is **sticky** — any subsequent upsert attempt for the same phase is silently ignored. `approved` verdicts always have `notes=None`; non-approved verdicts retain their notes for debugging.
 - **Slash Command Re-trigger Guard**: After `/task:start` the command message stays as the last `role="user"` entry in the conversation (tool results use `role="tool"` and do not replace it). `_handle_task_start` therefore checks whether `SystemPromptConfigSpec` already contains `TASK_MAIN_AGENT_SYSTEM_PROMPT`; if so, it returns `None` immediately, letting the LLM continue task execution without re-initializing the task queue.
+- **Compaction State Reset on Workflow Switch**: `_reset_compaction_state(...)` removes `CurrentCompactionSummaryComponent`, clears `ConversationArchiveComponent.archived_summaries`, and removes `RenderedSystemPromptComponent` before `/plan:start`, `/plan:resume`, or auto-loading state from `/task:start <workflow_id>`. This keeps prompt summaries aligned with the active workflow instead of a previous session.
 - **Plan Template**: `templates/workflow_plan_template.md` is an annotated reference showing the exact `workflow_plan.md` format: YAML frontmatter, `## Overview` with `### Dependency Graph`, `## Tasks` section, per-task `### Task: <task_id>` + ` ```yaml ``` ` blocks, and an optional `## Appendix` AC cross-reference table. The format spec is also embedded verbatim into `WRITE_PLAN_SYSTEM_PROMPT` and `build_write_plan_prompt()` as `_WORKFLOW_PLAN_FORMAT` so the `plan_writer` subagent has an unambiguous reference without reading a file.
 - **Dependency Resolution**: Tasks are executed in topological order based on their `dependencies` list.
 - **Review Verdict Lifecycle**: Each phase holds at most one verdict in `review_verdicts`. Upsert semantics: non-approved verdicts replace earlier non-approved verdicts for the same phase; `approved` is terminal and cannot be overwritten. `approved` verdicts always have `notes=None`. The `plan_version` field has been removed from `ReviewVerdict`.

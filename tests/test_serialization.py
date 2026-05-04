@@ -161,6 +161,47 @@ def test_serialization_roundtrip_message_with_multimodal_parts() -> None:
     assert restored_message.parts[0].filename == "report.pdf"
 
 
+def test_serialization_roundtrip_preserves_reasoning_replay_metadata() -> None:
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        ConversationComponent(
+            messages=[
+                Message(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id="call_123",
+                            name="get_weather",
+                            arguments={"city": "San Francisco"},
+                        )
+                    ],
+                    reasoning_content="",
+                    reasoning_signature="sig_123",
+                )
+            ]
+        ),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+    restored_conv = restored.get_component(entity, ConversationComponent)
+
+    assert restored_conv is not None
+    restored_message = restored_conv.messages[0]
+    assert restored_message.reasoning_content == ""
+    assert restored_message.reasoning_signature == "sig_123"
+    assert restored_message.tool_calls == [
+        ToolCall(
+            id="call_123",
+            name="get_weather",
+            arguments={"city": "San Francisco"},
+        )
+    ]
+
+
 def test_to_dict_skips_non_serializable_fields() -> None:
     model = DummyProvider()
     world = World()

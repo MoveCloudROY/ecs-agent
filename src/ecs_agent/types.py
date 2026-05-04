@@ -101,6 +101,8 @@ class Message:
     parts: list[MessagePart] | None = None
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
+    reasoning_content: str | None = None
+    reasoning_signature: str | None = None
     compaction_metadata: dict[str, Any] | None = field(default=None)
 
 

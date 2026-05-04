@@ -15,6 +15,7 @@ class Command:
 _COMMANDS_WITH_ARGS = {
     "/plan:start",
     "/plan:resume",
+    "/plan:qa_review",
     "/task:start",
     "/task:resume",
     "/task:replan",
@@ -23,6 +24,7 @@ _COMMANDS_WITH_ARGS = {
 _COMMANDS_WITHOUT_ARGS = {
     "/plan:status",
     "/plan:finalize",
+    "/plan:write",
     "/task:status",
     "/task:abort",
 }

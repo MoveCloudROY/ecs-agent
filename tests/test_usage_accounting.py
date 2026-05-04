@@ -16,8 +16,13 @@ from ecs_agent.accounting.normalization import (
     normalize_openai_usage,
 )
 from ecs_agent.core import EventBus
+from ecs_agent.logging import configure_logging
 from ecs_agent.types import LLMInvocationEvent as ExportedLLMInvocationEvent
 from ecs_agent.types import Usage
+
+
+def _captured_log_output(captured: object) -> str:
+    return str(getattr(captured, "err", "") or getattr(captured, "out", ""))
 
 
 def test_openai_cache_normalization_with_prompt_cache_fields() -> None:
@@ -269,6 +274,7 @@ async def test_accounting_subscriber_aggregate_cache_stats_are_token_weighted() 
 async def test_accounting_subscriber_failure_is_logged_and_publish_continues(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    configure_logging(json_output=False, level="ERROR")
     bus = EventBus()
     subscriber = AccountingSubscriber()
     subscriber.subscribe(bus)
@@ -290,5 +296,6 @@ async def test_accounting_subscriber_failure_is_logged_and_publish_continues(
     captured = capsys.readouterr()
 
     assert len(subscriber._records) == 1
-    assert "event_bus_subscriber_error" in captured.out
-    assert "accounting explode" in captured.out
+    output = _captured_log_output(captured)
+    assert "event_bus_subscriber_error" in output
+    assert "accounting explode" in output

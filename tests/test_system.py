@@ -13,6 +13,10 @@ from ecs_agent.types import (
 )
 
 
+def _captured_log_output(captured: object) -> str:
+    return str(getattr(captured, "err", "") or getattr(captured, "out", ""))
+
+
 @dataclass(slots=True)
 class LoggingSystem:
     name: str
@@ -175,7 +179,7 @@ class TestSystemLogging:
         captured = capsys.readouterr()
         # Parse only JSON lines
         events = []
-        for line in captured.out.strip().split("\n"):
+        for line in _captured_log_output(captured).strip().split("\n"):
             if line.strip() and line.strip().startswith("{"):
                 events.append(json.loads(line))
         system_start_events = [
@@ -213,7 +217,7 @@ class TestSystemLogging:
         captured = capsys.readouterr()
         # Parse only JSON lines
         events = []
-        for line in captured.out.strip().split("\n"):
+        for line in _captured_log_output(captured).strip().split("\n"):
             if line.strip() and line.strip().startswith("{"):
                 events.append(json.loads(line))
         system_complete_events = [
@@ -267,7 +271,7 @@ class TestSystemLogging:
         captured = capsys.readouterr()
         # Parse only JSON lines
         events = []
-        for line in captured.out.strip().split("\n"):
+        for line in _captured_log_output(captured).strip().split("\n"):
             if line.strip() and line.strip().startswith("{"):
                 events.append(json.loads(line))
         system_error_events = [

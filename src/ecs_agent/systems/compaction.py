@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import math
 from typing import cast
 
@@ -12,6 +13,7 @@ from ecs_agent.components import (
     ConversationComponent,
     EntityRegistryComponent,
     LLMComponent,
+    RenderedUserPromptComponent,
     RenderedSystemPromptComponent,
     SubagentNotificationQueueComponent,
     SubagentSessionTableComponent,
@@ -121,6 +123,14 @@ class CompactionSystem:
             if system_message is not None:
                 new_messages.append(system_message)
             new_messages.extend(retained_messages)
+            if not any(message.role != "system" for message in new_messages):
+                anchor = self._build_continuation_anchor(
+                    world=world,
+                    entity_id=entity_id,
+                    messages=conversation.messages,
+                )
+                if anchor is not None:
+                    new_messages.append(anchor)
             conversation.messages = new_messages
 
             compacted_tokens = self._estimate_tokens(new_messages)
@@ -144,6 +154,60 @@ class CompactionSystem:
     def _estimate_tokens(self, messages: list[Message]) -> int:
         word_count = sum(len(message.content.split()) for message in messages)
         return int(math.ceil(word_count * 1.3))
+
+    def _build_continuation_anchor(
+        self,
+        *,
+        world: World,
+        entity_id: EntityId,
+        messages: list[Message],
+    ) -> Message | None:
+        last_user = self._find_last_user_message(messages)
+        if last_user is None:
+            return None
+
+        last_user_index, last_user_message = last_user
+        rendered_user_prompt = world.get_component(entity_id, RenderedUserPromptComponent)
+        if (
+            rendered_user_prompt is not None
+            and self._rendered_prompt_matches(
+                rendered_user_prompt,
+                source_message=last_user_message,
+                source_message_index=last_user_index,
+            )
+        ):
+            return Message(role="user", content=rendered_user_prompt.text)
+
+        return Message(
+            role="user",
+            content=last_user_message.content,
+            parts=list(last_user_message.parts) if last_user_message.parts else None,
+        )
+
+    def _find_last_user_message(
+        self, messages: list[Message]
+    ) -> tuple[int, Message] | None:
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            if message.role == "user":
+                return index, message
+        return None
+
+    def _rendered_prompt_matches(
+        self,
+        rendered_user_prompt: RenderedUserPromptComponent,
+        *,
+        source_message: Message,
+        source_message_index: int,
+    ) -> bool:
+        if rendered_user_prompt.source_message_index != source_message_index:
+            return False
+        return rendered_user_prompt.source_fingerprint == self._fingerprint_text(
+            source_message.content
+        )
+
+    def _fingerprint_text(self, text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
     def _select_compaction_strategy(
         self,

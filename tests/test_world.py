@@ -10,6 +10,10 @@ from ecs_agent.logging import configure_logging
 from ecs_agent.types import EntityId
 
 
+def _captured_log_output(captured: object) -> str:
+    return str(getattr(captured, "err", "") or getattr(captured, "out", ""))
+
+
 def _json_events(output: str) -> list[dict[str, object]]:
     """Parse JSON events from logging output."""
     events: list[dict[str, object]] = []
@@ -139,6 +143,18 @@ async def test_world_process_executes_systems_by_priority() -> None:
     assert log == ["p0", "p1"]
 
 
+def test_world_construction_and_setup_are_silent_without_configure_logging(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    world = World(name="silent-world")
+    entity = world.create_entity()
+    world.add_component(entity, Position(x=1.0, y=2.0))
+
+    captured = capsys.readouterr()
+    assert _captured_log_output(captured) == ""
+    assert captured.err == ""
+
+
 def test_world_create_entity_logs_entity_created(capsys) -> None:
     """Test create_entity emits entity_created debug event."""
     configure_logging(json_output=True, level="DEBUG")
@@ -147,7 +163,7 @@ def test_world_create_entity_logs_entity_created(capsys) -> None:
     entity_id = world.create_entity()
 
     captured = capsys.readouterr()
-    output = captured.out
+    output = _captured_log_output(captured)
 
     # Check for entity_created event
     events = _json_events(output)
@@ -168,7 +184,7 @@ def test_world_add_component_logs_component_added(capsys) -> None:
     world.add_component(entity, position)
 
     captured = capsys.readouterr()
-    output = captured.out
+    output = _captured_log_output(captured)
 
     # Check for component_added event
     events = _json_events(output)
@@ -301,7 +317,7 @@ def test_world_create_entity_log_includes_world_name(capsys: pytest.CaptureFixtu
     world = World(name="test-world")
     world.create_entity()
     captured = capsys.readouterr()
-    events = _json_events(captured.out)
+    events = _json_events(_captured_log_output(captured))
     entity_event = next(e for e in events if e.get("event") == "entity_created")
     assert entity_event["world_name"] == "test-world"
 
@@ -317,7 +333,7 @@ def test_world_add_component_log_includes_world_name(capsys: pytest.CaptureFixtu
     e = world.create_entity()
     world.add_component(e, Dummy())
     captured = capsys.readouterr()
-    events = _json_events(captured.out)
+    events = _json_events(_captured_log_output(captured))
     comp_event = next(ev for ev in events if ev.get("event") == "component_added")
     assert comp_event["world_name"] == "named"
 
@@ -327,6 +343,6 @@ def test_world_unnamed_log_has_none_world_name(capsys: pytest.CaptureFixture[str
     world = World()
     world.create_entity()
     captured = capsys.readouterr()
-    events = _json_events(captured.out)
+    events = _json_events(_captured_log_output(captured))
     entity_event = next(e for e in events if e.get("event") == "entity_created")
     assert entity_event.get("world_name") is None

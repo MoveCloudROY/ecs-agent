@@ -80,8 +80,9 @@ class WorkflowStateMachine:
             Updated RuntimeState.
         """
         stale_task_ids = adapter.mark_stale_subagents(state)
-        if stale_task_ids and state.phase == "TASK_RUNNING":
+        if state.phase == "TASK_RUNNING":
             self._force_phase(state, "TASK_BLOCKED")
+            state.status = "blocked"
             logger.info(
                 "plan_task_restart_blocked",
                 workflow_id=state.workflow_id,

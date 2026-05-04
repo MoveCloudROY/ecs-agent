@@ -12,6 +12,10 @@ from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.types import ErrorOccurredEvent
 
 
+def _captured_log_output(captured: object) -> str:
+    return str(getattr(captured, "err", "") or getattr(captured, "out", ""))
+
+
 def _json_events(output: str) -> list[dict[str, object]]:
     """Parse JSON events from logging output."""
     events: list[dict[str, object]] = []
@@ -171,7 +175,7 @@ class TestErrorHandlingSystem:
         system: ErrorHandlingSystem,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """Test that process prints error log to stdout."""
+        """Test that process emits the error log after explicit logging setup."""
         configure_logging(json_output=True, level="ERROR")
 
         entity_id = world.create_entity()
@@ -185,7 +189,7 @@ class TestErrorHandlingSystem:
         await system.process(world)
 
         captured = capsys.readouterr()
-        events = _json_events(captured.out)
+        events = _json_events(_captured_log_output(captured))
 
         # Find entity_error event
         error_events = [e for e in events if e.get("event") == "entity_error"]

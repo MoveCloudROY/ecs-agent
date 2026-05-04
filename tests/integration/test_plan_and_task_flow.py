@@ -173,6 +173,18 @@ def _make_approved_verdicts() -> list[ReviewVerdict]:
             Command(name="/plan:finalize", raw="/plan:finalize", args=[]),
         ),
         (
+            "/plan:write",
+            Command(name="/plan:write", raw="/plan:write", args=[]),
+        ),
+        (
+            "/plan:qa_review approved looks good",
+            Command(
+                name="/plan:qa_review",
+                raw="/plan:qa_review approved looks good",
+                args=["approved", "looks", "good"],
+            ),
+        ),
+        (
             "/task:start implement parser",
             Command(
                 name="/task:start",
@@ -1643,6 +1655,28 @@ def test_handle_restart_no_active_subagents_keeps_phase(tmp_path: Path) -> None:
     assert result.phase == "TASK_BLOCKED"
 
 
+def test_handle_restart_running_without_subagents_becomes_blocked(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_RUNNING"
+    state.status = "active"
+    state.current_task_id = "task-001"
+    state.active_subagents = []
+    adapter.write_plan("# draft")
+    adapter.write_state(state)
+
+    sm = WorkflowStateMachine()
+    result = sm.handle_restart(state, adapter)
+
+    assert result.phase == "TASK_BLOCKED"
+    assert result.status == "blocked"
+    persisted = adapter.read_state()
+    assert persisted.phase == "TASK_BLOCKED"
+    assert persisted.status == "blocked"
+
+
 def test_readme_command_examples_match_supported_commands() -> None:
     """Each command documented in README.md is accepted by parse_command().
 
@@ -1770,20 +1804,51 @@ def test_main_world_registers_trigger_script_handlers(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_trigger_plan_start_handler_creates_state(tmp_path: Path) -> None:
-    from ecs_agent.components import UserPromptConfigComponent
+    from ecs_agent.components import ConversationComponent, UserPromptConfigComponent
+    from ecs_agent.types import Message
 
     world, agent_id, _, runtime_state = _build_test_world(tmp_path)
     config = world.get_component(agent_id, UserPromptConfigComponent)
     assert config is not None
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
 
     handler_key = next(t.content for t in config.triggers if t.pattern == "/plan:start")
     handler = config.script_handlers[handler_key]
 
-    result = await handler(world, agent_id, "/plan:start Build demo")
+    user_text = "/plan:start Build demo"
+    conversation.messages.append(Message(role="user", content=user_text))
+
+    result = await handler(world, agent_id, user_text)
 
     assert runtime_state[0] is not None
     assert runtime_state[0].phase == "DRAFT_INTERVIEW"
     assert isinstance(result, str)
+
+
+@pytest.mark.asyncio
+async def test_plan_start_trigger_is_not_reprocessed_for_same_user_message(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent.components import ConversationComponent
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+    from ecs_agent.types import Message
+
+    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.append(Message(role="user", content="/plan:start Build demo"))
+
+    system = UserPromptNormalizationSystem()
+
+    await system.process(world)
+    first_state = runtime_state[0]
+    await system.process(world)
+
+    assert first_state is not None
+    assert runtime_state[0] is first_state
 
 
 @pytest.mark.asyncio
@@ -1876,6 +1941,94 @@ async def test_main_world_setup_installs_subagent_infrastructure(
     )
 
 
+@pytest.mark.asyncio
+async def test_plan_task_world_installs_auto_compaction(tmp_path: Path) -> None:
+    from ecs_agent.components.definitions import (
+        CompactionConfigComponent,
+        ConversationArchiveComponent,
+    )
+    from ecs_agent.providers.fake_model import FakeModel
+    from ecs_agent.systems.compaction import CompactionSystem
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    model = FakeModel(responses=["ok"])
+    world, agent_id, _, _ = build_plan_task_world(model=model, base_dir=tmp_path)
+    world.apply_pending_system_operations()
+
+    compaction = world.get_component(agent_id, CompactionConfigComponent)
+    archive = world.get_component(agent_id, ConversationArchiveComponent)
+
+    assert compaction is not None
+    assert archive is not None
+    assert any(
+        isinstance(entry.system, CompactionSystem) and entry.priority == -30
+        for entry in world._systems._systems
+    )
+
+
+def test_plan_task_world_does_not_register_memory_system(tmp_path: Path) -> None:
+    from ecs_agent.providers.fake_model import FakeModel
+    from ecs_agent.systems.memory import MemorySystem
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    model = FakeModel(responses=["ok"])
+    world, _, _, _ = build_plan_task_world(model=model, base_dir=tmp_path)
+    world.apply_pending_system_operations()
+
+    assert not any(
+        isinstance(entry.system, MemorySystem) for entry in world._systems._systems
+    )
+
+
+@pytest.mark.asyncio
+async def test_plan_task_compaction_summarizes_before_prompt_render(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent.components import (
+        ConversationComponent,
+        CurrentCompactionSummaryComponent,
+        RenderedSystemPromptComponent,
+    )
+    from ecs_agent.providers.fake_model import FakeModel
+    from ecs_agent.systems.compaction import CompactionSystem
+    from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
+    from ecs_agent.types import CompletionResult, Message
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    model = FakeModel(
+        responses=[
+            CompletionResult(
+                message=Message(role="assistant", content="Compacted summary")
+            )
+        ]
+    )
+    world, agent_id, _, _ = build_plan_task_world(
+        model=model,
+        base_dir=tmp_path,
+        compaction_threshold_tokens=1,
+    )
+
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.extend(
+        [
+            Message(role="user", content="word " * 40),
+            Message(role="assistant", content="reply " * 40),
+        ]
+    )
+
+    await CompactionSystem().process(world)
+    await SystemPromptRenderSystem().process(world)
+
+    summary = world.get_component(agent_id, CurrentCompactionSummaryComponent)
+    rendered = world.get_component(agent_id, RenderedSystemPromptComponent)
+
+    assert summary is not None
+    assert summary.summary == "Compacted summary"
+    assert rendered is not None
+    assert "<chat_history_summary>Compacted summary</chat_history_summary>" in rendered.text
+
+
 # ── DelegationCompletedEvent verdict tests ─────────────────────────────────────
 
 
@@ -1890,6 +2043,258 @@ def test_main_world_does_not_register_record_verdict_tools(tmp_path: Path) -> No
     assert "record_qa_verdict" not in tool_registry.tools
     assert "record_advisor_verdict" not in tool_registry.handlers
     assert "record_qa_verdict" not in tool_registry.handlers
+
+
+@pytest.mark.asyncio
+async def test_plan_start_resets_stale_compaction_state(tmp_path: Path) -> None:
+    from ecs_agent.components import (
+        ConversationComponent,
+        ConversationArchiveComponent,
+        CurrentCompactionSummaryComponent,
+        RenderedSystemPromptComponent,
+        UserPromptConfigComponent,
+    )
+    from ecs_agent.types import Message
+
+    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+    world.add_component(
+        agent_id,
+        CurrentCompactionSummaryComponent(summary="stale-summary"),
+    )
+    archive = world.get_component(agent_id, ConversationArchiveComponent)
+    assert archive is not None
+    archive.archived_summaries.append("stale-archive")
+    world.add_component(agent_id, RenderedSystemPromptComponent(text="stale-rendered"))
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.extend(
+        [
+            Message(role="user", content="workflow-a question"),
+            Message(role="assistant", content="workflow-a answer"),
+        ]
+    )
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+    handler_key = next(t.content for t in config.triggers if t.pattern == "/plan:start")
+    handler = config.script_handlers[handler_key]
+
+    user_text = "/plan:start Build demo"
+    conversation.messages.append(Message(role="user", content=user_text))
+
+    result = await handler(world, agent_id, user_text)
+
+    assert result is not None
+    assert runtime_state[0] is not None
+    assert world.get_component(agent_id, CurrentCompactionSummaryComponent) is None
+    archive = world.get_component(agent_id, ConversationArchiveComponent)
+    assert archive is not None
+    assert archive.archived_summaries == []
+    assert world.get_component(agent_id, RenderedSystemPromptComponent) is None
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    assert [message.content for message in conversation.messages] == [user_text]
+
+
+@pytest.mark.asyncio
+async def test_plan_resume_resets_stale_compaction_state(tmp_path: Path) -> None:
+    from ecs_agent.components import (
+        ConversationComponent,
+        ConversationArchiveComponent,
+        CurrentCompactionSummaryComponent,
+        RenderedSystemPromptComponent,
+        UserPromptConfigComponent,
+    )
+    from ecs_agent.types import Message
+
+    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    state = _make_state_at_phase("TASK_BLOCKED")
+    state.workflow_id = adapter.workflow_id
+    state.status = "blocked"
+    state.current_task_id = "task-001"
+    (adapter.plan_dir / "workflow_plan.md").write_text("# Plan\n", encoding="utf-8")
+    adapter.write_state(state)
+
+    world.add_component(
+        agent_id,
+        CurrentCompactionSummaryComponent(summary="stale-summary"),
+    )
+    archive = world.get_component(agent_id, ConversationArchiveComponent)
+    assert archive is not None
+    archive.archived_summaries.append("stale-archive")
+    world.add_component(agent_id, RenderedSystemPromptComponent(text="stale-rendered"))
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.extend(
+        [
+            Message(role="user", content="workflow-a question"),
+            Message(role="assistant", content="workflow-a answer"),
+        ]
+    )
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+    handler_key = next(t.content for t in config.triggers if t.pattern == "/plan:resume")
+    handler = config.script_handlers[handler_key]
+
+    user_text = f"/plan:resume {state.workflow_id}"
+    conversation.messages.append(Message(role="user", content=user_text))
+
+    result = await handler(world, agent_id, user_text)
+
+    assert result is not None
+    assert runtime_state[0] is not None
+    assert runtime_state[0].workflow_id == state.workflow_id
+    assert world.get_component(agent_id, CurrentCompactionSummaryComponent) is None
+    archive = world.get_component(agent_id, ConversationArchiveComponent)
+    assert archive is not None
+    assert archive.archived_summaries == []
+    assert world.get_component(agent_id, RenderedSystemPromptComponent) is None
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    assert [message.content for message in conversation.messages] == [user_text]
+
+
+@pytest.mark.asyncio
+async def test_task_start_auto_load_resets_stale_compaction_state(tmp_path: Path) -> None:
+    from ecs_agent.components import (
+        ConversationArchiveComponent,
+        ConversationComponent,
+        CurrentCompactionSummaryComponent,
+    )
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+    from ecs_agent.types import Message
+
+    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    state = _make_runtime_state()
+    state.phase = "PLAN_FINALIZED"
+    state.review_verdicts = _make_approved_verdicts()
+    adapter.write_state(state)
+
+    world.add_component(
+        agent_id,
+        CurrentCompactionSummaryComponent(summary="stale-summary"),
+    )
+    archive = world.get_component(agent_id, ConversationArchiveComponent)
+    assert archive is not None
+    archive.archived_summaries.append("stale-archive")
+
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.append(
+        Message(role="user", content=f"/task:start {state.workflow_id}")
+    )
+
+    await UserPromptNormalizationSystem().process(world)
+
+    assert runtime_state[0] is not None
+    assert runtime_state[0].workflow_id == state.workflow_id
+    assert world.get_component(agent_id, CurrentCompactionSummaryComponent) is None
+    archive = world.get_component(agent_id, ConversationArchiveComponent)
+    assert archive is not None
+    assert archive.archived_summaries == []
+
+
+@pytest.mark.asyncio
+async def test_plan_start_reset_does_not_retrigger_on_second_normalization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ecs_agent.components import ConversationComponent
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+    from ecs_agent.types import Message
+
+    import examples.e2e.plan_and_task.main as plan_task_main
+
+    calls = {"count": 0}
+
+    async def fake_derive_workflow_id(description: str, model: object) -> str:
+        _ = (description, model)
+        calls["count"] += 1
+        return "build-demo"
+
+    monkeypatch.setattr(
+        plan_task_main,
+        "derive_workflow_id_from_llm",
+        fake_derive_workflow_id,
+    )
+
+    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.extend(
+        [
+            Message(role="user", content="workflow-a question"),
+            Message(role="assistant", content="workflow-a answer"),
+            Message(role="user", content="/plan:start Build demo"),
+        ]
+    )
+
+    system = UserPromptNormalizationSystem()
+    await system.process(world)
+    await system.process(world)
+
+    assert calls["count"] == 1
+    assert runtime_state[0] is not None
+    assert [message.content for message in conversation.messages] == [
+        "/plan:start Build demo"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_plan_resume_reset_does_not_retrigger_on_second_normalization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ecs_agent.components import ConversationComponent, UserPromptConfigComponent
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+    from ecs_agent.types import Message
+
+    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    state = _make_state_at_phase("TASK_BLOCKED")
+    state.workflow_id = adapter.workflow_id
+    state.status = "blocked"
+    state.current_task_id = "task-001"
+    (adapter.plan_dir / "workflow_plan.md").write_text("# Plan\n", encoding="utf-8")
+    adapter.write_state(state)
+
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.extend(
+        [
+            Message(role="user", content="workflow-a question"),
+            Message(role="assistant", content="workflow-a answer"),
+            Message(role="user", content=f"/plan:resume {state.workflow_id}"),
+        ]
+    )
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+    handler_key = next(t.content for t in config.triggers if t.pattern == "/plan:resume")
+    original_handler = config.script_handlers[handler_key]
+    calls = {"count": 0}
+
+    async def counted_handler(world_obj: World, entity_id: EntityId, user_text: str) -> str | None:
+        calls["count"] += 1
+        return await original_handler(world_obj, entity_id, user_text)
+
+    config.script_handlers[handler_key] = counted_handler
+
+    system = UserPromptNormalizationSystem()
+    await system.process(world)
+    await system.process(world)
+
+    assert calls["count"] == 1
+    assert runtime_state[0] is not None
+    assert runtime_state[0].workflow_id == state.workflow_id
+    assert [message.content for message in conversation.messages] == [
+        f"/plan:resume {state.workflow_id}"
+    ]
 
 
 def test_extract_verdict_parses_all_three_values() -> None:
@@ -2799,6 +3204,13 @@ async def test_plan_resume_handler_marks_stale_subagents(tmp_path: Path) -> None
     assert all(
         s.status == "stale" for s in runtime_state[0].active_subagents
     ), "All previously active subagents must be stale after resume"
+    assert runtime_state[0].phase == "TASK_BLOCKED"
+    assert runtime_state[0].status == "blocked"
+
+    restored = adapter.read_state()
+    assert restored.phase == "TASK_BLOCKED"
+    assert restored.status == "blocked"
+    assert restored.active_subagents[0].status == "stale"
 
 
 @pytest.mark.asyncio
@@ -3648,7 +4060,11 @@ def test_reconcile_plan_qa_revise_returns_no_triggers(tmp_path: Path) -> None:
 async def test_plan_resume_draft_qa_approved_injects_write_plan_message(
     tmp_path: Path,
 ) -> None:
-    from ecs_agent.components import ConversationComponent, UserPromptConfigComponent
+    from ecs_agent.components import (
+        ConversationComponent,
+        UserPromptConfigComponent,
+        WorkflowRuntimeComponent,
+    )
     from ecs_agent.providers.fake_model import FakeModel
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
@@ -3677,6 +4093,9 @@ async def test_plan_resume_draft_qa_approved_injects_write_plan_message(
     assert "Error" not in result
     assert _runtime_state[0] is not None
     assert _runtime_state[0].phase == "WRITE_PLAN"
+    workflow_runtime = world.get_component(agent_id, WorkflowRuntimeComponent)
+    assert workflow_runtime is not None
+    assert workflow_runtime.current_state_id == "WRITE_PLAN"
     conv = world.get_component(agent_id, ConversationComponent)
     assert conv is not None
     user_messages = [m for m in conv.messages if m.role == "user"]
@@ -3725,7 +4144,11 @@ async def test_plan_resume_write_plan_phase_injects_write_plan_message(
 async def test_plan_resume_plan_qa_approved_advances_to_finalized(
     tmp_path: Path,
 ) -> None:
-    from ecs_agent.components import ConversationComponent, UserPromptConfigComponent
+    from ecs_agent.components import (
+        ConversationComponent,
+        UserPromptConfigComponent,
+        WorkflowRuntimeComponent,
+    )
     from ecs_agent.providers.fake_model import FakeModel
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
@@ -3754,9 +4177,14 @@ async def test_plan_resume_plan_qa_approved_advances_to_finalized(
     assert "Error" not in result
     assert _runtime_state[0] is not None
     assert _runtime_state[0].phase == "PLAN_FINALIZED"
+    workflow_runtime = world.get_component(agent_id, WorkflowRuntimeComponent)
+    assert workflow_runtime is not None
+    assert workflow_runtime.current_state_id == "PLAN_FINALIZED"
     conv = world.get_component(agent_id, ConversationComponent)
     assert conv is not None
-    assert len([m for m in conv.messages if m.role == "user"]) == 0
+    assert [m.content for m in conv.messages if m.role == "user"] == [
+        f"/plan:resume {workflow_id}"
+    ]
 
 
 @pytest.mark.asyncio
@@ -3793,7 +4221,9 @@ async def test_plan_resume_draft_interview_no_message_injected(
     assert _runtime_state[0].phase == "DRAFT_INTERVIEW"
     conv = world.get_component(agent_id, ConversationComponent)
     assert conv is not None
-    assert len([m for m in conv.messages if m.role == "user"]) == 0
+    assert [m.content for m in conv.messages if m.role == "user"] == [
+        f"/plan:resume {workflow_id}"
+    ]
 
 
 def test_upsert_verdict_same_phase_keeps_latest(tmp_path: Path) -> None:
@@ -4002,7 +4432,8 @@ def test_write_plan_prompt_contains_read_file_path_not_content() -> None:
     from examples.e2e.plan_and_task.prompts import build_write_plan_prompt
 
     path = "scratchbook/wf-001/plan/draft.md"
-    prompt = build_write_plan_prompt(path)
+    plan_path = "scratchbook/wf-001/plan/workflow_plan.md"
+    prompt = build_write_plan_prompt(path, plan_path)
     assert path in prompt, "prompt must contain the draft path"
     assert "read_file" in prompt, "prompt must mention read_file tool"
     assert "## Draft Content" not in prompt
@@ -4282,6 +4713,117 @@ async def test_task_start_auto_loads_state_from_workflow_id(tmp_path: Path) -> N
     assert runtime_state[0] is not None
     assert runtime_state[0].workflow_id == state.workflow_id
     assert runtime_state[0].phase == "TASK_RUNNING"
+
+
+@pytest.mark.asyncio
+async def test_task_resume_auto_loads_blocked_state_from_workflow_id(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent.components import ConversationComponent
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+    from ecs_agent.types import Message
+
+    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    state = _make_runtime_state()
+    state.phase = "TASK_BLOCKED"
+    state.status = "blocked"
+    state.current_task_id = "task-001"
+    state.last_checkpoint = "waiting on external input"
+    state.tasks = [
+        TaskRecord(
+            task_id="task-001",
+            title="First Task",
+            status="blocked",
+            retry_count=1,
+            last_error="waiting on external input",
+        )
+    ]
+    adapter.write_state(state)
+
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.append(
+        Message(role="user", content=f"/task:resume {state.workflow_id}")
+    )
+
+    await UserPromptNormalizationSystem().process(world)
+
+    assert runtime_state[0] is not None
+    assert runtime_state[0].workflow_id == state.workflow_id
+    assert runtime_state[0].phase == "TASK_RUNNING"
+
+
+@pytest.mark.asyncio
+async def test_task_resume_auto_loads_running_state_from_workflow_id(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent.components import ConversationComponent, RenderedUserPromptComponent
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+    from ecs_agent.types import Message
+
+    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    state = _make_runtime_state()
+    state.phase = "TASK_RUNNING"
+    state.status = "active"
+    state.current_task_id = "task-001"
+    state.last_checkpoint = "interrupted while running"
+    state.tasks = [
+        TaskRecord(
+            task_id="task-001",
+            title="First Task",
+            status="running",
+            retry_count=0,
+            last_error=None,
+        )
+    ]
+    adapter.write_state(state)
+
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.append(
+        Message(role="user", content=f"/task:resume {state.workflow_id}")
+    )
+
+    await UserPromptNormalizationSystem().process(world)
+
+    assert runtime_state[0] is not None
+    assert runtime_state[0].workflow_id == state.workflow_id
+    assert runtime_state[0].phase == "TASK_RUNNING"
+    assert runtime_state[0].status == "active"
+    rendered = world.get_component(agent_id, RenderedUserPromptComponent)
+    assert rendered is not None
+    assert rendered.text.startswith("Task resumed:")
+
+
+@pytest.mark.asyncio
+async def test_task_resume_without_state_and_no_workflow_id_returns_error(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent.components import ConversationComponent, RenderedUserPromptComponent
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+    from ecs_agent.types import Message
+
+    world, agent_id, _adapter, runtime_state = _build_test_world(tmp_path)
+    assert runtime_state[0] is None
+
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.append(Message(role="user", content="/task:resume"))
+
+    await UserPromptNormalizationSystem().process(world)
+
+    assert runtime_state[0] is None
+    rendered = world.get_component(agent_id, RenderedUserPromptComponent)
+    assert rendered is not None
+    assert "workflow_id" in rendered.text.lower() or "Error" in rendered.text
 
 
 @pytest.mark.asyncio

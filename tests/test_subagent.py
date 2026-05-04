@@ -4917,6 +4917,48 @@ def test_assemble_child_world_different_calls_produce_unique_names() -> None:
     assert w1.name != w2.name
 
 
+def test_child_world_inherits_parent_compaction_config() -> None:
+    from ecs_agent.components.definitions import (
+        CompactionConfigComponent,
+        ConversationArchiveComponent,
+    )
+    from ecs_agent.systems.compaction import CompactionSystem
+
+    model = FakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
+    world = World(name="parent")
+    parent = world.create_entity()
+    world.add_component(parent, LLMComponent(model=model, system_prompt=""))
+    world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(parent, ConversationComponent(messages=[]))
+    world.add_component(
+        parent,
+        CompactionConfigComponent(
+            threshold_tokens=123,
+            compaction_method="predrop_then_compact",
+        ),
+    )
+
+    config = SubagentConfig(name="worker", model=model)
+    system = SubagentSystem()
+
+    child_world, child_entity_id = system._assemble_child_world(world, parent, config)
+    child_world.apply_pending_system_operations()
+
+    compaction = child_world.get_component(child_entity_id, CompactionConfigComponent)
+    archive = child_world.get_component(child_entity_id, ConversationArchiveComponent)
+
+    assert compaction is not None
+    assert compaction.threshold_tokens == 123
+    assert compaction.compaction_method == "predrop_then_compact"
+    assert archive is not None
+    assert any(
+        isinstance(entry.system, CompactionSystem) and entry.priority == -30
+        for entry in child_world._systems._systems
+    )
+
+
 # ---------------------------------------------------------------------------
 # Task 8: catalog skill resolution + workspace inheritance
 # ---------------------------------------------------------------------------

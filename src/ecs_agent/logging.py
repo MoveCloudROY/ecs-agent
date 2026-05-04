@@ -17,6 +17,7 @@ from structlog.processors import (
 from structlog.dev import ConsoleRenderer
 
 _log_level = os.getenv("ECS_AGENT_LOG_LEVEL", "ERROR").upper()
+_logging_configured = False
 _module_levels: dict[str, int] = {}
 _LEVEL_MAP = {
     "DEBUG": logging.DEBUG,
@@ -33,6 +34,25 @@ _METHOD_LEVEL_MAP = {
     "critical": logging.CRITICAL,
     "exception": logging.ERROR,
 }
+
+
+def _configured_level_for_logger_name(logger_name: str) -> int:
+    matched_level: int | None = None
+    matched_prefix_len = -1
+    for module_name, module_level in _module_levels.items():
+        if logger_name == module_name or logger_name.startswith(f"{module_name}."):
+            if len(module_name) > matched_prefix_len:
+                matched_level = module_level
+                matched_prefix_len = len(module_name)
+
+    if matched_level is not None:
+        return matched_level
+    return _LEVEL_MAP.get(_log_level, logging.INFO)
+
+
+class _StdlibRecordFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno >= _configured_level_for_logger_name(record.name)
 
 # Event Contract: Standard event names (snake_case)
 STANDARD_EVENT_NAMES: dict[str, str] = {
@@ -124,17 +144,7 @@ def _filter_by_module_level(
     if not logger_name:
         return event_dict
 
-    matched_level: int | None = None
-    matched_prefix_len = -1
-    for module_name, module_level in _module_levels.items():
-        if logger_name == module_name or logger_name.startswith(f"{module_name}."):
-            if len(module_name) > matched_prefix_len:
-                matched_level = module_level
-                matched_prefix_len = len(module_name)
-
-    if matched_level is None:
-        return event_dict
-
+    matched_level = _configured_level_for_logger_name(logger_name)
     method_level = _METHOD_LEVEL_MAP.get(method_name, logging.INFO)
     if method_level >= matched_level:
         return event_dict
@@ -152,6 +162,18 @@ def _ensure_exc_info(
     return event_dict
 
 
+def _drop_if_unconfigured(
+    logger: Any,
+    method_name: str,
+    event_dict: dict[str, Any],
+) -> dict[str, Any]:
+    del logger
+    del method_name
+    if _logging_configured:
+        return event_dict
+    raise structlog.DropEvent()
+
+
 def _filter_by_level(
     logger: Any,
     method_name: str,
@@ -163,6 +185,34 @@ def _filter_by_level(
     if method_level >= configured_level:
         return event_dict
     raise structlog.DropEvent()
+
+
+def _install_silent_defaults() -> None:
+    structlog.reset_defaults()
+    structlog.configure(
+        processors=[],
+        context_class=dict,
+        logger_factory=structlog.ReturnLoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
+
+
+def reset_logging() -> None:
+    """Reset logging to the library's silent default state."""
+    global _log_level
+    global _logging_configured
+    global _module_levels
+
+    _log_level = os.getenv("ECS_AGENT_LOG_LEVEL", "ERROR").upper()
+    _logging_configured = False
+    _module_levels = {}
+
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    root_logger.setLevel(logging.NOTSET)
+
+    _install_silent_defaults()
+    _refresh_module_loggers()
 
 
 def configure_logging(
@@ -181,16 +231,27 @@ def configure_logging(
     """
     global _log_level
     global _module_levels
-    env_level = os.getenv("ECS_AGENT_LOG_LEVEL", "OCCUPY").upper()
-    _log_level = env_level if env_level in _LEVEL_MAP else (level or "Error")
+    global _logging_configured
+
+    env_level = os.getenv("ECS_AGENT_LOG_LEVEL", "").upper()
+    if level is not None:
+        configured_level_name = level.upper()
+    elif env_level in _LEVEL_MAP:
+        configured_level_name = env_level
+    else:
+        configured_level_name = "ERROR"
+
+    _log_level = configured_level_name
     _module_levels = {
         module_name: _LEVEL_MAP.get(module_level.upper(), logging.INFO)
         for module_name, module_level in (module_levels or {}).items()
     }
+    _logging_configured = True
 
     shared_processors: list[Any] = [
         merge_contextvars,
         _add_caller_info,
+        _drop_if_unconfigured,
         _filter_by_module_level,
         _filter_by_level,
         add_log_level,
@@ -215,20 +276,25 @@ def configure_logging(
             renderer,
         ],
     )
-    handler = logging.StreamHandler(stream=sys.stdout)
+    handler = logging.StreamHandler()
     handler.setFormatter(formatter)
+    handler.addFilter(_StdlibRecordFilter())
     root_logger = logging.getLogger()
     root_logger.handlers.clear()
     root_logger.addHandler(handler)
     root_logger.setLevel(_LEVEL_MAP.get(_log_level, logging.INFO))
 
-    processors: list[Any] = [*shared_processors, renderer]
+    processors: list[Any] = [
+        *shared_processors,
+        structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+    ]
 
     structlog.reset_defaults()  # Clear cached loggers
     structlog.configure(
         processors=processors,
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(),
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,
     )
 
@@ -262,6 +328,9 @@ def get_logger(name: str) -> Any:
         A structlog bound logger instance.
     """
     return structlog.get_logger(name).bind(logger=name)
+
+
+_install_silent_defaults()
 
 
 def log_bus_publish(

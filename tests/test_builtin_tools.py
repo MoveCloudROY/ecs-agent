@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 
@@ -507,6 +508,35 @@ async def test_bash_timeout(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="timed out"):
         await bash('python -c "import time; time.sleep(2)"', 0.1, str(workspace))
+
+
+@pytest.mark.asyncio
+async def test_bash_timeout_terminates_spawned_children(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    marker = workspace / "child_marker.txt"
+
+    child_script = workspace / "child.py"
+    child_script.write_text(
+        "import pathlib\n"
+        "import time\n"
+        "time.sleep(0.3)\n"
+        "pathlib.Path('child_marker.txt').write_text('alive')\n",
+        encoding="utf-8",
+    )
+
+    # The spawned child would leave a marker behind if only the shell died.
+    command = (
+        'python -c "import subprocess, sys, time; '
+        'subprocess.Popen([sys.executable, \'child.py\']); '
+        'time.sleep(5)"'
+    )
+
+    with pytest.raises(ValueError, match="timed out"):
+        await bash(command, 0.1, str(workspace))
+
+    await asyncio.sleep(0.5)
+    assert not marker.exists()
 
 
 def test_builtin_skill_tools_returns_all_schemas() -> None:

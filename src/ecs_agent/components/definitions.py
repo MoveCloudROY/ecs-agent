@@ -516,6 +516,9 @@ class RenderedSystemPromptComponent:
 @dataclass(slots=True)
 class RenderedUserPromptComponent:
     text: str
+    source_fingerprint: str | None = None
+    trigger_key: str | None = None
+    source_message_index: int | None = None
 
 
 @dataclass(slots=True)

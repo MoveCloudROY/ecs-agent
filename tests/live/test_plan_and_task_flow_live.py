@@ -18,6 +18,7 @@ from ecs_agent.providers.claude_model import ClaudeModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.types import CompletionResult, Message
+from ecs_agent.systems.compaction import CompactionSystem
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
 )
@@ -256,6 +257,59 @@ async def test_anthropic_model_completes_simple_message(
     )
     assert isinstance(result, CompletionResult)
     assert result.message.content.strip()
+
+
+@_ANTHROPIC_SKIP
+@pytest.mark.asyncio
+async def test_anthropic_plan_task_auto_compaction_summarizes_context(
+    anthropic_model: ClaudeModel,
+    tmp_path: Path,
+) -> None:
+    from ecs_agent.components import (
+        ConversationArchiveComponent,
+        ConversationComponent,
+        CurrentCompactionSummaryComponent,
+    )
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    world, agent_id, _, _ = build_plan_task_world(
+        model=anthropic_model,
+        base_dir=tmp_path,
+        compaction_threshold_tokens=1,
+    )
+
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.extend(
+        [
+            Message(
+                role="user",
+                content=(
+                    "Summarize this workflow context with decisions, pending work, "
+                    "and design constraints. "
+                )
+                * 30,
+            ),
+            Message(
+                role="assistant",
+                content=(
+                    "The workflow currently coordinates planning, review, and task "
+                    "execution across multiple subagents. "
+                )
+                * 30,
+            ),
+        ]
+    )
+
+    await CompactionSystem().process(world)
+
+    summary = world.get_component(agent_id, CurrentCompactionSummaryComponent)
+    archive = world.get_component(agent_id, ConversationArchiveComponent)
+    assert summary is not None
+    assert summary.summary.strip()
+    assert archive is not None
+    assert archive.archived_summaries
+    assert all(message.role != "compaction" for message in conversation.messages)
 
 
 @_ANTHROPIC_SKIP
