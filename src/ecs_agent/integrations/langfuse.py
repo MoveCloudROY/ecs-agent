@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import importlib
 import os
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -130,6 +131,9 @@ class LangfuseTelemetrySink:
             redaction,
             config_context,
         )
+        if _first_method(self.client, ("trace", "create_trace")) is None:
+            await self._emit_v4_observation(payload, metadata, as_type="span")
+            return
         await self._call_client(
             ("trace", "create_trace"),
             id=payload.get("trace_id"),
@@ -156,6 +160,16 @@ class LangfuseTelemetrySink:
             redaction,
             _config_export_context(self.config, self.redactor),
         )
+        if _first_method(self.client, ("observation", "create_observation")) is None:
+            if payload.get("kind") == "event":
+                await self._emit_v4_event(payload, metadata)
+                return
+            await self._emit_v4_observation(
+                payload,
+                metadata,
+                as_type=_langfuse_observation_type(payload.get("kind")),
+            )
+            return
         await self._call_client(
             ("observation", "create_observation"),
             trace_id=payload.get("trace_id"),
@@ -178,13 +192,116 @@ class LangfuseTelemetrySink:
 
     async def _call_client(self, method_names: tuple[str, ...], **kwargs: Any) -> None:
         method = _first_method(self.client, method_names)
-        if method is None and "observation" in method_names:
-            method = getattr(self.client, "start_as_current_observation", None)
         if method is None:
             raise AttributeError(f"Langfuse client has none of {method_names!r}")
         result = method(**_drop_none(kwargs))
         if inspect.isawaitable(result):
             await result
+
+    async def _emit_v4_observation(
+        self,
+        payload: dict[str, JsonSafe],
+        metadata: dict[str, JsonSafe],
+        *,
+        as_type: str,
+    ) -> None:
+        method = getattr(self.client, "start_as_current_observation", None)
+        if method is None:
+            raise AttributeError("Langfuse client has no current observation method")
+        observation_metadata = dict(metadata)
+        observation_id = payload.get("observation_id")
+        if observation_id is not None:
+            observation_metadata["observation_id"] = observation_id
+        with self._v4_module_propagation_context():
+            observation_context = method(
+                **_drop_none(
+                    {
+                        "trace_context": _trace_context(payload),
+                        "name": payload.get("name"),
+                        "as_type": as_type,
+                        "input": payload.get("input"),
+                        "output": payload.get("output"),
+                        "metadata": observation_metadata,
+                        "level": _langfuse_level(
+                            payload.get("status"), payload.get("error")
+                        ),
+                        "status_message": payload.get("error"),
+                        "model": payload.get("model"),
+                        "model_parameters": payload.get("model_parameters"),
+                        "usage_details": payload.get("usage_details"),
+                        "cost_details": payload.get("cost_details"),
+                    }
+                )
+            )
+            with observation_context:
+                with self._v4_client_propagation_context():
+                    return
+
+    async def _emit_v4_event(
+        self,
+        payload: dict[str, JsonSafe],
+        metadata: dict[str, JsonSafe],
+    ) -> None:
+        method = getattr(self.client, "create_event", None)
+        if method is None:
+            await self._emit_v4_observation(payload, metadata, as_type="span")
+            return
+        event_metadata = dict(metadata)
+        observation_id = payload.get("observation_id")
+        if observation_id is not None:
+            event_metadata["observation_id"] = observation_id
+        with self._v4_module_propagation_context():
+            result = method(
+                **_drop_none(
+                    {
+                        "trace_context": _trace_context(payload),
+                        "name": payload.get("name"),
+                        "input": payload.get("input"),
+                        "output": payload.get("output"),
+                        "metadata": event_metadata,
+                        "level": _langfuse_level(
+                            payload.get("status"), payload.get("error")
+                        ),
+                        "status_message": payload.get("error"),
+                    }
+                )
+            )
+            if inspect.isawaitable(result):
+                await result
+
+    def _v4_propagation_kwargs(self) -> dict[str, JsonSafe]:
+        config_context = _config_export_context(self.config, self.redactor)
+        return _drop_none(
+            {
+                "user_id": config_context.metadata.get("user_id"),
+                "session_id": config_context.metadata.get("session_id"),
+                "tags": config_context.metadata.get("tags"),
+            }
+        )
+
+    def _v4_client_propagation_context(self) -> Any:
+        method = getattr(self.client, "propagate_attributes", None)
+        if method is None:
+            return nullcontext()
+        propagation = self._v4_propagation_kwargs()
+        if not propagation:
+            return nullcontext()
+        return method(**propagation)
+
+    def _v4_module_propagation_context(self) -> Any:
+        if getattr(self.client, "propagate_attributes", None) is not None:
+            return nullcontext()
+        propagation = self._v4_propagation_kwargs()
+        if not propagation:
+            return nullcontext()
+        try:
+            langfuse_module = importlib.import_module("langfuse")
+        except ImportError:
+            return nullcontext()
+        method = getattr(langfuse_module, "propagate_attributes", None)
+        if method is None:
+            return nullcontext()
+        return method(**propagation)
 
     async def _call_optional_client(self, method_name: str) -> None:
         method = getattr(self.client, method_name, None)
@@ -249,6 +366,17 @@ def _as_dict(payload: JsonSafe) -> dict[str, JsonSafe]:
     if isinstance(payload, dict):
         return payload
     raise TypeError("Langfuse telemetry payload must be a dictionary")
+
+
+def _trace_context(payload: dict[str, JsonSafe]) -> dict[str, JsonSafe]:
+    context: dict[str, JsonSafe] = {}
+    trace_id = payload.get("trace_id")
+    if trace_id is not None:
+        context["trace_id"] = trace_id
+    parent_observation_id = payload.get("parent_observation_id")
+    if parent_observation_id is not None:
+        context["parent_span_id"] = parent_observation_id
+    return context
 
 
 def _metadata_with_context(

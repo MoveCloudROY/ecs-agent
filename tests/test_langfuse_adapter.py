@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import builtins
+import sys
+import types
 from datetime import datetime, timezone
 from typing import Any
 
@@ -46,6 +48,146 @@ class FakeLangfuseClient:
         self.calls.append((name, kwargs))
         if self.fail:
             raise RuntimeError(f"{name} failed")
+
+
+class FakeLangfuseV4Observation:
+    """Langfuse v4-like observation object requiring explicit end."""
+
+    def __init__(self, client: FakeLangfuseV4Client, kwargs: dict[str, Any]) -> None:
+        self._client = client
+        self._kwargs = kwargs
+
+    def __enter__(self) -> FakeLangfuseV4Observation:
+        """Record that the observation became the active v4 span."""
+        self._client.active_observations.append(self._kwargs)
+        self._client.calls.append(("observation_enter", self._kwargs))
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object | None,
+    ) -> None:
+        """Record that the active v4 span context exited."""
+        self._client.calls.append(("observation_exit", self._kwargs))
+        self._client.active_observations.pop()
+
+    def end(self) -> None:
+        """Record that the v4 observation was ended."""
+        self._client.calls.append(("end", self._kwargs))
+
+
+class FakeLangfuseV4Client:
+    """Langfuse v4-like client using start_observation instead of observation."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.active_observations: list[dict[str, Any]] = []
+
+    def propagate_attributes(self, **kwargs: Any) -> FakeLangfuseV4Propagation:
+        """Record v4 trace-level propagated attributes."""
+        self.calls.append(("propagate_attributes", kwargs))
+        return FakeLangfuseV4Propagation(self)
+
+    def start_observation(self, **kwargs: Any) -> FakeLangfuseV4Observation:
+        """Record a v4 start_observation call."""
+        if "trace_id" in kwargs:
+            raise TypeError("start_observation got an unexpected keyword argument 'trace_id'")
+        if "parent_observation_id" in kwargs:
+            raise TypeError(
+                "start_observation got an unexpected keyword argument "
+                "'parent_observation_id'"
+            )
+        self.calls.append(("start_observation", kwargs))
+        return FakeLangfuseV4Observation(self, kwargs)
+
+    def start_as_current_observation(self, **kwargs: Any) -> FakeLangfuseV4Observation:
+        """Record a v4 current observation context-manager call."""
+        if "trace_id" in kwargs:
+            raise TypeError(
+                "start_as_current_observation got an unexpected keyword argument 'trace_id'"
+            )
+        if "parent_observation_id" in kwargs:
+            raise TypeError(
+                "start_as_current_observation got an unexpected keyword argument "
+                "'parent_observation_id'"
+            )
+        self.calls.append(("start_as_current_observation", kwargs))
+        return FakeLangfuseV4Observation(self, kwargs)
+
+    def create_event(self, **kwargs: Any) -> None:
+        """Record a v4 create_event call."""
+        if "trace_id" in kwargs:
+            raise TypeError("create_event got an unexpected keyword argument 'trace_id'")
+        self.calls.append(("create_event", kwargs))
+
+
+class FakeLangfuseV4Propagation:
+    """Langfuse v4-like propagation context manager."""
+
+    def __init__(self, client: FakeLangfuseV4Client) -> None:
+        self._client = client
+
+    def __enter__(self) -> None:
+        """Record entering v4 trace attribute propagation."""
+        if self._client.active_observations:
+            self._client.active_observations[-1]["propagated_attributes"] = dict(
+                self._client.calls[-1][1]
+            )
+        self._client.calls.append(("propagation_enter", {}))
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object | None,
+    ) -> None:
+        """Record exiting v4 trace attribute propagation."""
+        self._client.calls.append(("propagation_exit", {}))
+
+
+class FakeLangfuseV4ModulePropagation:
+    """Module-level Langfuse v4 propagation context manager."""
+
+    def __init__(self, client: FakeLangfuseV4Client, kwargs: dict[str, Any]) -> None:
+        self._client = client
+        self._kwargs = kwargs
+
+    def __enter__(self) -> None:
+        """Record module-level propagation before span creation."""
+        self._client.active_propagations.append(self._kwargs)
+        self._client.calls.append(("module_propagation_enter", {}))
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object | None,
+    ) -> None:
+        """Record exiting module-level propagation."""
+        self._client.calls.append(("module_propagation_exit", {}))
+        self._client.active_propagations.pop()
+
+
+class FakeLangfuseV4ModuleClient(FakeLangfuseV4Client):
+    """Real SDK v4 shape: propagation exists on langfuse module, not client."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.active_propagations: list[dict[str, Any]] = []
+
+    def __getattribute__(self, name: str) -> Any:
+        """Mimic real SDK v4 by omitting a client-level propagation API."""
+        if name == "propagate_attributes":
+            raise AttributeError("Langfuse v4 client has no propagate_attributes method")
+        return super().__getattribute__(name)
+
+    def start_as_current_observation(self, **kwargs: Any) -> FakeLangfuseV4Observation:
+        """Record whether module-level propagation was active at span creation."""
+        if self.active_propagations:
+            kwargs["propagated_at_start"] = dict(self.active_propagations[-1])
+        return super().start_as_current_observation(**kwargs)
 
 
 def test_langfuse_module_import_does_not_import_optional_dependency(
@@ -353,6 +495,192 @@ async def test_langfuse_adapter_maps_trace_span_tool_and_event_records() -> None
     assert client.calls[2][1]["as_type"] == "tool"
     assert client.calls[2][1]["level"] == "ERROR"
     assert client.calls[3][1]["as_type"] == "event"
+
+
+@pytest.mark.asyncio
+async def test_langfuse_adapter_uses_v4_trace_context_methods() -> None:
+    """Langfuse v4 observation APIs receive trace_context, not trace_id kwargs."""
+    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+
+    client = FakeLangfuseV4Client()
+    sink = LangfuseTelemetrySink(client=client)
+
+    await sink.emit(
+        TelemetryRecord(
+            trace_id="trace-one",
+            run_id="run-one",
+            observation_id="span-one",
+            parent_observation_id="trace-root",
+            name="runner.tick",
+            kind="span",
+            status="success",
+        )
+    )
+    await sink.emit(
+        TelemetryRecord(
+            trace_id="trace-one",
+            run_id="run-one",
+            observation_id="event-one",
+            parent_observation_id="span-one",
+            name="stream.end",
+            kind="event",
+            status="success",
+        )
+    )
+
+    assert client.calls[0] == (
+        "start_as_current_observation",
+        {
+            "trace_context": {
+                "trace_id": "trace-one",
+                "parent_span_id": "trace-root",
+            },
+            "name": "runner.tick",
+            "as_type": "span",
+            "metadata": {
+                "redaction": {"total_redactions": 0, "counts_by_rule": {}},
+                "observation_id": "span-one",
+            },
+            "level": "DEFAULT",
+        },
+    )
+    assert client.calls[1][0] == "observation_enter"
+    assert client.calls[2][0] == "observation_exit"
+    assert client.calls[3][0] == "create_event"
+    event_payload = client.calls[3][1]
+    assert event_payload["trace_context"] == {
+        "trace_id": "trace-one",
+        "parent_span_id": "span-one",
+    }
+    assert event_payload["name"] == "stream.end"
+    assert event_payload["metadata"]["observation_id"] == "event-one"
+
+
+@pytest.mark.asyncio
+async def test_langfuse_adapter_propagates_v4_session_id_as_trace_attribute() -> None:
+    """Langfuse v4 sessions use propagate_attributes, not metadata.session_id."""
+    from ecs_agent.integrations.langfuse import LangfuseConfig, LangfuseTelemetrySink
+
+    client = FakeLangfuseV4Client()
+    sink = LangfuseTelemetrySink(
+        client=client,
+        config=LangfuseConfig(
+            environment="test",
+            release="release-one",
+            user_id="user-one",
+            session_id="session-one",
+            tags=["unit"],
+        ),
+    )
+
+    await sink.emit(
+        TelemetryRecord(
+            trace_id="trace-one",
+            run_id="run-one",
+            observation_id="trace-root",
+            name="runner.run",
+            kind="trace",
+            status="success",
+        )
+    )
+
+    assert client.calls[0][0] == "start_as_current_observation"
+    assert client.calls[0][1]["trace_context"] == {"trace_id": "trace-one"}
+    assert client.calls[1] == ("observation_enter", client.calls[0][1])
+    assert client.calls[2] == (
+        "propagate_attributes",
+        {
+            "user_id": "user-one",
+            "session_id": "session-one",
+            "tags": ["unit"],
+        },
+    )
+    assert client.calls[3] == ("propagation_enter", {})
+    assert client.calls[0][1]["propagated_attributes"] == {
+        "user_id": "user-one",
+        "session_id": "session-one",
+        "tags": ["unit"],
+    }
+    assert client.calls[4] == ("propagation_exit", {})
+    assert client.calls[5] == ("observation_exit", client.calls[0][1])
+
+
+@pytest.mark.asyncio
+async def test_langfuse_adapter_sets_session_on_active_v4_root_observation() -> None:
+    """Sessions require propagation while the root observation is current."""
+    from ecs_agent.integrations.langfuse import LangfuseConfig, LangfuseTelemetrySink
+
+    client = FakeLangfuseV4Client()
+    sink = LangfuseTelemetrySink(
+        client=client,
+        config=LangfuseConfig(session_id="session-one"),
+    )
+
+    await sink.emit(
+        TelemetryRecord(
+            trace_id="trace-one",
+            run_id="run-one",
+            observation_id="trace-root",
+            name="runner.run",
+            kind="trace",
+            status="success",
+        )
+    )
+
+    assert [name for name, _ in client.calls[:5]] == [
+        "start_as_current_observation",
+        "observation_enter",
+        "propagate_attributes",
+        "propagation_enter",
+        "propagation_exit",
+    ]
+    root_payload = client.calls[0][1]
+    assert root_payload["trace_context"] == {"trace_id": "trace-one"}
+    assert root_payload["propagated_attributes"] == {"session_id": "session-one"}
+    assert root_payload["metadata"]["session_id"] == "session-one"
+
+
+@pytest.mark.asyncio
+async def test_langfuse_adapter_uses_module_level_v4_session_propagation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Langfuse SDK v4.5 exposes propagate_attributes on the module."""
+    from ecs_agent.integrations.langfuse import LangfuseConfig, LangfuseTelemetrySink
+
+    client = FakeLangfuseV4ModuleClient()
+
+    def propagate_attributes(**kwargs: Any) -> FakeLangfuseV4ModulePropagation:
+        client.calls.append(("module_propagate_attributes", kwargs))
+        return FakeLangfuseV4ModulePropagation(client, kwargs)
+
+    fake_module = types.ModuleType("langfuse")
+    fake_module.propagate_attributes = propagate_attributes
+    monkeypatch.setitem(sys.modules, "langfuse", fake_module)
+    sink = LangfuseTelemetrySink(
+        client=client,
+        config=LangfuseConfig(session_id="session-one"),
+    )
+
+    await sink.emit(
+        TelemetryRecord(
+            trace_id="trace-one",
+            run_id="run-one",
+            observation_id="trace-root",
+            name="runner.run",
+            kind="trace",
+            status="success",
+        )
+    )
+
+    assert client.calls[0] == (
+        "module_propagate_attributes",
+        {"session_id": "session-one"},
+    )
+    assert client.calls[1] == ("module_propagation_enter", {})
+    root_payload = client.calls[2][1]
+    assert root_payload["trace_context"] == {"trace_id": "trace-one"}
+    assert root_payload["propagated_at_start"] == {"session_id": "session-one"}
+    assert root_payload["metadata"]["session_id"] == "session-one"
 
 
 @pytest.mark.asyncio
