@@ -12,12 +12,42 @@ and scrapes that endpoint through `host.docker.internal:9100`.
 From the repository root:
 
 ```bash
+export LLM_API_KEY=your-api-key
 uv run python examples/prometheus/agent_metrics_demo.py
 ```
 
-The script uses `FakeModel`, so no `LLM_API_KEY` is required. It records a demo
-agent run every five seconds and keeps the `/metrics` server alive until you
-press `Ctrl+C`.
+The script runs a credentialed LLM workflow. Each iteration creates a real
+`Model`, asks the LLM to call safe local metric-summary tools, executes those
+tools through `ToolExecutionSystem`, and then records the final reasoning,
+tool, token, runner, and error metrics. `LLM_API_KEY` is required and is read
+from the environment; do not put secrets in files or command history.
+
+Common configuration variables:
+
+```bash
+export LLM_API_KEY=your-api-key
+export LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+export LLM_MODEL=qwen3.5-flash
+```
+
+For Anthropic-compatible endpoints, either set the format explicitly or use a
+base URL ending in `/anthropic`, which the demo infers automatically:
+
+```bash
+export LLM_API_FORMAT=anthropic_messages
+```
+
+For OpenAI Responses-compatible endpoints, either set the format explicitly or
+use a DashScope Responses URL containing
+`/api/v2/apps/protocols/compatible-mode/v1`, which the demo infers
+automatically:
+
+```bash
+export LLM_API_FORMAT=openai_responses
+```
+
+The endpoint records a demo agent run every five seconds and keeps the
+`/metrics` server alive until you press `Ctrl+C`.
 
 For a single smoke run:
 
@@ -104,6 +134,6 @@ tool-call IDs, raw prompts, responses, API keys, or tokens.
   `curl http://127.0.0.1:9100/metrics` returns `ecs_agent_*` output.
 - On Linux, this compose file maps `host.docker.internal` to Docker's host
   gateway. If your Docker runtime does not support `host-gateway`, replace the
-  target in `prometheus.yml` with your host IP.
+  target in `prometheus/prometheus.yml` with your host IP.
 - If port `9100` is already in use, start the demo with `--metrics-port <port>`
-  and update `prometheus.yml` to match.
+  and update `prometheus/prometheus.yml` to match.
