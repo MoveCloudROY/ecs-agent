@@ -145,6 +145,7 @@ RunnerLifecycleStatus = Literal[
     "terminal_component",
     "max_ticks",
     "interruption_component",
+    "cancelled",
     "error",
 ]
 SystemExecutionStatus = Literal["success", "error"]
