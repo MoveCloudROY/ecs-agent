@@ -54,6 +54,20 @@ def test_langfuse_docs_mention_configuration() -> None:
         assert has_host, f"{source} missing LANGFUSE_HOST or LANGFUSE_BASE_URL alias policy"
 
 
+def test_langfuse_docs_describe_session_attribute_propagation() -> None:
+    """Docs must explain Langfuse Sessions need trace-level session propagation."""
+    readme = get_readme_content()
+    docs = get_langfuse_docs_content()
+
+    for content, source in [(readme, "README"), (docs, "docs/features/langfuse.md")]:
+        assert "session_id" in content, f"{source} missing session_id guidance"
+        assert "trace-level" in content, f"{source} missing trace-level session guidance"
+        assert "metadata" in content, f"{source} missing metadata-only session warning"
+
+    assert "propagate_attributes" in docs
+    assert "start_as_current_observation" in docs
+
+
 def test_langfuse_docs_mention_skip_behavior() -> None:
     """README and docs must mention live-test skip behavior."""
     readme = get_readme_content()

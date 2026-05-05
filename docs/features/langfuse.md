@@ -50,6 +50,12 @@ The integration uses the following environment variables for configuration:
 
 > **Security Note**: Never hardcode your secret keys in source code. Use environment variables or a secret manager. If your credentials have been exposed outside a secure environment, we recommend a full credential rotation immediately.
 
+## Langfuse Sessions
+
+Langfuse Sessions require `session_id` as a trace-level session attribute, not only as `metadata.session_id`. The SDK v4 adapter creates observations with `start_as_current_observation(...)` and calls `propagate_attributes(session_id=...)` while the root observation is active, so Langfuse can group the complete trace chain in the Sessions UI.
+
+If you provide `LangfuseConfig(session_id="...")`, the value is exported both in sanitized metadata for debugging and through `propagate_attributes(...)` for Langfuse session grouping. A `session_id` placed only inside custom metadata remains metadata-only and is not sufficient for Sessions UI grouping.
+
 ## Trace Structure
 
 The integration produces one trace per `Runner.run()` call. Observations captured include:
@@ -65,7 +71,7 @@ The integration produces one trace per `Runner.run()` call. Observations capture
 
 ## Alerts and Monitoring
 
-The integration exports alert-ready score and context data for downstream use within the Langfuse platform. Note that the current v1 implementation does not implement alert thresholds, dashboards, notifications, or alert delivery directly; it focuses on exporting the necessary telemetry so these features can be configured within your Langfuse project.
+The integration exports alert-ready score and context data for downstream use within the Langfuse platform. The adapter focuses on exporting the necessary telemetry so these features can be configured within your Langfuse project.
 
 ## Data Privacy and Redaction
 
