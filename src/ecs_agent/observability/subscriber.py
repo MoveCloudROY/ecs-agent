@@ -168,10 +168,12 @@ class ObservabilitySubscriber:
                 kind="generation",
                 status=self._status(event.status),
                 entity_id=entity_id,
-                latency_ms=(
-                    event.duration_seconds * 1000
-                    if event.duration_seconds is not None
-                    else None
+                start_time=event.start_time,
+                end_time=event.end_time,
+                latency_ms=_record_latency_ms(
+                    event.duration_seconds,
+                    event.start_time,
+                    event.end_time,
                 ),
                 input={
                     "messages": event.messages,
@@ -189,13 +191,14 @@ class ObservabilitySubscriber:
                 ),
                 metadata={
                     "provider_id": event.provider_id,
+                    "model_id": event.model,
                     "operation": event.operation,
                     "response_id": event.response_id,
                     "streaming": event.streaming,
                     **self._context_pressure_metadata(event),
                 },
                 error=event.error,
-                model=event.model,
+                model=_provider_model_label(event.provider_id, event.model),
                 model_parameters=event.model_parameters,
                 usage_details=self._usage_details(event),
                 cost_details=dict(event.cost_details),
@@ -1086,6 +1089,26 @@ class ObservabilitySubscriber:
             )
             max_pressure = max(max_pressure, estimated_tokens / budget.max_tokens)
         return max_pressure
+
+
+def _provider_model_label(provider_id: str, model: str) -> str:
+    if "/" in model:
+        return model
+    if provider_id:
+        return f"{provider_id}/{model}"
+    return model
+
+
+def _record_latency_ms(
+    duration_seconds: float | None,
+    start_time: datetime | None,
+    end_time: datetime | None,
+) -> float | None:
+    if start_time is not None and end_time is not None:
+        return (end_time - start_time).total_seconds() * 1000
+    if duration_seconds is not None:
+        return duration_seconds * 1000
+    return None
 
 
 __all__ = ["ObservabilitySubscriber", "TraceState"]

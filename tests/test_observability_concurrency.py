@@ -107,7 +107,10 @@ async def test_concurrent_runs_have_isolated_trace_ids() -> None:
     )
 
     generations = [record for record in sink.records if record.kind == "generation"]
-    assert {record.model for record in generations} == {"model-a", "model-b"}
+    assert {record.model for record in generations} == {
+        "BarrierStreamingFakeModel/model-a",
+        "BarrierStreamingFakeModel/model-b",
+    }
     assert len({record.run_id for record in generations}) == 2
     assert len({record.trace_id for record in generations}) == 2
 
@@ -120,12 +123,12 @@ async def test_concurrent_runs_have_isolated_trace_ids() -> None:
         assert [record.metadata["seq"] for record in stream_records] == [0, 1, 2, 3]
         assert all(record.parent_observation_id == generation.observation_id for record in stream_records)
 
-    assert generation_by_model["model-a"].output == {
+    assert generation_by_model["BarrierStreamingFakeModel/model-a"].output == {
         "message": Message(role="assistant", content="alpha"),
         "reasoning_content": None,
         "response_id": "resp-model-a",
     }
-    assert generation_by_model["model-b"].output == {
+    assert generation_by_model["BarrierStreamingFakeModel/model-b"].output == {
         "message": Message(role="assistant", content="beta"),
         "reasoning_content": None,
         "response_id": "resp-model-b",

@@ -236,7 +236,13 @@ async def test_llm_generation_includes_raw_messages_and_output() -> None:
     generation = generations[0]
     assert generation.name == "llm.reasoning"
     assert generation.status == "success"
-    assert generation.model == "fake-generation-model"
+    assert generation.model == "FakeModel/fake-generation-model"
+    assert generation.start_time is not None
+    assert generation.end_time is not None
+    assert generation.latency_ms is not None
+    assert generation.latency_ms == pytest.approx(
+        (generation.end_time - generation.start_time).total_seconds() * 1000
+    )
     assert generation.input == {
         "messages": [Message(role="user", content="Hello Langfuse")],
         "tools": None,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Literal
 
 from ecs_agent.types import EntityId, Message, ToolSchema, Usage
@@ -44,6 +45,8 @@ class LLMObservationCompletedEvent:
     status: LLMObservationStatus = "success"
     error: str | None = None
     duration_seconds: float | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
     cost_details: dict[str, Any] = field(default_factory=dict)
 
 

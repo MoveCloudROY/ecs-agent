@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 from typing import Any, cast
 
 from ecs_agent.accounting.models import (
@@ -162,6 +163,8 @@ async def publish_llm_observation_completed_event(
     status: str = "success",
     error: str | None = None,
     duration_seconds: float | None = None,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
     cost_details: dict[str, Any] | None = None,
 ) -> None:
     """Publish a raw LLM generation observation completion event."""
@@ -182,6 +185,8 @@ async def publish_llm_observation_completed_event(
             status=cast(LLMObservationStatus, status),
             error=error,
             duration_seconds=duration_seconds,
+            start_time=start_time,
+            end_time=end_time,
             cost_details=cost_details or {},
         )
     )
@@ -199,6 +204,7 @@ async def _observe_stream_result(
     tools: list[ToolSchema] | None,
     model_parameters: dict[str, Any] | None,
     start_time: float,
+    started_at: datetime,
 ) -> AsyncIterator[StreamDelta]:
     content_chunks: list[str] = []
     reasoning_chunks: list[str] = []
@@ -226,6 +232,7 @@ async def _observe_stream_result(
         error = str(exc)
         raise
     finally:
+        ended_at = datetime.now(timezone.utc)
         await publish_llm_observation_completed_event(
             event_bus=event_bus,
             entity_id=entity_id,
@@ -243,6 +250,8 @@ async def _observe_stream_result(
             status=status,
             error=error,
             duration_seconds=time.monotonic() - start_time,
+            start_time=started_at,
+            end_time=ended_at,
         )
 
 
@@ -279,6 +288,7 @@ async def complete_with_llm_invocation_event(
         model_parameters.update(extra_kwargs)
 
     start_time = time.monotonic()
+    started_at = datetime.now(timezone.utc)
     await publish_llm_observation_started_event(
         event_bus=event_bus,
         entity_id=entity_id,
@@ -297,6 +307,7 @@ async def complete_with_llm_invocation_event(
         )
     except asyncio.CancelledError:
         duration_seconds = time.monotonic() - start_time
+        ended_at = datetime.now(timezone.utc)
         await publish_llm_observation_completed_event(
             event_bus=event_bus,
             entity_id=entity_id,
@@ -309,6 +320,8 @@ async def complete_with_llm_invocation_event(
             model_parameters=model_parameters or None,
             status="cancelled",
             duration_seconds=duration_seconds,
+            start_time=started_at,
+            end_time=ended_at,
         )
         await publish_llm_invocation_event(
             event_bus=event_bus,
@@ -326,6 +339,7 @@ async def complete_with_llm_invocation_event(
         raise
     except Exception as exc:
         duration_seconds = time.monotonic() - start_time
+        ended_at = datetime.now(timezone.utc)
         await publish_llm_observation_completed_event(
             event_bus=event_bus,
             entity_id=entity_id,
@@ -339,6 +353,8 @@ async def complete_with_llm_invocation_event(
             status="error",
             error=str(exc),
             duration_seconds=duration_seconds,
+            start_time=started_at,
+            end_time=ended_at,
         )
         await publish_llm_invocation_event(
             event_bus=event_bus,
@@ -358,6 +374,7 @@ async def complete_with_llm_invocation_event(
     usage = result.usage if isinstance(result, CompletionResult) else None
     request_id = result.response_id if isinstance(result, CompletionResult) else None
     duration_seconds = time.monotonic() - start_time
+    ended_at = datetime.now(timezone.utc)
     await publish_llm_invocation_event(
         event_bus=event_bus,
         entity_id=entity_id,
@@ -388,6 +405,8 @@ async def complete_with_llm_invocation_event(
             response_id=result.response_id,
             status="success",
             duration_seconds=duration_seconds,
+            start_time=started_at,
+            end_time=ended_at,
         )
         return result
 
@@ -402,6 +421,7 @@ async def complete_with_llm_invocation_event(
         tools=tools,
         model_parameters=model_parameters or None,
         start_time=start_time,
+        started_at=started_at,
     )
 
 

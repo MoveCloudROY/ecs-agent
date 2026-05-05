@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from ecs_agent.accounting.models import (
@@ -173,6 +174,7 @@ class ReasoningSystem:
             invocation_event_published = False
             observation_event_published = False
             invocation_started_at = time.monotonic()
+            invocation_start_time = datetime.now(timezone.utc)
             model_parameters = (
                 {"thread_response_id": previous_response_id}
                 if previous_response_id is not None
@@ -228,6 +230,7 @@ class ReasoningSystem:
                 )
 
                 invocation_duration_seconds = time.monotonic() - invocation_started_at
+                invocation_end_time = datetime.now(timezone.utc)
                 await publish_llm_observation_completed_event(
                     event_bus=world.event_bus,
                     entity_id=entity_id,
@@ -244,6 +247,8 @@ class ReasoningSystem:
                     response_id=result.response_id,
                     status="success",
                     duration_seconds=invocation_duration_seconds,
+                    start_time=invocation_start_time,
+                    end_time=invocation_end_time,
                 )
                 observation_event_published = True
 
@@ -315,6 +320,7 @@ class ReasoningSystem:
                     )
             except (IndexError, StopIteration):
                 if not observation_event_published:
+                    invocation_end_time = datetime.now(timezone.utc)
                     await publish_llm_observation_completed_event(
                         event_bus=world.event_bus,
                         entity_id=entity_id,
@@ -328,6 +334,8 @@ class ReasoningSystem:
                         status="error",
                         error="provider exhausted",
                         duration_seconds=time.monotonic() - invocation_started_at,
+                        start_time=invocation_start_time,
+                        end_time=invocation_end_time,
                     )
                     observation_event_published = True
                 if not invocation_event_published:
@@ -351,6 +359,7 @@ class ReasoningSystem:
                 )
             except asyncio.CancelledError:
                 if not observation_event_published:
+                    invocation_end_time = datetime.now(timezone.utc)
                     await publish_llm_observation_completed_event(
                         event_bus=world.event_bus,
                         entity_id=entity_id,
@@ -363,6 +372,8 @@ class ReasoningSystem:
                         model_parameters=model_parameters,
                         status="cancelled",
                         duration_seconds=time.monotonic() - invocation_started_at,
+                        start_time=invocation_start_time,
+                        end_time=invocation_end_time,
                     )
                     observation_event_published = True
                 if not invocation_event_published:
@@ -398,6 +409,7 @@ class ReasoningSystem:
                 raise
             except Exception as exc:
                 if not observation_event_published:
+                    invocation_end_time = datetime.now(timezone.utc)
                     await publish_llm_observation_completed_event(
                         event_bus=world.event_bus,
                         entity_id=entity_id,
@@ -411,6 +423,8 @@ class ReasoningSystem:
                         status="error",
                         error=str(exc),
                         duration_seconds=time.monotonic() - invocation_started_at,
+                        start_time=invocation_start_time,
+                        end_time=invocation_end_time,
                     )
                     observation_event_published = True
                 if not invocation_event_published:
