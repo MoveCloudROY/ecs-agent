@@ -542,6 +542,7 @@ class ToolExecutionStartedEvent:
 
     entity_id: EntityId
     tool_call: ToolCall
+    start_time: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -555,6 +556,8 @@ class ToolExecutionCompletedEvent:
     tool_name: str = ""
     status: ToolExecutionStatus = "success"
     duration_seconds: float | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
 
     def __post_init__(self) -> None:
         self.status = "success" if self.success else "error"

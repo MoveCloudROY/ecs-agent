@@ -293,10 +293,12 @@ class ObservabilitySubscriber:
                 kind="tool",
                 status="success" if event.success else "error",
                 entity_id=int(event.entity_id),
-                latency_ms=(
-                    event.duration_seconds * 1000
-                    if event.duration_seconds is not None
-                    else None
+                start_time=event.start_time,
+                end_time=event.end_time,
+                latency_ms=_record_latency_ms(
+                    event.duration_seconds,
+                    event.start_time,
+                    event.end_time,
                 ),
                 input={
                     "tool_call_id": event.tool_call_id,

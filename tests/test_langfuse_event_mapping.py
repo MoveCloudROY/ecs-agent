@@ -705,8 +705,13 @@ async def test_tool_success_records_arguments_result_and_latency() -> None:
         "arguments": {"city": "Paris"},
     }
     assert tool_record.output == {"result": "sunny in Paris"}
+    assert tool_record.start_time is not None
+    assert tool_record.end_time is not None
     assert tool_record.latency_ms is not None
     assert tool_record.latency_ms >= 0
+    assert tool_record.latency_ms == pytest.approx(
+        (tool_record.end_time - tool_record.start_time).total_seconds() * 1000
+    )
 
 
 @pytest.mark.asyncio
