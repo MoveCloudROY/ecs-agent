@@ -14,7 +14,7 @@ from ecs_agent.components import (
     WorkflowRuntimeComponent,
 )
 from ecs_agent.core import World
-from ecs_agent.types import EntityId
+from ecs_agent.types import EntityId, WorkflowStateEvaluatedEvent
 from ecs_agent.workflows.compiler import CompiledWorkflow
 from ecs_agent.workflows.contracts import (
     AbsentPredicate,
@@ -60,9 +60,10 @@ def _process_entity(
     compiled: CompiledWorkflow,
     runtime: WorkflowRuntimeComponent,
     tick: int,
-) -> None:
+) -> WorkflowStateEvaluatedEvent:
     transitions = compiled.transitions_by_state.get(runtime.current_state_id, ())
     matched = [transition for transition in transitions if _evaluate_gate(transition.gate, world, entity_id)]
+    matched_transition_ids = [transition.transition_id for transition in matched]
 
     if len(matched) == 0:
         world.add_component(
@@ -73,7 +74,16 @@ def _process_entity(
                 matched_transition_id=None,
             ),
         )
-        return
+        return WorkflowStateEvaluatedEvent(
+            entity_id=entity_id,
+            workflow_id=compiled.workflow_id,
+            state_id=runtime.current_state_id,
+            current_state_id=runtime.current_state_id,
+            tick=tick,
+            matched_transition_ids=matched_transition_ids,
+            transition_history=list(runtime.transition_history),
+            status="no_match",
+        )
 
     if len(matched) == 1:
         transition = matched[0]
@@ -97,21 +107,45 @@ def _process_entity(
                 matched_transition_id=transition.transition_id,
             ),
         )
-        return
+        return WorkflowStateEvaluatedEvent(
+            entity_id=entity_id,
+            workflow_id=compiled.workflow_id,
+            state_id=from_state,
+            current_state_id=runtime.current_state_id,
+            tick=tick,
+            matched_transition_ids=matched_transition_ids,
+            committed_transition_id=transition.transition_id,
+            from_state_id=from_state,
+            to_state_id=transition.target_state_id,
+            transition_history=list(runtime.transition_history),
+            status="transition",
+        )
 
     ids = ", ".join(transition.transition_id for transition in matched)
+    error = (
+        f"WorkflowStateSystem: {len(matched)} transitions matched simultaneously "
+        f"from state {runtime.current_state_id!r}: {ids}"
+    )
     world.add_component(
         entity_id,
         ErrorComponent(
-            error=(
-                f"WorkflowStateSystem: {len(matched)} transitions matched simultaneously "
-                f"from state {runtime.current_state_id!r}: {ids}"
-            ),
+            error=error,
             system_name="WorkflowStateSystem",
             timestamp=time.time(),
         ),
     )
     world.add_component(entity_id, TerminalComponent(reason="workflow_ambiguous_transition"))
+    return WorkflowStateEvaluatedEvent(
+        entity_id=entity_id,
+        workflow_id=compiled.workflow_id,
+        state_id=runtime.current_state_id,
+        current_state_id=runtime.current_state_id,
+        tick=tick,
+        matched_transition_ids=matched_transition_ids,
+        transition_history=list(runtime.transition_history),
+        status="ambiguous",
+        error=error,
+    )
 
 
 class WorkflowStateSystem:
@@ -131,4 +165,5 @@ class WorkflowStateSystem:
         for entity_id, (definition, runtime) in world.query(
             WorkflowDefinitionComponent, WorkflowRuntimeComponent
         ):
-            _process_entity(world, entity_id, definition.compiled, runtime, tick)
+            event = _process_entity(world, entity_id, definition.compiled, runtime, tick)
+            await world.event_bus.publish(event)

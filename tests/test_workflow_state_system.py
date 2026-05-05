@@ -12,7 +12,8 @@ from ecs_agent.components import (
     WorkflowLastTransitionComponent,
     WorkflowRuntimeComponent,
 )
-from ecs_agent.core import World
+from ecs_agent.core import Runner, World
+from ecs_agent.observability import RecordingTelemetrySink, install_observability
 from ecs_agent.types import EntityId
 from ecs_agent.systems.workflow_state import WorkflowStateSystem
 from ecs_agent.workflows.compiler import install_workflow
@@ -42,6 +43,14 @@ class MarkerB:
 @dataclass(slots=True)
 class StatusComponent:
     status: str
+
+
+class TerminatingSystem:
+    """Terminates a runner after earlier workflow systems have processed."""
+
+    async def process(self, world: World) -> None:
+        """Attach a terminal component to stop the runner."""
+        world.add_component(world.create_entity(), TerminalComponent(reason="done"))
 
 
 def _install_test_workflow(
@@ -112,6 +121,120 @@ async def test_one_match_commits_transition() -> None:
     assert last_transition.from_state_id == "draft"
     assert last_transition.to_state_id == "review"
     assert last_transition.transition_id == "draft_to_review"
+
+
+async def test_committed_transition_emits_workflow_state_telemetry() -> None:
+    world = World()
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+    entity_id = world.create_entity()
+    _install_test_workflow(world, entity_id, draft_gate=has(DoneMarker))
+    world.add_component(entity_id, DoneMarker())
+    world.register_system(WorkflowStateSystem(), priority=-25)
+    world.register_system(TerminatingSystem(), priority=0)
+
+    await Runner().run(world, max_ticks=1)
+
+    records = [record for record in sink.records if record.name == "workflow.state"]
+    assert len(records) == 1
+    record = records[0]
+    assert record.kind == "event"
+    assert record.entity_id == int(entity_id)
+    assert record.tick == 0
+    assert record.input == {
+        "workflow_id": "test_flow",
+        "state_id": "draft",
+        "matched_transition_ids": ["draft_to_review"],
+    }
+    assert record.output == {
+        "current_state_id": "review",
+        "committed_transition_id": "draft_to_review",
+        "from_state_id": "draft",
+        "to_state_id": "review",
+        "transition_history": ["draft_to_review"],
+    }
+    assert record.metadata == {"status": "transition"}
+
+
+async def test_no_match_emits_workflow_state_telemetry() -> None:
+    world = World()
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+    entity_id = world.create_entity()
+    _install_test_workflow(world, entity_id, draft_gate=has(DoneMarker))
+    world.register_system(WorkflowStateSystem(), priority=-25)
+    world.register_system(TerminatingSystem(), priority=0)
+
+    await Runner().run(world, max_ticks=1)
+
+    records = [record for record in sink.records if record.name == "workflow.state"]
+    assert len(records) == 1
+    record = records[0]
+    assert record.status == "success"
+    assert record.input == {
+        "workflow_id": "test_flow",
+        "state_id": "draft",
+        "matched_transition_ids": [],
+    }
+    assert record.output == {
+        "current_state_id": "draft",
+        "committed_transition_id": None,
+        "from_state_id": None,
+        "to_state_id": None,
+        "transition_history": [],
+    }
+    assert record.metadata == {"status": "no_match"}
+    assert record.error is None
+
+
+async def test_ambiguous_match_emits_error_workflow_state_telemetry() -> None:
+    world = World()
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+    entity_id = world.create_entity()
+    spec = workflow(
+        "ambiguous",
+        initial="draft",
+        profiles={"agent": {"p0": "Draft prompt"}},
+        states={
+            "draft": {
+                "bind": {"agent": "p0"},
+                "go": {
+                    "review": has(MarkerA),
+                    "done": has(MarkerB),
+                },
+            },
+            "review": {"bind": {"agent": "p0"}},
+            "done": {"bind": {"agent": "p0"}},
+        },
+    )
+    install_workflow(world, entity_id, spec, agent_key="agent")
+    world.add_component(entity_id, MarkerA())
+    world.add_component(entity_id, MarkerB())
+    world.register_system(WorkflowStateSystem(), priority=-25)
+    world.register_system(TerminatingSystem(), priority=0)
+
+    await Runner().run(world, max_ticks=1)
+
+    records = [record for record in sink.records if record.name == "workflow.state"]
+    assert len(records) == 1
+    record = records[0]
+    assert record.status == "error"
+    assert record.input == {
+        "workflow_id": "ambiguous",
+        "state_id": "draft",
+        "matched_transition_ids": ["draft_to_review", "draft_to_done"],
+    }
+    assert record.output == {
+        "current_state_id": "draft",
+        "committed_transition_id": None,
+        "from_state_id": None,
+        "to_state_id": None,
+        "transition_history": [],
+    }
+    assert record.metadata == {"status": "ambiguous"}
+    assert record.error is not None
+    assert "simultaneously" in record.error
 
 
 async def test_two_matches_produces_error() -> None:
