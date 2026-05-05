@@ -22,6 +22,8 @@ uv sync --group dev
 uv pip install -e ".[embeddings]"
 # Install with MCP support (optional)
 uv pip install -e ".[mcp]"
+# Install with Langfuse observability (optional)
+uv pip install -e ".[langfuse]"
 ```
 
 > **Requires Python ≥ 3.11**
@@ -134,7 +136,8 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **Context Management** — Checkpoints (undo/resume), conversation compaction (XML system-prompt summaries), and memory windowing.
 - **Tool Ecosystem** — Auto-discovery via `@tool` decorator, manual approval flows, secure `bwrap` sandboxing, and composable skills.
 - **MCP Integration** — Connect to external MCP tool servers via stdio, SSE, or HTTP transports with namespaced tool mapping.
-- **Prometheus Metrics** — Install low-cardinality runtime, LLM, tool, streaming, and runtime-control metrics on any `World` and expose them via render, ASGI/WSGI, or a standalone `/metrics` server.
+- **Prometheus Metrics**, Install low-cardinality runtime, LLM, tool, streaming, and runtime-control metrics on any `World` and expose them via render, ASGI/WSGI, or a standalone `/metrics` server.
+- **Langfuse Observability**, Capture full-fidelity traces, spans, and observations via `ecs-agent[langfuse]`. Install `install_langfuse_observability()` on any `World` to export user input, LLM generations, tool calls, retries, and errors to Langfuse. Supports mandatory redaction, one trace per run, and resilient background export. See [`docs/features/langfuse.md`](docs/features/langfuse.md) for configuration via `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_HOST`, plus live test commands (OpenAI/Anthropic) and skip behavior when credentials are missing. Credential rotation is recommended if keys are exposed.
 
 ## Architecture
 
@@ -410,6 +413,7 @@ See [`docs/`](docs/) for detailed guides:
 - [Models](docs/models.md), model selection, registry routing, and built-in model implementations
 - [Streaming](docs/features/streaming.md), SSE streaming setup and usage
 - [Prometheus Metrics](docs/features/metrics.md), low-cardinality metrics and `/metrics` exposure helpers
+- [Langfuse Observability](docs/features/langfuse.md), full-fidelity traces, spans, and observations
 - [Structured Output](docs/features/structured-output.md), Pydantic schema → JSON mode
 - [Serialization](docs/features/serialization.md), World state persistence
 - [Logging](docs/features/logging.md), structlog integration
