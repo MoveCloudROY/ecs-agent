@@ -24,7 +24,7 @@ from ecs_agent.prompts.provider import (
 from ecs_agent.prompts.registry import resolve_placeholder_values
 from ecs_agent.scratchbook.prompt_definition import ScratchbookPromptConfig
 from ecs_agent.scratchbook.prompt_provider import ScratchbookPromptPlaceholderProvider
-from ecs_agent.types import EntityId
+from ecs_agent.types import EntityId, PromptReplacementEvent
 from ecs_agent.workflows.prompt_provider import WorkflowPromptPlaceholderProvider
 
 _BUILTIN_PLACEHOLDER_PROVIDERS: list[BuiltinPlaceholderProvider] = [
@@ -35,6 +35,9 @@ _BUILTIN_PLACEHOLDER_PROVIDERS: list[BuiltinPlaceholderProvider] = [
 logger = get_logger(__name__)
 
 PlaceholderProviderRegistry = list[BuiltinPlaceholderProvider]
+_PLACEHOLDER_NAME_RE = re.compile(
+    r"\$(?:\{(?P<braced>[_a-zA-Z][_a-zA-Z0-9]*)\}|(?P<named>[_a-zA-Z][_a-zA-Z0-9]*))"
+)
 
 
 class SystemPromptRenderSystem:
@@ -65,6 +68,11 @@ class SystemPromptRenderSystem:
                     current_cache_key=cache_key,
                 )
             try:
+                template_text = _normalized_template_text(
+                    world,
+                    entity_id,
+                    prompt_config,
+                )
                 rendered, snapshot = _render_system_prompt(
                     world, entity_id, prompt_config
                 )
@@ -88,6 +96,23 @@ class SystemPromptRenderSystem:
                 )
 
                 _bridge_rendered_prompt(world, entity_id, rendered)
+                replacements = _prompt_replacements(template_text, snapshot)
+                if rendered != template_text and replacements:
+                    await world.event_bus.publish(
+                        PromptReplacementEvent(
+                            entity_id=entity_id,
+                            prompt_kind="system",
+                            source_text=template_text,
+                            rendered_text=rendered,
+                            replacements=replacements,
+                            metadata={
+                                "system_name": (
+                                    "ecs_agent.systems.system_prompt_render_system."
+                                    "SystemPromptRenderSystem"
+                                ),
+                            },
+                        )
+                    )
             except Exception as exc:
                 logger.error(
                     "system_prompt_render_failed",
@@ -102,16 +127,38 @@ def _render_system_prompt(
     entity_id: EntityId,
     prompt_config: SystemPromptConfigSpec,
 ) -> tuple[str, dict[str, str]]:
-    template_text = _read_template(prompt_config.template_source)
-    template_text = _normalize_compaction_summary_template(
-        world, entity_id, template_text
-    )
+    template_text = _normalized_template_text(world, entity_id, prompt_config)
     rendered, snapshot = render_prompt_template(
         template=template_text,
         world=world,
         entity=entity_id,
     )
     return rendered, snapshot
+
+
+def _normalized_template_text(
+    world: World,
+    entity_id: EntityId,
+    prompt_config: SystemPromptConfigSpec,
+) -> str:
+    template_text = _read_template(prompt_config.template_source)
+    return _normalize_compaction_summary_template(world, entity_id, template_text)
+
+
+def _prompt_replacements(
+    template_text: str,
+    snapshot: dict[str, str],
+) -> dict[str, str]:
+    replacements: dict[str, str] = {}
+    for match in _PLACEHOLDER_NAME_RE.finditer(template_text):
+        if match.start() > 0 and template_text[match.start() - 1] == "$":
+            continue
+        name = match.group("braced") or match.group("named")
+        if name is None:
+            continue
+        if name in snapshot:
+            replacements[name] = snapshot[name]
+    return replacements
 
 
 def render_prompt_template(

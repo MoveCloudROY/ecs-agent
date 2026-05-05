@@ -14,9 +14,11 @@ from ecs_agent.components import (
     SkillMetadata,
     SubagentRegistryComponent,
     SystemPromptComponent,
+    TerminalComponent,
     ToolRegistryComponent,
 )
-from ecs_agent.core import World
+from ecs_agent.core import Runner, World
+from ecs_agent.observability import RecordingTelemetrySink, install_observability
 from ecs_agent.prompts.contracts import (
     PlaceholderSpec,
     SystemPromptConfigSpec,
@@ -36,6 +38,14 @@ from ecs_agent.systems.system_prompt_render_system import (
     render_compaction_prompt,
 )
 from ecs_agent.types import SubagentConfig, ToolSchema
+
+
+class TerminatingSystem:
+    """Terminates a runner after prompt systems have processed."""
+
+    async def process(self, world: World) -> None:
+        """Attach a terminal component to stop the runner."""
+        world.add_component(world.create_entity(), TerminalComponent(reason="done"))
 
 
 def test_contract_prompt_template_source_requires_exactly_one_source() -> None:
@@ -183,6 +193,57 @@ async def test_render_system_renders_inline_template_and_bridges_to_llm() -> Non
         "_cache_key": "inventory:tools:write_file|skills:|subagents:|mcps:",
     }
     assert llm.system_prompt == rendered.text
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_replacement_emits_prompt_telemetry() -> None:
+    world = World()
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="Hello ${user_name}"),
+            placeholders=[PlaceholderSpec(name="user_name", value="roy")],
+        ),
+    )
+    world.register_system(SystemPromptRenderSystem(), priority=0)
+    world.register_system(TerminatingSystem(), priority=10)
+
+    await Runner().run(world, max_ticks=1)
+
+    records = [record for record in sink.records if record.name == "prompt.system.replacement"]
+    assert len(records) == 1
+    record = records[0]
+    assert record.kind == "event"
+    assert record.entity_id == int(entity_id)
+    assert record.input == {"text": "Hello ${user_name}"}
+    assert record.output == {"text": "Hello roy"}
+    assert record.metadata == {
+        "prompt_kind": "system",
+        "replacements": {"user_name": "roy"},
+        "system_name": "ecs_agent.systems.system_prompt_render_system.SystemPromptRenderSystem",
+    }
+
+
+@pytest.mark.asyncio
+async def test_static_system_prompt_emits_no_prompt_render_tracing() -> None:
+    world = World()
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(template_source=PromptTemplateSource(inline="Always terse.")),
+    )
+    world.register_system(SystemPromptRenderSystem(), priority=0)
+    world.register_system(TerminatingSystem(), priority=10)
+
+    await Runner().run(world, max_ticks=1)
+
+    assert not any(record.name == "prompt.system.replacement" for record in sink.records)
+    assert not any(record.name.endswith("SystemPromptRenderSystem") for record in sink.records)
 
 
 @pytest.mark.asyncio

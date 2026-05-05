@@ -5,8 +5,10 @@ from ecs_agent.components.definitions import (
     ContextEntry,
     PromptContextQueueComponent,
     RenderedUserPromptComponent,
+    TerminalComponent,
 )
-from ecs_agent.core import World
+from ecs_agent.core import Runner, World
+from ecs_agent.observability import RecordingTelemetrySink, install_observability
 from ecs_agent.prompts.contracts import TriggerSpec
 from ecs_agent.prompts.user_prompt_rendering import (
     render_user_prompt_text,
@@ -15,6 +17,14 @@ from ecs_agent.systems.user_prompt_normalization_system import (
     UserPromptNormalizationSystem,
 )
 from ecs_agent.types import Message
+
+
+class TerminatingSystem:
+    """Terminates a runner after prompt systems have processed."""
+
+    async def process(self, world: World) -> None:
+        """Attach a terminal component to stop the runner."""
+        world.add_component(world.create_entity(), TerminalComponent(reason="done"))
 
 
 _GREET_TRIGGER = TriggerSpec(
@@ -59,6 +69,57 @@ async def test_keyword_trigger_prepends_content() -> None:
     assert rendered is not None
     assert rendered.text.startswith("[PROMPT_INJECT:@greet]\nBe greeting")
     assert rendered.text.endswith("@greet please")
+
+
+async def test_user_prompt_replacement_emits_prompt_telemetry() -> None:
+    world = World()
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="@greet please")]),
+    )
+    world.add_component(entity_id, UserPromptConfigComponent(triggers=[_GREET_TRIGGER]))
+    world.register_system(UserPromptNormalizationSystem(), priority=0)
+    world.register_system(TerminatingSystem(), priority=10)
+
+    await Runner().run(world, max_ticks=1)
+
+    records = [record for record in sink.records if record.name == "prompt.user.replacement"]
+    assert len(records) == 1
+    record = records[0]
+    assert record.kind == "event"
+    assert record.entity_id == int(entity_id)
+    assert record.input == {"text": "@greet please"}
+    assert record.output == {
+        "text": "[PROMPT_INJECT:@greet]\nBe greeting\n\n@greet please"
+    }
+    assert record.metadata == {
+        "prompt_kind": "user",
+        "replacements": {"trigger_content": "Be greeting"},
+        "system_name": "ecs_agent.systems.user_prompt_normalization_system.UserPromptNormalizationSystem",
+        "trigger_action": "inject",
+        "trigger_pattern": "@greet",
+    }
+
+
+async def test_no_trigger_user_prompt_emits_no_normalization_tracing() -> None:
+    world = World()
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="hello")]),
+    )
+    world.register_system(UserPromptNormalizationSystem(), priority=0)
+    world.register_system(TerminatingSystem(), priority=10)
+
+    await Runner().run(world, max_ticks=1)
+
+    assert not any(record.name == "prompt.user.replacement" for record in sink.records)
+    assert not any(record.name.endswith("UserPromptNormalizationSystem") for record in sink.records)
 
 
 async def test_trigger_replace_action() -> None:

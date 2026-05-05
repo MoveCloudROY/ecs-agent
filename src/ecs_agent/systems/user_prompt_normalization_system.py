@@ -21,7 +21,7 @@ from ecs_agent.prompts.user_prompt_rendering import (
     _matches,
 )
 from ecs_agent.scratchbook import ArtifactRegistry, ScratchbookService
-from ecs_agent.types import EntityId, Message
+from ecs_agent.types import EntityId, Message, PromptReplacementEvent
 
 logger = get_logger(__name__)
 
@@ -124,6 +124,32 @@ class UserPromptNormalizationSystem:
                     source_message_index=updated_source_index,
                 ),
             )
+            if normalized_text != raw_user_text:
+                matched_spec = self._matching_trigger_spec(
+                    raw_user_text,
+                    trigger_specs,
+                )
+                replacements: dict[str, str] = {}
+                metadata = {
+                    "system_name": (
+                        "ecs_agent.systems.user_prompt_normalization_system."
+                        "UserPromptNormalizationSystem"
+                    ),
+                }
+                if matched_spec is not None:
+                    replacements["trigger_content"] = matched_spec.content
+                    metadata["trigger_action"] = matched_spec.action
+                    metadata["trigger_pattern"] = matched_spec.pattern
+                await world.event_bus.publish(
+                    PromptReplacementEvent(
+                        entity_id=entity_id,
+                        prompt_kind="user",
+                        source_text=raw_user_text,
+                        rendered_text=normalized_text,
+                        replacements=replacements,
+                        metadata=metadata,
+                    )
+                )
 
     @staticmethod
     def apply_trigger_specs(user_text: str, trigger_specs: list[TriggerSpec]) -> str:
@@ -271,6 +297,18 @@ class UserPromptNormalizationSystem:
                 key=lambda spec: -spec.priority,
             )
         )
+
+    @staticmethod
+    def _matching_trigger_spec(
+        raw_user_text: str,
+        trigger_specs: list[TriggerSpec] | None,
+    ) -> TriggerSpec | None:
+        if not trigger_specs:
+            return None
+        for spec in sorted(trigger_specs, key=lambda item: -item.priority):
+            if _matches(spec=spec, text=raw_user_text):
+                return spec
+        return None
 
     @staticmethod
     def _handler_signature(
