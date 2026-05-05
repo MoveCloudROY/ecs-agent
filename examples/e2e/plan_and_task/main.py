@@ -229,6 +229,10 @@ def build_plan_task_world(
         str(base_dir or _WORKFLOW_BASE_DIR)
     )
     SkillManager().install(world, agent_id, _builtin_skill)
+    plan_task_tool_registry = world.get_component(agent_id, ToolRegistryComponent)
+    if plan_task_tool_registry is not None:
+        plan_task_tool_registry.tools.pop("explore", None)
+        plan_task_tool_registry.handlers.pop("explore", None)
 
     world.add_component(agent_id, SubagentSessionTableComponent(sessions={}))
     world.add_component(
@@ -857,8 +861,8 @@ def build_plan_task_world(
     world.register_system(
         CompactionSystem(), priority=_PLAN_TASK_COMPACTION_PRIORITY
     )
-    world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
     world.register_system(UserPromptNormalizationSystem(priority=-10), priority=-10)
+    world.register_system(SystemPromptRenderSystem(priority=-5), priority=-5)
     subagent_system = SubagentSystem(priority=-1)
     world.register_system(subagent_system, priority=-1)
     subagent_system.install_subagent_tool(world, agent_id, tool_name="subagent")
