@@ -38,6 +38,7 @@ PlaceholderProviderRegistry = list[BuiltinPlaceholderProvider]
 _PLACEHOLDER_NAME_RE = re.compile(
     r"\$(?:\{(?P<braced>[_a-zA-Z][_a-zA-Z0-9]*)\}|(?P<named>[_a-zA-Z][_a-zA-Z0-9]*))"
 )
+_ESCAPED_DOLLAR_SENTINEL = "\u0000ecs_agent_escaped_template_dollar\u0000"
 
 
 class SystemPromptRenderSystem:
@@ -180,9 +181,6 @@ def render_prompt_template(
         placeholder_registry=placeholder_registry,
     )
     snapshot = {**resolved_user_values, **builtins}
-    _ensure_scratchbook_defaults_for_referenced_placeholders(
-        snapshot, template, world, entity
-    )
     return _substitute_prompt_template(template, snapshot), snapshot
 
 
@@ -310,37 +308,36 @@ def _resolve_entity_user_placeholders(
 
 
 def _substitute_prompt_template(template_text: str, snapshot: dict[str, str]) -> str:
-    current = template_text
+    current = _mask_escaped_template_dollars(template_text)
     for _ in range(5):
         template = Template(current)
         try:
-            rendered = template.substitute(snapshot)
+            rendered = _mask_escaped_template_dollars(template.substitute(snapshot))
         except KeyError as exc:
             missing = str(exc).strip("'\"")
             raise ValueError(f"unknown placeholders in template: {missing}") from exc
         if rendered == current:
-            return rendered
+            if _PLACEHOLDER_NAME_RE.search(rendered) is not None:
+                raise ValueError(
+                    "recursive placeholder expansion did not converge; "
+                    "unresolved placeholders remain"
+                )
+            return _unmask_escaped_template_dollars(rendered)
         current = rendered
-    return current
-
-
-def _ensure_scratchbook_defaults_for_referenced_placeholders(
-    snapshot: dict[str, str], template_text: str, world: World, entity_id: EntityId
-) -> None:
-    if "_scratchbook_path" in snapshot:
-        return
-    referenced_texts = [template_text, *snapshot.values()]
-    if not any("_scratchbook_" in text for text in referenced_texts):
-        return
-
-    provider = ScratchbookPromptPlaceholderProvider(
-        ScratchbookPromptConfig(
-            overview_default_template="",
-            scratchbook_root_path="scratchbook",
-            artifacts=[],
+    if _PLACEHOLDER_NAME_RE.search(current) is not None:
+        raise ValueError(
+            "recursive placeholder expansion exceeded limit; "
+            "unresolved placeholders remain"
         )
-    )
-    snapshot.update(provider.resolve_placeholders(world, entity_id))
+    return _unmask_escaped_template_dollars(current)
+
+
+def _mask_escaped_template_dollars(template_text: str) -> str:
+    return template_text.replace("$$", _ESCAPED_DOLLAR_SENTINEL)
+
+
+def _unmask_escaped_template_dollars(template_text: str) -> str:
+    return template_text.replace(_ESCAPED_DOLLAR_SENTINEL, "$")
 
 
 def _provider_id(provider: BuiltinPlaceholderProvider) -> str:

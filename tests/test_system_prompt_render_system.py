@@ -1918,30 +1918,6 @@ async def test_scratchbook_provider_placeholders_render_into_system_prompt() -> 
 
 
 @pytest.mark.asyncio
-async def test_scratchbook_references_without_config_get_safe_defaults() -> None:
-    _require_provider_seam_contract_surface()
-
-    world = World()
-    entity_id = world.create_entity()
-    world.add_component(
-        entity_id,
-        SystemPromptConfigSpec(
-            template_source=PromptTemplateSource(
-                inline="${_scratchbook_overview}\n${_scratchbook_artifacts}"
-            ),
-        ),
-    )
-
-    await SystemPromptRenderSystem().process(world)
-
-    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
-    assert rendered is not None
-    assert "Scratchbook path: scratchbook" in rendered.text
-    assert "- none" in rendered.text
-    assert rendered.placeholder_snapshot["_scratchbook_path"] == "scratchbook"
-
-
-@pytest.mark.asyncio
 async def test_system_prompt_values_can_reference_builtins_recursively() -> None:
     _require_provider_seam_contract_surface()
 
@@ -1962,6 +1938,43 @@ async def test_system_prompt_values_can_reference_builtins_recursively() -> None
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
     assert rendered.text == "Tools:\n- none"
+
+
+@pytest.mark.asyncio
+async def test_recursive_system_prompt_cycle_raises_instead_of_leaking_placeholder() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${outer}"),
+            placeholders=[
+                PlaceholderSpec(name="outer", value="${inner}"),
+                PlaceholderSpec(name="inner", value="${outer}"),
+            ],
+        ),
+    )
+
+    with pytest.raises(ValueError, match="recursive placeholder expansion"):
+        await SystemPromptRenderSystem().process(world)
+
+
+@pytest.mark.asyncio
+async def test_recursive_system_prompt_preserves_escaped_placeholders() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="literal=$${_installed_tools}"),
+        ),
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert rendered.text == "literal=${_installed_tools}"
 
 
 @pytest.mark.asyncio
