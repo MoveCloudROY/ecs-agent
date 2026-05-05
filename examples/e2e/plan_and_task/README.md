@@ -173,8 +173,25 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py::test_anthropic_plan_ta
   - `openai_responses` (default) — OpenAI Responses API via `OpenAIModel` (enables `enable_store=True` for prefix caching)
   - `openai_chat_completions` — OpenAI Chat Completions API via `OpenAIModel`
   - `anthropic_messages` — Anthropic Messages API via `ClaudeModel` (also works with Kimi-compatible Anthropic endpoints)
+- `PLAN_TASK_LANGFUSE`: Set to `1`, `true`, `yes`, or `on` to install Langfuse observability on the plan-and-task `World` before `Runner.run()` starts.
+- `PLAN_TASK_LANGFUSE_ENVIRONMENT`: Optional Langfuse environment label. Defaults to `plan-and-task`.
+- `PLAN_TASK_LANGFUSE_RELEASE`: Optional release label sent with plan-and-task traces.
+- `PLAN_TASK_LANGFUSE_SESSION_ID`: Optional session ID for grouping plan-and-task traces. The Langfuse SDK v4 adapter sends this as a trace-level session attribute via `propagate_attributes(...)`; metadata-only session IDs do not power the Langfuse Sessions UI.
+- `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_HOST` or `LANGFUSE_BASE_URL`: Langfuse connection settings used when `PLAN_TASK_LANGFUSE` is enabled.
 - `PLAN_TASK_INTERACTIVE`: Set to `0` to disable interactive stdin.
 - `DEBUG`: Set to `1` to make this example call `configure_logging()` with debug logging. All `plan_task_*` structured log events will then appear on stderr via structlog.
+
+### Langfuse Observability
+
+Install the optional extra before enabling Langfuse for this example:
+
+```bash
+uv pip install -e ".[langfuse]"
+```
+
+When `PLAN_TASK_LANGFUSE` is enabled, `main.py` calls `install_plan_task_langfuse_observability()` after `build_plan_task_world(...)` creates the `World` and before `Runner.run(...)` starts. The integration produces one trace per runner invocation and captures the plan interview, subagent/tool activity, LLM generations, retries, errors, context pressure, and completion scores through the shared EventBus-backed observability layer.
+
+Use environment variables or a secret manager for `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and the Langfuse host value. Do not put concrete keys in scripts, docs, or command history. On exit, the CLI calls `flush()` and `shutdown()` on the observability handle so buffered trace events are sent before the process terminates.
 
 ### Anthropic / Kimi Example
 

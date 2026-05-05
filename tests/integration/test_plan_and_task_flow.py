@@ -12,6 +12,7 @@ import pytest
 from ecs_agent.components.definitions import TerminalComponent
 from ecs_agent.core import World
 from ecs_agent.systems import TerminalCleanupSystem
+from ecs_agent.types import EntityId
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
     build_scratchbook_prompt_config,
@@ -1966,6 +1967,90 @@ async def test_plan_task_world_installs_auto_compaction(tmp_path: Path) -> None:
     )
 
 
+def test_plan_task_langfuse_disabled_by_default(tmp_path: Path) -> None:
+    from ecs_agent.observability.sinks import RecordingTelemetrySink
+    from examples.e2e.plan_and_task.main import install_plan_task_langfuse_observability
+
+    world, _, _, _ = _build_test_world(tmp_path)
+    sink = RecordingTelemetrySink()
+
+    handle = install_plan_task_langfuse_observability(
+        world,
+        env={},
+        sink=sink,
+    )
+
+    assert handle is None
+    assert not hasattr(world, "_ecs_agent_observability_sink")
+
+
+def test_plan_task_langfuse_installs_when_enabled(tmp_path: Path) -> None:
+    from ecs_agent.observability.sinks import RecordingTelemetrySink
+    from examples.e2e.plan_and_task.main import install_plan_task_langfuse_observability
+
+    world, _, _, _ = _build_test_world(tmp_path)
+    sink = RecordingTelemetrySink()
+
+    handle = install_plan_task_langfuse_observability(
+        world,
+        env={
+            "PLAN_TASK_LANGFUSE": "1",
+            "PLAN_TASK_LANGFUSE_SESSION_ID": "session-one",
+        },
+        sink=sink,
+    )
+
+    assert handle is not None
+    assert handle.sink is sink
+    assert handle.config.environment == "plan-and-task"
+    assert handle.config.session_id == "session-one"
+    assert handle.config.tags == ["plan-and-task"]
+    assert handle.config.metadata == {"source": "examples/e2e/plan_and_task"}
+
+
+def test_plan_task_readme_documents_langfuse_observability() -> None:
+    readme = Path("examples/e2e/plan_and_task/README.md").read_text()
+
+    assert "PLAN_TASK_LANGFUSE" in readme
+    assert "LANGFUSE_PUBLIC_KEY" in readme
+    assert "LANGFUSE_SECRET_KEY" in readme
+    assert "LANGFUSE_HOST" in readme or "LANGFUSE_BASE_URL" in readme
+    assert "PLAN_TASK_LANGFUSE_SESSION_ID" in readme
+    assert "install_plan_task_langfuse_observability" in readme
+    assert "flush" in readme
+    assert "shutdown" in readme
+
+
+@pytest.mark.asyncio
+async def test_plan_task_langfuse_records_runner_trace_when_enabled(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent.components import ConversationComponent
+    from ecs_agent.core import Runner
+    from ecs_agent.observability.sinks import RecordingTelemetrySink
+    from ecs_agent.types import Message
+    from examples.e2e.plan_and_task.main import install_plan_task_langfuse_observability
+
+    world, agent_id, _, _ = _build_test_world(tmp_path)
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.append(Message(role="user", content="Summarize plan status"))
+    sink = RecordingTelemetrySink()
+    handle = install_plan_task_langfuse_observability(
+        world,
+        env={"PLAN_TASK_LANGFUSE": "true"},
+        sink=sink,
+    )
+
+    assert handle is not None
+    await Runner().run(world, max_ticks=1)
+    await handle.flush()
+    await handle.shutdown()
+
+    assert any(record.kind == "trace" for record in sink.records)
+    assert any(record.kind == "generation" for record in sink.records)
+
+
 def test_plan_task_world_does_not_register_memory_system(tmp_path: Path) -> None:
     from ecs_agent.providers.fake_model import FakeModel
     from ecs_agent.systems.memory import MemorySystem
@@ -2478,6 +2563,8 @@ def test_main_world_installs_builtin_tools(tmp_path: Path) -> None:
         assert expected_tool in tool_registry.handlers, (
             f"missing handler: {expected_tool}"
         )
+    assert "explore" not in tool_registry.tools
+    assert "explore" not in tool_registry.handlers
 
 
 # ---------------------------------------------------------------------------
@@ -4512,6 +4599,17 @@ def test_task_main_agent_system_prompt_exists() -> None:
     assert TASK_MAIN_AGENT_SYSTEM_PROMPT != PLAN_MAIN_AGENT_SYSTEM_PROMPT
 
 
+def test_plan_and_task_prompts_embed_scratchbook_context() -> None:
+    from examples.e2e.plan_and_task.prompts import (
+        PLAN_MAIN_AGENT_SYSTEM_PROMPT,
+        TASK_MAIN_AGENT_SYSTEM_PROMPT,
+    )
+
+    for prompt in (PLAN_MAIN_AGENT_SYSTEM_PROMPT, TASK_MAIN_AGENT_SYSTEM_PROMPT):
+        assert "${_scratchbook_overview}" in prompt
+        assert "${_scratchbook_artifacts}" in prompt
+
+
 def test_build_plan_task_world_uses_plan_main_agent_system_prompt(tmp_path: Path) -> None:
     from ecs_agent.prompts.contracts import SystemPromptConfigSpec
     from ecs_agent.providers.fake_model import FakeModel
@@ -4685,6 +4783,73 @@ async def test_task_resume_swaps_system_prompt(tmp_path: Path) -> None:
     assert len(conv.messages) == 1
     assert conv.messages[0].role == "user"
     assert conv.messages[0].content == "/task:resume"
+
+
+@pytest.mark.asyncio
+async def test_task_resume_renders_task_prompt_before_reasoning_same_tick(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent.components import ConversationComponent
+    from ecs_agent.core import Runner
+    from ecs_agent.types import CompletionResult, Message, ToolSchema
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    class CapturingModel:
+        model_id = "capturing"
+
+        def __init__(self) -> None:
+            self.seen_messages: list[list[Message]] = []
+
+        async def complete(
+            self,
+            messages: list[Message],
+            tools: list[ToolSchema] | None = None,
+            stream: bool = False,
+            response_format: dict[str, object] | None = None,
+        ) -> CompletionResult:
+            del tools, response_format
+            if stream:
+                raise ValueError("streaming is not used in this regression test")
+            self.seen_messages.append(list(messages))
+            return CompletionResult(message=Message(role="assistant", content="ready"))
+
+    model = CapturingModel()
+    world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
+        model=model,
+        base_dir=tmp_path,
+    )
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    state = _make_runtime_state()
+    state.phase = "TASK_BLOCKED"
+    state.status = "blocked"
+    state.current_task_id = "task-001"
+    state.tasks = [
+        TaskRecord(
+            task_id="task-001",
+            title="First Task",
+            status="blocked",
+            retry_count=1,
+            last_error="waiting on input",
+        )
+    ]
+    adapter.write_state(state)
+    adapter_ref[0] = adapter
+    runtime_state[0] = state
+
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.append(Message(role="user", content="/task:resume"))
+
+    await Runner().run(world, max_ticks=1)
+
+    assert model.seen_messages
+    system_messages = [
+        message.content for message in model.seen_messages[0] if message.role == "system"
+    ]
+    assert system_messages
+    assert "task execution main agent" in system_messages[0]
+    assert "${_scratchbook_" not in system_messages[0]
 
 
 @pytest.mark.asyncio
