@@ -7,7 +7,7 @@ import json
 import os
 import re as _re
 import sys
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -58,6 +58,7 @@ from ecs_agent.types import (
     Message,
     SubagentConfig,
     CompactionMethod,
+    ToolSchema,
 )
 
 from ecs_agent.accounting import AccountingSubscriber
@@ -94,8 +95,36 @@ _VERDICT_PATTERN = _re.compile(r"\b(approved|revise|blocked)\b", _re.IGNORECASE)
 _WORKFLOW_BASE_DIR = Path(__file__).parent
 _SKILLS_DIR = Path(__file__).parent / ".claude" / "skills"
 _PLAN_TASK_COMPACTION_PRIORITY = -30
-_DEFAULT_COMPACTION_THRESHOLD_TOKENS = 12_000
+_DEFAULT_COMPACTION_THRESHOLD_TOKENS = 300_000
 _DEFAULT_COMPACTION_METHOD: CompactionMethod = "predrop_then_compact"
+
+
+class _FilteredBuiltinToolsSkill:
+    """Builtin tool bundle wrapper that omits tools before installation."""
+
+    name = BuiltinToolsSkill.name
+    description = BuiltinToolsSkill.description
+    is_tool_bundle = True
+
+    def __init__(self, skill: BuiltinToolsSkill, excluded_tools: set[str]) -> None:
+        self._skill = skill
+        self._excluded_tools = excluded_tools
+
+    def tools(self) -> dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]]:
+        return {
+            name: tool
+            for name, tool in self._skill.tools().items()
+            if name not in self._excluded_tools
+        }
+
+    def system_prompt(self) -> str:
+        return self._skill.system_prompt()
+
+    def install(self, world: World, entity_id: EntityId) -> None:
+        self._skill.install(world, entity_id)
+
+    def uninstall(self, world: World, entity_id: EntityId) -> None:
+        self._skill.uninstall(world, entity_id)
 
 
 def _env_flag_enabled(value: str | None) -> bool:
@@ -228,11 +257,11 @@ def build_plan_task_world(
     _builtin_skill = BuiltinToolsSkill().bind_workspace(
         str(base_dir or _WORKFLOW_BASE_DIR)
     )
-    SkillManager().install(world, agent_id, _builtin_skill)
-    plan_task_tool_registry = world.get_component(agent_id, ToolRegistryComponent)
-    if plan_task_tool_registry is not None:
-        plan_task_tool_registry.tools.pop("explore", None)
-        plan_task_tool_registry.handlers.pop("explore", None)
+    SkillManager().install(
+        world,
+        agent_id,
+        _FilteredBuiltinToolsSkill(_builtin_skill, excluded_tools={"explore"}),
+    )
 
     world.add_component(agent_id, SubagentSessionTableComponent(sessions={}))
     world.add_component(
