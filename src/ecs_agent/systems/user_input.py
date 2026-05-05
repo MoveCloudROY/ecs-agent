@@ -13,6 +13,7 @@ from ecs_agent.components.definitions import (
 )
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
+from ecs_agent.observability.events import UserInputReceivedEvent
 from ecs_agent.types import EntityId, Message, UserInputRequestedEvent
 
 logger = get_logger(__name__)
@@ -120,6 +121,13 @@ class UserInputSystem:
             "user_input_received",
             entity_id=entity_id,
             input_length=len(result),
+        )
+        await world.event_bus.publish(
+            UserInputReceivedEvent(
+                entity_id=entity_id,
+                prompt=component.prompt,
+                text=result,
+            )
         )
 
         # Append user message to conversation, but skip if a terminal condition

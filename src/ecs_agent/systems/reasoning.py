@@ -12,6 +12,8 @@ from ecs_agent.accounting.models import (
 )
 from ecs_agent.accounting.instrumentation import (
     attach_retry_event_bus,
+    publish_llm_observation_completed_event,
+    publish_llm_observation_started_event,
     publish_llm_invocation_event,
     resolve_provider_id,
 )
@@ -169,7 +171,24 @@ class ReasoningSystem:
             )
 
             invocation_event_published = False
+            observation_event_published = False
             invocation_started_at = time.monotonic()
+            model_parameters = (
+                {"thread_response_id": previous_response_id}
+                if previous_response_id is not None
+                else None
+            )
+            await publish_llm_observation_started_event(
+                event_bus=world.event_bus,
+                entity_id=entity_id,
+                provider_id=provider_id,
+                model=active_model.model_id,
+                operation="reasoning",
+                messages=messages,
+                tools=tools,
+                streaming=streaming_enabled,
+                model_parameters=model_parameters,
+            )
             try:
                 attach_retry_event_bus(active_model, world.event_bus)
                 if streaming_enabled:
@@ -208,6 +227,26 @@ class ReasoningSystem:
                     reasoning_content=result.reasoning_content,
                 )
 
+                invocation_duration_seconds = time.monotonic() - invocation_started_at
+                await publish_llm_observation_completed_event(
+                    event_bus=world.event_bus,
+                    entity_id=entity_id,
+                    provider_id=provider_id,
+                    model=active_model.model_id,
+                    operation="reasoning",
+                    messages=messages,
+                    tools=tools,
+                    streaming=streaming_enabled,
+                    model_parameters=model_parameters,
+                    response_message=result.message,
+                    reasoning_content=result.reasoning_content,
+                    usage=result.usage,
+                    response_id=result.response_id,
+                    status="success",
+                    duration_seconds=invocation_duration_seconds,
+                )
+                observation_event_published = True
+
                 await self._publish_llm_invocation_event(
                     world=world,
                     entity_id=entity_id,
@@ -219,7 +258,7 @@ class ReasoningSystem:
                     operation="reasoning",
                     status="success",
                     streaming=streaming_enabled,
-                    duration_seconds=time.monotonic() - invocation_started_at,
+                    duration_seconds=invocation_duration_seconds,
                 )
                 invocation_event_published = True
 
@@ -275,6 +314,22 @@ class ReasoningSystem:
                         TerminalComponent(reason="reasoning_complete"),
                     )
             except (IndexError, StopIteration):
+                if not observation_event_published:
+                    await publish_llm_observation_completed_event(
+                        event_bus=world.event_bus,
+                        entity_id=entity_id,
+                        provider_id=provider_id,
+                        model=active_model.model_id,
+                        operation="reasoning",
+                        messages=messages,
+                        tools=tools,
+                        streaming=streaming_enabled,
+                        model_parameters=model_parameters,
+                        status="error",
+                        error="provider exhausted",
+                        duration_seconds=time.monotonic() - invocation_started_at,
+                    )
+                    observation_event_published = True
                 if not invocation_event_published:
                     await self._publish_llm_invocation_event(
                         world=world,
@@ -295,6 +350,21 @@ class ReasoningSystem:
                     TerminalComponent(reason="provider_exhausted"),
                 )
             except asyncio.CancelledError:
+                if not observation_event_published:
+                    await publish_llm_observation_completed_event(
+                        event_bus=world.event_bus,
+                        entity_id=entity_id,
+                        provider_id=provider_id,
+                        model=active_model.model_id,
+                        operation="reasoning",
+                        messages=messages,
+                        tools=tools,
+                        streaming=streaming_enabled,
+                        model_parameters=model_parameters,
+                        status="cancelled",
+                        duration_seconds=time.monotonic() - invocation_started_at,
+                    )
+                    observation_event_published = True
                 if not invocation_event_published:
                     stream_completeness = StreamCompleteness.UNKNOWN
                     interruption = world.get_component(entity_id, InterruptionComponent)
@@ -327,6 +397,22 @@ class ReasoningSystem:
                     )
                 raise
             except Exception as exc:
+                if not observation_event_published:
+                    await publish_llm_observation_completed_event(
+                        event_bus=world.event_bus,
+                        entity_id=entity_id,
+                        provider_id=provider_id,
+                        model=active_model.model_id,
+                        operation="reasoning",
+                        messages=messages,
+                        tools=tools,
+                        streaming=streaming_enabled,
+                        model_parameters=model_parameters,
+                        status="error",
+                        error=str(exc),
+                        duration_seconds=time.monotonic() - invocation_started_at,
+                    )
+                    observation_event_published = True
                 if not invocation_event_published:
                     stream_completeness = (
                         StreamCompleteness.PARTIAL

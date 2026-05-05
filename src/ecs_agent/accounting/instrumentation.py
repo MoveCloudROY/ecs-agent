@@ -14,6 +14,11 @@ from ecs_agent.accounting.models import (
     UsageRecord,
 )
 from ecs_agent.core.event_bus import EventBus
+from ecs_agent.observability.events import (
+    LLMObservationCompletedEvent,
+    LLMObservationStartedEvent,
+    LLMObservationStatus,
+)
 from ecs_agent.types import CompletionResult, EntityId, Message, StreamDelta, ToolSchema, Usage
 
 
@@ -112,6 +117,135 @@ async def publish_llm_invocation_event(
     )
 
 
+async def publish_llm_observation_started_event(
+    *,
+    event_bus: EventBus,
+    entity_id: EntityId | int,
+    provider_id: str,
+    model: str,
+    operation: str,
+    messages: list[Message],
+    tools: list[ToolSchema] | None,
+    streaming: bool,
+    model_parameters: dict[str, Any] | None = None,
+) -> None:
+    """Publish a raw LLM generation observation start event."""
+    await event_bus.publish(
+        LLMObservationStartedEvent(
+            entity_id=entity_id,
+            provider_id=provider_id,
+            model=model,
+            operation=operation,
+            messages=list(messages),
+            tools=list(tools) if tools is not None else None,
+            streaming=streaming,
+            model_parameters=model_parameters,
+        )
+    )
+
+
+async def publish_llm_observation_completed_event(
+    *,
+    event_bus: EventBus,
+    entity_id: EntityId | int,
+    provider_id: str,
+    model: str,
+    operation: str,
+    messages: list[Message],
+    tools: list[ToolSchema] | None,
+    streaming: bool,
+    model_parameters: dict[str, Any] | None = None,
+    response_message: Message | None = None,
+    reasoning_content: str | None = None,
+    usage: Usage | None = None,
+    response_id: str | None = None,
+    status: str = "success",
+    error: str | None = None,
+    duration_seconds: float | None = None,
+    cost_details: dict[str, Any] | None = None,
+) -> None:
+    """Publish a raw LLM generation observation completion event."""
+    await event_bus.publish(
+        LLMObservationCompletedEvent(
+            entity_id=entity_id,
+            provider_id=provider_id,
+            model=model,
+            operation=operation,
+            messages=list(messages),
+            tools=list(tools) if tools is not None else None,
+            streaming=streaming,
+            model_parameters=model_parameters,
+            response_message=response_message,
+            reasoning_content=reasoning_content,
+            usage=usage,
+            response_id=response_id,
+            status=cast(LLMObservationStatus, status),
+            error=error,
+            duration_seconds=duration_seconds,
+            cost_details=cost_details or {},
+        )
+    )
+
+
+async def _observe_stream_result(
+    *,
+    stream: AsyncIterator[StreamDelta],
+    event_bus: EventBus,
+    entity_id: EntityId,
+    provider_id: str,
+    model: str,
+    operation: str,
+    messages: list[Message],
+    tools: list[ToolSchema] | None,
+    model_parameters: dict[str, Any] | None,
+    start_time: float,
+) -> AsyncIterator[StreamDelta]:
+    content_chunks: list[str] = []
+    reasoning_chunks: list[str] = []
+    usage: Usage | None = None
+    response_id: str | None = None
+    status = "success"
+    error: str | None = None
+
+    try:
+        async for delta in stream:
+            if delta.content is not None:
+                content_chunks.append(delta.content)
+            if delta.reasoning_content is not None:
+                reasoning_chunks.append(delta.reasoning_content)
+            if delta.usage is not None:
+                usage = delta.usage
+            if delta.response_id is not None:
+                response_id = delta.response_id
+            yield delta
+    except asyncio.CancelledError:
+        status = "cancelled"
+        raise
+    except Exception as exc:
+        status = "error"
+        error = str(exc)
+        raise
+    finally:
+        await publish_llm_observation_completed_event(
+            event_bus=event_bus,
+            entity_id=entity_id,
+            provider_id=provider_id,
+            model=model,
+            operation=operation,
+            messages=messages,
+            tools=tools,
+            streaming=True,
+            model_parameters=model_parameters,
+            response_message=Message(role="assistant", content="".join(content_chunks)),
+            reasoning_content="".join(reasoning_chunks) or None,
+            usage=usage,
+            response_id=response_id,
+            status=status,
+            error=error,
+            duration_seconds=time.monotonic() - start_time,
+        )
+
+
 async def complete_with_llm_invocation_event(
     *,
     event_bus: EventBus,
@@ -138,14 +272,44 @@ async def complete_with_llm_invocation_event(
         kwargs["response_format"] = response_format
     if extra_kwargs:
         kwargs.update(extra_kwargs)
+    model_parameters: dict[str, Any] = {}
+    if response_format is not None:
+        model_parameters["response_format"] = response_format
+    if extra_kwargs:
+        model_parameters.update(extra_kwargs)
 
     start_time = time.monotonic()
+    await publish_llm_observation_started_event(
+        event_bus=event_bus,
+        entity_id=entity_id,
+        provider_id=provider_id,
+        model=model_id,
+        operation=operation,
+        messages=messages,
+        tools=tools,
+        streaming=stream,
+        model_parameters=model_parameters or None,
+    )
     try:
         result = cast(
             CompletionResult | AsyncIterator[StreamDelta],
             await model.complete(**kwargs),
         )
     except asyncio.CancelledError:
+        duration_seconds = time.monotonic() - start_time
+        await publish_llm_observation_completed_event(
+            event_bus=event_bus,
+            entity_id=entity_id,
+            provider_id=provider_id,
+            model=model_id,
+            operation=operation,
+            messages=messages,
+            tools=tools,
+            streaming=stream,
+            model_parameters=model_parameters or None,
+            status="cancelled",
+            duration_seconds=duration_seconds,
+        )
         await publish_llm_invocation_event(
             event_bus=event_bus,
             entity_id=entity_id,
@@ -157,10 +321,25 @@ async def complete_with_llm_invocation_event(
             operation=operation,
             status="cancelled",
             streaming=stream,
-            duration_seconds=time.monotonic() - start_time,
+            duration_seconds=duration_seconds,
         )
         raise
-    except Exception:
+    except Exception as exc:
+        duration_seconds = time.monotonic() - start_time
+        await publish_llm_observation_completed_event(
+            event_bus=event_bus,
+            entity_id=entity_id,
+            provider_id=provider_id,
+            model=model_id,
+            operation=operation,
+            messages=messages,
+            tools=tools,
+            streaming=stream,
+            model_parameters=model_parameters or None,
+            status="error",
+            error=str(exc),
+            duration_seconds=duration_seconds,
+        )
         await publish_llm_invocation_event(
             event_bus=event_bus,
             entity_id=entity_id,
@@ -172,12 +351,13 @@ async def complete_with_llm_invocation_event(
             operation=operation,
             status="error",
             streaming=stream,
-            duration_seconds=time.monotonic() - start_time,
+            duration_seconds=duration_seconds,
         )
         raise
 
     usage = result.usage if isinstance(result, CompletionResult) else None
     request_id = result.response_id if isinstance(result, CompletionResult) else None
+    duration_seconds = time.monotonic() - start_time
     await publish_llm_invocation_event(
         event_bus=event_bus,
         entity_id=entity_id,
@@ -189,14 +369,47 @@ async def complete_with_llm_invocation_event(
         operation=operation,
         status="success",
         streaming=stream,
-        duration_seconds=time.monotonic() - start_time,
+        duration_seconds=duration_seconds,
     )
-    return result
+    if isinstance(result, CompletionResult):
+        await publish_llm_observation_completed_event(
+            event_bus=event_bus,
+            entity_id=entity_id,
+            provider_id=provider_id,
+            model=model_id,
+            operation=operation,
+            messages=messages,
+            tools=tools,
+            streaming=stream,
+            model_parameters=model_parameters or None,
+            response_message=result.message,
+            reasoning_content=result.reasoning_content,
+            usage=result.usage,
+            response_id=result.response_id,
+            status="success",
+            duration_seconds=duration_seconds,
+        )
+        return result
+
+    return _observe_stream_result(
+        stream=result,
+        event_bus=event_bus,
+        entity_id=entity_id,
+        provider_id=provider_id,
+        model=model_id,
+        operation=operation,
+        messages=messages,
+        tools=tools,
+        model_parameters=model_parameters or None,
+        start_time=start_time,
+    )
 
 
 __all__ = [
     "attach_retry_event_bus",
     "complete_with_llm_invocation_event",
+    "publish_llm_observation_completed_event",
+    "publish_llm_observation_started_event",
     "publish_llm_invocation_event",
     "resolve_model_id",
     "resolve_provider_id",
