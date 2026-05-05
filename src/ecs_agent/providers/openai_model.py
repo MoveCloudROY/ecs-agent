@@ -55,6 +55,11 @@ class OpenAIModel:
     def model_id(self) -> str:
         return self._model
 
+    @property
+    def provider_id(self) -> str:
+        """Low-cardinality provider label used for accounting and metrics."""
+        return self._provider_config.provider_id
+
     async def complete(
         self,
         messages: list[Message],
