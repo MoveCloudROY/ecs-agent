@@ -4639,13 +4639,14 @@ def test_workflow_spec_compiles_successfully() -> None:
 
 
 def test_workflow_planning_states_bind_plan_main_profile() -> None:
-    """Planning states must bind to plan_main profile for agent key 'main'."""
+    """Active planning states bind plan_main after scratchbook config exists."""
     from ecs_agent.workflows.compiler import compile_workflow
     from examples.e2e.plan_and_task.workflow_spec import PLAN_TASK_WORKFLOW_SPEC
 
     compiled = compile_workflow(PLAN_TASK_WORKFLOW_SPEC)
+    idle_bindings = compiled.bindings_by_state.get("IDLE", {})
+    assert idle_bindings.get("main") == "idle_main"
     planning_states = [
-        "IDLE",
         "DRAFT_INTERVIEW",
         "DRAFT_ADVISOR_REVIEW",
         "DRAFT_QA_REVIEW",
@@ -4701,6 +4702,7 @@ async def test_task_start_swaps_system_prompt(tmp_path: Path) -> None:
     state.review_verdicts = _make_approved_verdicts()
     adapter.write_state(state)
     runtime_state[0] = state
+    world.add_component(agent_id, build_scratchbook_prompt_config(state.workflow_id))
     world.add_component(agent_id, RenderedSystemPromptComponent(text="stale"))
 
     conversation = world.get_component(agent_id, ConversationComponent)
@@ -4758,6 +4760,7 @@ async def test_task_resume_swaps_system_prompt(tmp_path: Path) -> None:
     ]
     adapter.write_state(state)
     runtime_state[0] = state
+    world.add_component(agent_id, build_scratchbook_prompt_config(state.workflow_id))
     world.add_component(agent_id, RenderedSystemPromptComponent(text="stale"))
 
     conversation = world.get_component(agent_id, ConversationComponent)
@@ -4836,6 +4839,7 @@ async def test_task_resume_renders_task_prompt_before_reasoning_same_tick(
     adapter.write_state(state)
     adapter_ref[0] = adapter
     runtime_state[0] = state
+    world.add_component(agent_id, build_scratchbook_prompt_config(state.workflow_id))
 
     conversation = world.get_component(agent_id, ConversationComponent)
     assert conversation is not None
