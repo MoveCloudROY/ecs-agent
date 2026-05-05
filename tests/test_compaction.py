@@ -16,8 +16,10 @@ from ecs_agent.components import (
     SubagentNotificationQueueComponent,
     SubagentSessionTableComponent,
     SystemPromptComponent,
+    TerminalComponent,
 )
-from ecs_agent.core import World
+from ecs_agent.core import Runner, World
+from ecs_agent.observability import RecordingTelemetrySink, install_observability
 from ecs_agent.serialization import WorldSerializer
 from ecs_agent.providers import FakeModel
 from ecs_agent.providers.registry import ProviderRegistry
@@ -69,6 +71,14 @@ class RegistryBackedRecordingFakeModel(RecordingFakeModel):
     ) -> None:
         super().__init__(responses=responses)
         self.registry = registry
+
+
+class TerminatingSystem:
+    """Stops runner-driven compaction observability tests after one tick."""
+
+    async def process(self, world: World) -> None:
+        """Attach a terminal component."""
+        world.add_component(world.create_entity(), TerminalComponent(reason="done"))
 
 
 def _message(content: str, role: str = "user") -> Message:
@@ -683,6 +693,68 @@ async def test_no_compaction_when_threshold_not_exceeded() -> None:
     assert conversation is not None
     assert conversation.messages == original_messages
     assert model.calls == []
+
+
+@pytest.mark.asyncio
+async def test_noop_compaction_run_emits_no_compaction_tracing() -> None:
+    world = World()
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+    model = RecordingFakeModel(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="unused"))
+        ]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[_message("hello"), _message("world")]),
+    )
+    world.add_component(
+        entity_id,
+        CompactionConfigComponent(threshold_tokens=1000, summary_model="summary-model"),
+    )
+    world.register_system(CompactionSystem(), priority=-30)
+    world.register_system(TerminatingSystem(), priority=0)
+
+    await Runner().run(world, max_ticks=1)
+
+    assert model.calls == []
+    assert not any(record.name == "compaction.complete" for record in sink.records)
+    assert not any(record.name.endswith("CompactionSystem") for record in sink.records)
+
+
+@pytest.mark.asyncio
+async def test_compaction_run_emits_only_compaction_complete_tracing() -> None:
+    world = World()
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+    model = RecordingFakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content="summary"))]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[_message("a b c d"), _message("e f g h")]),
+    )
+    world.add_component(
+        entity_id,
+        CompactionConfigComponent(threshold_tokens=1, summary_model="summary-model"),
+    )
+    world.register_system(CompactionSystem(), priority=-30)
+    world.register_system(TerminatingSystem(), priority=0)
+
+    await Runner().run(world, max_ticks=1)
+
+    compaction_records = [record for record in sink.records if record.name == "compaction.complete"]
+    assert len(compaction_records) == 1
+    assert compaction_records[0].kind == "event"
+    assert compaction_records[0].entity_id == int(entity_id)
+    assert compaction_records[0].metadata is not None
+    assert compaction_records[0].metadata["original_tokens"] >= compaction_records[0].metadata["compacted_tokens"]
+    assert not any(record.name.endswith("CompactionSystem") for record in sink.records)
 
 
 @pytest.mark.asyncio

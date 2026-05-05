@@ -36,6 +36,7 @@ from ecs_agent.types import (
     RunStartedEvent,
     RunnerTickCompletedEvent,
     RunnerTickStartedEvent,
+    PromptReplacementEvent,
     StreamContentDeltaEvent,
     StreamContentStartEvent,
     StreamEndEvent,
@@ -52,7 +53,21 @@ from ecs_agent.types import (
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
     ToolResultCachedEvent,
+    WorkflowStateEvaluatedEvent,
 )
+
+
+_SUPPRESSED_SYSTEM_SPANS = {
+    "ecs_agent.systems.reasoning.ReasoningSystem",
+    "ecs_agent.systems.subagent.SubagentSystem",
+    "ecs_agent.systems.user_input.UserInputSystem",
+    "ecs_agent.systems.tool_execution.ToolExecutionSystem",
+    "ecs_agent.systems.terminal_cleanup.TerminalCleanupSystem",
+    "ecs_agent.systems.compaction.CompactionSystem",
+    "ecs_agent.systems.workflow_state.WorkflowStateSystem",
+    "ecs_agent.systems.system_prompt_render_system.SystemPromptRenderSystem",
+    "ecs_agent.systems.user_prompt_normalization_system.UserPromptNormalizationSystem",
+}
 
 
 @dataclass(slots=True)
@@ -93,6 +108,8 @@ class ObservabilitySubscriber:
             (RunCompletedEvent, self.handle_run_completed),
             (SystemExecutionStartedEvent, self.handle_system_execution_started),
             (SystemExecutionCompletedEvent, self.handle_system_execution_completed),
+            (PromptReplacementEvent, self.handle_prompt_replacement),
+            (WorkflowStateEvaluatedEvent, self.handle_workflow_state_evaluated),
             (ErrorOccurredEvent, self.handle_error_occurred),
             (PlanStepCompletedEvent, self.handle_plan_step_completed),
             (PlanRevisedEvent, self.handle_plan_revised),
@@ -345,43 +362,16 @@ class ObservabilitySubscriber:
         )
 
     async def handle_runner_tick_started(self, event: RunnerTickStartedEvent) -> None:
-        """Emit a tick span when the runner starts a tick."""
-        state = self._state_for_current_run()
-        if state is None:
-            return
-
-        await self.sink.emit(
-            self._event_record(
-                state,
-                name="runner.tick",
-                kind="span",
-                status="running",
-                tick=event.tick,
-                metadata={"active_entities": event.active_entities},
-            )
-        )
+        """Suppress empty tick-start spans while preserving event consumption."""
+        _ = event
 
     async def handle_runner_tick_completed(self, event: RunnerTickCompletedEvent) -> None:
-        """Emit a tick completion span and update run counters."""
+        """Update run counters without emitting empty runner.tick spans."""
         state = self._state_for_current_run()
         if state is None:
             return
 
         state.tick_count += 1
-        await self.sink.emit(
-            self._event_record(
-                state,
-                name="runner.tick",
-                kind="span",
-                status=self._status(event.status),
-                tick=event.tick,
-                latency_ms=event.duration_seconds * 1000,
-                metadata={
-                    "active_entities": event.active_entities,
-                    "lifecycle_status": event.status,
-                },
-            )
-        )
 
     async def handle_run_completed(self, event: RunCompletedEvent) -> None:
         """Close the active trace, emit summary scores, and clear state."""
@@ -621,20 +611,8 @@ class ObservabilitySubscriber:
         )
 
     async def handle_system_execution_started(self, event: SystemExecutionStartedEvent) -> None:
-        """Emit a system execution start event."""
-        state = self._state_for_current_run()
-        if state is None:
-            return
-
-        await self.sink.emit(
-            self._event_record(
-                state,
-                name=event.system,
-                kind="span",
-                status="running",
-                system_name=event.system,
-            )
-        )
+        """Suppress empty system-start spans."""
+        _ = event
 
     async def handle_system_execution_completed(
         self, event: SystemExecutionCompletedEvent
@@ -642,6 +620,8 @@ class ObservabilitySubscriber:
         """Emit a system execution completion event."""
         state = self._state_for_current_run()
         if state is None:
+            return
+        if event.system in _SUPPRESSED_SYSTEM_SPANS:
             return
 
         await self.sink.emit(
@@ -652,6 +632,61 @@ class ObservabilitySubscriber:
                 status=self._status(event.status),
                 system_name=event.system,
                 latency_ms=event.duration_seconds * 1000,
+            )
+        )
+
+    async def handle_prompt_replacement(self, event: PromptReplacementEvent) -> None:
+        """Emit prompt replacement telemetry only when prompt text changed."""
+        state = self._state_for_current_run()
+        if state is None:
+            return
+
+        await self.sink.emit(
+            self._event_record(
+                state,
+                name=f"prompt.{event.prompt_kind}.replacement",
+                kind="event",
+                entity_id=int(event.entity_id),
+                input={"text": event.source_text},
+                output={"text": event.rendered_text},
+                metadata={
+                    "prompt_kind": event.prompt_kind,
+                    "replacements": dict(event.replacements),
+                    **event.metadata,
+                },
+            )
+        )
+
+    async def handle_workflow_state_evaluated(
+        self, event: WorkflowStateEvaluatedEvent
+    ) -> None:
+        """Emit workflow state and transition payloads."""
+        state = self._state_for_current_run()
+        if state is None:
+            return
+
+        await self.sink.emit(
+            self._event_record(
+                state,
+                name="workflow.state",
+                kind="event",
+                status="error" if event.status == "ambiguous" else "success",
+                entity_id=int(event.entity_id),
+                tick=event.tick,
+                input={
+                    "workflow_id": event.workflow_id,
+                    "state_id": event.state_id,
+                    "matched_transition_ids": list(event.matched_transition_ids),
+                },
+                output={
+                    "current_state_id": event.current_state_id,
+                    "committed_transition_id": event.committed_transition_id,
+                    "from_state_id": event.from_state_id,
+                    "to_state_id": event.to_state_id,
+                    "transition_history": list(event.transition_history),
+                },
+                metadata={"status": event.status},
+                error=event.error,
             )
         )
 

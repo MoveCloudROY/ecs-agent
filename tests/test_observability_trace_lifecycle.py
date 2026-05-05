@@ -13,8 +13,18 @@ from ecs_agent.observability import (
     current_run_id,
     current_trace_id,
     install_observability,
+    reset_run_context,
+    set_run_context,
 )
-from ecs_agent.types import ErrorOccurredEvent, RunStartedEvent
+from ecs_agent.types import (
+    ErrorOccurredEvent,
+    RunCompletedEvent,
+    RunnerTickCompletedEvent,
+    RunnerTickStartedEvent,
+    RunStartedEvent,
+    SystemExecutionCompletedEvent,
+    SystemExecutionStartedEvent,
+)
 
 
 class TerminatingSystem:
@@ -83,7 +93,7 @@ class ScoreFailingSink(RecordingTelemetrySink):
 
 @pytest.mark.asyncio
 async def test_runner_success_creates_one_trace() -> None:
-    """A successful runner run creates one closed trace and lifecycle spans."""
+    """A successful runner run creates one closed trace without empty tick spans."""
     world = World()
     world.register_system(TerminatingSystem(), priority=0)
     sink = RecordingTelemetrySink()
@@ -109,10 +119,65 @@ async def test_runner_success_creates_one_trace() -> None:
 
     assert {record.run_id for record in sink.records} == {trace.run_id}
     assert {record.trace_id for record in sink.records} == {trace.trace_id}
-    assert any(record.name == "runner.tick" and record.tick == 0 for record in sink.records)
+    assert not any(record.name == "runner.tick" for record in sink.records)
     assert any(record.name.endswith("TerminatingSystem") for record in sink.records)
     assert current_trace_id() is None
     assert current_run_id() is None
+
+
+@pytest.mark.asyncio
+async def test_empty_runner_and_noisy_system_lifecycle_spans_are_suppressed() -> None:
+    """Empty runner tick plus Reasoning/Subagent lifecycle records are not traced."""
+    world = World()
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+    token = set_run_context(trace_id="trace-empty", run_id="run-empty")
+    noisy_systems = {
+        "ecs_agent.systems.reasoning.ReasoningSystem",
+        "ecs_agent.systems.subagent.SubagentSystem",
+        "ecs_agent.systems.user_input.UserInputSystem",
+        "ecs_agent.systems.tool_execution.ToolExecutionSystem",
+        "ecs_agent.systems.terminal_cleanup.TerminalCleanupSystem",
+    }
+
+    try:
+        await world.event_bus.publish(
+            RunStartedEvent(max_ticks=1, start_tick=0, active_entities=0)
+        )
+        await world.event_bus.publish(
+            RunnerTickStartedEvent(tick=0, active_entities=0)
+        )
+        await world.event_bus.publish(
+            RunnerTickCompletedEvent(
+                tick=0,
+                status="success",
+                duration_seconds=0.001,
+                active_entities=0,
+            )
+        )
+        for system_name in noisy_systems:
+            await world.event_bus.publish(SystemExecutionStartedEvent(system=system_name))
+            await world.event_bus.publish(
+                SystemExecutionCompletedEvent(
+                    system=system_name,
+                    status="success",
+                    duration_seconds=0.001,
+                )
+            )
+        await world.event_bus.publish(
+            RunCompletedEvent(
+                status="success",
+                reason="manual",
+                duration_seconds=0.01,
+                ticks=1,
+                active_entities=0,
+            )
+        )
+    finally:
+        reset_run_context(token)
+
+    assert not any(record.name == "runner.tick" for record in sink.records)
+    assert not any(record.name in noisy_systems for record in sink.records)
 
 
 @pytest.mark.asyncio
