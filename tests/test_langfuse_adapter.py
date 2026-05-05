@@ -123,6 +123,24 @@ class FakeLangfuseV4Client:
         self.calls.append(("create_event", kwargs))
 
 
+class FakeLangfuseV4ClientRejectingObservationTimes(FakeLangfuseV4Client):
+    """Langfuse v4 client shape that rejects observation start/end kwargs."""
+
+    def start_as_current_observation(self, **kwargs: Any) -> FakeLangfuseV4Observation:
+        """Reject deprecated timing kwargs on current observation start."""
+        if "start_time" in kwargs:
+            raise TypeError(
+                "start_as_current_observation got an unexpected keyword argument "
+                "'start_time'"
+            )
+        if "end_time" in kwargs:
+            raise TypeError(
+                "start_as_current_observation got an unexpected keyword argument "
+                "'end_time'"
+            )
+        return super().start_as_current_observation(**kwargs)
+
+
 class FakeLangfuseV4Propagation:
     """Langfuse v4-like propagation context manager."""
 
@@ -336,6 +354,8 @@ async def test_langfuse_adapter_maps_generation_and_scores(
     assert observation_payload["parent_observation_id"] == "trace-root"
     assert observation_payload["as_type"] == "generation"
     assert observation_payload["model"] == "model-one"
+    assert observation_payload["start_time"] == "2026-01-02T00:00:00+00:00"
+    assert observation_payload["end_time"] == "2026-01-02T00:00:01+00:00"
     assert observation_payload["usage_details"] == {
         "prompt_tokens": 1,
         "completion_tokens": 2,
@@ -514,6 +534,8 @@ async def test_langfuse_adapter_uses_v4_trace_context_methods() -> None:
             name="runner.tick",
             kind="span",
             status="success",
+            start_time=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 2, 0, 0, 1, tzinfo=timezone.utc),
         )
     )
     await sink.emit(
@@ -554,6 +576,34 @@ async def test_langfuse_adapter_uses_v4_trace_context_methods() -> None:
     }
     assert event_payload["name"] == "stream.end"
     assert event_payload["metadata"]["observation_id"] == "event-one"
+
+
+@pytest.mark.asyncio
+async def test_langfuse_v4_current_observation_does_not_receive_timing_kwargs() -> None:
+    """start_as_current_observation in newer SDKs rejects start_time/end_time."""
+    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+
+    client = FakeLangfuseV4ClientRejectingObservationTimes()
+    sink = LangfuseTelemetrySink(client=client)
+
+    await sink.emit(
+        TelemetryRecord(
+            trace_id="trace-one",
+            run_id="run-one",
+            observation_id="span-one",
+            parent_observation_id="trace-root",
+            name="runner.tick",
+            kind="span",
+            status="success",
+            start_time=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 2, 0, 0, 1, tzinfo=timezone.utc),
+        )
+    )
+
+    assert client.calls[0][0] == "start_as_current_observation"
+    observation_payload = client.calls[0][1]
+    assert "start_time" not in observation_payload
+    assert "end_time" not in observation_payload
 
 
 @pytest.mark.asyncio
