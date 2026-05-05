@@ -250,6 +250,12 @@ ${{_installed_tools}}
 ## Available subagents:
 ${{_installed_subagents}}
 
+## Scratchbook Context
+${{_scratchbook_overview}}
+
+## Scratchbook Artifacts
+${{_scratchbook_artifacts}}
+
 ## Sending to Review
 
 When all sections are filled (no more "(to be filled" placeholders remain):
@@ -356,6 +362,12 @@ ${_installed_tools}
 
 ## Available subagents:
 ${_installed_subagents}
+
+## Scratchbook Context
+${_scratchbook_overview}
+
+## Scratchbook Artifacts
+${_scratchbook_artifacts}
 """
 
 DRAFT_INTERVIEW_SYSTEM_PROMPT = PLAN_MAIN_AGENT_SYSTEM_PROMPT

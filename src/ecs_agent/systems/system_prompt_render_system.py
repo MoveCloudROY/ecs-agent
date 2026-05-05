@@ -180,6 +180,9 @@ def render_prompt_template(
         placeholder_registry=placeholder_registry,
     )
     snapshot = {**resolved_user_values, **builtins}
+    _ensure_scratchbook_defaults_for_referenced_placeholders(
+        snapshot, template, world, entity
+    )
     return _substitute_prompt_template(template, snapshot), snapshot
 
 
@@ -307,13 +310,37 @@ def _resolve_entity_user_placeholders(
 
 
 def _substitute_prompt_template(template_text: str, snapshot: dict[str, str]) -> str:
-    template = Template(template_text)
+    current = template_text
+    for _ in range(5):
+        template = Template(current)
+        try:
+            rendered = template.substitute(snapshot)
+        except KeyError as exc:
+            missing = str(exc).strip("'\"")
+            raise ValueError(f"unknown placeholders in template: {missing}") from exc
+        if rendered == current:
+            return rendered
+        current = rendered
+    return current
 
-    try:
-        return template.substitute(snapshot)
-    except KeyError as exc:
-        missing = str(exc).strip("'\"")
-        raise ValueError(f"unknown placeholders in template: {missing}") from exc
+
+def _ensure_scratchbook_defaults_for_referenced_placeholders(
+    snapshot: dict[str, str], template_text: str, world: World, entity_id: EntityId
+) -> None:
+    if "_scratchbook_path" in snapshot:
+        return
+    referenced_texts = [template_text, *snapshot.values()]
+    if not any("_scratchbook_" in text for text in referenced_texts):
+        return
+
+    provider = ScratchbookPromptPlaceholderProvider(
+        ScratchbookPromptConfig(
+            overview_default_template="",
+            scratchbook_root_path="scratchbook",
+            artifacts=[],
+        )
+    )
+    snapshot.update(provider.resolve_placeholders(world, entity_id))
 
 
 def _provider_id(provider: BuiltinPlaceholderProvider) -> str:
