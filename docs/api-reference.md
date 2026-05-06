@@ -789,6 +789,38 @@ class ScratchbookIndexer:
     def lookup_by_category(self, category: str) -> list[dict[str, Any]]: ...
 ```
 
+### ToolResultsSink
+```python
+class ToolResultsSink:
+    def __init__(self, registry: ArtifactRegistry): ...
+    def persist_tool_result(
+        self,
+        tool_call_id: str,
+        tool_name: str,
+        result: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> ArtifactPersistResult: ...
+    def read_tool_result(self, stable_id: str) -> dict[str, Any] | None: ...
+```
+
+`ToolResultsSink` persists each tool call result through `ArtifactRegistry` as an
+immutable YAML record under `scratchbook/records/tool/tool_<uuid24>`. The record
+separates tool metadata from the full tool output:
+
+```yaml
+metadata:
+  tool_call_id: call_abc123
+  tool_name: get_weather
+  timestamp: "2026-01-01T00:00:00.000000+00:00"
+  arguments:
+    city: Paris
+content: sunny in Paris
+```
+
+Small records may also populate `ArtifactPersistResult.inline_content` according
+to the shared 2 KB UTF-8 threshold; the persisted file always contains the full
+YAML document.
+
 ---
 
 ## ecs_agent.dsl
