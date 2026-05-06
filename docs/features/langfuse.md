@@ -113,7 +113,7 @@ Observations captured include:
 - **Context Pressure**: Information about conversation compaction or windowing.
 - **Scores**: Automated evaluation scores if provided.
 
-For Langfuse SDK v4, completed ECS records are exported with the manual observation lifecycle: `start_observation(...)`, followed by `end(end_time=...)` using the recorded operation end timestamp. This keeps LLM reasoning, tool execution, and subagent span durations aligned with the actual work rather than the telemetry export call duration. Active root observations still use `start_as_current_observation(...)` so `session_id` can be propagated while the trace context is current.
+For Langfuse SDK v4, completed ECS records are exported with the manual observation lifecycle. When the SDK exposes its OpenTelemetry-backed manual span hooks, the adapter creates the observation with the recorded operation `start_time` and then calls `end(end_time=...)` with the recorded operation end timestamp, both converted to Langfuse's nanosecond epoch format. This keeps LLM reasoning, tool execution, and subagent span durations aligned with the actual work rather than the telemetry export call duration, preventing the Langfuse UI from displaying zero-latency observations for operations that already completed before export. Older or test clients that do not expose historical OTel start hooks fall back to `start_observation(...)` plus `end(end_time=...)`. Active root observations still use `start_as_current_observation(...)` so `session_id` can be propagated while the trace context is current.
 
 ## Alerts and Monitoring
 
@@ -155,6 +155,21 @@ uv run pytest tests/live/test_langfuse_observability_live.py -v
 uv run pytest tests/live/test_langfuse_observability_live.py::test_live_langfuse_openai_chat_agent_run -v
 uv run pytest tests/live/test_langfuse_observability_live.py::test_live_langfuse_openai_responses_agent_run -v
 uv run pytest tests/live/test_langfuse_observability_live.py::test_live_langfuse_anthropic_messages_agent_run -v
+```
+
+For the plan-and-task example against an Anthropic-compatible endpoint, enable the example installer and flush on process exit:
+
+```bash
+export PLAN_TASK_LANGFUSE=1
+export PLAN_TASK_LANGFUSE_ENVIRONMENT=dev
+export PLAN_TASK_LANGFUSE_RELEASE=local-test
+export PLAN_TASK_LANGFUSE_SESSION_ID="plan-task-dev-1"
+export LLM_API_FORMAT=anthropic_messages
+export LLM_MODEL=deepseek-v4-flash
+
+# Set LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_BASE_URL,
+# LLM_BASE_URL, and LLM_API_KEY in your shell or secret manager first.
+uv run python examples/e2e/plan_and_task/main.py
 ```
 
 Note: Do not commit actual secret values to version control.

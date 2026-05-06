@@ -191,9 +191,23 @@ Install the optional extra before enabling Langfuse for this example:
 uv pip install -e ".[langfuse]"
 ```
 
-When `PLAN_TASK_LANGFUSE` is enabled, `main.py` calls `install_plan_task_langfuse_observability()` after `build_plan_task_world(...)` creates the `World` and before `Runner.run(...)` starts. The integration produces one trace per runner invocation and captures the plan interview, subagent/tool activity, LLM generations, retries, errors, context pressure, and completion scores through the shared EventBus-backed observability layer.
+When `PLAN_TASK_LANGFUSE` is enabled, `main.py` calls `install_plan_task_langfuse_observability()` after `build_plan_task_world(...)` creates the `World` and before `Runner.run(...)` starts. The integration produces one trace per runner invocation and captures the plan interview, subagent/tool activity, LLM generations, retries, errors, context pressure, and completion scores through the shared EventBus-backed observability layer. Completed LLM, tool, and subagent observations preserve the ECS-recorded start and end timestamps when exported to Langfuse SDK v4, so the Langfuse UI reports the actual operation latency instead of the near-zero telemetry export duration.
 
 Use environment variables or a secret manager for `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and the Langfuse host value. Do not put concrete keys in scripts, docs, or command history. On exit, the CLI calls `flush()` and `shutdown()` on the observability handle so buffered trace events are sent before the process terminates.
+
+Anthropic-compatible Langfuse smoke run:
+
+```bash
+PLAN_TASK_LANGFUSE=1 \
+PLAN_TASK_LANGFUSE_ENVIRONMENT=dev \
+PLAN_TASK_LANGFUSE_RELEASE=local-test \
+PLAN_TASK_LANGFUSE_SESSION_ID="plan-task-dev-1" \
+LLM_API_FORMAT=anthropic_messages \
+LLM_MODEL=deepseek-v4-flash \
+uv run python examples/e2e/plan_and_task/main.py
+```
+
+Set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LLM_BASE_URL`, and `LLM_API_KEY` in your shell or secret manager before running the command.
 
 ### Anthropic / Kimi Example
 
