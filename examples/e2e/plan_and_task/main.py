@@ -62,7 +62,6 @@ from ecs_agent.types import (
 )
 
 from ecs_agent.accounting import AccountingSubscriber
-from ecs_agent.scratchbook import ArtifactRegistry
 from ecs_agent.workflows import install_workflow
 from examples.e2e.plan_and_task.billing import BillingSubscriber
 from examples.e2e.plan_and_task.scratchbook_adapter import (
@@ -233,9 +232,6 @@ def build_plan_task_world(
 ) -> tuple[World, EntityId, list[ArtifactAdapter | None], list[RuntimeState | None]]:
     discover_skills([_SKILLS_DIR])
 
-    workflow_base_dir = base_dir or _WORKFLOW_BASE_DIR
-    artifact_registry = ArtifactRegistry(root=workflow_base_dir)
-
     world = World()
 
     agent_id = world.create_entity()
@@ -258,7 +254,9 @@ def build_plan_task_world(
     )
     world.add_component(agent_id, ToolRegistryComponent(tools={}, handlers={}))
 
-    _builtin_skill = BuiltinToolsSkill().bind_workspace(str(workflow_base_dir))
+    _builtin_skill = BuiltinToolsSkill().bind_workspace(
+        str(base_dir or _WORKFLOW_BASE_DIR)
+    )
     SkillManager().install(
         world,
         agent_id,
@@ -899,9 +897,7 @@ def build_plan_task_world(
     subagent_system.install_subagent_tool(world, agent_id, tool_name="subagent")
     subagent_system.install_subagent_control_tools(world, agent_id)
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(
-        ToolExecutionSystem(priority=5, registry=artifact_registry), priority=5
-    )
+    world.register_system(ToolExecutionSystem(priority=5), priority=5)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     return world, agent_id, adapter_ref, runtime_state

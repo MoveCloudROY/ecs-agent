@@ -8,8 +8,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import yaml
-
 from ecs_agent.components.definitions import TerminalComponent
 from ecs_agent.core import World
 from ecs_agent.systems import TerminalCleanupSystem
@@ -1944,7 +1942,7 @@ async def test_main_world_setup_installs_subagent_infrastructure(
 
 
 @pytest.mark.asyncio
-async def test_plan_task_world_persists_tool_results_to_scratchbook(
+async def test_plan_task_world_keeps_tool_results_inline_without_scratchbook_sink(
     tmp_path: Path,
 ) -> None:
     from ecs_agent.components import (
@@ -2006,13 +2004,8 @@ async def test_plan_task_world_persists_tool_results_to_scratchbook(
     results = world.get_component(agent_id, ToolResultsComponent)
     assert results is not None
     result_ref = results.results["plan-tool-1"]
-    assert result_ref.startswith("scratchbook/records/tool/tool_")
-    artifact_path = tmp_path / result_ref
-    artifact_data = yaml.safe_load(artifact_path.read_text(encoding="utf-8"))
-    assert artifact_data["metadata"]["tool_call_id"] == "plan-tool-1"
-    assert artifact_data["metadata"]["tool_name"] == "emit_report"
-    assert artifact_data["metadata"]["arguments"] == {"topic": "scratchbook"}
-    assert artifact_data["content"] == "report for scratchbook"
+    assert result_ref == "report for scratchbook"
+    assert not (tmp_path / "scratchbook" / "records" / "tool").exists()
     tool_messages = [message for message in conversation.messages if message.role == "tool"]
     assert [message.content for message in tool_messages] == [result_ref]
 
