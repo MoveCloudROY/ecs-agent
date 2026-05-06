@@ -28,7 +28,7 @@ The workflow follows a structured lifecycle:
 - **Prompt Configuration**: The planner entity declares `SystemPromptConfigSpec` with `DRAFT_INTERVIEW_SYSTEM_PROMPT`, and `SystemPromptRenderSystem` bridges the rendered value into `LLMComponent.system_prompt` before reasoning.
 - **Workflow DSL**: Uses `install_workflow` and `WorkflowStateSystem` (priority -25) to manage the phase graph and automatic prompt-profile selection via `${_workflow_state_prompt}`.
 - **State Machine**: Explicit phase transitions managed by `WorkflowStateMachine`.
-- **Artifacts**: Durable persistence of plans, state, and execution evidence via `PlanTaskScratchbookAdapter` and canonical `ArtifactRegistry` records. Main-agent tool results are written through `ToolResultsSink` to `scratchbook/records/tool/tool_<uuid24>` as YAML documents with `metadata` and `content` top-level keys.
+- **Artifacts**: Durable persistence of plans, state, and execution evidence via `PlanTaskScratchbookAdapter`. Main-agent tool results are currently kept inline in ECS conversation/tool-result state rather than being written through `ToolResultsSink`.
 - **Controller**: `PlanController` manages the high-level workflow logic and review gates.
 - **Subagent Reviews**: Advisor, QA, and Plan QA review steps are wired as ECS subagents via `SubagentRegistryComponent`. The planner invokes them with `subagent(category="advisor", ...)`, `subagent(category="qa", ...)`, and `subagent(category="plan_qa", ...)` respectively. Verdicts are automatically extracted from subagent results via `DelegationCompletedEvent` subscription, routed to the correct controller method based on the subagent name.
 - **Plan Writer Subagent**: The `WRITE_PLAN` phase is executed by a dedicated `plan_writer` subagent registered in `SubagentRegistryComponent`. It is pre-loaded with the `writing-plans` skill (discovered from `.claude/skills/writing_plans/SKILL.md`) and inherits `read_file`, `write_file`, `edit_file`, and `glob` tools. When it completes, `handle_write_plan_completed()` transitions the state to `PLAN_QA_REVIEW`.
@@ -62,7 +62,7 @@ All workflow data is persisted in `scratchbook/<workflow_id>/`:
 - `evidence/`: Directory for task execution artifacts.
 - `review/`: Contains JSON verdicts from Advisor and QA reviews.
 
-Main-agent tool call results are persisted separately as canonical immutable records under `scratchbook/records/tool/tool_<uuid24>`. Each record is YAML: `metadata` contains `tool_call_id`, `tool_name`, `timestamp`, and `arguments`; `content` contains the full tool output.
+Main-agent tool call results are not currently persisted as separate canonical records by this example. They remain inline in ECS tool result state and conversation tool messages while durable workflow artifacts continue to live under `scratchbook/<workflow_id>/`.
 
 ## Usage
 
