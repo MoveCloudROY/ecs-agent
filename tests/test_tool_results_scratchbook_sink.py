@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from ecs_agent.components import (
     ConversationComponent,
@@ -78,11 +78,12 @@ async def test_tool_execution_appends_result_to_scratchbook(
     assert len(artifact_files) > 0
 
     # Verify artifact contains expected result
-    artifact_data = json.loads(artifact_files[0].read_text(encoding="utf-8"))
-    assert artifact_data["tool_call_id"] == "call-1"
-    assert artifact_data["tool_name"] == "get_weather"
-    assert artifact_data["result"] == "sunny in Paris"
-    assert "timestamp" in artifact_data
+    artifact_data = yaml.safe_load(artifact_files[0].read_text(encoding="utf-8"))
+    assert artifact_data["metadata"]["tool_call_id"] == "call-1"
+    assert artifact_data["metadata"]["tool_name"] == "get_weather"
+    assert "timestamp" in artifact_data["metadata"]
+    assert artifact_data["metadata"]["arguments"] == {"city": "Paris"}
+    assert artifact_data["content"] == "sunny in Paris"
 
 
 @pytest.mark.asyncio
@@ -244,8 +245,8 @@ async def test_multiple_tool_results_each_get_unique_artifact(
     # Each artifact should have unique tool_call_id
     call_ids = set()
     for artifact_path in artifacts:
-        data = json.loads(artifact_path.read_text(encoding="utf-8"))
-        call_ids.add(data["tool_call_id"])
+        data = yaml.safe_load(artifact_path.read_text(encoding="utf-8"))
+        call_ids.add(data["metadata"]["tool_call_id"])
 
     assert call_ids == {"c1", "c2", "c3"}
 
@@ -379,14 +380,14 @@ def test_large_tool_result_file_contains_full_content_not_summary(
 
     # The persisted file must contain the FULL result, not a summary
     stored_text = (registry.root / persist_result.record_path).read_text(encoding="utf-8")
-    stored_data = json.loads(stored_text)
-    assert stored_data["result"] == large_result, (
+    stored_data = yaml.safe_load(stored_text)
+    assert stored_data["content"] == large_result, (
         "Persisted record must store full result content, not a summary or truncation"
     )
 
 
 def test_tool_result_record_has_required_fields(tmp_path: Path) -> None:
-    """Persisted tool result record JSON contains all required schema fields."""
+    """Persisted tool result record YAML separates metadata from content."""
     registry = ArtifactRegistry(root=tmp_path / ".scratchbook")
     sink = ToolResultsSink(registry)
 
@@ -398,19 +399,20 @@ def test_tool_result_record_has_required_fields(tmp_path: Path) -> None:
     )
 
     stored_text = (registry.root / persist_result.record_path).read_text(encoding="utf-8")
-    record = json.loads(stored_text)
+    record = yaml.safe_load(stored_text)
 
     # Required fields per record schema
-    assert "tool_call_id" in record, "record must have tool_call_id"
-    assert "tool_name" in record, "record must have tool_name"
-    assert "result" in record, "record must have result (full content)"
-    assert "timestamp" in record, "record must have timestamp (ISO-8601)"
-    assert "arguments" in record, "record must have arguments"
+    assert "metadata" in record, "record must have metadata"
+    assert "content" in record, "record must have content (full result)"
+    assert "tool_call_id" in record["metadata"], "metadata must have tool_call_id"
+    assert "tool_name" in record["metadata"], "metadata must have tool_name"
+    assert "timestamp" in record["metadata"], "metadata must have timestamp (ISO-8601)"
+    assert "arguments" in record["metadata"], "metadata must have arguments"
 
-    assert record["tool_call_id"] == "schema-check-1"
-    assert record["tool_name"] == "schema_tool"
-    assert record["result"] == "output data"
-    assert record["arguments"] == {"param": "value"}
+    assert record["metadata"]["tool_call_id"] == "schema-check-1"
+    assert record["metadata"]["tool_name"] == "schema_tool"
+    assert record["metadata"]["arguments"] == {"param": "value"}
+    assert record["content"] == "output data"
 
 
 def test_large_tool_result_spills_to_file_without_inline_and_retry_is_immutable(
@@ -430,9 +432,9 @@ def test_large_tool_result_spills_to_file_without_inline_and_retry_is_immutable(
     assert first.record_path.startswith("scratchbook/records/tool/tool_")
     assert first.inline_content is None
     stored = (registry.root / first.record_path).read_text(encoding="utf-8")
-    stored_data = json.loads(stored)
+    stored_data = yaml.safe_load(stored)
     # Full content must be preserved in file
-    assert stored_data["result"] == large_result
+    assert stored_data["content"] == large_result
 
     with pytest.raises(ValueError, match="immutable|already persisted|overwrite"):
         sink.persist_tool_result(
@@ -441,3 +443,58 @@ def test_large_tool_result_spills_to_file_without_inline_and_retry_is_immutable(
             result="new-result",
             arguments={"size": 10},
         )
+
+
+def test_read_tool_result_returns_yaml_metadata_and_content(tmp_path: Path) -> None:
+    """Reading a YAML tool result returns the metadata/content record shape."""
+    registry = ArtifactRegistry(root=tmp_path / ".scratchbook")
+    sink = ToolResultsSink(registry)
+
+    persist_result = sink.persist_tool_result(
+        tool_call_id="read-yaml-1",
+        tool_name="yaml_tool",
+        result="yaml output",
+        arguments={"format": "yaml"},
+    )
+
+    record = sink.read_tool_result(persist_result.record_path)
+
+    assert record is not None
+    assert record["metadata"]["tool_call_id"] == "read-yaml-1"
+    assert record["metadata"]["tool_name"] == "yaml_tool"
+    assert record["metadata"]["arguments"] == {"format": "yaml"}
+    assert record["content"] == "yaml output"
+
+
+def test_read_tool_result_normalizes_legacy_flat_record(tmp_path: Path) -> None:
+    """Legacy flat JSON/YAML records are normalized to metadata/content shape."""
+    registry = ArtifactRegistry(root=tmp_path / ".scratchbook")
+    sink = ToolResultsSink(registry)
+    record_path = "scratchbook/records/tool/tool_0123456789abcdef01234567"
+    artifact_path = registry.root / record_path
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(
+        yaml.safe_dump(
+            {
+                "tool_call_id": "legacy-1",
+                "tool_name": "legacy_tool",
+                "result": "legacy output",
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "arguments": {"old": True},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    record = sink.read_tool_result(record_path)
+
+    assert record == {
+        "metadata": {
+            "tool_call_id": "legacy-1",
+            "tool_name": "legacy_tool",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "arguments": {"old": True},
+        },
+        "content": "legacy output",
+    }

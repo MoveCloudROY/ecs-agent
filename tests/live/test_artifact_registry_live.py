@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 import pytest
+import yaml
 
 from ecs_agent.components import (
     ConversationComponent,
@@ -111,9 +112,11 @@ async def test_live_tool_execution_persists_canonical_artifact(
     assert record_path.startswith("scratchbook/records/tool/tool_")
     assert (tmp_path / record_path).exists()
 
-    payload = json.loads((tmp_path / record_path).read_text(encoding="utf-8"))
-    assert payload["tool_call_id"] == "live-tool-1"
-    assert payload["result"] == "tool-ok:artifact"
+    payload = yaml.safe_load((tmp_path / record_path).read_text(encoding="utf-8"))
+    assert payload["metadata"]["tool_call_id"] == "live-tool-1"
+    assert payload["metadata"]["tool_name"] == "live_tool"
+    assert payload["metadata"]["arguments"] == {"payload": "artifact"}
+    assert payload["content"] == "tool-ok:artifact"
 
 
 @pytest.mark.asyncio
