@@ -31,7 +31,15 @@ class Runner:
     """Orchestrates the main execution loop."""
 
     async def run(
-        self, world: World, max_ticks: int | None = 100, start_tick: int = 0
+        self,
+        world: World,
+        max_ticks: int | None = 100,
+        start_tick: int = 0,
+        *,
+        trace_id: str | None = None,
+        run_id: str | None = None,
+        parent_observation_id: str | None = None,
+        emit_root_trace: bool = True,
     ) -> None:
         """Run the main execution loop until terminal condition.
 
@@ -51,7 +59,12 @@ class Runner:
                        Pass None for unlimited execution.
             start_tick: Starting tick count for resume (default 0)
         """
-        context_token = set_run_context(trace_id=uuid.uuid4().hex, run_id=str(uuid.uuid4()))
+        resolved_trace_id = uuid.uuid4().hex if trace_id is None else trace_id
+        resolved_run_id = str(uuid.uuid4()) if run_id is None else run_id
+        context_token = set_run_context(
+            trace_id=resolved_trace_id,
+            run_id=resolved_run_id,
+        )
         run_start_time = time.monotonic()
         tick = start_tick
         completion_published = False
@@ -67,6 +80,8 @@ class Runner:
                     max_ticks=max_ticks,
                     start_tick=start_tick,
                     active_entities=self._active_entity_count(world),
+                    parent_observation_id=parent_observation_id,
+                    emit_root_trace=emit_root_trace,
                 )
             )
 

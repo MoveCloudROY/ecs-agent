@@ -161,6 +161,8 @@ class RunStartedEvent:
     max_ticks: int | None
     start_tick: int
     active_entities: int
+    parent_observation_id: str | None = None
+    emit_root_trace: bool = True
 
 
 @dataclass(slots=True)
@@ -810,6 +812,8 @@ class DelegationStartedEvent:
     correlation_id: str
     traceparent: str
     child_world_name: str | None = None
+    observation_id: str = ""
+    start_time: datetime | None = None
     phase: str = "running"
     status: str = "running"
 
@@ -826,6 +830,9 @@ class DelegationCompletedEvent:
     correlation_id: str = ""
     traceparent: str = ""
     child_world_name: str | None = None
+    observation_id: str = ""
+    end_time: datetime | None = None
+    duration_seconds: float | None = None
     phase: str = "completed"
     status: str = ""
 

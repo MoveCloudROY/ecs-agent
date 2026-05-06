@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextvars import ContextVar
 import json
+import time
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -45,6 +46,8 @@ from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfig
 from ecs_agent.scratchbook.artifact_registry import ArtifactKind, ArtifactRegistry
 from ecs_agent.systems.subagent_runtime import SubagentRuntimeManager
 from ecs_agent.observability import generate_traceparent
+from ecs_agent.observability.context import current_run_id, current_trace_id
+from ecs_agent.observability.install import install_observability
 from ecs_agent.types import (
     DelegationCompletedEvent,
     DelegationStartedEvent,
@@ -1459,6 +1462,14 @@ class SubagentSystem:
                 traceparent=traceparent,
                 task=task,
                 child_world_name=child_world.name,
+                observation_id=correlation_id,
+                start_time=datetime.now(timezone.utc),
+            )
+            delegation_started_monotonic = time.monotonic()
+            self._install_child_observability(
+                parent_world=world,
+                child_world=child_world,
+                parent_observation_id=correlation_id,
             )
 
             try:
@@ -1507,6 +1518,9 @@ class SubagentSystem:
                     success=True,
                     error=None,
                     child_world_name=child_world.name,
+                    observation_id=correlation_id,
+                    end_time=datetime.now(timezone.utc),
+                    duration_seconds=time.monotonic() - delegation_started_monotonic,
                 )
 
             return (result, True, None)
@@ -1530,6 +1544,7 @@ class SubagentSystem:
                     result=error_msg,
                     success=False,
                     error=error_msg,
+                    observation_id=correlation_id,
                 )
             return (error_msg, False, error_msg)
 
@@ -1551,6 +1566,7 @@ class SubagentSystem:
                     result=error_msg,
                     success=False,
                     error=error_msg,
+                    observation_id=correlation_id,
                 )
             raise
 
@@ -1572,6 +1588,7 @@ class SubagentSystem:
                     result=error_msg,
                     success=False,
                     error=error_msg,
+                    observation_id=correlation_id,
                 )
             return (error_msg, False, error_msg)
 
@@ -2034,8 +2051,42 @@ class SubagentSystem:
             ConversationComponent(messages=[Message(role="user", content=task)]),
         )
         runner = Runner()
-        await runner.run(child_world, max_ticks=config.max_ticks)
+        await runner.run(
+            child_world,
+            max_ticks=config.max_ticks,
+            trace_id=current_trace_id(),
+            run_id=current_run_id(),
+            parent_observation_id=getattr(
+                child_world,
+                "_ecs_agent_parent_observation_id",
+                None,
+            ),
+            emit_root_trace=False,
+        )
         return self._extract_delegation_result(child_world, child_entity)
+
+    def _install_child_observability(
+        self,
+        *,
+        parent_world: World,
+        child_world: World,
+        parent_observation_id: str,
+    ) -> None:
+        """Install parent observability sink on a child world when available."""
+        parent_sink = getattr(parent_world, "_ecs_agent_observability_sink", None)
+        if parent_sink is None:
+            return
+        parent_config = getattr(
+            parent_world,
+            "_ecs_agent_observability_config",
+            None,
+        )
+        install_observability(child_world, parent_sink, config=parent_config)
+        setattr(
+            child_world,
+            "_ecs_agent_parent_observation_id",
+            parent_observation_id,
+        )
 
     def _extract_delegation_result(
         self, child_world: World, child_entity: EntityId
@@ -2063,6 +2114,10 @@ class SubagentSystem:
         success: bool | None = None,
         error: str | None = None,
         child_world_name: str | None = None,
+        observation_id: str = "",
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        duration_seconds: float | None = None,
     ) -> None:
         """Publish start/completion delegation events via one wrapper API."""
         if task is not None:
@@ -2074,6 +2129,8 @@ class SubagentSystem:
                     correlation_id=correlation_id,
                     traceparent=traceparent,
                     child_world_name=child_world_name,
+                    observation_id=observation_id,
+                    start_time=start_time,
                 )
             )
 
@@ -2088,5 +2145,8 @@ class SubagentSystem:
                     correlation_id=correlation_id,
                     traceparent=traceparent,
                     child_world_name=child_world_name,
+                    observation_id=observation_id,
+                    end_time=end_time,
+                    duration_seconds=duration_seconds,
                 )
             )
