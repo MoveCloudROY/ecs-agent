@@ -73,9 +73,9 @@ class FakeLangfuseV4Observation:
         self._client.calls.append(("observation_exit", self._kwargs))
         self._client.active_observations.pop()
 
-    def end(self) -> None:
+    def end(self, *, end_time: int | None = None) -> None:
         """Record that the v4 observation was ended."""
-        self._client.calls.append(("end", self._kwargs))
+        self._client.calls.append(("end", {"kwargs": self._kwargs, "end_time": end_time}))
 
 
 class FakeLangfuseV4Client:
@@ -206,6 +206,22 @@ class FakeLangfuseV4ModuleClient(FakeLangfuseV4Client):
         if self.active_propagations:
             kwargs["propagated_at_start"] = dict(self.active_propagations[-1])
         return super().start_as_current_observation(**kwargs)
+
+
+class FakeLangfuseV4TimedClient:
+    """Langfuse v4-like client exposing explicit observation start/end timing."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def start_observation(self, **kwargs: Any) -> FakeLangfuseV4Observation:
+        """Record non-current observation creation for explicit timing tests."""
+        if "start_time" in kwargs:
+            raise TypeError("start_observation got an unexpected keyword argument 'start_time'")
+        if "end_time" in kwargs:
+            raise TypeError("start_observation got an unexpected keyword argument 'end_time'")
+        self.calls.append(("start_observation", kwargs))
+        return FakeLangfuseV4Observation(self, kwargs)
 
 
 def test_langfuse_module_import_does_not_import_optional_dependency(
@@ -519,7 +535,7 @@ async def test_langfuse_adapter_maps_trace_span_tool_and_event_records() -> None
 
 @pytest.mark.asyncio
 async def test_langfuse_adapter_uses_v4_trace_context_methods() -> None:
-    """Langfuse v4 observation APIs receive trace_context, not trace_id kwargs."""
+    """Langfuse v4 manual observations receive trace_context, not trace_id kwargs."""
     from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
 
     client = FakeLangfuseV4Client()
@@ -551,7 +567,7 @@ async def test_langfuse_adapter_uses_v4_trace_context_methods() -> None:
     )
 
     assert client.calls[0] == (
-        "start_as_current_observation",
+        "start_observation",
         {
             "trace_context": {
                 "trace_id": "trace-one",
@@ -566,10 +582,15 @@ async def test_langfuse_adapter_uses_v4_trace_context_methods() -> None:
             "level": "DEFAULT",
         },
     )
-    assert client.calls[1][0] == "observation_enter"
-    assert client.calls[2][0] == "observation_exit"
-    assert client.calls[3][0] == "create_event"
-    event_payload = client.calls[3][1]
+    assert client.calls[1] == (
+        "end",
+        {
+            "kwargs": client.calls[0][1],
+            "end_time": int(datetime(2026, 1, 2, 0, 0, 1, tzinfo=timezone.utc).timestamp() * 1_000_000_000),
+        },
+    )
+    assert client.calls[2][0] == "create_event"
+    event_payload = client.calls[2][1]
     assert event_payload["trace_context"] == {
         "trace_id": "trace-one",
         "parent_span_id": "span-one",
@@ -580,7 +601,7 @@ async def test_langfuse_adapter_uses_v4_trace_context_methods() -> None:
 
 @pytest.mark.asyncio
 async def test_langfuse_v4_current_observation_does_not_receive_timing_kwargs() -> None:
-    """start_as_current_observation in newer SDKs rejects start_time/end_time."""
+    """v4 observation creation in newer SDKs rejects start_time/end_time kwargs."""
     from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
 
     client = FakeLangfuseV4ClientRejectingObservationTimes()
@@ -600,10 +621,128 @@ async def test_langfuse_v4_current_observation_does_not_receive_timing_kwargs() 
         )
     )
 
-    assert client.calls[0][0] == "start_as_current_observation"
+    assert client.calls[0][0] == "start_observation"
     observation_payload = client.calls[0][1]
     assert "start_time" not in observation_payload
     assert "end_time" not in observation_payload
+    assert client.calls[1][0] == "end"
+
+
+@pytest.mark.asyncio
+async def test_langfuse_v4_observation_uses_explicit_record_timing() -> None:
+    """v4 exports should preserve record timing instead of export-context timing."""
+    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+
+    client = FakeLangfuseV4TimedClient()
+    sink = LangfuseTelemetrySink(client=client)
+    started_at = datetime(2026, 1, 2, 0, 0, 0, 123456, tzinfo=timezone.utc)
+    ended_at = datetime(2026, 1, 2, 0, 0, 1, 654321, tzinfo=timezone.utc)
+
+    await sink.emit(
+        TelemetryRecord(
+            trace_id="trace-one",
+            run_id="run-one",
+            observation_id="generation-one",
+            parent_observation_id="trace-root",
+            name="llm.reasoning",
+            kind="generation",
+            status="success",
+            start_time=started_at,
+            end_time=ended_at,
+            input={"messages": []},
+            output={"message": "ok"},
+            model="model-one",
+            usage_details={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        )
+    )
+
+    assert client.calls[0][0] == "start_observation"
+    observation_payload = client.calls[0][1]
+    assert observation_payload["trace_context"] == {
+        "trace_id": "trace-one",
+        "parent_span_id": "trace-root",
+    }
+    assert observation_payload["as_type"] == "generation"
+    assert observation_payload["model"] == "model-one"
+    assert observation_payload["usage_details"] == {
+        "prompt_tokens": 1,
+        "completion_tokens": 2,
+        "total_tokens": 3,
+    }
+    assert client.calls[1] == (
+        "end",
+        {
+            "kwargs": observation_payload,
+            "end_time": int(ended_at.timestamp() * 1_000_000_000),
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_langfuse_v4_timed_generation_uses_manual_lifecycle_when_current_api_exists() -> None:
+    """Completed records use manual v4 lifecycle so Langfuse receives real timing."""
+    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+
+    client = FakeLangfuseV4Client()
+    sink = LangfuseTelemetrySink(client=client)
+    started_at = datetime(2026, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
+    ended_at = datetime(2026, 1, 2, 0, 0, 2, 500000, tzinfo=timezone.utc)
+
+    await sink.emit(
+        TelemetryRecord(
+            trace_id="trace-one",
+            run_id="run-one",
+            observation_id="generation-one",
+            parent_observation_id="trace-root",
+            name="llm.reasoning",
+            kind="generation",
+            status="success",
+            start_time=started_at,
+            end_time=ended_at,
+            input={"messages": []},
+            output={"message": "ok"},
+            model="deepseek-v4-flash",
+            model_parameters={"temperature": 0},
+        )
+    )
+
+    assert [name for name, _ in client.calls] == ["start_observation", "end"]
+    observation_payload = client.calls[0][1]
+    assert observation_payload["as_type"] == "generation"
+    assert observation_payload["model"] == "deepseek-v4-flash"
+    assert observation_payload["model_parameters"] == {"temperature": 0}
+    assert client.calls[1][1]["end_time"] == int(ended_at.timestamp() * 1_000_000_000)
+
+
+@pytest.mark.asyncio
+async def test_langfuse_adapter_preserves_env_configured_model_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LLM_MODEL is configuration, not a secret, so generation.model stays readable."""
+    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+
+    monkeypatch.setenv("LLM_MODEL", "deepseek-v4-flash")
+    client = FakeLangfuseClient()
+    sink = LangfuseTelemetrySink(client=client, redactor=SecretRedactor())
+
+    await sink.emit(
+        TelemetryRecord(
+            trace_id="trace-one",
+            run_id="run-one",
+            observation_id="generation-one",
+            parent_observation_id="trace-root",
+            name="llm.reasoning",
+            kind="generation",
+            status="success",
+            model="deepseek-v4-flash",
+            metadata={"model_id": "deepseek-v4-flash"},
+        )
+    )
+
+    observation_payload = client.calls[0][1]
+    assert observation_payload["model"] == "deepseek-v4-flash"
+    assert observation_payload["metadata"]["model_id"] == "deepseek-v4-flash"
+    assert "[REDACTED:value:LLM_MODEL]" not in str(observation_payload)
 
 
 @pytest.mark.asyncio

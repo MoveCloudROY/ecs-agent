@@ -7,6 +7,7 @@ import importlib
 import os
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any
 
 from ecs_agent.logging import get_logger
@@ -184,8 +185,8 @@ class LangfuseTelemetrySink:
             status_message=payload.get("error"),
             model=payload.get("model"),
             model_parameters=payload.get("model_parameters"),
-            usage_details=payload.get("usage_details"),
-            cost_details=payload.get("cost_details"),
+            usage_details=_langfuse_usage_details(payload.get("usage_details")),
+            cost_details=_langfuse_cost_details(payload.get("cost_details")),
             start_time=payload.get("start_time"),
             end_time=payload.get("end_time"),
         )
@@ -205,9 +206,26 @@ class LangfuseTelemetrySink:
         *,
         as_type: str,
     ) -> None:
+        non_current_method = getattr(self.client, "start_observation", None)
+        if payload.get("end_time") is not None and non_current_method is not None:
+            await self._emit_v4_non_current_observation(
+                non_current_method,
+                payload,
+                metadata,
+                as_type=as_type,
+            )
+            return
         method = getattr(self.client, "start_as_current_observation", None)
         if method is None:
-            raise AttributeError("Langfuse client has no current observation method")
+            if non_current_method is None:
+                raise AttributeError("Langfuse client has no observation start method")
+            await self._emit_v4_non_current_observation(
+                non_current_method,
+                payload,
+                metadata,
+                as_type=as_type,
+            )
+            return
         observation_metadata = dict(metadata)
         observation_id = payload.get("observation_id")
         if observation_id is not None:
@@ -228,14 +246,62 @@ class LangfuseTelemetrySink:
                         "status_message": payload.get("error"),
                         "model": payload.get("model"),
                         "model_parameters": payload.get("model_parameters"),
-                        "usage_details": payload.get("usage_details"),
-                        "cost_details": payload.get("cost_details"),
+                        "usage_details": _langfuse_usage_details(
+                            payload.get("usage_details")
+                        ),
+                        "cost_details": _langfuse_cost_details(
+                            payload.get("cost_details")
+                        ),
                     }
                 )
             )
             with observation_context:
                 with self._v4_client_propagation_context():
                     return
+
+    async def _emit_v4_non_current_observation(
+        self,
+        method: Any,
+        payload: dict[str, JsonSafe],
+        metadata: dict[str, JsonSafe],
+        *,
+        as_type: str,
+    ) -> None:
+        """Emit a v4 observation through start_observation and explicit end time."""
+        observation_metadata = dict(metadata)
+        observation_id = payload.get("observation_id")
+        if observation_id is not None:
+            observation_metadata["observation_id"] = observation_id
+        with self._v4_module_propagation_context():
+            observation = method(
+                **_drop_none(
+                    {
+                        "trace_context": _trace_context(payload),
+                        "name": payload.get("name"),
+                        "as_type": as_type,
+                        "input": payload.get("input"),
+                        "output": payload.get("output"),
+                        "metadata": observation_metadata,
+                        "level": _langfuse_level(
+                            payload.get("status"), payload.get("error")
+                        ),
+                        "status_message": payload.get("error"),
+                        "model": payload.get("model"),
+                        "model_parameters": payload.get("model_parameters"),
+                        "usage_details": _langfuse_usage_details(
+                            payload.get("usage_details")
+                        ),
+                        "cost_details": _langfuse_cost_details(
+                            payload.get("cost_details")
+                        ),
+                    }
+                )
+            )
+            end = getattr(observation, "end", None)
+            if end is not None:
+                result = end(end_time=_datetime_to_epoch_ns(payload.get("end_time")))
+                if inspect.isawaitable(result):
+                    await result
 
     async def _emit_v4_event(
         self,
@@ -360,6 +426,40 @@ def _first_method(client: Any, method_names: tuple[str, ...]) -> Any | None:
 
 def _drop_none(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if value is not None}
+
+
+def _langfuse_usage_details(value: JsonSafe) -> dict[str, int] | None:
+    """Return Langfuse-compatible integer usage counters."""
+    if not isinstance(value, dict):
+        return None
+    usage = {
+        key: item
+        for key, item in value.items()
+        if isinstance(key, str) and isinstance(item, int) and not isinstance(item, bool)
+    }
+    return usage or None
+
+
+def _langfuse_cost_details(value: JsonSafe) -> dict[str, float] | None:
+    """Return Langfuse-compatible numeric cost counters."""
+    if not isinstance(value, dict):
+        return None
+    cost = {
+        key: float(item)
+        for key, item in value.items()
+        if isinstance(key, str)
+        and isinstance(item, int | float)
+        and not isinstance(item, bool)
+    }
+    return cost or None
+
+
+def _datetime_to_epoch_ns(value: JsonSafe) -> int | None:
+    """Convert an ISO datetime payload value to epoch nanoseconds."""
+    if not isinstance(value, str):
+        return None
+    parsed = datetime.fromisoformat(value)
+    return int(parsed.timestamp() * 1_000_000_000)
 
 
 def _as_dict(payload: JsonSafe) -> dict[str, JsonSafe]:
