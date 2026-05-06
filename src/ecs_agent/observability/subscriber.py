@@ -27,6 +27,8 @@ from ecs_agent.types import (
     BranchCreatedEvent,
     CompactionCompleteEvent,
     ContextPrunedEvent,
+    DelegationCompletedEvent,
+    DelegationStartedEvent,
     ErrorOccurredEvent,
     MessageDeliveredEvent,
     PlanRevisedEvent,
@@ -85,10 +87,22 @@ class TraceState:
     tick_count: int = 0
     error_count: int = 0
     closed: bool = False
+    has_user_turn: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
     active_tools: dict[tuple[int, str], ToolCall] = field(default_factory=dict)
     active_generations: dict[int, str] = field(default_factory=dict)
+    active_subagents: dict[str, SubagentSpanState] = field(default_factory=dict)
     stream_sequences: dict[int, int] = field(default_factory=dict)
+    emit_root_trace: bool = True
+
+
+@dataclass(slots=True)
+class SubagentSpanState:
+    """In-flight subagent span metadata."""
+
+    observation_id: str
+    task: str
+    start_time: datetime | None
 
 
 class ObservabilitySubscriber:
@@ -121,6 +135,8 @@ class ObservabilitySubscriber:
             (SubagentStreamStartEvent, self.handle_subagent_stream_start),
             (SubagentStreamDeltaEvent, self.handle_subagent_stream_delta),
             (SubagentStreamEndEvent, self.handle_subagent_stream_end),
+            (DelegationStartedEvent, self.handle_delegation_started),
+            (DelegationCompletedEvent, self.handle_delegation_completed),
             (LLMObservationStartedEvent, self.handle_llm_observation_started),
             (LLMObservationCompletedEvent, self.handle_llm_observation_completed),
             (StreamStartEvent, self.handle_stream_start),
@@ -198,7 +214,7 @@ class ObservabilitySubscriber:
                     **self._context_pressure_metadata(event),
                 },
                 error=event.error,
-                model=_provider_model_label(event.provider_id, event.model),
+                model=event.model,
                 model_parameters=event.model_parameters,
                 usage_details=self._usage_details(event),
                 cost_details=dict(event.cost_details),
@@ -213,7 +229,7 @@ class ObservabilitySubscriber:
             return
 
         started_at = datetime.now(timezone.utc)
-        observation_id = uuid.uuid4().hex
+        observation_id = event.parent_observation_id or uuid.uuid4().hex
         root_record = TelemetryRecord(
             trace_id=trace_id,
             run_id=run_id,
@@ -242,14 +258,18 @@ class ObservabilitySubscriber:
                 "start_tick": event.start_tick,
                 "active_entities_start": event.active_entities,
             },
+            emit_root_trace=event.emit_root_trace,
         )
-        await self._emit_initial_user_messages(self.trace_states[run_id])
+        if event.emit_root_trace:
+            await self._emit_initial_user_messages(self.trace_states[run_id])
 
     async def handle_user_input_received(self, event: UserInputReceivedEvent) -> None:
         """Map resolved user input text to a user-input event record."""
         state = self._state_for_current_run()
         if state is None:
             return
+
+        state = await self._start_user_turn(state, event)
 
         await self.sink.emit(
             self._event_record(
@@ -388,6 +408,11 @@ class ObservabilitySubscriber:
         if state is None or state.closed:
             return
 
+        if not state.emit_root_trace:
+            state.closed = True
+            self.trace_states.pop(run_id, None)
+            return
+
         ended_at = datetime.now(timezone.utc)
         root_record = state.root_record
         root_record.end_time = ended_at
@@ -450,6 +475,144 @@ class ObservabilitySubscriber:
         finally:
             state.closed = True
             self.trace_states.pop(run_id, None)
+
+    async def handle_delegation_started(self, event: DelegationStartedEvent) -> None:
+        """Track a subagent run as a span under the active trace root."""
+        state = self._state_for_current_run()
+        if state is None:
+            return
+
+        observation_id = event.observation_id or uuid.uuid4().hex
+        state.active_subagents[event.correlation_id] = SubagentSpanState(
+            observation_id=observation_id,
+            task=event.task,
+            start_time=event.start_time,
+        )
+
+    async def handle_delegation_completed(self, event: DelegationCompletedEvent) -> None:
+        """Emit the completed subagent run span."""
+        state = self._state_for_current_run()
+        if state is None:
+            return
+
+        span_state = state.active_subagents.pop(
+            event.correlation_id,
+            SubagentSpanState(
+                observation_id=event.observation_id or uuid.uuid4().hex,
+                task="",
+                start_time=None,
+            ),
+        )
+        ended_at = event.end_time or datetime.now(timezone.utc)
+        started_at = span_state.start_time
+        latency_ms = None
+        if event.duration_seconds is not None:
+            latency_ms = event.duration_seconds * 1000
+        elif started_at is not None:
+            latency_ms = (ended_at - started_at).total_seconds() * 1000
+        await self.sink.emit(
+            TelemetryRecord(
+                trace_id=state.trace_id,
+                run_id=state.run_id,
+                observation_id=span_state.observation_id,
+                parent_observation_id=state.observation_id,
+                name=f"subagent.{event.subagent_name}",
+                kind="span",
+                status="success" if event.success else "error",
+                entity_id=int(event.entity_id),
+                start_time=started_at,
+                end_time=ended_at,
+                latency_ms=latency_ms,
+                input={
+                    "category": event.subagent_name,
+                    "prompt": span_state.task,
+                },
+                output={"result": event.result},
+                metadata={
+                    "correlation_id": event.correlation_id,
+                    "traceparent": event.traceparent,
+                    "child_world_name": event.child_world_name,
+                },
+                error=event.error,
+            )
+        )
+
+    async def _start_user_turn(
+        self,
+        state: TraceState,
+        event: UserInputReceivedEvent,
+    ) -> TraceState:
+        """Rotate the active trace so each interactive user input owns a trace."""
+        run_id = current_run_id()
+        if run_id is None:
+            return state
+
+        if state.has_user_turn:
+            await self._emit_root_record(
+                state,
+                status="success",
+                reason="next_user_input",
+            )
+
+        started_at = datetime.now(timezone.utc)
+        observation_id = uuid.uuid4().hex
+        trace_id = uuid.uuid4().hex
+        metadata = {
+            **state.metadata,
+            "source": "user_input_system",
+            "prompt": event.prompt,
+            "parent_run_trace_id": state.trace_id,
+        }
+        root_record = TelemetryRecord(
+            trace_id=trace_id,
+            run_id=state.run_id,
+            observation_id=observation_id,
+            name="user.turn",
+            kind="trace",
+            status="running",
+            start_time=started_at,
+            input={"text": event.text},
+            metadata=metadata,
+        )
+        next_state = TraceState(
+            trace_id=trace_id,
+            run_id=state.run_id,
+            observation_id=observation_id,
+            root_record=root_record,
+            started_at=started_at,
+            max_ticks=state.max_ticks,
+            start_tick=state.start_tick,
+            active_entities_start=state.active_entities_start,
+            tick_count=state.tick_count,
+            error_count=state.error_count,
+            has_user_turn=True,
+            metadata=metadata,
+        )
+        self.trace_states[run_id] = next_state
+        return next_state
+
+    async def _emit_root_record(
+        self,
+        state: TraceState,
+        *,
+        status: TelemetryStatus,
+        reason: str,
+        active_entities_end: int | None = None,
+        ticks: int | None = None,
+    ) -> None:
+        """Finalize and emit the trace root record for a state."""
+        ended_at = datetime.now(timezone.utc)
+        root_record = state.root_record
+        root_record.end_time = ended_at
+        root_record.latency_ms = (ended_at - state.started_at).total_seconds() * 1000
+        root_record.status = status
+        metadata = {**state.metadata, "reason": reason}
+        if active_entities_end is not None:
+            metadata["active_entities_end"] = active_entities_end
+        if ticks is not None:
+            metadata["ticks"] = ticks
+        root_record.metadata = metadata
+        await self.sink.emit(root_record)
 
     async def handle_stream_start(self, event: StreamStartEvent) -> None:
         """Map stream start to a child event under the active generation."""
@@ -1026,12 +1189,12 @@ class ObservabilitySubscriber:
             return "success"
         return "unknown"
 
-    def _usage_details(self, event: LLMObservationCompletedEvent) -> dict[str, Any]:
+    def _usage_details(self, event: LLMObservationCompletedEvent) -> dict[str, int]:
         usage = event.usage
         if usage is None:
             return {}
 
-        return {
+        raw_usage = {
             "prompt_tokens": usage.prompt_tokens,
             "completion_tokens": usage.completion_tokens,
             "total_tokens": usage.total_tokens,
@@ -1039,10 +1202,11 @@ class ObservabilitySubscriber:
             "cache_creation_tokens": usage.cache_creation_tokens,
             "cache_read_tokens": usage.cache_read_tokens,
             "image_count": usage.image_count,
-            "audio_seconds": usage.audio_seconds,
-            "provider_id": usage.provider_id,
-            "model": usage.model,
-            "stream_completeness": usage.stream_completeness.value,
+        }
+        return {
+            key: value
+            for key, value in raw_usage.items()
+            if isinstance(value, int) and not isinstance(value, bool)
         }
 
     def _context_pressure_metadata(
@@ -1091,14 +1255,6 @@ class ObservabilitySubscriber:
             )
             max_pressure = max(max_pressure, estimated_tokens / budget.max_tokens)
         return max_pressure
-
-
-def _provider_model_label(provider_id: str, model: str) -> str:
-    if "/" in model:
-        return model
-    if provider_id:
-        return f"{provider_id}/{model}"
-    return model
 
 
 def _record_latency_ms(

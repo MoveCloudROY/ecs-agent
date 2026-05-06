@@ -9,7 +9,10 @@ import pytest
 from ecs_agent.components.definitions import TerminalComponent
 from ecs_agent.core import Runner, World
 from ecs_agent.observability import (
+    LLMObservationCompletedEvent,
+    LLMObservationStartedEvent,
     RecordingTelemetrySink,
+    UserInputReceivedEvent,
     current_run_id,
     current_trace_id,
     install_observability,
@@ -24,6 +27,8 @@ from ecs_agent.types import (
     RunStartedEvent,
     SystemExecutionCompletedEvent,
     SystemExecutionStartedEvent,
+    Message,
+    Usage,
 )
 
 
@@ -71,6 +76,52 @@ class HangingSystem:
         """Block forever until cancellation propagates into the system."""
         _ = world
         await asyncio.Event().wait()
+
+
+class TwoUserTurnSystem:
+    """System that emits two user-turn LLM chains within one runner run."""
+
+    def __init__(self) -> None:
+        self._tick = 0
+        self.entity_id: int | None = None
+
+    async def process(self, world: World) -> None:
+        """Emit a user input and LLM generation per tick, then terminate."""
+        if self.entity_id is None:
+            self.entity_id = int(world.create_entity())
+        entity_id = self.entity_id
+        user_text = "first question" if self._tick == 0 else "second question"
+        answer_text = "first answer" if self._tick == 0 else "second answer"
+        await world.event_bus.publish(
+            UserInputReceivedEvent(
+                entity_id=entity_id,
+                prompt="You> ",
+                text=user_text,
+            )
+        )
+        await world.event_bus.publish(
+            LLMObservationStartedEvent(
+                entity_id=entity_id,
+                provider_id="fake-provider",
+                model=f"turn-model-{self._tick}",
+                operation="reasoning",
+                messages=[Message(role="user", content=user_text)],
+            )
+        )
+        await world.event_bus.publish(
+            LLMObservationCompletedEvent(
+                entity_id=entity_id,
+                provider_id="fake-provider",
+                model=f"turn-model-{self._tick}",
+                operation="reasoning",
+                messages=[Message(role="user", content=user_text)],
+                response_message=Message(role="assistant", content=answer_text),
+                usage=Usage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+            )
+        )
+        self._tick += 1
+        if self._tick >= 2:
+            world.add_component(world.create_entity(), TerminalComponent(reason="done"))
 
 
 class FailingSink(RecordingTelemetrySink):
@@ -289,6 +340,37 @@ async def test_subscriber_keeps_separate_trace_state_per_run() -> None:
     assert len({trace.trace_id for trace in traces}) == 2
     subscriber = getattr(world, "_ecs_agent_observability_subscriber")
     assert subscriber.trace_states == {}
+
+
+@pytest.mark.asyncio
+async def test_user_inputs_create_separate_turn_traces_with_child_generations() -> None:
+    """One long runner run creates one trace per user input turn."""
+    world = World()
+    system = TwoUserTurnSystem()
+    world.register_system(system, priority=0)
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+
+    await Runner().run(world, max_ticks=5)
+
+    turn_traces = [
+        record for record in sink.records if record.kind == "trace" and record.name == "user.turn"
+    ]
+    assert len(turn_traces) == 2
+    assert [trace.input for trace in turn_traces] == [
+        {"text": "first question"},
+        {"text": "second question"},
+    ]
+    assert len({trace.trace_id for trace in turn_traces}) == 2
+
+    generations = [record for record in sink.records if record.kind == "generation"]
+    assert len(generations) == 2
+    assert [generation.trace_id for generation in generations] == [
+        trace.trace_id for trace in turn_traces
+    ]
+    assert [generation.parent_observation_id for generation in generations] == [
+        trace.observation_id for trace in turn_traces
+    ]
 
 
 @pytest.mark.asyncio

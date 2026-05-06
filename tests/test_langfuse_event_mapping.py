@@ -16,6 +16,8 @@ from ecs_agent.components import (
     PendingToolCallsComponent,
     PermissionComponent,
     StreamingComponent,
+    SubagentRegistryComponent,
+    SubagentSessionTableComponent,
     TerminalComponent,
     ToolRegistryComponent,
     UserInputComponent,
@@ -28,6 +30,7 @@ from ecs_agent.providers.retry_model import RetryModel
 from ecs_agent.scratchbook import ArtifactRegistry
 from ecs_agent.systems.permission import PermissionSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.systems.user_input import UserInputSystem
 from ecs_agent.accounting.models import LLMRetryEvent
@@ -36,6 +39,7 @@ from ecs_agent.types import (
     Message,
     RetryConfig,
     StreamDelta,
+    SubagentConfig,
     ToolCall,
     ToolSchema,
     Usage,
@@ -236,7 +240,7 @@ async def test_llm_generation_includes_raw_messages_and_output() -> None:
     generation = generations[0]
     assert generation.name == "llm.reasoning"
     assert generation.status == "success"
-    assert generation.model == "FakeModel/fake-generation-model"
+    assert generation.model == "fake-generation-model"
     assert generation.start_time is not None
     assert generation.end_time is not None
     assert generation.latency_ms is not None
@@ -261,14 +265,6 @@ async def test_llm_generation_includes_raw_messages_and_output() -> None:
         "prompt_tokens": 4,
         "completion_tokens": 2,
         "total_tokens": 6,
-        "cached_input_tokens": None,
-        "cache_creation_tokens": None,
-        "cache_read_tokens": None,
-        "image_count": None,
-        "audio_seconds": None,
-        "provider_id": None,
-        "model": None,
-        "stream_completeness": "complete",
     }
     assert generation.cost_details == {}
 
@@ -921,3 +917,93 @@ async def test_complete_with_llm_invocation_event_streaming_maps_final_output_on
     assert [record for record in sink.records if record.output == generation.output] == [
         generation
     ]
+
+
+@pytest.mark.asyncio
+async def test_subagent_run_records_span_with_child_generation() -> None:
+    """A subagent run is a trace span and its internal LLM call is a child generation."""
+    world = World()
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+    parent_model = FakeModel(
+        responses=[
+            CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id="call-subagent",
+                            name="subagent",
+                            arguments={"category": "worker", "prompt": "Do work"},
+                        )
+                    ],
+                ),
+                usage=Usage(prompt_tokens=5, completion_tokens=1, total_tokens=6),
+            ),
+            CompletionResult(
+                message=Message(role="assistant", content="Parent done"),
+                usage=Usage(prompt_tokens=7, completion_tokens=2, total_tokens=9),
+            ),
+        ],
+        model_id="parent-model",
+    )
+    child_model = FakeModel(
+        responses=[
+            CompletionResult(
+                message=Message(role="assistant", content="Child done"),
+                usage=Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+            )
+        ],
+        model_id="child-model",
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=parent_model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Delegate work")]),
+    )
+    world.add_component(entity_id, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(
+        entity_id,
+        SubagentRegistryComponent(
+            subagents={
+                "worker": SubagentConfig(
+                    name="worker",
+                    model=child_model,
+                    system_prompt="You are a worker.",
+                    max_ticks=2,
+                )
+            }
+        ),
+    )
+    world.add_component(entity_id, SubagentSessionTableComponent(sessions={}))
+    world.register_system(SubagentSystem(priority=-1), priority=-1)
+    world.register_system(ReasoningSystem(priority=0), priority=0)
+    world.register_system(ToolExecutionSystem(priority=5), priority=5)
+
+    await Runner().run(world, max_ticks=3)
+
+    traces = [record for record in sink.records if record.kind == "trace"]
+    assert len(traces) == 1
+    subagent_spans = [
+        record
+        for record in sink.records
+        if record.kind == "span" and record.name == "subagent.worker"
+    ]
+    assert len(subagent_spans) == 1
+    subagent_span = subagent_spans[0]
+    assert subagent_span.parent_observation_id == traces[0].observation_id
+    assert subagent_span.status == "success"
+    assert subagent_span.input == {
+        "category": "worker",
+        "prompt": "Do work",
+    }
+    assert subagent_span.output == {"result": "Child done"}
+
+    child_generation = next(
+        record for record in sink.records if record.model == "child-model"
+    )
+    assert child_generation.kind == "generation"
+    assert child_generation.trace_id == subagent_span.trace_id
+    assert child_generation.parent_observation_id == subagent_span.observation_id
