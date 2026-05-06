@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from ecs_agent.components.definitions import TerminalComponent
 from ecs_agent.core import World
@@ -1940,6 +1941,80 @@ async def test_main_world_setup_installs_subagent_infrastructure(
         isinstance(entry.system, SubagentSystem) and entry.priority == -1
         for entry in world._systems._systems
     )
+
+
+@pytest.mark.asyncio
+async def test_plan_task_world_persists_tool_results_to_scratchbook(
+    tmp_path: Path,
+) -> None:
+    from ecs_agent.components import (
+        ConversationComponent,
+        PendingToolCallsComponent,
+        ToolRegistryComponent,
+        ToolResultsComponent,
+    )
+    from ecs_agent.providers.fake_model import FakeModel
+    from ecs_agent.systems.tool_execution import ToolExecutionSystem
+    from ecs_agent.types import Message, ToolCall, ToolSchema
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    async def emit_report(topic: str) -> str:
+        return f"report for {topic}"
+
+    model = FakeModel(responses=["ok"])
+    world, agent_id, _, _ = build_plan_task_world(model=model, base_dir=tmp_path)
+    world.apply_pending_system_operations()
+
+    tool_registry = world.get_component(agent_id, ToolRegistryComponent)
+    assert tool_registry is not None
+    tool_registry.tools["emit_report"] = ToolSchema(
+        name="emit_report",
+        description="Emit a test report.",
+        parameters={
+            "type": "object",
+            "properties": {"topic": {"type": "string"}},
+            "required": ["topic"],
+        },
+    )
+    tool_registry.handlers["emit_report"] = emit_report
+
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.append(Message(role="user", content="run report"))
+    world.add_component(
+        agent_id,
+        PendingToolCallsComponent(
+            tool_calls=[
+                ToolCall(
+                    id="plan-tool-1",
+                    name="emit_report",
+                    arguments={"topic": "scratchbook"},
+                )
+            ]
+        ),
+    )
+
+    tool_systems = [
+        entry.system
+        for entry in world._systems._systems
+        if isinstance(entry.system, ToolExecutionSystem)
+    ]
+    assert len(tool_systems) == 1
+
+    await tool_systems[0].process(world)
+
+    results = world.get_component(agent_id, ToolResultsComponent)
+    assert results is not None
+    result_ref = results.results["plan-tool-1"]
+    assert result_ref.startswith("scratchbook/records/tool/tool_")
+    artifact_path = tmp_path / result_ref
+    artifact_data = yaml.safe_load(artifact_path.read_text(encoding="utf-8"))
+    assert artifact_data["metadata"]["tool_call_id"] == "plan-tool-1"
+    assert artifact_data["metadata"]["tool_name"] == "emit_report"
+    assert artifact_data["metadata"]["arguments"] == {"topic": "scratchbook"}
+    assert artifact_data["content"] == "report for scratchbook"
+    tool_messages = [message for message in conversation.messages if message.role == "tool"]
+    assert [message.content for message in tool_messages] == [result_ref]
 
 
 @pytest.mark.asyncio
