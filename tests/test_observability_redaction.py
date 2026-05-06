@@ -105,7 +105,7 @@ def test_secret_values_are_redacted_recursively(
     assert sanitized["model_output"] == [
         "assistant response",
         "[REDACTED:value:LLM_API_KEY]",
-        "using [REDACTED:value:LLM_MODEL] for generation",
+        f"using {model_name} for generation",
     ]
     assert sanitized["tuple_value"] == ["[REDACTED:value:extra_secret]"]
     assert sanitized["set_value"] == ["[REDACTED:value:LANGFUSE_SECRET_KEY]"]
@@ -115,7 +115,6 @@ def test_secret_values_are_redacted_recursively(
     for secret in [
         langfuse_secret,
         llm_key,
-        model_name,
         caller_secret,
         nested_token,
         "synthetic-header-token-value",
@@ -128,7 +127,9 @@ def test_secret_values_are_redacted_recursively(
 
     assert ignored_short_value in sanitized_text
     assert ignored_short_value not in report_text
-    assert report.total_redactions == 11
+    assert model_name in sanitized_text
+    assert model_name not in report_text
+    assert report.total_redactions == 10
     assert report.counts_by_rule == {
         "key:authorization": 1,
         "key:x-api-key": 1,
@@ -138,7 +139,6 @@ def test_secret_values_are_redacted_recursively(
         "value:LANGFUSE_SECRET_KEY": 2,
         "value:extra_secret": 2,
         "value:LLM_API_KEY": 1,
-        "value:LLM_MODEL": 1,
     }
     report_payload = report.to_payload()
     assert set(report_payload) == {"total_redactions", "counts_by_rule"}

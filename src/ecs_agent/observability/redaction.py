@@ -29,7 +29,6 @@ SECRET_ENV_NAMES: tuple[str, ...] = (
     "LANGFUSE_BASE_URL",
     "LLM_API_KEY",
     "LLM_BASE_URL",
-    "LLM_MODEL",
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
 )
