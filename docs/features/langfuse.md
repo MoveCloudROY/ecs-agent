@@ -56,18 +56,64 @@ Langfuse Sessions require `session_id` as a trace-level session attribute, not o
 
 If you provide `LangfuseConfig(session_id="...")`, the value is exported both in sanitized metadata for debugging and through `propagate_attributes(...)` for Langfuse session grouping. A `session_id` placed only inside custom metadata remains metadata-only and is not sufficient for Sessions UI grouping.
 
+## Runner Context vs Langfuse Configuration
+
+`Runner.run(...)` and `LangfuseConfig(...)` configure different layers and do not overwrite each other.
+
+| Source | Parameter | Purpose | Overwrites the other layer? |
+| --- | --- | --- | --- |
+| `Runner.run(...)` | `trace_id` | ecs-agent trace context for the active or inherited execution chain; maps to Langfuse trace context during export. | Does not overwrite `LangfuseConfig`. |
+| `Runner.run(...)` | `run_id` | Internal ecs-agent id for one runner execution chain. | Not a Langfuse `session_id`; does not overwrite it. |
+| `Runner.run(...)` | `parent_observation_id` | Parent span id for nested child-world observations. | Does not affect Langfuse configuration. |
+| `Runner.run(...)` | `emit_root_trace` | Controls whether this runner emits its own root trace record. | Does not affect Langfuse configuration. |
+| `LangfuseConfig(...)` | `session_id` | Langfuse Sessions grouping attribute. | Does not overwrite `run_id` or `trace_id`. |
+| `LangfuseConfig(...)` | `user_id` | Langfuse user attribution. | Does not affect runner context. |
+| `LangfuseConfig(...)` | `environment`, `release`, `tags` | Langfuse trace/export attributes and metadata. | Does not affect runner context. |
+| `LangfuseConfig(...)` | `public_key`, `secret_key`, `host` | Langfuse project connection settings. | Used only by the Langfuse client/export layer. |
+
+`Runner.run(...)` owns ecs-agent execution context. Its observability parameters are internal hooks used mostly for nested runs such as subagents:
+
+- `trace_id`: inherited by child worlds so their observations stay inside the active parent Langfuse trace.
+- `run_id`: stable ecs-agent execution-scope id for one runner chain. It is not a Langfuse Session id.
+- `parent_observation_id`: default parent span for child-world observations, typically the `subagent.<name>` span id.
+- `emit_root_trace`: disables a child world's own root trace when it should be nested under a parent span.
+
+`LangfuseConfig(...)` owns Langfuse project/session/export attributes:
+
+- `session_id`: propagated as a Langfuse Sessions attribute and also included in sanitized metadata for debugging.
+- `user_id`: exported as the Langfuse user attribute where supported.
+- `environment`, `release`, and `tags`: exported as Langfuse trace/export attributes and metadata.
+- `public_key`, `secret_key`, and `host`: used only to connect to the Langfuse project.
+
+For normal top-level runs, prefer the default call:
+
+```python
+await Runner().run(world)
+```
+
+Do not pass a fixed top-level `trace_id` unless you intentionally want multiple runner calls to be associated with the same Langfuse trace. Subagent internals pass these runner parameters automatically so child LLM/tool observations are nested correctly; application code usually only needs `LangfuseConfig` for session, user, environment, release, and credential settings.
+
 ## Trace Structure
 
-The integration produces one trace per `Runner.run()` call. Observations captured include:
+The integration treats a `Runner.run()` call as the execution scope, while Langfuse traces are scoped to user turns:
 
-- **User Input**: The initial prompt that triggered the run.
-- **LLM Generations**: Full prompt and completion details, including token usage and model parameters.
-- **Tool Calls**: Tool names, arguments, and results.
-- **Streaming**: Real-time token delivery events.
+- **Interactive agents**: every `UserInputReceivedEvent` starts a new `user.turn` trace. The trace covers everything that happens from that user input until the next user input or run completion.
+- **One-shot agents**: if a world starts with an initial `ConversationComponent` user message and does not receive interactive input, the existing single trace for that run is preserved.
+- **Subagents**: each subagent delegation is a `subagent.<name>` span inside the active user-turn trace. LLM calls, tool calls, retrieval, streaming, and other child-world observations from that subagent are nested under the subagent span instead of creating a second top-level trace.
+
+Observations captured include:
+
+- **User Input**: The prompt or input text that started the turn.
+- **LLM Generations**: Full prompt and completion details, model name, model parameters, and integer token counters such as `prompt_tokens`, `completion_tokens`, `total_tokens`, and cache token counts when the provider supplies them. `LLM_MODEL` is treated as operational configuration rather than a secret, so model identifiers such as `deepseek-v4-flash` remain visible in the Langfuse model field and dashboards.
+- **Tool Calls**: Tool names, arguments, results, errors, and recorded execution duration.
+- **Subagent Runs**: Parent spans for delegated child agents, with child LLM/tool observations nested beneath them.
+- **Streaming**: Real-time token delivery events under the active generation.
 - **Retries**: Automatic retry attempts and reasons.
 - **Errors**: Captured system errors and stack traces.
 - **Context Pressure**: Information about conversation compaction or windowing.
 - **Scores**: Automated evaluation scores if provided.
+
+For Langfuse SDK v4, completed ECS records are exported with the manual observation lifecycle: `start_observation(...)`, followed by `end(end_time=...)` using the recorded operation end timestamp. This keeps LLM reasoning, tool execution, and subagent span durations aligned with the actual work rather than the telemetry export call duration. Active root observations still use `start_as_current_observation(...)` so `session_id` can be propagated while the trace context is current.
 
 ## Alerts and Monitoring
 
@@ -79,6 +125,7 @@ The integration follows a strict data privacy policy. While raw prompts, respons
 
 - **Mandatory Redaction**: Sensitive patterns (like API keys or tokens) are automatically redacted from payloads.
 - **Redaction Reports**: Exported metadata includes counts and names of applied redaction rules, but never the redacted content itself.
+- **Model Names**: `LLM_MODEL` is intentionally not redacted because model identifiers drive Langfuse generation grouping and dashboard filters. Do not encode credentials, tenant secrets, or private data in model names.
 
 ## Telemetry Resilience
 

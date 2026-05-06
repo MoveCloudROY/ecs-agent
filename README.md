@@ -14,7 +14,9 @@ Build modular, testable LLM agents by composing behavior from dataclass componen
 ## Installation
 
 ```bash
-# Clone and install with uv
+# Stable version 
+uv pip install ecs-agent
+# Develop version
 git clone https://github.com/MoveCloudROY/ecs-agent.git
 cd ecs-agent
 uv sync --group dev
@@ -105,7 +107,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 
 ### Scratchbook Artifact Registry
 - **`ArtifactRegistry`** — Canonical persistence layer for durable scratchbook records and mutable plan execution state.
-- **Canonical immutable records** — Tool and subagent outputs persist to `scratchbook/records/tool/tool_<uuid24>` and `scratchbook/records/subagent/subagent_<uuid24>`.
+- **Canonical immutable records** — Tool and subagent outputs persist to `scratchbook/records/tool/tool_<uuid24>` and `scratchbook/records/subagent/subagent_<uuid24>`. Tool result records are YAML documents with tool metadata under `metadata` and the full tool output under `content`.
 - **Canonical mutable plan state** — Plan markdown and Boulder machine state live at `scratchbook/<plan_slug>/plan.md` and `scratchbook/<plan_slug>/executes/boulder.json`.
 - **Trigger-to-Boulder lifecycle** — Plan-type script triggers create Boulder; planning/replanning/tool systems update it throughout execution.
 - **Inline payload policy** — Artifact inline content is populated only when UTF-8 payload size is `<= 2048` bytes. For larger results, `inline_content` is `None` and content is file-backed only. The persisted file always stores the full content — no truncation or summarisation.
@@ -137,7 +139,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **Tool Ecosystem** — Auto-discovery via `@tool` decorator, manual approval flows, secure `bwrap` sandboxing, and composable skills.
 - **MCP Integration** — Connect to external MCP tool servers via stdio, SSE, or HTTP transports with namespaced tool mapping.
 - **Prometheus Metrics**, Install low-cardinality runtime, LLM, tool, streaming, and runtime-control metrics on any `World` and expose them via render, ASGI/WSGI, or a standalone `/metrics` server.
-- **Langfuse Observability**, Capture full-fidelity traces, spans, and observations via `ecs-agent[langfuse]`. Install `install_langfuse_observability()` on any `World` to export user input, LLM generations, tool calls, retries, and errors to Langfuse. Supports mandatory redaction, one trace per run, resilient background export, and Langfuse Sessions by propagating `session_id` as a trace-level attribute rather than metadata-only. See [`docs/features/langfuse.md`](docs/features/langfuse.md) for configuration via `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_HOST`, plus live test commands (OpenAI/Anthropic) and skip behavior when credentials are missing. Credential rotation is recommended if keys are exposed.
+- **Langfuse Observability**, Capture full-fidelity traces, spans, and observations via `ecs-agent[langfuse]`. Install `install_langfuse_observability()` on any `World` to export user input, LLM generations, tool calls, retries, subagent runs, and errors to Langfuse. Supports mandatory redaction, one trace per interactive user turn (with one-shot run compatibility), nested `subagent.<name>` spans with child LLM/tool observations, recorded operation timing exported through Langfuse SDK v4 manual observation endings, readable model identifiers from `LLM_MODEL`, integer token usage, resilient background export, and Langfuse Sessions by propagating `session_id` as a trace-level attribute rather than metadata-only. See [`docs/features/langfuse.md`](docs/features/langfuse.md) for configuration via `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_HOST`, plus live test commands (OpenAI/Anthropic) and skip behavior when credentials are missing. Credential rotation is recommended if keys are exposed.
 
 ## Architecture
 
