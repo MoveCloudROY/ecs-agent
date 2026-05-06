@@ -20,15 +20,15 @@ The workflow follows a structured lifecycle:
   - `plan_qa` uses `PLAN_QA_REVIEW_SYSTEM_PROMPT` (final plan review lens) and routes `DelegationCompletedEvent` → `controller.handle_plan_qa_review()` → `PLAN_QA_REVIEW` verdict.
   - The planner system prompt calls `subagent(category="qa", ...)` for draft review and `subagent(category="plan_qa", ...)` for plan review.
 - **Review Prompts via File Path** — When invoking `advisor`, `qa`, `plan_qa`, or `plan_writer` subagents for review, the prompt passes the artifact file path (e.g. `scratchbook/<workflow_id>/plan/draft.md`) rather than embedding the file content inline. The subagent reads the file itself using `read_file`, avoiding prompt token bloat.
-- **Auto Compaction** — `build_plan_task_world(...)` installs `CompactionConfigComponent(threshold_tokens=12_000, compaction_method="predrop_then_compact")`, `ConversationArchiveComponent`, and `CompactionSystem` at priority `-30` so compaction runs before workflow prompt rendering and before reasoning. `SystemPromptRenderSystem` then injects the current summary into the effective system prompt as `<chat_history_summary>...</chat_history_summary>` XML.
+- **Auto Compaction** — `build_plan_task_world(...)` installs `CompactionConfigComponent(threshold_tokens=300_000, compaction_method="predrop_then_compact")` by default, `ConversationArchiveComponent`, and `CompactionSystem` at priority `-30` so compaction runs before workflow prompt rendering and before reasoning. `SystemPromptRenderSystem` then injects the current summary into the effective system prompt as `<chat_history_summary>...</chat_history_summary>` XML.
 - **Subagent Compaction Inheritance** — Child worlds created by `SubagentSystem` inherit the parent `CompactionConfigComponent`, receive their own `ConversationArchiveComponent`, and register `CompactionSystem` at the same priority. Long-running review and task subagents therefore compact independently without requiring plan-and-task-specific special cases.
 - **Workflow Reset Safety** — `/plan:start`, `/plan:resume`, and `/task:start <workflow_id>` clear stale `CurrentCompactionSummaryComponent`, reset archived summaries, and invalidate `RenderedSystemPromptComponent` before restoring or switching workflow state. This prevents an old summary from leaking into a newly loaded workflow phase.
 - **Log Truncation** — Structured log fields `last_user_prompt` and user-normalization `prompt_text` are truncated to 200 characters to keep logs readable without losing signal. System-prompt render logs still report `prompt_length`, but the rendered prompt text itself is not truncated in this example.
-- **ECS Core**: Uses `SystemPromptRenderSystem`, `UserPromptNormalizationSystem`, `ReasoningSystem`, `ToolExecutionSystem`, and `MemorySystem`.
+- **ECS Core**: Uses `SystemPromptRenderSystem`, `UserPromptNormalizationSystem`, `ReasoningSystem`, and `ToolExecutionSystem`.
 - **Prompt Configuration**: The planner entity declares `SystemPromptConfigSpec` with `DRAFT_INTERVIEW_SYSTEM_PROMPT`, and `SystemPromptRenderSystem` bridges the rendered value into `LLMComponent.system_prompt` before reasoning.
 - **Workflow DSL**: Uses `install_workflow` and `WorkflowStateSystem` (priority -25) to manage the phase graph and automatic prompt-profile selection via `${_workflow_state_prompt}`.
 - **State Machine**: Explicit phase transitions managed by `WorkflowStateMachine`.
-- **Artifacts**: Durable persistence of plans, state, and execution evidence via `PlanTaskScratchbookAdapter`.
+- **Artifacts**: Durable persistence of plans, state, and execution evidence via `PlanTaskScratchbookAdapter` and canonical `ArtifactRegistry` records. Main-agent tool results are written through `ToolResultsSink` to `scratchbook/records/tool/tool_<uuid24>` as YAML documents with `metadata` and `content` top-level keys.
 - **Controller**: `PlanController` manages the high-level workflow logic and review gates.
 - **Subagent Reviews**: Advisor, QA, and Plan QA review steps are wired as ECS subagents via `SubagentRegistryComponent`. The planner invokes them with `subagent(category="advisor", ...)`, `subagent(category="qa", ...)`, and `subagent(category="plan_qa", ...)` respectively. Verdicts are automatically extracted from subagent results via `DelegationCompletedEvent` subscription, routed to the correct controller method based on the subagent name.
 - **Plan Writer Subagent**: The `WRITE_PLAN` phase is executed by a dedicated `plan_writer` subagent registered in `SubagentRegistryComponent`. It is pre-loaded with the `writing-plans` skill (discovered from `.claude/skills/writing_plans/SKILL.md`) and inherits `read_file`, `write_file`, `edit_file`, and `glob` tools. When it completes, `handle_write_plan_completed()` transitions the state to `PLAN_QA_REVIEW`.
@@ -61,6 +61,8 @@ All workflow data is persisted in `scratchbook/<workflow_id>/`:
 - `memory/`: Contains `knowledge.jsonl` for cross-task context.
 - `evidence/`: Directory for task execution artifacts.
 - `review/`: Contains JSON verdicts from Advisor and QA reviews.
+
+Main-agent tool call results are persisted separately as canonical immutable records under `scratchbook/records/tool/tool_<uuid24>`. Each record is YAML: `metadata` contains `tool_call_id`, `tool_name`, `timestamp`, and `arguments`; `content` contains the full tool output.
 
 ## Usage
 
