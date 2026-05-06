@@ -224,6 +224,117 @@ class FakeLangfuseV4TimedClient:
         return FakeLangfuseV4Observation(self, kwargs)
 
 
+class FakeLangfuseV4HistoricalSpan:
+    """OTel-like span that records attributes set by the adapter."""
+
+    def __init__(self, client: FakeLangfuseV4HistoricalClient, name: str) -> None:
+        self._client = client
+        self.name = name
+        self.attributes: dict[str, Any] = {}
+
+    def set_attribute(self, key: str, value: Any) -> None:
+        """Record OTel attributes set on the historical span."""
+        self.attributes[key] = value
+        self._client.calls.append(("otel_set_attribute", {key: value}))
+
+
+class FakeLangfuseV4HistoricalTracer:
+    """OTel-like tracer that records manual historical start times."""
+
+    def __init__(self, client: FakeLangfuseV4HistoricalClient) -> None:
+        self._client = client
+
+    def start_span(
+        self,
+        *,
+        name: str,
+        start_time: int | None = None,
+    ) -> FakeLangfuseV4HistoricalSpan:
+        """Record the span creation request and return a fake OTel span."""
+        self._client.calls.append(
+            ("otel_start_span", {"name": name, "start_time": start_time})
+        )
+        return FakeLangfuseV4HistoricalSpan(self._client, name)
+
+
+class FakeLangfuseV4HistoricalClient:
+    """Langfuse v4-like client that can backdate OTel span starts."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.active_observations: list[dict[str, Any]] = []
+        self._otel_tracer = FakeLangfuseV4HistoricalTracer(self)
+
+    def start_observation(self, **kwargs: Any) -> FakeLangfuseV4Observation:
+        """Expose the normal v4 method; historical path should bypass it."""
+        self.calls.append(("start_observation", kwargs))
+        return FakeLangfuseV4Observation(self, kwargs)
+
+    def propagate_attributes(self, **kwargs: Any) -> FakeLangfuseV4Propagation:
+        """Record trace-level attributes around historical observation creation."""
+        self.calls.append(("propagate_attributes", kwargs))
+        return FakeLangfuseV4Propagation(self)
+
+    def _create_remote_parent_span(
+        self,
+        *,
+        trace_id: str,
+        parent_span_id: str | None = None,
+    ) -> str:
+        """Record parent trace context creation."""
+        self.calls.append(
+            (
+                "create_remote_parent_span",
+                {"trace_id": trace_id, "parent_span_id": parent_span_id},
+            )
+        )
+        return "remote-parent"
+
+    def _create_observation_from_otel_span(self, **kwargs: Any) -> FakeLangfuseV4Observation:
+        """Create a fake Langfuse observation from the historical OTel span."""
+        self.calls.append(("create_observation_from_otel_span", kwargs))
+        return FakeLangfuseV4Observation(self, kwargs)
+
+
+class FakeLangfuseV4PartialHistoricalClient:
+    """Client with partial historical hooks that must use public fallback."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.active_observations: list[dict[str, Any]] = []
+        self._otel_tracer = FakeLangfuseV4HistoricalTracer(self)
+
+    def start_observation(self, **kwargs: Any) -> FakeLangfuseV4Observation:
+        """Record the safe public fallback path."""
+        self.calls.append(("start_observation", kwargs))
+        return FakeLangfuseV4Observation(self, kwargs)
+
+    def _create_observation_from_otel_span(self, **kwargs: Any) -> FakeLangfuseV4Observation:
+        """Record an unsafe path that should not be used without parent support."""
+        self.calls.append(("create_observation_from_otel_span", kwargs))
+        return FakeLangfuseV4Observation(self, kwargs)
+
+
+class FakeLangfuseV4HistoricalModuleClient(FakeLangfuseV4HistoricalClient):
+    """Historical client with module-level propagation like real SDK v4.5."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.active_propagations: list[dict[str, Any]] = []
+
+    def __getattribute__(self, name: str) -> Any:
+        """Mimic real SDK v4.5 by omitting client-level propagation."""
+        if name == "propagate_attributes":
+            raise AttributeError("Langfuse v4 client has no propagate_attributes method")
+        return super().__getattribute__(name)
+
+    def _create_observation_from_otel_span(self, **kwargs: Any) -> FakeLangfuseV4Observation:
+        """Record whether module propagation was active at observation creation."""
+        if self.active_propagations:
+            kwargs["propagated_at_start"] = dict(self.active_propagations[-1])
+        return super()._create_observation_from_otel_span(**kwargs)
+
+
 def test_langfuse_module_import_does_not_import_optional_dependency(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -712,6 +823,182 @@ async def test_langfuse_v4_timed_generation_uses_manual_lifecycle_when_current_a
     assert observation_payload["model"] == "deepseek-v4-flash"
     assert observation_payload["model_parameters"] == {"temperature": 0}
     assert client.calls[1][1]["end_time"] == int(ended_at.timestamp() * 1_000_000_000)
+
+
+@pytest.mark.asyncio
+async def test_langfuse_v4_historical_observation_backdates_start_and_end() -> None:
+    """v4 OTel-backed observations preserve elapsed record latency in Langfuse."""
+    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+
+    client = FakeLangfuseV4HistoricalClient()
+    sink = LangfuseTelemetrySink(client=client)
+    started_at = datetime(2026, 1, 2, 0, 0, 0, 123456, tzinfo=timezone.utc)
+    ended_at = datetime(2026, 1, 2, 0, 0, 2, 654321, tzinfo=timezone.utc)
+
+    await sink.emit(
+        TelemetryRecord(
+            trace_id="trace-one",
+            run_id="run-one",
+            observation_id="generation-one",
+            parent_observation_id="trace-root",
+            name="llm.reasoning",
+            kind="generation",
+            status="success",
+            start_time=started_at,
+            end_time=ended_at,
+            input={"messages": []},
+            output={"message": "ok"},
+            model="deepseek-v4-flash",
+            model_parameters={"temperature": 0},
+            usage_details={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        )
+    )
+
+    assert client.calls[0] == (
+        "create_remote_parent_span",
+        {"trace_id": "trace-one", "parent_span_id": "trace-root"},
+    )
+    assert client.calls[1] == (
+        "otel_start_span",
+        {
+            "name": "llm.reasoning",
+            "start_time": int(started_at.timestamp() * 1_000_000_000),
+        },
+    )
+    assert client.calls[2] == (
+        "otel_set_attribute",
+        {"langfuse.internal.as_root": True},
+    )
+    assert client.calls[3][0] == "create_observation_from_otel_span"
+    observation_payload = client.calls[3][1]
+    assert observation_payload["as_type"] == "generation"
+    assert observation_payload["model"] == "deepseek-v4-flash"
+    assert observation_payload["usage_details"] == {
+        "prompt_tokens": 1,
+        "completion_tokens": 2,
+        "total_tokens": 3,
+    }
+    assert client.calls[4] == (
+        "end",
+        {
+            "kwargs": observation_payload,
+            "end_time": int(ended_at.timestamp() * 1_000_000_000),
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_langfuse_v4_partial_historical_client_uses_public_fallback() -> None:
+    """Partial private SDK hooks must not create orphaned historical spans."""
+    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+
+    client = FakeLangfuseV4PartialHistoricalClient()
+    sink = LangfuseTelemetrySink(client=client)
+    started_at = datetime(2026, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
+    ended_at = datetime(2026, 1, 2, 0, 0, 1, tzinfo=timezone.utc)
+
+    await sink.emit(
+        TelemetryRecord(
+            trace_id="trace-one",
+            run_id="run-one",
+            observation_id="generation-one",
+            parent_observation_id="trace-root",
+            name="llm.reasoning",
+            kind="generation",
+            status="success",
+            start_time=started_at,
+            end_time=ended_at,
+        )
+    )
+
+    assert [name for name, _ in client.calls] == ["start_observation", "end"]
+    observation_payload = client.calls[0][1]
+    assert observation_payload["trace_context"] == {
+        "trace_id": "trace-one",
+        "parent_span_id": "trace-root",
+    }
+
+
+@pytest.mark.asyncio
+async def test_langfuse_v4_historical_root_observation_propagates_session() -> None:
+    """Historical root observations keep Langfuse Session attributes."""
+    from ecs_agent.integrations.langfuse import LangfuseConfig, LangfuseTelemetrySink
+
+    client = FakeLangfuseV4HistoricalClient()
+    sink = LangfuseTelemetrySink(
+        client=client,
+        config=LangfuseConfig(session_id="session-one"),
+    )
+    started_at = datetime(2026, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
+    ended_at = datetime(2026, 1, 2, 0, 0, 1, tzinfo=timezone.utc)
+
+    await sink.emit(
+        TelemetryRecord(
+            trace_id="trace-one",
+            run_id="run-one",
+            observation_id="trace-root",
+            name="runner.run",
+            kind="trace",
+            status="success",
+            start_time=started_at,
+            end_time=ended_at,
+        )
+    )
+
+    assert client.calls[0] == ("propagate_attributes", {"session_id": "session-one"})
+    assert client.calls[1] == ("propagation_enter", {})
+    observation_payload = client.calls[5][1]
+    assert observation_payload["metadata"]["session_id"] == "session-one"
+    assert client.calls[6] == ("propagation_exit", {})
+    assert client.calls[-1][0] == "end"
+
+
+@pytest.mark.asyncio
+async def test_langfuse_v4_historical_module_propagation_is_active_at_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Historical observations use module-level propagation for SDK v4.5."""
+    from ecs_agent.integrations.langfuse import LangfuseConfig, LangfuseTelemetrySink
+
+    client = FakeLangfuseV4HistoricalModuleClient()
+
+    def propagate_attributes(**kwargs: Any) -> FakeLangfuseV4ModulePropagation:
+        client.calls.append(("module_propagate_attributes", kwargs))
+        return FakeLangfuseV4ModulePropagation(client, kwargs)
+
+    fake_module = types.ModuleType("langfuse")
+    fake_module.propagate_attributes = propagate_attributes
+    monkeypatch.setitem(sys.modules, "langfuse", fake_module)
+    sink = LangfuseTelemetrySink(
+        client=client,
+        config=LangfuseConfig(session_id="session-one"),
+    )
+    started_at = datetime(2026, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
+    ended_at = datetime(2026, 1, 2, 0, 0, 1, tzinfo=timezone.utc)
+
+    await sink.emit(
+        TelemetryRecord(
+            trace_id="trace-one",
+            run_id="run-one",
+            observation_id="trace-root",
+            name="runner.run",
+            kind="trace",
+            status="success",
+            start_time=started_at,
+            end_time=ended_at,
+        )
+    )
+
+    assert client.calls[0] == (
+        "module_propagate_attributes",
+        {"session_id": "session-one"},
+    )
+    assert client.calls[1] == ("module_propagation_enter", {})
+    observation_payload = next(
+        payload for name, payload in client.calls if name == "create_observation_from_otel_span"
+    )
+    assert observation_payload["propagated_at_start"] == {"session_id": "session-one"}
+    assert observation_payload["metadata"]["session_id"] == "session-one"
 
 
 @pytest.mark.asyncio

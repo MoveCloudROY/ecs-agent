@@ -272,6 +272,13 @@ class LangfuseTelemetrySink:
         observation_id = payload.get("observation_id")
         if observation_id is not None:
             observation_metadata["observation_id"] = observation_id
+        if self._can_emit_v4_historical_observation(payload):
+            await self._emit_v4_historical_observation(
+                payload,
+                observation_metadata,
+                as_type=as_type,
+            )
+            return
         with self._v4_module_propagation_context():
             observation = method(
                 **_drop_none(
@@ -302,6 +309,110 @@ class LangfuseTelemetrySink:
                 result = end(end_time=_datetime_to_epoch_ns(payload.get("end_time")))
                 if inspect.isawaitable(result):
                     await result
+
+    def _can_emit_v4_historical_observation(
+        self,
+        payload: dict[str, JsonSafe],
+    ) -> bool:
+        """Return whether the client can create a v4 observation with start time."""
+        return (
+            payload.get("start_time") is not None
+            and payload.get("end_time") is not None
+            and getattr(self.client, "_otel_tracer", None) is not None
+            and getattr(self.client, "_create_remote_parent_span", None) is not None
+            and getattr(self.client, "_create_observation_from_otel_span", None)
+            is not None
+        )
+
+    async def _emit_v4_historical_observation(
+        self,
+        payload: dict[str, JsonSafe],
+        metadata: dict[str, JsonSafe],
+        *,
+        as_type: str,
+    ) -> None:
+        """Emit a v4 observation with historical start and end times."""
+        tracer = getattr(self.client, "_otel_tracer")
+        start_time = _datetime_to_epoch_ns(payload.get("start_time"))
+        end_time = _datetime_to_epoch_ns(payload.get("end_time"))
+        trace_context = _trace_context(payload)
+        with self._v4_historical_propagation_context():
+            remote_parent = self._v4_remote_parent_span(trace_context)
+            with self._v4_use_span(remote_parent):
+                otel_span = tracer.start_span(
+                    name=str(payload.get("name", "ecs-agent.observation")),
+                    start_time=start_time,
+                )
+                set_attribute = getattr(otel_span, "set_attribute", None)
+                if set_attribute is not None:
+                    set_attribute("langfuse.internal.as_root", True)
+                observation_factory = getattr(
+                    self.client,
+                    "_create_observation_from_otel_span",
+                )
+                observation = observation_factory(
+                    **_drop_none(
+                        {
+                            "otel_span": otel_span,
+                            "as_type": as_type,
+                            "input": payload.get("input"),
+                            "output": payload.get("output"),
+                            "metadata": metadata,
+                            "level": _langfuse_level(
+                                payload.get("status"), payload.get("error")
+                            ),
+                            "status_message": payload.get("error"),
+                            "model": payload.get("model"),
+                            "model_parameters": payload.get("model_parameters"),
+                            "usage_details": _langfuse_usage_details(
+                                payload.get("usage_details")
+                            ),
+                            "cost_details": _langfuse_cost_details(
+                                payload.get("cost_details")
+                            ),
+                        }
+                    )
+                )
+        end = getattr(observation, "end", None)
+        if end is not None:
+            result = end(end_time=end_time)
+            if inspect.isawaitable(result):
+                await result
+
+    def _v4_remote_parent_span(self, trace_context: dict[str, JsonSafe]) -> Any | None:
+        """Create a v4 remote parent span when trace context is available."""
+        trace_id = trace_context.get("trace_id")
+        if not isinstance(trace_id, str):
+            return None
+        parent_span_id = trace_context.get("parent_span_id")
+        if not isinstance(parent_span_id, str):
+            parent_span_id = None
+        create_remote_parent = getattr(self.client, "_create_remote_parent_span", None)
+        if create_remote_parent is None:
+            return None
+        return create_remote_parent(
+            trace_id=trace_id,
+            parent_span_id=parent_span_id,
+        )
+
+    def _v4_use_span(self, span: Any | None) -> Any:
+        """Return an OpenTelemetry use_span context or a no-op fallback."""
+        if span is None:
+            return nullcontext()
+        try:
+            trace_api = importlib.import_module("opentelemetry.trace")
+        except ImportError:
+            return nullcontext()
+        use_span = getattr(trace_api, "use_span", None)
+        if use_span is None:
+            return nullcontext()
+        return use_span(span)
+
+    def _v4_historical_propagation_context(self) -> Any:
+        """Return a trace-attribute propagation context for historical spans."""
+        if getattr(self.client, "propagate_attributes", None) is not None:
+            return self._v4_client_propagation_context()
+        return self._v4_module_propagation_context()
 
     async def _emit_v4_event(
         self,
