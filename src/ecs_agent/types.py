@@ -539,6 +539,15 @@ class UserInputRequestedEvent:
 
 
 @dataclass(slots=True)
+class UserInputReceivedEvent:
+    """Event emitted when resolved user input text is received."""
+
+    entity_id: EntityId | int
+    prompt: str
+    text: str
+
+
+@dataclass(slots=True)
 class ToolExecutionStartedEvent:
     """Event emitted when tool execution starts."""
 
@@ -715,6 +724,9 @@ class SubagentSessionRecord:
     error: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
+    launch_trace_id: str | None = None
+    launch_run_id: str | None = None
+    launch_parent_observation_id: str | None = None
 
     def __post_init__(self) -> None:
         self.status = _normalize_subagent_lifecycle_status(self.status)
@@ -835,6 +847,11 @@ class DelegationCompletedEvent:
     duration_seconds: float | None = None
     phase: str = "completed"
     status: str = ""
+    task: str = ""
+    trace_id: str | None = None
+    run_id: str | None = None
+    parent_observation_id: str | None = None
+    start_time: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -1008,6 +1025,7 @@ __all__ = [
     "ToolSchema",
     "ToolTimeoutError",
     "Usage",
+    "UserInputReceivedEvent",
     "UserInputRequestedEvent",
     "WorkflowStateEvaluatedEvent",
     "WorkflowStateEvaluationStatus",

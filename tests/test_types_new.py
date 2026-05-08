@@ -21,6 +21,7 @@ from ecs_agent.types import (
     ToolCall,
     ToolDeniedEvent,
     ToolTimeoutError,
+    UserInputReceivedEvent,
 )
 
 class TestToolTimeoutError:
@@ -204,6 +205,35 @@ class TestRAGRetrievalCompletedEvent:
         assert event.num_results == 42
 
 
+class TestUserInputReceivedEvent:
+    """UserInputReceivedEvent dataclass tests."""
+
+    def test_instantiate_with_required_fields(self) -> None:
+        """UserInputReceivedEvent should live with core runtime events in ecs_agent.types."""
+        event = UserInputReceivedEvent(
+            entity_id=EntityId(1),
+            prompt="You> ",
+            text="hello",
+        )
+
+        assert event.entity_id == EntityId(1)
+        assert event.prompt == "You> "
+        assert event.text == "hello"
+
+    def test_has_dataclass_fields(self) -> None:
+        """UserInputReceivedEvent should be a dataclass with slots."""
+        event = UserInputReceivedEvent(
+            entity_id=EntityId(7),
+            prompt="Input: ",
+            text="status",
+        )
+
+        assert hasattr(type(event), "__slots__")
+        assert hasattr(event, "entity_id")
+        assert hasattr(event, "prompt")
+        assert hasattr(event, "text")
+
+
 class TestAllExports:
     """Test that all new symbols are properly exported."""
 
@@ -219,6 +249,7 @@ class TestAllExports:
             "ToolDeniedEvent",
             "MCTSNodeScoredEvent",
             "RAGRetrievalCompletedEvent",
+            "UserInputReceivedEvent",
         }
         missing = required_symbols - set(types.__all__)
         assert not missing, f"Missing from __all__: {missing}"
@@ -233,6 +264,7 @@ class TestAllExports:
         assert callable(ToolDeniedEvent)
         assert callable(MCTSNodeScoredEvent)
         assert callable(RAGRetrievalCompletedEvent)
+        assert callable(UserInputReceivedEvent)
 
 
 class TestMessageBusEnvelope:
