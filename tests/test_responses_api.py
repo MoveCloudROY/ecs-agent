@@ -12,7 +12,8 @@ from ecs_agent.components import (
     LLMComponent,
     ResponsesAPIStateComponent,
 )
-from ecs_agent.core import World
+from ecs_agent.core import Runner, World
+from ecs_agent.observability import RecordingTelemetrySink, install_observability
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -261,6 +262,58 @@ async def test_responses_api_complete_non_streaming_state_component_updates_on_s
     state = world.get_component(entity, ResponsesAPIStateComponent)
     assert state is not None
     assert state.previous_response_id == "resp_state_123"
+
+
+@pytest.mark.asyncio
+async def test_responses_api_reasoning_emits_api_observation() -> None:
+    """Real Responses API reasoning publishes api.responses telemetry."""
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "id": "resp_observed_123",
+        "model": "gpt-4o-mini",
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "observed"}],
+            }
+        ],
+    }
+    mock_response.raise_for_status = Mock()
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post.return_value = mock_response
+
+    world = World()
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+    entity = world.create_entity()
+    model = OpenAIModel(
+        config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES),
+        model="gpt-4o-mini",
+    )
+    model._client = mock_client
+    world.add_component(entity, LLMComponent(model=model))
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content="hello")]),
+    )
+    world.register_system(ReasoningSystem(), priority=0)
+
+    await Runner().run(world, max_ticks=1)
+
+    api_record = next(record for record in sink.records if record.name == "api.responses")
+    trace = next(record for record in sink.records if record.kind == "trace")
+    generation = next(record for record in sink.records if record.kind == "generation")
+    assert api_record.kind == "span"
+    assert api_record.trace_id == trace.trace_id
+    assert api_record.parent_observation_id == generation.observation_id
+    assert api_record.entity_id == int(entity)
+    assert api_record.metadata == {
+        "api": "responses",
+        "response_id": "resp_observed_123",
+        "model_id": "gpt-4o-mini",
+    }
 
 
 @pytest.mark.asyncio

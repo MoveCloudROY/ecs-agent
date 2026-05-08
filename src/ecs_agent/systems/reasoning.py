@@ -61,6 +61,7 @@ from ecs_agent.types import (
     Usage,
     InterruptionReason,
     ReasoningCompleteEvent,
+    ResponsesAPICallEvent,
 )
 
 logger = get_logger(__name__)
@@ -231,6 +232,14 @@ class ReasoningSystem:
 
                 invocation_duration_seconds = time.monotonic() - invocation_started_at
                 invocation_end_time = datetime.now(timezone.utc)
+                if result.response_id is not None and isinstance(active_model, OpenAIModel):
+                    await world.event_bus.publish(
+                        ResponsesAPICallEvent(
+                            entity_id=entity_id,
+                            response_id=result.response_id,
+                            model=active_model.model_id,
+                        )
+                    )
                 await publish_llm_observation_completed_event(
                     event_bus=world.event_bus,
                     entity_id=entity_id,
