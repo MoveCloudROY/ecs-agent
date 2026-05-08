@@ -14,7 +14,6 @@ from ecs_agent.observability.context import current_run_id, current_trace_id
 from ecs_agent.observability.events import (
     LLMObservationCompletedEvent,
     LLMObservationStartedEvent,
-    UserInputReceivedEvent,
 )
 from ecs_agent.observability.schema import (
     TelemetryRecord,
@@ -39,6 +38,7 @@ from ecs_agent.types import (
     RunnerTickCompletedEvent,
     RunnerTickStartedEvent,
     PromptReplacementEvent,
+    ResponsesAPICallEvent,
     StreamContentDeltaEvent,
     StreamContentStartEvent,
     StreamEndEvent,
@@ -55,11 +55,13 @@ from ecs_agent.types import (
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
     ToolResultCachedEvent,
+    UserInputReceivedEvent,
     WorkflowStateEvaluatedEvent,
 )
 
 
 _SUPPRESSED_SYSTEM_SPANS = {
+    "ecs_agent.systems.error_handling.ErrorHandlingSystem",
     "ecs_agent.systems.reasoning.ReasoningSystem",
     "ecs_agent.systems.subagent.SubagentSystem",
     "ecs_agent.systems.user_input.UserInputSystem",
@@ -91,6 +93,7 @@ class TraceState:
     metadata: dict[str, Any] = field(default_factory=dict)
     active_tools: dict[tuple[int, str], ToolCall] = field(default_factory=dict)
     active_generations: dict[int, str] = field(default_factory=dict)
+    last_generation_observation_ids: dict[int, str] = field(default_factory=dict)
     active_subagents: dict[str, SubagentSpanState] = field(default_factory=dict)
     stream_sequences: dict[int, int] = field(default_factory=dict)
     emit_root_trace: bool = True
@@ -151,6 +154,7 @@ class ObservabilitySubscriber:
             (ToolExecutionCompletedEvent, self.handle_tool_execution_completed),
             (ToolDeniedEvent, self.handle_tool_denied),
             (ToolResultCachedEvent, self.handle_tool_result_cached),
+            (ResponsesAPICallEvent, self.handle_responses_api_call),
         )
 
     async def handle_llm_observation_started(
@@ -173,6 +177,7 @@ class ObservabilitySubscriber:
 
         entity_id = int(event.entity_id)
         observation_id = state.active_generations.pop(entity_id, uuid.uuid4().hex)
+        state.last_generation_observation_ids[entity_id] = observation_id
 
         await self.sink.emit(
             TelemetryRecord(
@@ -308,7 +313,7 @@ class ObservabilitySubscriber:
                 trace_id=state.trace_id,
                 run_id=state.run_id,
                 observation_id=uuid.uuid4().hex,
-                parent_observation_id=state.observation_id,
+                parent_observation_id=self._tool_parent_observation_id(state, int(event.entity_id)),
                 name=f"tool.{tool_name}" if tool_name else "tool.unknown",
                 kind="tool",
                 status="success" if event.success else "error",
@@ -342,7 +347,7 @@ class ObservabilitySubscriber:
                 trace_id=state.trace_id,
                 run_id=state.run_id,
                 observation_id=uuid.uuid4().hex,
-                parent_observation_id=state.observation_id,
+                parent_observation_id=self._tool_parent_observation_id(state, int(event.entity_id)),
                 name=f"tool.{event.tool_name}" if event.tool_name else "tool.denied",
                 kind="tool",
                 status="error",
@@ -360,6 +365,35 @@ class ObservabilitySubscriber:
             )
         )
 
+    async def handle_responses_api_call(self, event: ResponsesAPICallEvent) -> None:
+        """Map completed Responses API calls to API child observations."""
+        state = self._state_for_current_run()
+        if state is None:
+            return
+
+        parent_observation_id = state.active_generations.get(
+            int(event.entity_id),
+            state.observation_id,
+        )
+        await self.sink.emit(
+            TelemetryRecord(
+                trace_id=state.trace_id,
+                run_id=state.run_id,
+                observation_id=uuid.uuid4().hex,
+                parent_observation_id=parent_observation_id,
+                name="api.responses",
+                kind="span",
+                status="success",
+                entity_id=int(event.entity_id),
+                output={"response_id": event.response_id},
+                metadata={
+                    "api": "responses",
+                    "response_id": event.response_id,
+                    "model_id": event.model,
+                },
+            )
+        )
+
     async def handle_tool_result_cached(self, event: ToolResultCachedEvent) -> None:
         """Map cached tool result references to tool cache observations."""
         state = self._state_for_current_run()
@@ -371,7 +405,7 @@ class ObservabilitySubscriber:
                 trace_id=state.trace_id,
                 run_id=state.run_id,
                 observation_id=uuid.uuid4().hex,
-                parent_observation_id=state.observation_id,
+                parent_observation_id=self._tool_parent_observation_id(state, int(event.entity_id)),
                 name="tool.cache",
                 kind="tool",
                 status="success",
@@ -492,17 +526,45 @@ class ObservabilitySubscriber:
     async def handle_delegation_completed(self, event: DelegationCompletedEvent) -> None:
         """Emit the completed subagent run span."""
         state = self._state_for_current_run()
-        if state is None:
+        if state is None and (event.trace_id is None or event.run_id is None):
             return
 
-        span_state = state.active_subagents.pop(
-            event.correlation_id,
-            SubagentSpanState(
-                observation_id=event.observation_id or uuid.uuid4().hex,
-                task="",
-                start_time=None,
-            ),
-        )
+        if event.trace_id is not None and event.run_id is not None:
+            assert event.trace_id is not None
+            assert event.run_id is not None
+            active_span_state = (
+                state.active_subagents.pop(event.correlation_id, None)
+                if state is not None
+                else None
+            )
+            span_state = active_span_state or SubagentSpanState(
+                observation_id=(
+                    event.observation_id or event.correlation_id or uuid.uuid4().hex
+                ),
+                task=event.task,
+                start_time=event.start_time,
+            )
+            trace_id = event.trace_id
+            run_id = event.run_id
+            parent_observation_id = event.parent_observation_id
+        elif state is not None:
+            span_state = state.active_subagents.pop(
+                event.correlation_id,
+                SubagentSpanState(
+                    observation_id=(
+                        event.observation_id
+                        or event.correlation_id
+                        or uuid.uuid4().hex
+                    ),
+                    task=event.task,
+                    start_time=event.start_time,
+                ),
+            )
+            trace_id = state.trace_id
+            run_id = state.run_id
+            parent_observation_id = state.observation_id
+        else:
+            return
         ended_at = event.end_time or datetime.now(timezone.utc)
         started_at = span_state.start_time
         latency_ms = None
@@ -512,10 +574,10 @@ class ObservabilitySubscriber:
             latency_ms = (ended_at - started_at).total_seconds() * 1000
         await self.sink.emit(
             TelemetryRecord(
-                trace_id=state.trace_id,
-                run_id=state.run_id,
+                trace_id=trace_id,
+                run_id=run_id,
                 observation_id=span_state.observation_id,
-                parent_observation_id=state.observation_id,
+                parent_observation_id=parent_observation_id,
                 name=f"subagent.{event.subagent_name}",
                 kind="span",
                 status="success" if event.success else "error",
@@ -1176,6 +1238,13 @@ class ObservabilitySubscriber:
             latency_ms=latency_ms,
             output=output,
             metadata=event_metadata,
+        )
+
+    def _tool_parent_observation_id(self, state: TraceState, entity_id: int) -> str:
+        """Return the most specific parent observation for tool-related telemetry."""
+        return state.last_generation_observation_ids.get(
+            entity_id,
+            state.observation_id,
         )
 
     def _status(self, status: str) -> TelemetryStatus:

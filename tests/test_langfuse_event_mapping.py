@@ -37,6 +37,7 @@ from ecs_agent.accounting.models import LLMRetryEvent
 from ecs_agent.types import (
     CompletionResult,
     Message,
+    ResponsesAPICallEvent,
     RetryConfig,
     StreamDelta,
     SubagentConfig,
@@ -198,6 +199,26 @@ class DirectLLMStreamingSystem:
         async for _ in result:
             pass
         world.add_component(entity_id, TerminalComponent(reason="direct_helper_done"))
+
+
+class ResponsesAPICallSystem:
+    """System that emits a completed Responses API call event."""
+
+    def __init__(self) -> None:
+        self.entity_id: int | None = None
+
+    async def process(self, world: World) -> None:
+        """Publish a Responses API event and terminate the run."""
+        entity_id = world.create_entity()
+        self.entity_id = int(entity_id)
+        await world.event_bus.publish(
+            ResponsesAPICallEvent(
+                entity_id=entity_id,
+                response_id="resp-api-123",
+                model="responses-model",
+            )
+        )
+        world.add_component(entity_id, TerminalComponent(reason="responses_api_done"))
 
 
 def _tool_schema(name: str) -> ToolSchema:
@@ -826,6 +847,122 @@ async def test_tool_permission_denied_records_error_observation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tool_permission_denied_nests_under_calling_generation() -> None:
+    """Permission-denied tool calls stay attached to the generation that requested them."""
+    world = World()
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+    model = FakeModel(
+        responses=[
+            CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        ToolCall(id="deny-1", name="bash", arguments={"cmd": "pwd"})
+                    ],
+                ),
+                usage=Usage(prompt_tokens=5, completion_tokens=1, total_tokens=6),
+            )
+        ],
+        model_id="tool-denied-parent-model",
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Try running bash")]),
+    )
+    world.add_component(entity_id, PermissionComponent(denied_tools=["bash"]))
+    world.register_system(ReasoningSystem(priority=0), priority=0)
+    world.register_system(PermissionSystem(priority=5), priority=5)
+
+    await Runner().run(world, max_ticks=2)
+
+    tool_call_generation = next(
+        record
+        for record in sink.records
+        if record.kind == "generation"
+        and record.output is not None
+        and isinstance(record.output.get("message"), Message)
+        and record.output["message"].tool_calls
+    )
+    denied_tool = next(
+        record for record in sink.records if record.kind == "tool" and record.name == "tool.bash"
+    )
+
+    assert denied_tool.trace_id == tool_call_generation.trace_id
+    assert denied_tool.parent_observation_id == tool_call_generation.observation_id
+
+
+@pytest.mark.asyncio
+async def test_tool_execution_records_child_observation_under_calling_generation() -> None:
+    """Tool execution nests under the generation that requested the tool call."""
+    world = World()
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+    model = FakeModel(
+        responses=[
+            CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id="call-lookup",
+                            name="lookup",
+                            arguments={"query": "langfuse"},
+                        )
+                    ],
+                ),
+                usage=Usage(prompt_tokens=5, completion_tokens=1, total_tokens=6),
+            ),
+            CompletionResult(
+                message=Message(role="assistant", content="Lookup complete"),
+                usage=Usage(prompt_tokens=6, completion_tokens=2, total_tokens=8),
+            ),
+        ],
+        model_id="tool-parent-model",
+    )
+    entity_id = world.create_entity()
+
+    async def lookup(query: str) -> str:
+        return f"result for {query}"
+
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Run lookup")]),
+    )
+    world.add_component(
+        entity_id,
+        ToolRegistryComponent(
+            tools={"lookup": _tool_schema("lookup")},
+            handlers={"lookup": lookup},
+        ),
+    )
+    world.register_system(ReasoningSystem(priority=0), priority=0)
+    world.register_system(ToolExecutionSystem(priority=5), priority=5)
+
+    await Runner().run(world, max_ticks=3)
+
+    tool_call_generation = next(
+        record
+        for record in sink.records
+        if record.kind == "generation"
+        and record.output is not None
+        and isinstance(record.output.get("message"), Message)
+        and record.output["message"].tool_calls
+    )
+    tool_record = next(
+        record for record in sink.records if record.kind == "tool" and record.name == "tool.lookup"
+    )
+
+    assert tool_record.trace_id == tool_call_generation.trace_id
+    assert tool_record.parent_observation_id == tool_call_generation.observation_id
+
+
+@pytest.mark.asyncio
 async def test_cached_tool_result_records_artifact_observation(tmp_path) -> None:
     """Tool result caching maps artifact metadata without changing cache behavior."""
     scratchbook_root = tmp_path / ".scratchbook"
@@ -879,6 +1016,79 @@ async def test_cached_tool_result_records_artifact_observation(tmp_path) -> None
 
 
 @pytest.mark.asyncio
+async def test_cached_tool_result_nests_under_calling_generation(tmp_path) -> None:
+    """Cached tool artifacts remain attached to the generation that requested them."""
+    scratchbook_root = tmp_path / ".scratchbook"
+    registry = ArtifactRegistry(root=scratchbook_root)
+    world = World()
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+    model = FakeModel(
+        responses=[
+            CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        ToolCall(id="call-cache", name="lookup", arguments={"query": "archive"})
+                    ],
+                ),
+                usage=Usage(prompt_tokens=5, completion_tokens=1, total_tokens=6),
+            ),
+            CompletionResult(
+                message=Message(role="assistant", content="Cached result noted"),
+                usage=Usage(prompt_tokens=6, completion_tokens=2, total_tokens=8),
+            ),
+        ],
+        model_id="tool-cache-parent-model",
+    )
+    entity_id = world.create_entity()
+
+    async def lookup(query: str) -> str:
+        return f"{query}-payload " * 80
+
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Run cached lookup")]),
+    )
+    world.add_component(
+        entity_id,
+        ContextBudgetConfig(
+            max_tokens=5,
+            token_estimation_chars_per_token=1.0,
+            overflow_behavior="warn",
+        ),
+    )
+    world.add_component(
+        entity_id,
+        ToolRegistryComponent(
+            tools={"lookup": _tool_schema("lookup")},
+            handlers={"lookup": lookup},
+        ),
+    )
+    world.register_system(ReasoningSystem(priority=0), priority=0)
+    world.register_system(ToolExecutionSystem(priority=5, registry=registry), priority=5)
+
+    await Runner().run(world, max_ticks=3)
+
+    tool_call_generation = next(
+        record
+        for record in sink.records
+        if record.kind == "generation"
+        and record.output is not None
+        and isinstance(record.output.get("message"), Message)
+        and record.output["message"].tool_calls
+    )
+    cache_record = next(
+        record for record in sink.records if record.kind == "tool" and record.name == "tool.cache"
+    )
+
+    assert cache_record.trace_id == tool_call_generation.trace_id
+    assert cache_record.parent_observation_id == tool_call_generation.observation_id
+
+
+@pytest.mark.asyncio
 async def test_complete_with_llm_invocation_event_streaming_maps_final_output_once() -> None:
     """The direct instrumentation helper maps consumed streams once."""
     world = World()
@@ -917,6 +1127,35 @@ async def test_complete_with_llm_invocation_event_streaming_maps_final_output_on
     assert [record for record in sink.records if record.output == generation.output] == [
         generation
     ]
+
+
+@pytest.mark.asyncio
+async def test_responses_api_call_event_records_api_child_span() -> None:
+    """Responses API calls are exported as API child observations in the active trace."""
+    world = World()
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+    system = ResponsesAPICallSystem()
+    world.register_system(system, priority=0)
+
+    await Runner().run(world, max_ticks=1)
+
+    trace = next(record for record in sink.records if record.kind == "trace")
+    api_records = [record for record in sink.records if record.name == "api.responses"]
+    assert len(api_records) == 1
+    api_record = api_records[0]
+    assert api_record.kind == "span"
+    assert api_record.status == "success"
+    assert api_record.trace_id == trace.trace_id
+    assert api_record.run_id == trace.run_id
+    assert api_record.parent_observation_id == trace.observation_id
+    assert api_record.entity_id == system.entity_id
+    assert api_record.metadata == {
+        "api": "responses",
+        "response_id": "resp-api-123",
+        "model_id": "responses-model",
+    }
+    assert api_record.output == {"response_id": "resp-api-123"}
 
 
 @pytest.mark.asyncio

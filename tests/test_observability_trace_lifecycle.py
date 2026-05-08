@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
-from ecs_agent.components.definitions import TerminalComponent
+from ecs_agent.components.definitions import (
+    ConversationComponent,
+    LLMComponent,
+    SubagentRegistryComponent,
+    SubagentSessionTableComponent,
+    TerminalComponent,
+    ToolRegistryComponent,
+)
 from ecs_agent.core import Runner, World
 from ecs_agent.observability import (
     LLMObservationCompletedEvent,
     LLMObservationStartedEvent,
     RecordingTelemetrySink,
-    UserInputReceivedEvent,
     current_run_id,
     current_trace_id,
     install_observability,
@@ -20,6 +27,7 @@ from ecs_agent.observability import (
     set_run_context,
 )
 from ecs_agent.types import (
+    CompletionResult,
     ErrorOccurredEvent,
     RunCompletedEvent,
     RunnerTickCompletedEvent,
@@ -28,8 +36,12 @@ from ecs_agent.types import (
     SystemExecutionCompletedEvent,
     SystemExecutionStartedEvent,
     Message,
+    SubagentConfig,
     Usage,
+    UserInputReceivedEvent,
 )
+from ecs_agent.providers.fake_model import FakeModel
+from ecs_agent.systems.subagent import SubagentSystem
 
 
 class TerminatingSystem:
@@ -124,6 +136,130 @@ class TwoUserTurnSystem:
             world.add_component(world.create_entity(), TerminalComponent(reason="done"))
 
 
+class UserTurnSubagentSystem:
+    """System that launches a real subagent inside one interactive user turn."""
+
+    def __init__(self, entity_id: int) -> None:
+        self.entity_id = entity_id
+        self._ran = False
+
+    async def process(self, world: World) -> None:
+        """Publish user input, call the installed subagent tool, then terminate."""
+        if self._ran:
+            return
+        self._ran = True
+        await world.event_bus.publish(
+            UserInputReceivedEvent(
+                entity_id=self.entity_id,
+                prompt="You> ",
+                text="delegate inside this turn",
+            )
+        )
+        registry = world.get_component(self.entity_id, ToolRegistryComponent)
+        assert registry is not None
+        handler = registry.handlers["subagent"]
+        await handler(category="worker", prompt="Do child task")
+        world.add_component(world.create_entity(), TerminalComponent(reason="done"))
+
+
+class UserTurnBackgroundSubagentSystem:
+    """System that queues a background subagent inside one interactive turn."""
+
+    def __init__(self, entity_id: int) -> None:
+        self.entity_id = entity_id
+        self._ran = False
+        self.session_id: str | None = None
+
+    async def process(self, world: World) -> None:
+        """Publish user input, queue a background subagent, then terminate."""
+        if self._ran:
+            return
+        self._ran = True
+        await world.event_bus.publish(
+            UserInputReceivedEvent(
+                entity_id=self.entity_id,
+                prompt="You> ",
+                text="queue delayed delegation inside this turn",
+            )
+        )
+        registry = world.get_component(self.entity_id, ToolRegistryComponent)
+        assert registry is not None
+        handler = registry.handlers["subagent"]
+        result = await handler(
+            category="worker",
+            prompt="Do delayed child task",
+            background=True,
+        )
+        payload = json.loads(result)
+        self.session_id = payload["session_id"]
+        world.add_component(world.create_entity(), TerminalComponent(reason="done"))
+
+
+class TwoTurnBackgroundSubagentSystem:
+    """System that launches a background subagent in turn one, then starts turn two."""
+
+    def __init__(self, entity_id: int) -> None:
+        self.entity_id = entity_id
+        self._tick = 0
+        self.session_id: str | None = None
+
+    async def process(self, world: World) -> None:
+        """Exercise background completion while a later user-turn trace is active."""
+        registry = world.get_component(self.entity_id, ToolRegistryComponent)
+        assert registry is not None
+        handler = registry.handlers["subagent"]
+        if self._tick == 0:
+            await world.event_bus.publish(
+                UserInputReceivedEvent(
+                    entity_id=self.entity_id,
+                    prompt="You> ",
+                    text="turn one launches background",
+                )
+            )
+            result = await handler(
+                category="worker",
+                prompt="Complete during later turn",
+                background=True,
+            )
+            payload = json.loads(result)
+            self.session_id = payload["session_id"]
+        elif self._tick == 1:
+            await world.event_bus.publish(
+                UserInputReceivedEvent(
+                    entity_id=self.entity_id,
+                    prompt="You> ",
+                    text="turn two is active",
+                )
+            )
+            await asyncio.sleep(0.05)
+            world.add_component(world.create_entity(), TerminalComponent(reason="done"))
+        self._tick += 1
+
+
+class DelayedFakeModel(FakeModel):
+    """Fake model that waits before returning a response."""
+
+    def __init__(self, responses: list[CompletionResult], model_id: str) -> None:
+        super().__init__(responses=responses, model_id=model_id)
+        self.release = asyncio.Event()
+
+    async def complete(
+        self,
+        messages: list[Message],
+        tools: list[object] | None = None,
+        stream: bool = False,
+        response_format: dict[str, object] | None = None,
+    ) -> CompletionResult:
+        """Wait until released, then return the next fake response."""
+        del tools, stream, response_format
+        _ = messages
+        await self.release.wait()
+        result = await super().complete(messages)
+        if not isinstance(result, CompletionResult):
+            raise RuntimeError("expected completion result")
+        return result
+
+
 class FailingSink(RecordingTelemetrySink):
     """Recording sink that raises on telemetry emission."""
 
@@ -184,6 +320,7 @@ async def test_empty_runner_and_noisy_system_lifecycle_spans_are_suppressed() ->
     install_observability(world, sink)
     token = set_run_context(trace_id="trace-empty", run_id="run-empty")
     noisy_systems = {
+        "ecs_agent.systems.error_handling.ErrorHandlingSystem",
         "ecs_agent.systems.reasoning.ReasoningSystem",
         "ecs_agent.systems.subagent.SubagentSystem",
         "ecs_agent.systems.user_input.UserInputSystem",
@@ -371,6 +508,176 @@ async def test_user_inputs_create_separate_turn_traces_with_child_generations() 
     assert [generation.parent_observation_id for generation in generations] == [
         trace.observation_id for trace in turn_traces
     ]
+
+
+@pytest.mark.asyncio
+async def test_subagent_child_generation_uses_active_user_turn_trace() -> None:
+    """Subagent child-world telemetry stays under the active user-turn trace."""
+    world = World()
+    parent_model = FakeModel(responses=[], model_id="unused-parent")
+    child_model = FakeModel(
+        responses=["child answer"],
+        model_id="child-model",
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=parent_model))
+    world.add_component(entity_id, ConversationComponent(messages=[]))
+    world.add_component(entity_id, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(entity_id, SubagentSessionTableComponent(sessions={}))
+    world.add_component(
+        entity_id,
+        SubagentRegistryComponent(
+            subagents={
+                "worker": SubagentConfig(
+                    name="worker",
+                    model=child_model,
+                    system_prompt="You are a worker.",
+                    max_ticks=2,
+                )
+            }
+        ),
+    )
+    world.register_system(SubagentSystem(priority=-1), priority=-1)
+    world.register_system(UserTurnSubagentSystem(int(entity_id)), priority=0)
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+
+    await Runner().run(world, max_ticks=5)
+
+    turn_trace = next(
+        record
+        for record in sink.records
+        if record.kind == "trace" and record.name == "user.turn"
+    )
+    subagent_span = next(record for record in sink.records if record.name == "subagent.worker")
+    child_generation = next(record for record in sink.records if record.model == "child-model")
+
+    assert subagent_span.trace_id == turn_trace.trace_id
+    assert subagent_span.parent_observation_id == turn_trace.observation_id
+    assert child_generation.trace_id == turn_trace.trace_id
+    assert child_generation.parent_observation_id == subagent_span.observation_id
+
+
+@pytest.mark.asyncio
+async def test_background_subagent_session_captures_launch_user_turn_trace() -> None:
+    """Queued background subagents persist the launch user-turn trace context."""
+    world = World()
+    parent_model = FakeModel(responses=[], model_id="unused-parent")
+    child_model = FakeModel(responses=["child answer"], model_id="child-model")
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=parent_model))
+    world.add_component(entity_id, ConversationComponent(messages=[]))
+    world.add_component(entity_id, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(entity_id, SubagentSessionTableComponent(sessions={}))
+    world.add_component(
+        entity_id,
+        SubagentRegistryComponent(
+            subagents={
+                "worker": SubagentConfig(
+                    name="worker",
+                    model=child_model,
+                    system_prompt="You are a worker.",
+                    max_ticks=2,
+                )
+            }
+        ),
+    )
+    world.register_system(SubagentSystem(priority=-1, max_background_concurrency=1), priority=-1)
+    system = UserTurnBackgroundSubagentSystem(int(entity_id))
+    world.register_system(system, priority=0)
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+
+    await Runner().run(world, max_ticks=5)
+
+    assert system.session_id is not None
+    turn_trace = next(
+        record
+        for record in sink.records
+        if record.kind == "trace" and record.name == "user.turn"
+    )
+    table = world.get_component(entity_id, SubagentSessionTableComponent)
+    assert table is not None
+    session = table.sessions[system.session_id]
+    assert session.launch_trace_id == turn_trace.trace_id
+    assert session.launch_run_id == turn_trace.run_id
+    assert session.launch_parent_observation_id == turn_trace.observation_id
+
+    for _ in range(50):
+        has_subagent_span = any(
+            record.name == "subagent.worker" for record in sink.records
+        )
+        has_child_generation = any(record.model == "child-model" for record in sink.records)
+        if has_subagent_span and has_child_generation:
+            break
+        await asyncio.sleep(0.01)
+
+    subagent_span = next(record for record in sink.records if record.name == "subagent.worker")
+    child_generation = next(record for record in sink.records if record.model == "child-model")
+    assert subagent_span.trace_id == turn_trace.trace_id
+    assert subagent_span.parent_observation_id == turn_trace.observation_id
+    assert child_generation.trace_id == turn_trace.trace_id
+    assert child_generation.parent_observation_id == subagent_span.observation_id
+
+
+@pytest.mark.asyncio
+async def test_background_subagent_completion_uses_launch_turn_when_later_turn_active() -> None:
+    """Background completion stays on its launch turn even if another turn is active."""
+    world = World()
+    parent_model = FakeModel(responses=[], model_id="unused-parent")
+    child_model = DelayedFakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content="child answer"))],
+        model_id="child-model",
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=parent_model))
+    world.add_component(entity_id, ConversationComponent(messages=[]))
+    world.add_component(entity_id, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(entity_id, SubagentSessionTableComponent(sessions={}))
+    world.add_component(
+        entity_id,
+        SubagentRegistryComponent(
+            subagents={
+                "worker": SubagentConfig(
+                    name="worker",
+                    model=child_model,
+                    system_prompt="You are a worker.",
+                    max_ticks=2,
+                )
+            }
+        ),
+    )
+    world.register_system(SubagentSystem(priority=-1, max_background_concurrency=1), priority=-1)
+    system = TwoTurnBackgroundSubagentSystem(int(entity_id))
+    world.register_system(system, priority=0)
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+
+    async def release_after_second_turn(event: UserInputReceivedEvent) -> None:
+        if event.text == "turn two is active":
+            child_model.release.set()
+
+    world.event_bus.subscribe(UserInputReceivedEvent, release_after_second_turn)
+
+    await Runner().run(world, max_ticks=5)
+
+    turn_traces = [
+        record for record in sink.records if record.kind == "trace" and record.name == "user.turn"
+    ]
+    assert [trace.input for trace in turn_traces] == [
+        {"text": "turn one launches background"},
+        {"text": "turn two is active"},
+    ]
+    first_turn, second_turn = turn_traces
+    subagent_spans = [record for record in sink.records if record.name == "subagent.worker"]
+    assert len(subagent_spans) == 1
+    subagent_span = subagent_spans[0]
+    child_generation = next(record for record in sink.records if record.model == "child-model")
+    assert subagent_span.trace_id == first_turn.trace_id
+    assert subagent_span.trace_id != second_turn.trace_id
+    assert subagent_span.parent_observation_id == first_turn.observation_id
+    assert child_generation.trace_id == first_turn.trace_id
+    assert child_generation.parent_observation_id == subagent_span.observation_id
 
 
 @pytest.mark.asyncio
