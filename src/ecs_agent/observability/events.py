@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
-from ecs_agent.types import EntityId, Message, ToolSchema, Usage
+from ecs_agent.types import EntityId, Message, ToolSchema, Usage, UserInputReceivedEvent
 
 
 LLMObservationStatus = Literal["success", "error", "cancelled", "unknown"]
@@ -48,15 +48,6 @@ class LLMObservationCompletedEvent:
     start_time: datetime | None = None
     end_time: datetime | None = None
     cost_details: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class UserInputReceivedEvent:
-    """Raw user input text received by UserInputSystem."""
-
-    entity_id: EntityId | int
-    prompt: str
-    text: str
 
 
 __all__ = [

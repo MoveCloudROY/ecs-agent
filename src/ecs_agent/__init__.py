@@ -55,6 +55,7 @@ from ecs_agent.types import (
     ToolExecutionStartedEvent,
     ToolSchema,
     ToolTimeoutError,
+    UserInputReceivedEvent,
     UserInputRequestedEvent,
 )
 from ecs_agent.providers.embedding_provider import OpenAIEmbeddingProvider
@@ -310,6 +311,7 @@ __all__ = [
     "to",
     "TreeSearchSystem",
     "UserInputComponent",
+    "UserInputReceivedEvent",
     "UserInputRequestedEvent",
     "UserInputSystem",
     "validate_agent_spec",

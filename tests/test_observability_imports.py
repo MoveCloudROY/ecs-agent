@@ -18,6 +18,14 @@ def test_observability_is_package() -> None:
     assert Path(observability.__file__).name == "__init__.py"
 
 
+def test_user_input_received_event_legacy_observability_events_import() -> None:
+    """Legacy observability.events import remains an alias to the core event type."""
+    from ecs_agent.types import UserInputReceivedEvent as CoreUserInputReceivedEvent
+    from ecs_agent.observability.events import UserInputReceivedEvent
+
+    assert UserInputReceivedEvent is CoreUserInputReceivedEvent
+
+
 def test_generate_traceparent_has_expected_shape() -> None:
     traceparent = generate_traceparent()
     parts = traceparent.split("-")

@@ -13,8 +13,7 @@ from ecs_agent.components.definitions import (
 )
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
-from ecs_agent.observability.events import UserInputReceivedEvent
-from ecs_agent.types import EntityId, Message, UserInputRequestedEvent
+from ecs_agent.types import EntityId, Message, UserInputReceivedEvent, UserInputRequestedEvent
 
 logger = get_logger(__name__)
 

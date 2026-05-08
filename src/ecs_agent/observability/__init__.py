@@ -31,8 +31,8 @@ from ecs_agent.observability.events import (
     LLMObservationCompletedEvent,
     LLMObservationStartedEvent,
     LLMObservationStatus,
-    UserInputReceivedEvent,
 )
+from ecs_agent.types import UserInputReceivedEvent
 from ecs_agent.observability.install import (
     ObservabilityHandle,
     install_observability,
