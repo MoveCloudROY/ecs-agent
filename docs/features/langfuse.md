@@ -99,13 +99,14 @@ The integration treats a `Runner.run()` call as the execution scope, while Langf
 
 - **Interactive agents**: every `UserInputReceivedEvent` starts a new `user.turn` trace. The trace covers everything that happens from that user input until the next user input or run completion.
 - **One-shot agents**: if a world starts with an initial `ConversationComponent` user message and does not receive interactive input, the existing single trace for that run is preserved.
-- **Subagents**: each subagent delegation is a `subagent.<name>` span inside the active user-turn trace. LLM calls, tool calls, retrieval, streaming, and other child-world observations from that subagent are nested under the subagent span instead of creating a second top-level trace.
+- **Subagents**: each subagent delegation is a `subagent.<name>` span inside the active user-turn trace. LLM calls, tool calls, retrieval, streaming, API calls, and other child-world observations from that subagent are nested under the subagent span instead of creating a second top-level trace. Tool calls nest under the generation that requested them, so Langfuse shows the exact LLM → tool → follow-up-LLM chain instead of flattening tool work directly under the turn root. Background subagents persist the launch-time trace, run, and parent observation IDs on their session metadata so delayed or restored execution remains attached to the original user-turn trace.
 
 Observations captured include:
 
 - **User Input**: The prompt or input text that started the turn.
 - **LLM Generations**: Full prompt and completion details, model name, model parameters, and integer token counters such as `prompt_tokens`, `completion_tokens`, `total_tokens`, and cache token counts when the provider supplies them. `LLM_MODEL` is treated as operational configuration rather than a secret, so model identifiers such as `deepseek-v4-flash` remain visible in the Langfuse model field and dashboards.
-- **Tool Calls**: Tool names, arguments, results, errors, and recorded execution duration.
+- **Tool Calls**: Tool names, arguments, results, errors, and recorded execution duration. When a tool call comes from an LLM response, the tool observation stays attached to that generation rather than being flattened under the trace root.
+- **API Calls**: Framework API observations such as `api.responses`, including response IDs and model identifiers.
 - **Subagent Runs**: Parent spans for delegated child agents, with child LLM/tool observations nested beneath them.
 - **Streaming**: Real-time token delivery events under the active generation.
 - **Retries**: Automatic retry attempts and reasons.

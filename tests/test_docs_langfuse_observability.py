@@ -78,6 +78,25 @@ def test_langfuse_docs_mention_skip_behavior() -> None:
         assert "live" in content.lower(), f"{source} must mention live tests"
 
 
+def test_langfuse_docs_describe_generation_nested_tool_observations() -> None:
+    """Docs must explain that tool/cache work stays attached to the calling generation."""
+    readme = get_readme_content()
+    docs = get_langfuse_docs_content()
+
+    expected_phrases = [
+        "generation",
+        "tool",
+        "requested",
+    ]
+
+    for content, source in [(readme, "README"), (docs, "docs/features/langfuse.md")]:
+        lowered = content.lower()
+        for phrase in expected_phrases:
+            assert phrase in lowered, f"{source} missing nested tool/generation guidance: {phrase}"
+
+    assert "tool calls nest under the generation that requested them" in docs.lower()
+
+
 def test_langfuse_docs_mention_credential_rotation() -> None:
     """README and docs must mention credential rotation."""
     readme = get_readme_content()
