@@ -19,6 +19,8 @@ from ecs_agent.observability.sinks import NoOpTelemetrySink, TelemetrySink
 logger = get_logger(__name__)
 
 LANGFUSE_IMPORT_ERROR = "Install ecs-agent[langfuse] to use Langfuse observability"
+_LANGFUSE_SPAN_ID_HEX_LENGTH = 16
+_INTERNAL_OBSERVATION_ID_HEX_LENGTH = 32
 
 
 @dataclass(slots=True)
@@ -65,6 +67,7 @@ class LangfuseTelemetrySink:
         self.client = client
         self.config = LangfuseConfig() if config is None else config
         self.redactor = SecretRedactor() if redactor is None else redactor
+        self._v4_observation_ids: dict[str, str] = {}
 
     async def emit(self, record: TelemetryRecord) -> None:
         """Emit one sanitized telemetry record to Langfuse."""
@@ -234,7 +237,7 @@ class LangfuseTelemetrySink:
             observation_context = method(
                 **_drop_none(
                     {
-                        "trace_context": _trace_context(payload),
+                        "trace_context": _trace_context(payload, self._v4_observation_ids),
                         "name": payload.get("name"),
                         "as_type": as_type,
                         "input": payload.get("input"),
@@ -255,7 +258,8 @@ class LangfuseTelemetrySink:
                     }
                 )
             )
-            with observation_context:
+            with observation_context as observation:
+                self._remember_v4_observation_id(payload, observation)
                 with self._v4_client_propagation_context():
                     return
 
@@ -283,7 +287,7 @@ class LangfuseTelemetrySink:
             observation = method(
                 **_drop_none(
                     {
-                        "trace_context": _trace_context(payload),
+                        "trace_context": _trace_context(payload, self._v4_observation_ids),
                         "name": payload.get("name"),
                         "as_type": as_type,
                         "input": payload.get("input"),
@@ -304,6 +308,7 @@ class LangfuseTelemetrySink:
                     }
                 )
             )
+            self._remember_v4_observation_id(payload, observation)
             end = getattr(observation, "end", None)
             if end is not None:
                 result = end(end_time=_datetime_to_epoch_ns(payload.get("end_time")))
@@ -335,7 +340,7 @@ class LangfuseTelemetrySink:
         tracer = getattr(self.client, "_otel_tracer")
         start_time = _datetime_to_epoch_ns(payload.get("start_time"))
         end_time = _datetime_to_epoch_ns(payload.get("end_time"))
-        trace_context = _trace_context(payload)
+        trace_context = _trace_context(payload, self._v4_observation_ids)
         with self._v4_historical_propagation_context():
             remote_parent = self._v4_remote_parent_span(trace_context)
             with self._v4_use_span(remote_parent):
@@ -373,6 +378,7 @@ class LangfuseTelemetrySink:
                         }
                     )
                 )
+                self._remember_v4_observation_id(payload, observation)
         end = getattr(observation, "end", None)
         if end is not None:
             result = end(end_time=end_time)
@@ -431,7 +437,7 @@ class LangfuseTelemetrySink:
             result = method(
                 **_drop_none(
                     {
-                        "trace_context": _trace_context(payload),
+                        "trace_context": _trace_context(payload, self._v4_observation_ids),
                         "name": payload.get("name"),
                         "input": payload.get("input"),
                         "output": payload.get("output"),
@@ -445,6 +451,19 @@ class LangfuseTelemetrySink:
             )
             if inspect.isawaitable(result):
                 await result
+
+    def _remember_v4_observation_id(
+        self,
+        payload: dict[str, JsonSafe],
+        observation: Any,
+    ) -> None:
+        """Map internal observation IDs to SDK-generated Langfuse v4 IDs."""
+        internal_id = payload.get("observation_id")
+        sdk_id = getattr(observation, "id", None)
+        if not isinstance(internal_id, str) or not isinstance(sdk_id, str):
+            return
+        if _is_lower_hex(sdk_id, _LANGFUSE_SPAN_ID_HEX_LENGTH):
+            self._v4_observation_ids[internal_id] = sdk_id
 
     def _v4_propagation_kwargs(self) -> dict[str, JsonSafe]:
         config_context = _config_export_context(self.config, self.redactor)
@@ -579,15 +598,37 @@ def _as_dict(payload: JsonSafe) -> dict[str, JsonSafe]:
     raise TypeError("Langfuse telemetry payload must be a dictionary")
 
 
-def _trace_context(payload: dict[str, JsonSafe]) -> dict[str, JsonSafe]:
+def _trace_context(
+    payload: dict[str, JsonSafe],
+    v4_observation_ids: dict[str, str] | None = None,
+) -> dict[str, JsonSafe]:
     context: dict[str, JsonSafe] = {}
     trace_id = payload.get("trace_id")
     if trace_id is not None:
         context["trace_id"] = trace_id
     parent_observation_id = payload.get("parent_observation_id")
-    if parent_observation_id is not None:
-        context["parent_span_id"] = parent_observation_id
+    parent_span_id = _langfuse_parent_span_id(parent_observation_id, v4_observation_ids)
+    if parent_span_id is not None:
+        context["parent_span_id"] = parent_span_id
     return context
+
+
+def _langfuse_parent_span_id(
+    value: JsonSafe,
+    v4_observation_ids: dict[str, str] | None = None,
+) -> str | None:
+    """Return a Langfuse v4 parent span ID from an internal observation ID."""
+    if not isinstance(value, str):
+        return None
+    if v4_observation_ids is not None and value in v4_observation_ids:
+        return v4_observation_ids[value]
+    if _is_lower_hex(value, _INTERNAL_OBSERVATION_ID_HEX_LENGTH):
+        return value[:_LANGFUSE_SPAN_ID_HEX_LENGTH]
+    return value
+
+
+def _is_lower_hex(value: str, length: int) -> bool:
+    return len(value) == length and all(char in "0123456789abcdef" for char in value)
 
 
 def _metadata_with_context(

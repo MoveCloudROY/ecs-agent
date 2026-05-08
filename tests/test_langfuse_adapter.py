@@ -141,6 +141,20 @@ class FakeLangfuseV4ClientRejectingObservationTimes(FakeLangfuseV4Client):
         return super().start_as_current_observation(**kwargs)
 
 
+class FakeLangfuseV4MappedIdClient(FakeLangfuseV4Client):
+    """Langfuse v4 client that exposes SDK-generated observation IDs."""
+
+    def __init__(self, observation_ids: list[str]) -> None:
+        super().__init__()
+        self._observation_ids = observation_ids
+
+    def start_observation(self, **kwargs: Any) -> FakeLangfuseV4Observation:
+        """Return an observation with the next SDK-generated ID."""
+        observation = super().start_observation(**kwargs)
+        observation.id = self._observation_ids.pop(0)
+        return observation
+
+
 class FakeLangfuseV4Propagation:
     """Langfuse v4-like propagation context manager."""
 
@@ -642,6 +656,112 @@ async def test_langfuse_adapter_maps_trace_span_tool_and_event_records() -> None
     assert client.calls[2][1]["as_type"] == "tool"
     assert client.calls[2][1]["level"] == "ERROR"
     assert client.calls[3][1]["as_type"] == "event"
+
+
+@pytest.mark.asyncio
+async def test_langfuse_v4_trace_context_shortens_internal_uuid_parent_ids() -> None:
+    """v4 trace_context parent_span_id must use Langfuse's 16-hex span ID shape."""
+    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+
+    client = FakeLangfuseV4Client()
+    sink = LangfuseTelemetrySink(client=client)
+    parent_observation_id = "215222198bf24da4a4effcf01c89521a"
+
+    await sink.emit(
+        TelemetryRecord(
+            trace_id="trace-one",
+            run_id="run-one",
+            observation_id="span-one",
+            parent_observation_id=parent_observation_id,
+            name="runner.tick",
+            kind="span",
+            status="success",
+            start_time=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 2, 0, 0, 1, tzinfo=timezone.utc),
+        )
+    )
+
+    observation_payload = client.calls[0][1]
+    assert observation_payload["trace_context"] == {
+        "trace_id": "trace-one",
+        "parent_span_id": parent_observation_id[:16],
+    }
+
+
+@pytest.mark.asyncio
+async def test_langfuse_v4_historical_remote_parent_shortens_internal_uuid_parent_ids() -> None:
+    """Historical remote parent creation must not pass 32-hex observation IDs as span IDs."""
+    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+
+    client = FakeLangfuseV4HistoricalClient()
+    sink = LangfuseTelemetrySink(client=client)
+    parent_observation_id = "215222198bf24da4a4effcf01c89521a"
+
+    await sink.emit(
+        TelemetryRecord(
+            trace_id="trace-one",
+            run_id="run-one",
+            observation_id="generation-one",
+            parent_observation_id=parent_observation_id,
+            name="llm.reasoning",
+            kind="generation",
+            status="success",
+            start_time=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 2, 0, 0, 1, tzinfo=timezone.utc),
+        )
+    )
+
+    assert client.calls[0] == (
+        "create_remote_parent_span",
+        {"trace_id": "trace-one", "parent_span_id": parent_observation_id[:16]},
+    )
+
+
+@pytest.mark.asyncio
+async def test_langfuse_v4_tool_parent_uses_generation_sdk_observation_id() -> None:
+    """Tool spans should parent to the actual v4 generation observation ID."""
+    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+
+    generation_observation_id = "215222198bf24da4a4effcf01c89521a"
+    root_observation_id = "3bd19b7975c845a2920fcd8b68b95a62"
+    generation_sdk_id = "aaaaaaaaaaaaaaaa"
+    client = FakeLangfuseV4MappedIdClient(
+        observation_ids=[generation_sdk_id, "bbbbbbbbbbbbbbbb"]
+    )
+    sink = LangfuseTelemetrySink(client=client)
+
+    await sink.emit(
+        TelemetryRecord(
+            trace_id="trace-one",
+            run_id="run-one",
+            observation_id=generation_observation_id,
+            parent_observation_id=root_observation_id,
+            name="llm.reasoning",
+            kind="generation",
+            status="success",
+            start_time=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 2, 0, 0, 1, tzinfo=timezone.utc),
+        )
+    )
+    await sink.emit(
+        TelemetryRecord(
+            trace_id="trace-one",
+            run_id="run-one",
+            observation_id="tool-observation",
+            parent_observation_id=generation_observation_id,
+            name="tool.lookup",
+            kind="tool",
+            status="success",
+            start_time=datetime(2026, 1, 2, 0, 0, 2, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 2, 0, 0, 3, tzinfo=timezone.utc),
+        )
+    )
+
+    tool_payload = client.calls[2][1]
+    assert tool_payload["trace_context"] == {
+        "trace_id": "trace-one",
+        "parent_span_id": generation_sdk_id,
+    }
 
 
 @pytest.mark.asyncio
