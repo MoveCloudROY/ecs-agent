@@ -85,6 +85,12 @@ _BACKGROUND_RESULT_ENVELOPE_ENABLED: ContextVar[bool] = ContextVar(
     "_BACKGROUND_RESULT_ENVELOPE_ENABLED",
     default=False,
 )
+_BACKGROUND_LAUNCH_OBSERVABILITY_CONTEXT: ContextVar[
+    tuple[str | None, str | None, str | None] | None
+] = ContextVar(
+    "_BACKGROUND_LAUNCH_OBSERVABILITY_CONTEXT",
+    default=None,
+)
 
 _BACKGROUND_RESULT_WRAPPER_START = "<subagent_background_result>"
 _BACKGROUND_RESULT_WRAPPER_END = "</subagent_background_result>"
@@ -295,6 +301,30 @@ class SubagentSystem:
             per_call_timeout if per_call_timeout is not None else self._default_timeout
         )
 
+    def _active_observability_context(
+        self,
+        world: World,
+    ) -> tuple[str | None, str | None, str | None]:
+        """Return active trace, run, and root observation IDs for this world."""
+        active_run_id = current_run_id()
+        active_trace_id = current_trace_id()
+        active_parent_observation_id: str | None = None
+        parent_subscriber = getattr(
+            world,
+            "_ecs_agent_observability_subscriber",
+            None,
+        )
+        trace_states = getattr(parent_subscriber, "trace_states", None)
+        if isinstance(active_run_id, str) and isinstance(trace_states, dict):
+            trace_state = trace_states.get(active_run_id)
+            trace_state_id = getattr(trace_state, "trace_id", None)
+            trace_state_observation_id = getattr(trace_state, "observation_id", None)
+            if isinstance(trace_state_id, str):
+                active_trace_id = trace_state_id
+            if isinstance(trace_state_observation_id, str):
+                active_parent_observation_id = trace_state_observation_id
+        return (active_trace_id, active_run_id, active_parent_observation_id)
+
     def _utc_now_iso(self) -> str:
         return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -391,6 +421,13 @@ class SubagentSystem:
     ) -> Any:
         async def execute_with_config() -> tuple[str, bool, str | None]:
             token = _PUBLISH_COMPLETION_EVENT.set(False)
+            launch_context_token = _BACKGROUND_LAUNCH_OBSERVABILITY_CONTEXT.set(
+                (
+                    metadata.launch_trace_id,
+                    metadata.launch_run_id,
+                    metadata.launch_parent_observation_id,
+                )
+            )
             try:
                 if metadata.stream:
                     return await self._execute_subagent_core(
@@ -415,6 +452,7 @@ class SubagentSystem:
                     config,
                 )
             finally:
+                _BACKGROUND_LAUNCH_OBSERVABILITY_CONTEXT.reset(launch_context_token)
                 _PUBLISH_COMPLETION_EVENT.reset(token)
 
         async def run_in_background() -> None:
@@ -453,9 +491,15 @@ class SubagentSystem:
                     category,
                     correlation_id=metadata.correlation_id,
                     traceparent=metadata.traceparent,
+                    task=metadata.prompt,
                     result=error_msg,
                     success=False,
                     error=error_msg,
+                    trace_id=metadata.launch_trace_id,
+                    run_id=metadata.launch_run_id,
+                    parent_observation_id=metadata.launch_parent_observation_id,
+                    observation_id=metadata.correlation_id,
+                    publish_started=False,
                 )
                 return
             except Exception as exc:
@@ -473,9 +517,15 @@ class SubagentSystem:
                     category,
                     correlation_id=metadata.correlation_id,
                     traceparent=metadata.traceparent,
+                    task=metadata.prompt,
                     result=error_msg,
                     success=False,
                     error=error_msg,
+                    trace_id=metadata.launch_trace_id,
+                    run_id=metadata.launch_run_id,
+                    parent_observation_id=metadata.launch_parent_observation_id,
+                    observation_id=metadata.correlation_id,
+                    publish_started=False,
                 )
                 return
 
@@ -519,9 +569,15 @@ class SubagentSystem:
                 category,
                 correlation_id=metadata.correlation_id,
                 traceparent=metadata.traceparent,
+                task=metadata.prompt,
                 result=result,
                 success=success,
                 error=error,
+                trace_id=metadata.launch_trace_id,
+                run_id=metadata.launch_run_id,
+                parent_observation_id=metadata.launch_parent_observation_id,
+                observation_id=metadata.correlation_id,
+                publish_started=False,
             )
 
         return run_in_background
@@ -1272,6 +1328,11 @@ class SubagentSystem:
 
             # Resolve timeout for this subagent execution
             resolved_timeout = self._resolve_timeout(resolved_timeout_raw)
+            (
+                launch_trace_id,
+                launch_run_id,
+                launch_parent_observation_id,
+            ) = self._active_observability_context(world)
 
             metadata: SubagentSessionRecord | None = None
 
@@ -1328,6 +1389,9 @@ class SubagentSystem:
                 background=True,
                 correlation_id=correlation_id,
                 traceparent=traceparent,
+                launch_trace_id=launch_trace_id,
+                launch_run_id=launch_run_id,
+                launch_parent_observation_id=launch_parent_observation_id,
                 timeout_seconds=timeout,
             )
             run_in_background = self._build_background_coroutine(
@@ -1466,9 +1530,16 @@ class SubagentSystem:
                 start_time=datetime.now(timezone.utc),
             )
             delegation_started_monotonic = time.monotonic()
+            launch_context = _BACKGROUND_LAUNCH_OBSERVABILITY_CONTEXT.get()
+            launch_trace_id: str | None = None
+            launch_run_id: str | None = None
+            if launch_context is not None:
+                launch_trace_id, launch_run_id, _ = launch_context
             self._install_child_observability(
                 parent_world=world,
                 child_world=child_world,
+                trace_id=launch_trace_id,
+                run_id=launch_run_id,
                 parent_observation_id=correlation_id,
             )
 
@@ -2054,8 +2125,16 @@ class SubagentSystem:
         await runner.run(
             child_world,
             max_ticks=config.max_ticks,
-            trace_id=current_trace_id(),
-            run_id=current_run_id(),
+            trace_id=getattr(
+                child_world,
+                "_ecs_agent_trace_id",
+                current_trace_id(),
+            ),
+            run_id=getattr(
+                child_world,
+                "_ecs_agent_run_id",
+                current_run_id(),
+            ),
             parent_observation_id=getattr(
                 child_world,
                 "_ecs_agent_parent_observation_id",
@@ -2070,6 +2149,8 @@ class SubagentSystem:
         *,
         parent_world: World,
         child_world: World,
+        trace_id: str | None = None,
+        run_id: str | None = None,
         parent_observation_id: str,
     ) -> None:
         """Install parent observability sink on a child world when available."""
@@ -2082,6 +2163,15 @@ class SubagentSystem:
             None,
         )
         install_observability(child_world, parent_sink, config=parent_config)
+        active_trace_id, active_run_id, _ = self._active_observability_context(parent_world)
+        if trace_id is not None:
+            active_trace_id = trace_id
+        if run_id is not None:
+            active_run_id = run_id
+        if active_trace_id is not None:
+            setattr(child_world, "_ecs_agent_trace_id", active_trace_id)
+        if active_run_id is not None:
+            setattr(child_world, "_ecs_agent_run_id", active_run_id)
         setattr(
             child_world,
             "_ecs_agent_parent_observation_id",
@@ -2115,12 +2205,16 @@ class SubagentSystem:
         error: str | None = None,
         child_world_name: str | None = None,
         observation_id: str = "",
+        trace_id: str | None = None,
+        run_id: str | None = None,
+        parent_observation_id: str | None = None,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         duration_seconds: float | None = None,
+        publish_started: bool = True,
     ) -> None:
         """Publish start/completion delegation events via one wrapper API."""
-        if task is not None:
+        if task is not None and publish_started:
             await world.event_bus.publish(
                 DelegationStartedEvent(
                     entity_id=parent_entity_id,
@@ -2142,10 +2236,15 @@ class SubagentSystem:
                     result=result,
                     success=success,
                     error=error,
+                    task=task or "",
                     correlation_id=correlation_id,
                     traceparent=traceparent,
                     child_world_name=child_world_name,
                     observation_id=observation_id,
+                    trace_id=trace_id,
+                    run_id=run_id,
+                    parent_observation_id=parent_observation_id,
+                    start_time=start_time,
                     end_time=end_time,
                     duration_seconds=duration_seconds,
                 )
