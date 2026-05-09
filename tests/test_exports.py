@@ -14,6 +14,7 @@ def test_all_new_symbols_importable_from_ecs_agent() -> None:
         SubagentConfig,
         DelegationStartedEvent,
         DelegationCompletedEvent,
+        UserInputReceivedEvent,
     )
 
     # Components from definitions.py
@@ -45,6 +46,7 @@ def test_all_new_symbols_importable_from_ecs_agent() -> None:
     assert SubagentConfig is not None
     assert DelegationStartedEvent is not None
     assert DelegationCompletedEvent is not None
+    assert UserInputReceivedEvent is not None
     assert ResponsesAPIStateComponent is not None
     assert ConversationTreeComponent is not None
     assert SubagentRegistryComponent is not None

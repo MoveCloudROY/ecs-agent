@@ -187,6 +187,14 @@ _QA_PROMPT_EXAMPLE = build_qa_prompt(
 )
 _PLAN_QA_PROMPT_EXAMPLE = build_plan_qa_prompt("scratchbook/<workflow_id>/plan/workflow_plan.md")
 
+_SCRATCHBOOK_CONTEXT_SECTION = """
+## Scratchbook Context
+${_scratchbook_overview}
+
+## Scratchbook Artifacts
+${_scratchbook_artifacts}
+"""
+
 
 PLAN_MAIN_AGENT_SYSTEM_PROMPT = f"""You are the planning interviewer for the plan-and-task workflow.
 
@@ -249,6 +257,8 @@ ${{_installed_tools}}
 
 ## Available subagents:
 ${{_installed_subagents}}
+
+{_SCRATCHBOOK_CONTEXT_SECTION}
 
 ## Sending to Review
 
@@ -322,7 +332,7 @@ When QA returns "revise" or "blocked":
 5. Call `subagent(category="plan_qa", prompt=<updated plan qa review prompt>)` with the revised plan content.
 """
 
-TASK_MAIN_AGENT_SYSTEM_PROMPT = """You are the task execution main agent for the plan-and-task workflow.
+TASK_MAIN_AGENT_SYSTEM_PROMPT = f"""You are the task execution main agent for the plan-and-task workflow.
 
 Your job is to execute tasks from `workflow_plan.md` one at a time.
 Always focus on the current task only. Use the plan, the current task state, and scratchbook artifacts
@@ -352,12 +362,18 @@ to decide the next concrete action. Do not jump ahead to future tasks unless a r
 - `/task:abort` — abort the current task and stop execution.
 
 ## Available tools:
-${_installed_tools}
+${{_installed_tools}}
 
 ## Available subagents:
-${_installed_subagents}
+${{_installed_subagents}}
+
+{_SCRATCHBOOK_CONTEXT_SECTION}
 """
 
+IDLE_MAIN_AGENT_SYSTEM_PROMPT = PLAN_MAIN_AGENT_SYSTEM_PROMPT.replace(
+    _SCRATCHBOOK_CONTEXT_SECTION,
+    "",
+)
 DRAFT_INTERVIEW_SYSTEM_PROMPT = PLAN_MAIN_AGENT_SYSTEM_PROMPT
 PLAN_INTERVIEW_SYSTEM_PROMPT = PLAN_MAIN_AGENT_SYSTEM_PROMPT
 

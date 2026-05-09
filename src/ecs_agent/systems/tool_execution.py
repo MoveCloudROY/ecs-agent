@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from math import ceil
 from typing import Awaitable, Callable
 
@@ -25,6 +26,7 @@ from ecs_agent.types import (
     ToolCall,
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
+    ToolResultCachedEvent,
 )
 
 logger = get_logger(__name__)
@@ -69,10 +71,13 @@ class ToolExecutionSystem:
                 )
 
             for tool_call in pending.tool_calls:
+                start_time = time.monotonic()
+                tool_start_time = datetime.now(timezone.utc)
                 await world.event_bus.publish(
                     ToolExecutionStartedEvent(
                         entity_id=entity_id,
                         tool_call=tool_call,
+                        start_time=tool_start_time,
                     )
                 )
 
@@ -84,12 +89,17 @@ class ToolExecutionSystem:
                 )
 
                 success = not result.startswith("Error")
+                tool_end_time = datetime.now(timezone.utc)
                 await world.event_bus.publish(
                     ToolExecutionCompletedEvent(
                         entity_id=entity_id,
                         tool_call_id=tool_call.id,
                         result=result,
                         success=success,
+                        tool_name=tool_call.name,
+                        duration_seconds=time.monotonic() - start_time,
+                        start_time=tool_start_time,
+                        end_time=tool_end_time,
                     )
                 )
 
@@ -259,6 +269,13 @@ class ToolExecutionSystem:
             entity_id=entity_id,
             tool_call_id=tool_call.id,
             artifact_path=artifact_path,
+        )
+        await world.event_bus.publish(
+            ToolResultCachedEvent(
+                entity_id=entity_id,
+                tool_call_id=tool_call.id,
+                artifact_path=artifact_path,
+            )
         )
 
     def _estimate_conversation_tokens(

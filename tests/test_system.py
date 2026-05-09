@@ -6,7 +6,11 @@ import pytest
 
 from ecs_agent.core.system import SystemExecutor
 from ecs_agent.core.world import World
-from ecs_agent.types import SystemHandle
+from ecs_agent.types import (
+    SystemExecutionCompletedEvent,
+    SystemExecutionStartedEvent,
+    SystemHandle,
+)
 
 
 def _captured_log_output(captured: object) -> str:
@@ -33,6 +37,13 @@ class SlowSystem:
         _ = world
         await asyncio.sleep(self.delay)
         self.log.append(self.name)
+
+
+@dataclass(slots=True)
+class FailingSystem:
+    async def process(self, world: World) -> None:
+        _ = world
+        raise RuntimeError("boom")
 
 
 @pytest.mark.asyncio
@@ -86,6 +97,57 @@ async def test_system_protocol_structural_typing_works_with_world_registration()
 
     await world.process()
     assert log == ["typed"]
+
+
+@pytest.mark.asyncio
+async def test_system_executor_publishes_success_lifecycle_events() -> None:
+    executor = SystemExecutor()
+    world = World()
+    log: list[str] = []
+    events: list[object] = []
+
+    async def on_started(event: SystemExecutionStartedEvent) -> None:
+        events.append(event)
+
+    async def on_completed(event: SystemExecutionCompletedEvent) -> None:
+        events.append(event)
+
+    world.event_bus.subscribe(SystemExecutionStartedEvent, on_started)
+    world.event_bus.subscribe(SystemExecutionCompletedEvent, on_completed)
+    executor.register(LoggingSystem(name="single", log=log), priority=0)
+
+    await executor.execute(world)
+
+    assert [type(event) for event in events] == [
+        SystemExecutionStartedEvent,
+        SystemExecutionCompletedEvent,
+    ]
+    assert isinstance(events[0], SystemExecutionStartedEvent)
+    assert events[0].system.endswith("LoggingSystem")
+    assert isinstance(events[1], SystemExecutionCompletedEvent)
+    assert events[1].status == "success"
+    assert events[1].duration_seconds >= 0
+
+
+@pytest.mark.asyncio
+async def test_system_executor_publishes_error_lifecycle_event() -> None:
+    executor = SystemExecutor()
+    world = World()
+    completed: list[SystemExecutionCompletedEvent] = []
+
+    async def on_completed(event: SystemExecutionCompletedEvent) -> None:
+        completed.append(event)
+
+    world.event_bus.subscribe(SystemExecutionCompletedEvent, on_completed)
+    executor.register(FailingSystem(), priority=0)
+
+    with pytest.raises(ExceptionGroup):
+        await executor.execute(world)
+
+    assert len(completed) == 1
+    assert completed[0].system.endswith("FailingSystem")
+    assert completed[0].status == "error"
+    assert completed[0].duration_seconds >= 0
 
 
 class TestSystemLogging:

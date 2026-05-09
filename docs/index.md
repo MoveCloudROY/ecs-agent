@@ -28,6 +28,7 @@ The Entity-Component-System (ECS) pattern makes LLM agents composable and testab
     *   [Retry](features/retry.md)
     *   [Serialization](features/serialization.md)
     *   [Structured Logging](features/logging.md)
+    *   [Prometheus Metrics](features/metrics.md)
     *   [Structured Output](features/structured-output.md)
 *   [Context Management](features/context-management.md)
 *   [Tool Discovery & Approval](features/tool-discovery.md)

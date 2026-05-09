@@ -14,7 +14,9 @@ Build modular, testable LLM agents by composing behavior from dataclass componen
 ## Installation
 
 ```bash
-# Clone and install with uv
+# Stable version 
+uv pip install ecs-agent
+# Develop version
 git clone https://github.com/MoveCloudROY/ecs-agent.git
 cd ecs-agent
 uv sync --group dev
@@ -22,6 +24,8 @@ uv sync --group dev
 uv pip install -e ".[embeddings]"
 # Install with MCP support (optional)
 uv pip install -e ".[mcp]"
+# Install with Langfuse observability (optional)
+uv pip install -e ".[langfuse]"
 ```
 
 > **Requires Python ≥ 3.11**
@@ -103,7 +107,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 
 ### Scratchbook Artifact Registry
 - **`ArtifactRegistry`** — Canonical persistence layer for durable scratchbook records and mutable plan execution state.
-- **Canonical immutable records** — Tool and subagent outputs persist to `scratchbook/records/tool/tool_<uuid24>` and `scratchbook/records/subagent/subagent_<uuid24>`.
+- **Canonical immutable records** — Tool and subagent outputs persist to `scratchbook/records/tool/tool_<uuid24>` and `scratchbook/records/subagent/subagent_<uuid24>`. Tool result records are YAML documents with tool metadata under `metadata` and the full tool output under `content`.
 - **Canonical mutable plan state** — Plan markdown and Boulder machine state live at `scratchbook/<plan_slug>/plan.md` and `scratchbook/<plan_slug>/executes/boulder.json`.
 - **Trigger-to-Boulder lifecycle** — Plan-type script triggers create Boulder; planning/replanning/tool systems update it throughout execution.
 - **Inline payload policy** — Artifact inline content is populated only when UTF-8 payload size is `<= 2048` bytes. For larger results, `inline_content` is `None` and content is file-backed only. The persisted file always stores the full content — no truncation or summarisation.
@@ -134,6 +138,8 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **Context Management** — Checkpoints (undo/resume), conversation compaction (XML system-prompt summaries), and memory windowing.
 - **Tool Ecosystem** — Auto-discovery via `@tool` decorator, manual approval flows, secure `bwrap` sandboxing, and composable skills.
 - **MCP Integration** — Connect to external MCP tool servers via stdio, SSE, or HTTP transports with namespaced tool mapping.
+- **Prometheus Metrics**, Install low-cardinality runtime, LLM, tool, streaming, and runtime-control metrics on any `World` and expose them via render, ASGI/WSGI, or a standalone `/metrics` server.
+- **Langfuse Observability**, Capture traces, spans, and observations via `ecs-agent[langfuse]`. Install `install_langfuse_observability()` on any `World` to export user input, LLM generations, tool calls, retries, subagent runs, and errors to Langfuse; raw input and output capture remains enabled by default for backward compatibility and can be disabled with `LangfuseConfig(capture_input=False, capture_output=False)`. Supports mandatory redaction, one trace per interactive user turn (with one-shot run compatibility), nested `subagent.<name>` spans with child LLM/tool observations, tool calls that nest under the generation that requested them, recorded operation end timing through the Langfuse SDK v4 public lifecycle, optional private historical start-time backdating with `enable_private_v4_historical_otel=True`, readable model identifiers from `LLM_MODEL`, integer token usage, resilient background export, and Langfuse Sessions by propagating `session_id` as a trace-level attribute rather than metadata-only. See [`docs/features/langfuse.md`](docs/features/langfuse.md) for configuration via `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_HOST`, plus live test commands (OpenAI/Anthropic) and skip behavior when credentials are missing. Credential rotation is recommended if keys are exposed.
 
 ## Architecture
 
@@ -292,6 +298,42 @@ uv run python examples/chat_agent.py
 
 Model setup, registry-based construction, supported protocols, and model ID rules are documented in [`docs/models.md`](docs/models.md).
 
+## Prometheus Metrics
+
+Install metrics on a `World` before running agents, then expose the same private registry through whichever deployment shape fits your service:
+
+```python
+from ecs_agent.core import Runner, World
+from ecs_agent.metrics import (
+    install_prometheus_metrics,
+    make_metrics_asgi_app,
+    make_metrics_wsgi_app,
+    render_metrics,
+    start_metrics_server,
+)
+
+world = World()
+metrics = install_prometheus_metrics(world)
+
+# Direct scrape payload for tests, CLIs, or custom handlers.
+body = render_metrics(metrics)
+
+# Framework adapters.
+asgi_app = make_metrics_asgi_app(metrics)  # mount at /metrics in an ASGI app
+wsgi_app = make_metrics_wsgi_app(metrics)  # mount at /metrics in a WSGI app
+
+# Standalone endpoint helper.
+handle = start_metrics_server(9100, addr="127.0.0.1", metrics=metrics)
+try:
+    await Runner().run(world, max_ticks=3)
+finally:
+    handle.close(timeout=5)
+```
+
+The exposition uses `ecs_agent_*` metric families such as `ecs_agent_runs_total`, `ecs_agent_llm_invocations_total`, `ecs_agent_tool_calls_total`, and `ecs_agent_stream_events_total`. Labels are intentionally low-cardinality (`status`, `system`, `provider`, `model`, `operation`, `tool`, and similar bounded values); IDs, raw prompts/responses, tool arguments/results, paths, API keys, and tokens are never accepted as labels. See [`docs/features/metrics.md`](docs/features/metrics.md) for the complete metric contract, endpoint modes, install/uninstall behavior, and live smoke test instructions.
+
+To try the feature in real dashboards, run the local Prometheus + Grafana demo in [`examples/prometheus/`](examples/prometheus/). It exposes ecs-agent metrics at `127.0.0.1:9100/metrics`, starts Prometheus and Grafana with Docker Compose, and provisions an `ecs-agent Overview` dashboard at `http://localhost:3000`.
+
 ## Development
 
 ### Tests
@@ -321,6 +363,11 @@ LLM_API_KEY="$LLM_API_KEY" \
 
 LLM_API_KEY="$LLM_API_KEY" \
   uv run pytest tests/live/test_compaction_live.py -v
+
+LLM_API_KEY="$LLM_API_KEY" \
+  LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
+  LLM_MODEL=qwen3.5-flash \
+  uv run pytest tests/live/test_prometheus_metrics_live.py -v
 ```
 
 See `tests/live/` for the available live suites.
@@ -367,6 +414,8 @@ See [`docs/`](docs/) for detailed guides:
 - [Systems](docs/systems.md), Built-in systems and configuration details
 - [Models](docs/models.md), model selection, registry routing, and built-in model implementations
 - [Streaming](docs/features/streaming.md), SSE streaming setup and usage
+- [Prometheus Metrics](docs/features/metrics.md), low-cardinality metrics and `/metrics` exposure helpers
+- [Langfuse Observability](docs/features/langfuse.md), traces, spans, observations, raw capture controls, and optional historical timing
 - [Structured Output](docs/features/structured-output.md), Pydantic schema → JSON mode
 - [Serialization](docs/features/serialization.md), World state persistence
 - [Logging](docs/features/logging.md), structlog integration

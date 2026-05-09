@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import Any
+
+import yaml
 
 from ecs_agent.logging import get_logger
 from ecs_agent.scratchbook.artifact_registry import (
@@ -61,16 +62,22 @@ class ToolResultsSink:
             raise ValueError(msg)
 
         artifact_data: dict[str, Any] = {
-            "tool_call_id": tool_call_id,
-            "tool_name": tool_name,
-            "result": result,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "arguments": arguments,
+            "metadata": {
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "arguments": arguments,
+            },
+            "content": result,
         }
 
         persist_result = self.registry.persist(
             kind=ArtifactKind.TOOL,
-            content=json.dumps(artifact_data),
+            content=yaml.safe_dump(
+                artifact_data,
+                allow_unicode=True,
+                sort_keys=False,
+            ),
         )
 
         # Track persisted call
@@ -97,7 +104,21 @@ class ToolResultsSink:
         artifact_path = self.registry.root / stable_id
         if not artifact_path.exists():
             return None
-        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        payload = yaml.safe_load(artifact_path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             return None
+        if "metadata" in payload and "content" in payload:
+            return payload
+        if {"tool_call_id", "tool_name", "result", "timestamp", "arguments"}.issubset(
+            payload
+        ):
+            return {
+                "metadata": {
+                    "tool_call_id": payload["tool_call_id"],
+                    "tool_name": payload["tool_name"],
+                    "timestamp": payload["timestamp"],
+                    "arguments": payload["arguments"],
+                },
+                "content": payload["result"],
+            }
         return payload

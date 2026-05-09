@@ -4,6 +4,7 @@ import hashlib
 import math
 from typing import cast
 
+from ecs_agent.accounting.instrumentation import complete_with_llm_invocation_event
 from ecs_agent.components import (
     CompactionConfigComponent,
     ContextBudgetConfig,
@@ -87,6 +88,8 @@ class CompactionSystem:
                 entity_id, CurrentCompactionSummaryComponent
             )
             summary = await self._summarize(
+                world=world,
+                entity_id=entity_id,
                 model=summary_model,
                 messages=self._build_summary_input_messages(
                     previous_summary=(
@@ -341,6 +344,8 @@ class CompactionSystem:
     async def _summarize(
         self,
         *,
+        world: World,
+        entity_id: EntityId,
         model: LLMModel,
         messages: list[Message],
         system_prompt: str,
@@ -351,13 +356,17 @@ class CompactionSystem:
         )
         if subagent_state is not None:
             formatted_messages = f"{formatted_messages}\n\n{subagent_state}"
-        result = await model.complete(
+        result = await complete_with_llm_invocation_event(
+            event_bus=world.event_bus,
+            entity_id=entity_id,
+            model=model,
             messages=[
                 Message(role="system", content=system_prompt),
                 Message(role="user", content=formatted_messages),
             ],
             tools=None,
             stream=False,
+            operation="compaction",
         )
         if not isinstance(result, CompletionResult):
             raise RuntimeError("Provider returned stream iterator for compaction")

@@ -9,9 +9,11 @@ from ecs_agent.types import (
     ToolCall,
     ToolSchema,
     CompletionResult,
+    DelegationCompletedEvent,
     Usage,
     StreamDelta,
     RetryConfig,
+    SubagentSessionRecord,
 )
 
 
@@ -267,6 +269,66 @@ class TestRetryConfig:
         assert config.min_wait == 4.0
         assert config.max_wait == 60.0
         assert config.retry_status_codes == (429, 500, 502, 503, 504)
+
+
+def test_subagent_session_record_positional_fields_remain_compatible() -> None:
+    """New launch trace fields do not shift existing positional arguments."""
+    record = SubagentSessionRecord(
+        "session-1",
+        "worker",
+        "do work",
+        EntityId(1),
+        "created",
+        "updated",
+        ["skill-a"],
+        True,
+        True,
+        "running",
+        "corr-1",
+        "traceparent-1",
+        30.0,
+        "deadline",
+        "excerpt",
+        "summary",
+        "artifact",
+        "record-path",
+        "inline",
+        None,
+        "started",
+        "finished",
+    )
+
+    assert record.timeout_seconds == 30.0
+    assert record.deadline_at == "deadline"
+    assert record.finished_at == "finished"
+    assert record.launch_trace_id is None
+
+
+def test_delegation_completed_event_positional_fields_remain_compatible() -> None:
+    """New fallback trace fields do not shift existing positional arguments."""
+    event = DelegationCompletedEvent(
+        EntityId(1),
+        "worker",
+        "result",
+        True,
+        None,
+        "corr-1",
+        "traceparent-1",
+        "child-world",
+        "obs-1",
+        None,
+        1.5,
+        "completed",
+        "success",
+    )
+
+    assert event.correlation_id == "corr-1"
+    assert event.traceparent == "traceparent-1"
+    assert event.observation_id == "obs-1"
+    assert event.duration_seconds == 1.5
+    assert event.status == "success"
+    assert event.task == ""
+    assert event.trace_id is None
 
     def test_retry_config_custom(self) -> None:
         """Test RetryConfig with custom values."""

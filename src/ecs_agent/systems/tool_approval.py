@@ -125,6 +125,7 @@ class ToolApprovalSystem:
                 entity_id,
                 tool_call.id,
                 f"Approval timeout after {timeout}s",
+                tool_name=tool_call.name,
             )
             return False
 
@@ -137,7 +138,12 @@ class ToolApprovalSystem:
     ) -> None:
         approval.approved_calls.append(tool_call.id)
         await world.event_bus.publish(
-            ToolApprovedEvent(entity_id=entity_id, tool_call_id=tool_call.id)
+            ToolApprovedEvent(
+                entity_id=entity_id,
+                tool_call_id=tool_call.id,
+                tool_name=tool_call.name,
+                policy=approval.policy.value,
+            )
         )
 
     async def _deny(
@@ -153,7 +159,9 @@ class ToolApprovalSystem:
         conversation.messages.append(
             Message(role="system", content=f"Tool call {tool_call.id} denied by policy")
         )
-        await self._publish_denied(world, entity_id, tool_call.id, reason)
+        await self._publish_denied(
+            world, entity_id, tool_call.id, reason, tool_name=tool_call.name
+        )
 
     async def _publish_denied(
         self,
@@ -161,10 +169,14 @@ class ToolApprovalSystem:
         entity_id: EntityId,
         tool_call_id: str,
         reason: str,
+        tool_name: str = "",
     ) -> None:
         await world.event_bus.publish(
             ToolDeniedEvent(
-                entity_id=entity_id, tool_call_id=tool_call_id, reason=reason
+                entity_id=entity_id,
+                tool_call_id=tool_call_id,
+                reason=reason,
+                tool_name=tool_name,
             )
         )
 

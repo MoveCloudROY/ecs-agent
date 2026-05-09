@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Any
 
@@ -549,13 +549,25 @@ class WorldSerializer:
             for session_id, session_data in normalized_data.get("sessions", {}).items():
                 # If session_data is a dict, reconstruct it as SubagentSessionRecord
                 if isinstance(session_data, dict):
+                    normalized_session_data = dict(session_data)
                     # Convert parent_entity_id if it's an int
-                    parent_entity_id_value = session_data.get("parent_entity_id")
+                    parent_entity_id_value = normalized_session_data.get(
+                        "parent_entity_id"
+                    )
                     if isinstance(parent_entity_id_value, int):
-                        session_data["parent_entity_id"] = EntityId(
+                        normalized_session_data["parent_entity_id"] = EntityId(
                             parent_entity_id_value
                         )
-                    sessions_dict[session_id] = SubagentSessionRecord(**session_data)
+                    allowed_fields = {
+                        field.name for field in fields(SubagentSessionRecord)
+                    }
+                    sessions_dict[session_id] = SubagentSessionRecord(
+                        **{
+                            key: value
+                            for key, value in normalized_session_data.items()
+                            if key in allowed_fields
+                        }
+                    )
                 else:
                     # Already a SubagentSessionRecord object
                     sessions_dict[session_id] = session_data

@@ -35,25 +35,26 @@ This keeps small artifacts cheap to inline while keeping larger payloads out of 
 
 ## Tool Result Record Format
 
-Every tool result is persisted as a JSON object. The canonical schema is:
+Every tool result is persisted as a YAML document. Tool metadata is kept under
+`metadata`, and the full tool output is stored under `content`:
 
-```json
-{
-  "tool_call_id": "call_abc123",
-  "tool_name": "get_weather",
-  "result": "<full tool output — never truncated>",
-  "timestamp": "2026-01-01T00:00:00.000000+00:00",
-  "arguments": {"city": "Paris"}
-}
+```yaml
+metadata:
+  tool_call_id: call_abc123
+  tool_name: get_weather
+  timestamp: "2026-01-01T00:00:00.000000+00:00"
+  arguments:
+    city: Paris
+content: "<full tool output — never truncated>"
 ```
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `tool_call_id` | `string` | Unique ID for the tool call (immutable key — no overwrite) |
-| `tool_name` | `string` | Name of the tool that was called |
-| `result` | `string` | **Full** tool output — never summarised or truncated |
-| `timestamp` | `string` | ISO-8601 UTC timestamp of when the result was persisted |
-| `arguments` | `object \| null` | Tool arguments dict as passed to the handler |
+| `metadata.tool_call_id` | `string` | Unique ID for the tool call (immutable key — no overwrite) |
+| `metadata.tool_name` | `string` | Name of the tool that was called |
+| `metadata.timestamp` | `string` | ISO-8601 UTC timestamp of when the result was persisted |
+| `metadata.arguments` | `object \| null` | Tool arguments dict as passed to the handler |
+| `content` | `string` | **Full** tool output — never summarised or truncated |
 
 Records are written atomically (temp file + `os.replace`) and are immutable once written. Attempting to persist a second result for the same `tool_call_id` raises `ValueError`.
 
@@ -193,10 +194,22 @@ from ecs_agent.scratchbook import ArtifactKind, ArtifactRegistry
 
 registry = ArtifactRegistry(root=Path("."))
 
-# Immutable records
-result = registry.persist(kind=ArtifactKind.TOOL, content='{"ok": true}')
+# Immutable records. ToolResultsSink writes tool records as YAML documents
+# with metadata/content top-level keys; ArtifactRegistry itself stores any text.
+result = registry.persist(
+    kind=ArtifactKind.TOOL,
+    content=(
+        "metadata:\n"
+        "  tool_call_id: call_abc123\n"
+        "  tool_name: get_weather\n"
+        "  timestamp: '2026-01-01T00:00:00+00:00'\n"
+        "  arguments:\n"
+        "    city: Paris\n"
+        "content: sunny\n"
+    ),
+)
 print(result.record_path)      # scratchbook/records/tool/tool_<uuid24>
-print(result.inline_content)   # str | None (8 KB threshold)
+print(result.inline_content)   # str | None (2 KB threshold)
 
 # Human-facing mutable plan document
 plan_path = registry.write_plan(

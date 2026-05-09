@@ -14,6 +14,7 @@ The following types and classes are re-exported for convenience:
 - `RetryModel` from `ecs_agent.providers.retry_model`
 - `WorldSerializer` from `ecs_agent.serialization`
 - `configure_logging`, `get_logger` from `ecs_agent.logging`
+- `PrometheusMetrics`, `install_prometheus_metrics`, `uninstall_prometheus_metrics`, `render_metrics`, `make_metrics_asgi_app`, `make_metrics_wsgi_app`, `start_metrics_server` from `ecs_agent.metrics`
 - `StreamingComponent`, `CheckpointComponent`, `CompactionConfigComponent`, `ConversationArchiveComponent`, `RunnerStateComponent`, `UserInputComponent` from `ecs_agent.components`
 - `ClaudeModel` from `ecs_agent.providers.claude_model`
 - `LiteLLMModel` from `ecs_agent.providers.litellm_model`
@@ -26,6 +27,34 @@ The following types and classes are re-exported for convenience:
 - `ScratchbookService`, `ScratchbookIndexer`, `ToolResultsSink` from `ecs_agent.scratchbook`
 - `AgentSpec`, `validate_agent_spec`, `discover_agent_sources`, `load_json_agents`, `load_markdown_agent`, `resolve_agent_specs`, `compile_agent_specs`, `resolve_prompt_file` from `ecs_agent.dsl`
 
+
+---
+
+## ecs_agent.metrics
+
+Prometheus metrics are available through `ecs_agent.metrics` and re-exported from `ecs_agent`.
+
+```python
+from ecs_agent.metrics import (
+    PrometheusMetrics,
+    install_prometheus_metrics,
+    uninstall_prometheus_metrics,
+    render_metrics,
+    make_metrics_asgi_app,
+    make_metrics_wsgi_app,
+    start_metrics_server,
+)
+```
+
+- `PrometheusMetrics(registry: CollectorRegistry | None = None)`: owns an isolated Prometheus registry and the fixed `ecs_agent_*` collectors.
+- `install_prometheus_metrics(world: World | None = None, *, registry: CollectorRegistry | None = None, metrics: PrometheusMetrics | None = None) -> PrometheusMetrics`: creates a recorder and, when a world is provided, subscribes it to that world's event bus idempotently.
+- `uninstall_prometheus_metrics(world: World) -> PrometheusMetrics | None`: removes the recorder's event-bus subscriptions from a world and returns the removed recorder, or `None` if metrics were not installed.
+- `render_metrics(metrics: PrometheusMetrics | CollectorRegistry | None = None) -> bytes`: renders Prometheus text format from the provided metrics surface or registry.
+- `make_metrics_asgi_app(metrics: PrometheusMetrics | CollectorRegistry | None = None)`: returns a framework-free ASGI callable suitable for `/metrics`.
+- `make_metrics_wsgi_app(metrics: PrometheusMetrics | CollectorRegistry | None = None)`: returns a framework-free WSGI callable suitable for `/metrics`.
+- `start_metrics_server(port: int, *, addr: str = "0.0.0.0", metrics: PrometheusMetrics | CollectorRegistry | None = None)`: starts a standalone metrics HTTP server and returns a cleanup handle.
+
+The metric contract is intentionally fixed and low-cardinality. Use [`docs/features/metrics.md`](features/metrics.md) for the complete metric list, label allowlist, endpoint examples, install/uninstall semantics, and label safety policy.
 
 ---
 
@@ -759,6 +788,38 @@ class ScratchbookIndexer:
     def lookup_by_artifact_type(self, artifact_type: str) -> list[dict[str, Any]]: ...
     def lookup_by_category(self, category: str) -> list[dict[str, Any]]: ...
 ```
+
+### ToolResultsSink
+```python
+class ToolResultsSink:
+    def __init__(self, registry: ArtifactRegistry): ...
+    def persist_tool_result(
+        self,
+        tool_call_id: str,
+        tool_name: str,
+        result: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> ArtifactPersistResult: ...
+    def read_tool_result(self, stable_id: str) -> dict[str, Any] | None: ...
+```
+
+`ToolResultsSink` persists each tool call result through `ArtifactRegistry` as an
+immutable YAML record under `scratchbook/records/tool/tool_<uuid24>`. The record
+separates tool metadata from the full tool output:
+
+```yaml
+metadata:
+  tool_call_id: call_abc123
+  tool_name: get_weather
+  timestamp: "2026-01-01T00:00:00.000000+00:00"
+  arguments:
+    city: Paris
+content: sunny in Paris
+```
+
+Small records may also populate `ArtifactPersistResult.inline_content` according
+to the shared 2 KB UTF-8 threshold; the persisted file always contains the full
+YAML document.
 
 ---
 

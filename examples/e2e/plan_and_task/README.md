@@ -20,15 +20,15 @@ The workflow follows a structured lifecycle:
   - `plan_qa` uses `PLAN_QA_REVIEW_SYSTEM_PROMPT` (final plan review lens) and routes `DelegationCompletedEvent` → `controller.handle_plan_qa_review()` → `PLAN_QA_REVIEW` verdict.
   - The planner system prompt calls `subagent(category="qa", ...)` for draft review and `subagent(category="plan_qa", ...)` for plan review.
 - **Review Prompts via File Path** — When invoking `advisor`, `qa`, `plan_qa`, or `plan_writer` subagents for review, the prompt passes the artifact file path (e.g. `scratchbook/<workflow_id>/plan/draft.md`) rather than embedding the file content inline. The subagent reads the file itself using `read_file`, avoiding prompt token bloat.
-- **Auto Compaction** — `build_plan_task_world(...)` installs `CompactionConfigComponent(threshold_tokens=12_000, compaction_method="predrop_then_compact")`, `ConversationArchiveComponent`, and `CompactionSystem` at priority `-30` so compaction runs before workflow prompt rendering and before reasoning. `SystemPromptRenderSystem` then injects the current summary into the effective system prompt as `<chat_history_summary>...</chat_history_summary>` XML.
+- **Auto Compaction** — `build_plan_task_world(...)` installs `CompactionConfigComponent(threshold_tokens=300_000, compaction_method="predrop_then_compact")` by default, `ConversationArchiveComponent`, and `CompactionSystem` at priority `-30` so compaction runs before workflow prompt rendering and before reasoning. `SystemPromptRenderSystem` then injects the current summary into the effective system prompt as `<chat_history_summary>...</chat_history_summary>` XML.
 - **Subagent Compaction Inheritance** — Child worlds created by `SubagentSystem` inherit the parent `CompactionConfigComponent`, receive their own `ConversationArchiveComponent`, and register `CompactionSystem` at the same priority. Long-running review and task subagents therefore compact independently without requiring plan-and-task-specific special cases.
 - **Workflow Reset Safety** — `/plan:start`, `/plan:resume`, and `/task:start <workflow_id>` clear stale `CurrentCompactionSummaryComponent`, reset archived summaries, and invalidate `RenderedSystemPromptComponent` before restoring or switching workflow state. This prevents an old summary from leaking into a newly loaded workflow phase.
 - **Log Truncation** — Structured log fields `last_user_prompt` and user-normalization `prompt_text` are truncated to 200 characters to keep logs readable without losing signal. System-prompt render logs still report `prompt_length`, but the rendered prompt text itself is not truncated in this example.
-- **ECS Core**: Uses `SystemPromptRenderSystem`, `UserPromptNormalizationSystem`, `ReasoningSystem`, `ToolExecutionSystem`, and `MemorySystem`.
+- **ECS Core**: Uses `SystemPromptRenderSystem`, `UserPromptNormalizationSystem`, `ReasoningSystem`, and `ToolExecutionSystem`.
 - **Prompt Configuration**: The planner entity declares `SystemPromptConfigSpec` with `DRAFT_INTERVIEW_SYSTEM_PROMPT`, and `SystemPromptRenderSystem` bridges the rendered value into `LLMComponent.system_prompt` before reasoning.
 - **Workflow DSL**: Uses `install_workflow` and `WorkflowStateSystem` (priority -25) to manage the phase graph and automatic prompt-profile selection via `${_workflow_state_prompt}`.
 - **State Machine**: Explicit phase transitions managed by `WorkflowStateMachine`.
-- **Artifacts**: Durable persistence of plans, state, and execution evidence via `PlanTaskScratchbookAdapter`.
+- **Artifacts**: Durable persistence of plans, state, and execution evidence via `PlanTaskScratchbookAdapter`. Main-agent tool results are currently kept inline in ECS conversation/tool-result state rather than being written through `ToolResultsSink`.
 - **Controller**: `PlanController` manages the high-level workflow logic and review gates.
 - **Subagent Reviews**: Advisor, QA, and Plan QA review steps are wired as ECS subagents via `SubagentRegistryComponent`. The planner invokes them with `subagent(category="advisor", ...)`, `subagent(category="qa", ...)`, and `subagent(category="plan_qa", ...)` respectively. Verdicts are automatically extracted from subagent results via `DelegationCompletedEvent` subscription, routed to the correct controller method based on the subagent name.
 - **Plan Writer Subagent**: The `WRITE_PLAN` phase is executed by a dedicated `plan_writer` subagent registered in `SubagentRegistryComponent`. It is pre-loaded with the `writing-plans` skill (discovered from `.claude/skills/writing_plans/SKILL.md`) and inherits `read_file`, `write_file`, `edit_file`, and `glob` tools. When it completes, `handle_write_plan_completed()` transitions the state to `PLAN_QA_REVIEW`.
@@ -61,6 +61,8 @@ All workflow data is persisted in `scratchbook/<workflow_id>/`:
 - `memory/`: Contains `knowledge.jsonl` for cross-task context.
 - `evidence/`: Directory for task execution artifacts.
 - `review/`: Contains JSON verdicts from Advisor and QA reviews.
+
+Main-agent tool call results are not currently persisted as separate canonical records by this example. They remain inline in ECS tool result state and conversation tool messages while durable workflow artifacts continue to live under `scratchbook/<workflow_id>/`.
 
 ## Usage
 
@@ -173,8 +175,41 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py::test_anthropic_plan_ta
   - `openai_responses` (default) — OpenAI Responses API via `OpenAIModel` (enables `enable_store=True` for prefix caching)
   - `openai_chat_completions` — OpenAI Chat Completions API via `OpenAIModel`
   - `anthropic_messages` — Anthropic Messages API via `ClaudeModel` (also works with Kimi-compatible Anthropic endpoints)
+- `PLAN_TASK_LANGFUSE`: Set to `1`, `true`, `yes`, or `on` to install Langfuse observability on the plan-and-task `World` before `Runner.run()` starts.
+- `PLAN_TASK_LANGFUSE_ENVIRONMENT`: Optional Langfuse environment label. Defaults to `plan-and-task`.
+- `PLAN_TASK_LANGFUSE_RELEASE`: Optional release label sent with plan-and-task traces.
+- `PLAN_TASK_LANGFUSE_SESSION_ID`: Optional session ID for grouping plan-and-task traces. The Langfuse SDK v4 adapter sends this as a trace-level session attribute via `propagate_attributes(...)`; metadata-only session IDs do not power the Langfuse Sessions UI.
+- `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_HOST` or `LANGFUSE_BASE_URL`: Langfuse connection settings used when `PLAN_TASK_LANGFUSE` is enabled.
 - `PLAN_TASK_INTERACTIVE`: Set to `0` to disable interactive stdin.
 - `DEBUG`: Set to `1` to make this example call `configure_logging()` with debug logging. All `plan_task_*` structured log events will then appear on stderr via structlog.
+
+### Langfuse Observability
+
+Install the optional extra before enabling Langfuse for this example:
+
+```bash
+uv pip install -e ".[langfuse]"
+```
+
+When `PLAN_TASK_LANGFUSE` is enabled, `main.py` calls `install_plan_task_langfuse_observability()` after `build_plan_task_world(...)` creates the `World` and before `Runner.run(...)` starts. In interactive mode, every `UserInputReceivedEvent` starts a `user.turn` trace that covers the complete chain from that user input until the next user input or process exit: prompt normalization, retrieval/compaction, LLM generations, tool calls, subagent spans, retries, errors, context pressure, and completion scores all stay inside that turn trace. One-shot runs without interactive input keep the runner trace for backward compatibility. Completed LLM, tool, and subagent observations export their ECS-recorded end timestamps through the Langfuse SDK v4 public lifecycle; preserving historical start timestamps requires explicitly validating your SDK version and enabling `LangfuseConfig(enable_private_v4_historical_otel=True)` because that path uses private SDK hooks. Raw prompts, tool arguments, and outputs are captured by default for backward compatibility; use `LangfuseConfig(capture_input=False, capture_output=False)` if raw content should not leave the process.
+
+Subagents are exported as `subagent.<name>` spans inside the active `user.turn` trace. Their child-world LLM calls are exported as `generation` observations under that subagent span, and child-world tool/retrieval/API work is exported as child spans/events under the same turn trace rather than creating another top-level Langfuse trace. When a child-world generation requests a tool, that tool observation stays attached to the requesting generation so the Langfuse hierarchy shows the exact delegation chain.
+
+Use environment variables or a secret manager for `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and the Langfuse host value. Do not put concrete keys in scripts, docs, or command history. On exit, the CLI calls `flush()` and `shutdown()` on the observability handle so buffered trace events are sent before the process terminates.
+
+Anthropic-compatible Langfuse smoke run:
+
+```bash
+PLAN_TASK_LANGFUSE=1 \
+PLAN_TASK_LANGFUSE_ENVIRONMENT=dev \
+PLAN_TASK_LANGFUSE_RELEASE=local-test \
+PLAN_TASK_LANGFUSE_SESSION_ID="plan-task-dev-1" \
+LLM_API_FORMAT=anthropic_messages \
+LLM_MODEL=deepseek-v4-flash \
+uv run python examples/e2e/plan_and_task/main.py
+```
+
+Set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`, `LLM_BASE_URL`, and `LLM_API_KEY` in your shell or secret manager before running the command.
 
 ### Anthropic / Kimi Example
 

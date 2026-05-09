@@ -7,6 +7,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
+from ecs_agent.accounting.instrumentation import complete_with_llm_invocation_event
 from ecs_agent.components import (
     ConversationComponent,
     ErrorComponent,
@@ -210,7 +211,13 @@ class TreeSearchSystem:
                 role="user", content=f"Current path: {self._path_text(nodes, node_id)}"
             ),
         ]
-        result = await llm_component.model.complete(messages)
+        result = await complete_with_llm_invocation_event(
+            event_bus=world.event_bus,
+            entity_id=entity_id,
+            model=llm_component.model,
+            messages=messages,
+            operation="tree_search_expand",
+        )
         if not isinstance(result, CompletionResult):
             raise TypeError("Streaming response not supported in TreeSearchSystem")
 
@@ -251,7 +258,13 @@ class TreeSearchSystem:
             Message(role="user", content=prompt),
         ]
 
-        result = await llm_component.model.complete(messages)
+        result = await complete_with_llm_invocation_event(
+            event_bus=world.event_bus,
+            entity_id=EntityId(entity_id),
+            model=llm_component.model,
+            messages=messages,
+            operation="tree_search_simulate",
+        )
         if not isinstance(result, CompletionResult):
             raise TypeError("Streaming response not supported in TreeSearchSystem")
 

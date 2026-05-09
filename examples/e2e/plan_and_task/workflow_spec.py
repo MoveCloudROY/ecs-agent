@@ -6,6 +6,7 @@ from ecs_agent.workflows import PromptProfileSpec, absent, workflow
 from ecs_agent.workflows._components import WorkflowRuntimeComponent
 
 from examples.e2e.plan_and_task.prompts import (
+    IDLE_MAIN_AGENT_SYSTEM_PROMPT,
     PLAN_MAIN_AGENT_SYSTEM_PROMPT,
     TASK_MAIN_AGENT_SYSTEM_PROMPT,
 )
@@ -17,6 +18,10 @@ PLAN_TASK_WORKFLOW_SPEC = workflow(
     initial="IDLE",
     profiles={
         "main": {
+            "idle_main": PromptProfileSpec(
+                profile_id="idle_main",
+                prompt=IDLE_MAIN_AGENT_SYSTEM_PROMPT,
+            ),
             "plan_main": PromptProfileSpec(
                 profile_id="plan_main",
                 prompt=PLAN_MAIN_AGENT_SYSTEM_PROMPT,
@@ -29,7 +34,7 @@ PLAN_TASK_WORKFLOW_SPEC = workflow(
     },
     states={
         "IDLE": {
-            "bind": {"main": "plan_main"},
+            "bind": {"main": "idle_main"},
             "go": {"DRAFT_INTERVIEW": _SENTINEL},
         },
         "DRAFT_INTERVIEW": {

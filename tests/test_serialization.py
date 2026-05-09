@@ -1504,6 +1504,9 @@ def test_subagent_session_table_component_roundtrip() -> None:
         status="Working",
         correlation_id="corr_123",
         traceparent="00-trace-span-00",
+        launch_trace_id="trace-launch-123",
+        launch_run_id="run-launch-123",
+        launch_parent_observation_id="obs-launch-123",
         parent_entity_id=EntityId(42),
         created_at="2026-03-10T10:00:00Z",
         updated_at="2026-03-10T10:05:00Z",
@@ -1580,6 +1583,9 @@ def test_subagent_session_table_component_roundtrip() -> None:
     assert restored_session1.status == "running"
     assert restored_session1.correlation_id == "corr_123"
     assert restored_session1.traceparent == "00-trace-span-00"
+    assert restored_session1.launch_trace_id == "trace-launch-123"
+    assert restored_session1.launch_run_id == "run-launch-123"
+    assert restored_session1.launch_parent_observation_id == "obs-launch-123"
     assert restored_session1.parent_entity_id == EntityId(42)
     assert restored_session1.created_at == "2026-03-10T10:00:00Z"
     assert restored_session1.updated_at == "2026-03-10T10:05:00Z"
@@ -1605,6 +1611,43 @@ def test_subagent_session_table_component_roundtrip() -> None:
     assert restored_session3.parent_entity_id == EntityId(44)
     assert restored_session3.started_at is None
     assert restored_session3.finished_at is None
+
+
+def test_subagent_session_table_ignores_unknown_legacy_session_fields() -> None:
+    """Old checkpoints with removed session keys still restore."""
+    data = {
+        "next_entity_id": 2,
+        "entities": {
+            "1": {
+                "SubagentSessionTableComponent": {
+                    "sessions": {
+                        "sess_legacy": {
+                            "session_id": "sess_legacy",
+                            "category": "quick",
+                            "prompt": "restore me",
+                            "parent_entity_id": 1,
+                            "created_at": "2026-03-10T10:00:00Z",
+                            "updated_at": "2026-03-10T10:00:00Z",
+                            "traceparent": "00-trace-span-00",
+                            "legacy_task_handle": "not serializable anymore",
+                        }
+                    }
+                }
+            }
+        },
+    }
+
+    restored = WorldSerializer.from_dict(data, providers={}, tool_handlers={})
+
+    restored_comp = restored.get_component(
+        EntityId(1),
+        SubagentSessionTableComponent,
+    )
+    assert restored_comp is not None
+    restored_session = restored_comp.sessions["sess_legacy"]
+    assert restored_session.session_id == "sess_legacy"
+    assert restored_session.parent_entity_id == EntityId(1)
+    assert restored_session.traceparent == "00-trace-span-00"
 
 
 def test_subagent_session_table_rejects_runtime_handles() -> None:

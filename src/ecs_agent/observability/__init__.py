@@ -14,6 +14,45 @@ Example: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
 
 import secrets
 
+from ecs_agent.observability.context import (
+    ObservationContextToken,
+    RunContextToken,
+    current_observation_id,
+    current_observation_stack,
+    current_parent_observation_id,
+    current_run_id,
+    current_trace_id,
+    push_observation,
+    reset_observation,
+    reset_run_context,
+    set_run_context,
+)
+from ecs_agent.observability.events import (
+    LLMObservationCompletedEvent,
+    LLMObservationStartedEvent,
+    LLMObservationStatus,
+)
+from ecs_agent.types import UserInputReceivedEvent
+from ecs_agent.observability.install import (
+    ObservabilityHandle,
+    install_observability,
+    uninstall_observability,
+)
+from ecs_agent.observability.schema import (
+    JsonSafe,
+    TelemetryRecord,
+    TelemetryRecordKind,
+    TelemetryScore,
+    TelemetryStatus,
+    json_safe,
+)
+from ecs_agent.observability.sinks import (
+    NoOpTelemetrySink,
+    RecordingTelemetrySink,
+    TelemetrySink,
+)
+from ecs_agent.observability.subscriber import ObservabilitySubscriber, TraceState
+
 
 def generate_traceparent(sampled: bool = True) -> str:
     """Generate a new W3C TraceContext traceparent header.
@@ -103,3 +142,40 @@ def propagate_trace_context(parent_traceparent: str) -> str:
     trace_flags = parts[3]
     new_parent_id = secrets.token_hex(8)  # Generate new parent ID
     return f"{version}-{trace_id}-{new_parent_id}-{trace_flags}"
+
+
+__all__ = [
+    "JsonSafe",
+    "LLMObservationCompletedEvent",
+    "LLMObservationStartedEvent",
+    "LLMObservationStatus",
+    "NoOpTelemetrySink",
+    "ObservationContextToken",
+    "ObservabilityHandle",
+    "ObservabilitySubscriber",
+    "RecordingTelemetrySink",
+    "RunContextToken",
+    "TelemetryRecord",
+    "TelemetryRecordKind",
+    "TelemetryScore",
+    "TelemetrySink",
+    "TelemetryStatus",
+    "TraceState",
+    "UserInputReceivedEvent",
+    "current_observation_id",
+    "current_observation_stack",
+    "current_parent_observation_id",
+    "current_run_id",
+    "current_trace_id",
+    "extract_parent_id",
+    "extract_trace_id",
+    "generate_traceparent",
+    "install_observability",
+    "json_safe",
+    "propagate_trace_context",
+    "push_observation",
+    "reset_observation",
+    "reset_run_context",
+    "set_run_context",
+    "uninstall_observability",
+]

@@ -50,6 +50,7 @@ class PermissionSystem:
                             entity_id=entity_id,
                             tool_call_id=tool_call.id,
                             reason=denied_message,
+                            tool_name=tool_call.name,
                         )
                     )
                     continue
