@@ -616,18 +616,19 @@ world.add_component(
 ```
 
 ### SubagentRegistryComponent
-Registry of named subagent configurations for delegation.
+Registry of named subagent configurations and opt-in free-form delegation defaults.
 
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `subagents` | `dict[str, SubagentConfig]` | `{}` | Subagent configurations by name |
+| `free_subagent_config` | `FreeSubagentConfig` | disabled | Defaults for dynamically created subagents when free-form mode is enabled |
 
 **Used by:** `SubagentSystem`, `subagent` tool
 
 **Usage:**
 ```python
 from ecs_agent.components import SubagentRegistryComponent
-from ecs_agent.types import SubagentConfig
+from ecs_agent.types import FreeSubagentConfig, SubagentConfig
 
 researcher = SubagentConfig(
     name="researcher",
@@ -640,7 +641,11 @@ researcher = SubagentConfig(
 
 world.add_component(
     agent,
-    SubagentRegistryComponent(subagents={"researcher": researcher}),
+    SubagentRegistryComponent(
+        subagents={"researcher": researcher},
+        # Optional: let agents call unregistered names such as "security-reviewer".
+        free_subagent_config=FreeSubagentConfig(enabled=True),
+    ),
 )
 ```
 

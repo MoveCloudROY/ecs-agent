@@ -69,7 +69,7 @@ SubagentConfig(
 
 ### SubagentRegistryComponent
 
-Register named subagents:
+Register named subagents and, optionally, enable free-form delegation:
 
 ```python
 from ecs_agent.components import SubagentRegistryComponent
@@ -85,6 +85,22 @@ world.add_component(
     ),
 )
 ```
+
+By default, `category` must match a key in `subagents`. To let the parent agent call arbitrary named workers, opt in with `FreeSubagentConfig`:
+
+```python
+from ecs_agent.components import SubagentRegistryComponent
+from ecs_agent.types import FreeSubagentConfig
+
+world.add_component(
+    entity,
+    SubagentRegistryComponent(
+        free_subagent_config=FreeSubagentConfig(enabled=True),
+    ),
+)
+```
+
+When free-form mode is enabled, `subagent(category="security-reviewer", prompt="...")` creates a dynamic `SubagentConfig` using the parent entity's `LLMComponent.model`, the free-mode system prompt template, and the configured default skills/inheritance policy. Registered subagents still take precedence, so teams can mix curated names with ad hoc specialists.
 ### SubagentSessionRecord
 
 Track background session metadata:
@@ -158,8 +174,16 @@ Register the `SubagentSystem` and `SubagentWaitSystem` during world setup:
 from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.systems.subagent_wait import SubagentWaitSystem
 
-# Register SubagentSystem (priority -1 recommended to run before ReasoningSystem)
+# Register SubagentSystem (priority -1 recommended to run before ReasoningSystem).
 world.register_system(SubagentSystem(priority=-1), priority=-1)
+
+# To enable free-form subagent names for all entities with ToolRegistryComponent
+# and expose that capability in ${_installed_subagents}, run SubagentSystem before
+# SystemPromptRenderSystem (recommended priority -30) instead of the previous line:
+# world.register_system(
+#     SubagentSystem(priority=-30, allow_unregistered_subagents=True),
+#     priority=-30,
+# )
 
 # Register SubagentWaitSystem (priority -5 REQUIRED to run before ReasoningSystem)
 # This system handles the subagent_wait tool and notification delivery.
@@ -241,6 +265,25 @@ world.register_system(ToolExecutionSystem(priority=5), priority=5)
 runner = Runner()
 await runner.run(world, max_ticks=20)
 ```
+
+### Free-Form Delegation
+
+Free-form delegation is opt-in. It is useful when you want the model to invent focused roles on demand instead of pre-registering every possible worker name.
+
+```python
+from ecs_agent.components import LLMComponent, ToolRegistryComponent
+from ecs_agent.systems.subagent import SubagentSystem
+
+world.add_component(parent, LLMComponent(model=your_model))
+world.add_component(parent, ToolRegistryComponent(tools={}, handlers={}))
+
+world.register_system(
+    SubagentSystem(priority=-30, allow_unregistered_subagents=True),
+    priority=-30,
+)
+```
+
+With that option enabled, `SubagentSystem` creates a `SubagentRegistryComponent` if the entity does not already have one, installs the `subagent` tool, and updates the tool description plus `${_installed_subagents}` prompt inventory to say that arbitrary unregistered category names are allowed. Use a priority earlier than `SystemPromptRenderSystem` so this inventory hint is available during the first rendered prompt. If a requested category is registered, its explicit `SubagentConfig` is used; otherwise a dynamic config is built from the parent model.
 
 ### `subagent` Tool Usage
 
