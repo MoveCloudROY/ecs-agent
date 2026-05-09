@@ -37,7 +37,8 @@ from ecs_agent.systems.system_prompt_render_system import (
     SystemPromptRenderSystem,
     render_compaction_prompt,
 )
-from ecs_agent.types import SubagentConfig, ToolSchema
+from ecs_agent.systems.subagent import SubagentSystem
+from ecs_agent.types import FreeSubagentConfig, SubagentConfig, ToolSchema
 
 
 class TerminatingSystem:
@@ -810,6 +811,52 @@ async def test_render_system_empty_subagents_renders_none() -> None:
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
     assert rendered.text == "- none"
+
+
+@pytest.mark.asyncio
+async def test_render_system_free_subagents_mentions_unregistered_categories() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_installed_subagents}")
+        ),
+    )
+    world.add_component(
+        entity_id,
+        SubagentRegistryComponent(
+            free_subagent_config=FreeSubagentConfig(enabled=True),
+        ),
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert "Free-form subagents enabled" in rendered.text
+    assert "unregistered" in rendered.text
+
+
+@pytest.mark.asyncio
+async def test_render_system_global_free_subagent_preinstall_exposes_prompt_hint() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=object()))
+    world.add_component(entity_id, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="${_installed_subagents}")
+        ),
+    )
+
+    await SubagentSystem(allow_unregistered_subagents=True).process(world)
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    assert "Free-form subagents enabled" in rendered.text
 
 
 @pytest.mark.asyncio

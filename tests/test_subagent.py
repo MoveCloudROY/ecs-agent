@@ -44,6 +44,7 @@ from ecs_agent.types import (
     SubagentNotificationRecord,
     SubagentSessionRecord,
     SubagentConfig,
+    FreeSubagentConfig,
     ToolSchema,
     is_wake_worthy,
     validate_subagent_lifecycle_transition,
@@ -1957,6 +1958,150 @@ async def test_subagent_tool_sync_happy_path() -> None:
     )
 
     assert result == "sync-result"
+
+
+async def test_process_installs_free_subagent_tool_without_registry_when_system_option_enabled() -> None:
+    world = World()
+    parent_entity = world.create_entity()
+    model = FakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
+    world.add_component(parent_entity, LLMComponent(model=model))
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem(allow_unregistered_subagents=True)
+
+    await system.process(world)
+
+    registry = world.get_component(parent_entity, SubagentRegistryComponent)
+    assert registry is not None
+    assert registry.free_subagent_config.enabled is True
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    assert "subagent" in tool_registry.tools
+    assert "subagent" in tool_registry.handlers
+
+
+async def test_subagent_tool_free_mode_allows_unregistered_category_from_parent_model() -> None:
+    world = World()
+    parent_entity = world.create_entity()
+    parent_model = FakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
+    world.add_component(parent_entity, LLMComponent(model=parent_model))
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(
+            free_subagent_config=FreeSubagentConfig(enabled=True),
+        ),
+    )
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem()
+    system.install_subagent_tool(world, parent_entity)
+
+    async def fake_execute_core(
+        world_arg: World,
+        parent_entity_id: EntityId,
+        subagent_name: str,
+        task: str,
+        correlation_id: str,
+        traceparent: str,
+        config_snapshot: SubagentConfig,
+    ) -> tuple[str, bool, str | None]:
+        assert world_arg is world
+        assert parent_entity_id == parent_entity
+        assert subagent_name == "security-reviewer"
+        assert task == "review this module"
+        assert correlation_id
+        assert traceparent
+        assert config_snapshot.name == "security-reviewer"
+        assert config_snapshot.model is parent_model
+        assert "security-reviewer" in config_snapshot.system_prompt
+        return ("free-result", True, None)
+
+    system._execute_subagent_core = fake_execute_core  # type: ignore[method-assign]
+
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    handler = tool_registry.handlers["subagent"]
+
+    result = await handler(
+        category="security-reviewer",
+        prompt="review this module",
+        load_skills=[],
+        background=False,
+        timeout=None,
+    )
+
+    assert result == "free-result"
+
+
+async def test_subagent_tool_free_mode_prefers_registered_subagent_config() -> None:
+    parent_model = FakeModel(responses=[])
+    registered_model = FakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
+    registry = SubagentRegistryComponent(
+        subagents={
+            "reviewer": SubagentConfig(
+                name="reviewer",
+                model=registered_model,
+                system_prompt="Registered reviewer prompt.",
+            )
+        },
+        free_subagent_config=FreeSubagentConfig(enabled=True),
+    )
+
+    resolved = SubagentSystem()._resolve_subagent_config(
+        registry,
+        "reviewer",
+        parent_model=parent_model,
+    )
+
+    assert resolved.model is registered_model
+    assert resolved.system_prompt == "Registered reviewer prompt."
+
+
+async def test_subagent_tool_free_mode_template_allows_literal_braces() -> None:
+    parent_model = FakeModel(responses=[])
+    registry = SubagentRegistryComponent(
+        free_subagent_config=FreeSubagentConfig(
+            enabled=True,
+            system_prompt_template='You are {name}. Return JSON like {"ok": true}.',
+        ),
+    )
+
+    resolved = SubagentSystem()._resolve_subagent_config(
+        registry,
+        "json-worker",
+        parent_model=parent_model,
+    )
+
+    assert resolved.system_prompt == 'You are json-worker. Return JSON like {"ok": true}.'
+
+
+async def test_subagent_tool_description_mentions_free_categories_when_enabled() -> None:
+    world = World()
+    parent_entity = world.create_entity()
+    model = FakeModel(responses=[])
+    world.add_component(parent_entity, LLMComponent(model=model))
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(
+            free_subagent_config=FreeSubagentConfig(enabled=True),
+        ),
+    )
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem()
+    system.install_subagent_tool(world, parent_entity)
+
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    schema = tool_registry.tools["subagent"]
+    assert "any descriptive category name" in schema.description
+    assert "unregistered" in schema.parameters["properties"]["category"]["description"]
 
 
 async def test_subagent_tool_background_returns_session_id() -> None:

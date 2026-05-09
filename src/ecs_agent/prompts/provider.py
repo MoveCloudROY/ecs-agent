@@ -105,10 +105,18 @@ class InventoryPlaceholderProvider:
         registry = world.get_component(entity_id, SubagentRegistryComponent)
         if registry is None:
             return []
-        return sorted(
+        entries = sorted(
             ((name, cfg.description) for name, cfg in registry.subagents.items()),
             key=lambda e: e[0],
         )
+        if registry.free_subagent_config.enabled:
+            entries.append(
+                (
+                    "Free-form subagents enabled",
+                    "you may call the subagent tool with any descriptive unregistered category name",
+                )
+            )
+        return entries
 
     @staticmethod
     def _mcp_tool_entries(world: World, entity_id: EntityId) -> list[tuple[str, str]]:

@@ -52,6 +52,7 @@ from ecs_agent.types import (
     DelegationCompletedEvent,
     DelegationStartedEvent,
     EntityId,
+    FreeSubagentConfig,
     InheritancePolicy,
     Message,
     render_subagent_session_reminder_table,
@@ -175,6 +176,8 @@ class SubagentSystem:
         default_timeout: float | None = None,
         registry: ArtifactRegistry | None = None,
         max_background_concurrency: int = 5,
+        allow_unregistered_subagents: bool = False,
+        free_subagent_config: FreeSubagentConfig | None = None,
     ) -> None:
         self.priority = priority
         self._runtime_manager = SubagentRuntimeManager(
@@ -182,6 +185,9 @@ class SubagentSystem:
         )
         self._default_timeout = default_timeout
         self._registry = registry
+        self._free_subagent_config = free_subagent_config or FreeSubagentConfig(
+            enabled=allow_unregistered_subagents
+        )
         self._reconciled_session_ids: set[str] = set()
 
     def _persist_subagent_result(
@@ -681,6 +687,18 @@ class SubagentSystem:
         if tool_registry is None:
             raise ValueError(f"Entity {entity_id} missing ToolRegistryComponent")
 
+        free_mode_enabled = registry.free_subagent_config.enabled
+        category_description = (
+            'Registered subagent type/name (e.g. "researcher", "coder") or, because free-form subagents are enabled, any unregistered descriptive category name.'
+            if free_mode_enabled
+            else 'Registered subagent type/name (e.g. "researcher", "coder"). Must match a key in SubagentRegistryComponent.'
+        )
+        free_mode_description = (
+            "  - Free-form subagents are enabled: category may be any descriptive category name, including unregistered names.\n"
+            if free_mode_enabled
+            else "  - category must match a subagent registered in SubagentRegistryComponent.\n"
+        )
+
         tool_registry.tools[tool_name] = ToolSchema(
             name=tool_name,
             description=(
@@ -693,7 +711,7 @@ class SubagentSystem:
                 "    and collect results later via subagent_result.\n"
                 "  - Use background=False (default) when you need the result before continuing.\n\n"
                 "INTERFACE:\n"
-                "  category (required) — subagent type/name registered in SubagentRegistryComponent.\n"
+                f"{free_mode_description}"
                 "  prompt   (required) — full task instruction for the subagent; be specific.\n"
                 "  load_skills        — extra skill names to inject on top of category defaults.\n"
                 "  background         — if True, returns a JSON payload with session_id immediately; "
@@ -717,7 +735,7 @@ class SubagentSystem:
                 "properties": {
                     "category": {
                         "type": "string",
-                        "description": 'Registered subagent type/name (e.g. "researcher", "coder"). Must match a key in SubagentRegistryComponent.',
+                        "description": category_description,
                     },
                     "prompt": {
                         "type": "string",
@@ -765,6 +783,34 @@ class SubagentSystem:
         System registers the unified subagent tool on entities with both
         SubagentRegistryComponent and ToolRegistryComponent.
         """
+        if self._free_subagent_config.enabled:
+            for entity_id, (tool_registry,) in world.query(ToolRegistryComponent):
+                registry_comp = world.get_component(entity_id, SubagentRegistryComponent)
+                if registry_comp is None:
+                    registry_comp = SubagentRegistryComponent(
+                        free_subagent_config=replace(self._free_subagent_config)
+                    )
+                    world.add_component(entity_id, registry_comp)
+                elif not registry_comp.free_subagent_config.enabled:
+                    registry_comp.free_subagent_config = replace(
+                        self._free_subagent_config
+                    )
+
+                await self._reconcile_restored_sessions(world, entity_id, registry_comp)
+                if "subagent" in tool_registry.tools:
+                    continue
+                self.install_subagent_tool(
+                    world, entity_id, tool_name="subagent", override=False
+                )
+
+                logger.info(
+                    "subagent_tool_registered",
+                    entity_id=entity_id,
+                    available_subagents=list(registry_comp.subagents.keys()),
+                    free_subagents_enabled=True,
+                )
+            return
+
         for entity_id, components in world.query(
             SubagentRegistryComponent, ToolRegistryComponent
         ):
@@ -1309,8 +1355,13 @@ class SubagentSystem:
             # Validate parameters BEFORE the try/except — raise so callers can catch
             self._validate_subagent_params(category, prompt, effective_load_skills)
 
+            parent_llm = world.get_component(parent_entity_id, LLMComponent)
             try:
-                config = self._resolve_subagent_config(registry_comp, category)
+                config = self._resolve_subagent_config(
+                    registry_comp,
+                    category,
+                    parent_model=parent_llm.model if parent_llm is not None else None,
+                )
             except ValueError as exc:
                 return str(exc)
 
@@ -1762,19 +1813,52 @@ class SubagentSystem:
         self,
         registry: SubagentRegistryComponent,
         subagent_name: str,
+        *,
+        parent_model: LLMModel | None = None,
     ) -> SubagentConfig:
         """Resolve and validate subagent configuration from registry."""
         config = registry.subagents.get(subagent_name)
         if config is None:
-            raise ValueError(
-                f"Error: Unknown subagent '{subagent_name}'. Available subagents: {list(registry.subagents.keys())}"
+            config = self._resolve_free_subagent_config(
+                registry,
+                subagent_name,
+                parent_model,
             )
+            if config is None:
+                raise ValueError(
+                    f"Error: Unknown subagent '{subagent_name}'. Available subagents: {list(registry.subagents.keys())}"
+                )
 
         # Wrap model with RetryModel by default
         wrapped_model = self._wrap_retry_model_if_needed(config.model)
 
         # Return config with wrapped model (use replace to preserve other fields)
         return replace(config, model=wrapped_model)
+
+    def _resolve_free_subagent_config(
+        self,
+        registry: SubagentRegistryComponent,
+        subagent_name: str,
+        parent_model: LLMModel | None,
+    ) -> SubagentConfig | None:
+        free_config = registry.free_subagent_config
+        if not free_config.enabled:
+            return None
+        if parent_model is None:
+            raise ValueError(
+                f"Error: Unknown subagent '{subagent_name}' cannot be created without a parent LLMComponent model"
+            )
+        return SubagentConfig(
+            name=subagent_name,
+            model=parent_model,
+            description="Dynamically created free-form subagent.",
+            system_prompt=free_config.system_prompt_template.replace(
+                "{name}", subagent_name
+            ),
+            skills=list(free_config.skills),
+            max_ticks=free_config.max_ticks,
+            inheritance_policy=replace(free_config.inheritance_policy),
+        )
 
     def _validate_subagent_params(
         self, category: str, prompt: str, load_skills: list[str]
