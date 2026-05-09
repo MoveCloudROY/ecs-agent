@@ -39,6 +39,10 @@ class LangfuseConfig:
     flush_at: int | None = None
     flush_interval: float | None = None
     enabled: bool = True
+    capture_input: bool = True
+    capture_output: bool = True
+    enable_private_v4_historical_otel: bool = False
+    timeout: float | None = None
 
     def with_env(self, env: dict[str, str] | None = None) -> LangfuseConfig:
         """Return a copy with missing SDK credential fields loaded from env names."""
@@ -68,6 +72,12 @@ class LangfuseTelemetrySink:
         self.config = LangfuseConfig() if config is None else config
         self.redactor = SecretRedactor() if redactor is None else redactor
         self._v4_observation_ids: dict[str, str] = {}
+        self._v4_trace_ids: dict[str, str] = {}
+        self._v4_trace_names: dict[str, str] = {}
+        self._active_v4_root_observations: dict[str, Any] = {}
+        self.failure_count = 0
+        self.failures_by_operation: dict[str, int] = {}
+        self.last_error: str | None = None
 
     async def emit(self, record: TelemetryRecord) -> None:
         """Emit one sanitized telemetry record to Langfuse."""
@@ -75,13 +85,14 @@ class LangfuseTelemetrySink:
             return
         try:
             payload, redaction = sanitize_payload(record.to_payload(), self.redactor)
-            record_payload = _as_dict(payload)
+            record_payload = _apply_capture_policy(_as_dict(payload), self.config)
             redaction_payload = redaction.to_payload()
-            if record.kind == "trace":
+            if _is_trace_container_payload(record_payload):
                 await self._emit_trace(record_payload, redaction_payload)
                 return
             await self._emit_observation(record_payload, redaction_payload)
         except Exception as exc:
+            self._record_failure("emit", exc)
             logger.error("langfuse_emit_failed", exception=str(exc))
 
     async def score(self, score: TelemetryScore) -> None:
@@ -107,6 +118,7 @@ class LangfuseTelemetrySink:
                 metadata=metadata,
             )
         except Exception as exc:
+            self._record_failure("score", exc)
             logger.error("langfuse_score_failed", exception=str(exc))
 
     async def flush(self) -> None:
@@ -114,6 +126,7 @@ class LangfuseTelemetrySink:
         try:
             await self._call_optional_client("flush")
         except Exception as exc:
+            self._record_failure("flush", exc)
             logger.error("langfuse_flush_failed", exception=str(exc))
 
     async def shutdown(self) -> None:
@@ -121,7 +134,17 @@ class LangfuseTelemetrySink:
         try:
             await self._call_optional_client("shutdown")
         except Exception as exc:
+            self._record_failure("shutdown", exc)
             logger.error("langfuse_shutdown_failed", exception=str(exc))
+
+    def _record_failure(self, operation: str, exc: Exception) -> None:
+        """Record sink-local failure health without interrupting agent runs."""
+        self.failure_count += 1
+        self.failures_by_operation[operation] = (
+            self.failures_by_operation.get(operation, 0) + 1
+        )
+        sanitized, _ = sanitize_payload(str(exc), self.redactor)
+        self.last_error = sanitized if isinstance(sanitized, str) else repr(sanitized)
 
     async def _emit_trace(
         self,
@@ -209,7 +232,22 @@ class LangfuseTelemetrySink:
         *,
         as_type: str,
     ) -> None:
+        self._remember_v4_trace_name(payload)
+        if await self._finalize_active_v4_root_observation(
+            payload,
+            metadata,
+            as_type=as_type,
+        ):
+            return
         non_current_method = getattr(self.client, "start_observation", None)
+        if _is_root_observation_payload(payload) and non_current_method is not None:
+            await self._emit_v4_non_current_observation(
+                non_current_method,
+                payload,
+                metadata,
+                as_type=as_type,
+            )
+            return
         if payload.get("end_time") is not None and non_current_method is not None:
             await self._emit_v4_non_current_observation(
                 non_current_method,
@@ -233,13 +271,16 @@ class LangfuseTelemetrySink:
         observation_id = payload.get("observation_id")
         if observation_id is not None:
             observation_metadata["observation_id"] = observation_id
-        with self._v4_module_propagation_context():
+        with self._v4_module_propagation_context(payload):
             observation_context = method(
                 **_drop_none(
                     {
-                        "trace_context": _trace_context(payload, self._v4_observation_ids),
+                        "trace_context": self._v4_trace_context(payload),
                         "name": payload.get("name"),
                         "as_type": as_type,
+                        "end_on_exit": (
+                            False if _is_root_observation_payload(payload) else None
+                        ),
                         "input": payload.get("input"),
                         "output": payload.get("output"),
                         "metadata": observation_metadata,
@@ -260,8 +301,75 @@ class LangfuseTelemetrySink:
             )
             with observation_context as observation:
                 self._remember_v4_observation_id(payload, observation)
-                with self._v4_client_propagation_context():
+                self._remember_v4_trace_id(payload, observation)
+                self._apply_v4_trace_name(payload, observation)
+                self._remember_active_v4_root_observation(payload, observation)
+                with self._v4_client_propagation_context(payload):
                     return
+
+    async def _finalize_active_v4_root_observation(
+        self,
+        payload: dict[str, JsonSafe],
+        metadata: dict[str, JsonSafe],
+        *,
+        as_type: str,
+    ) -> bool:
+        """Update and end an active root observation instead of creating a duplicate."""
+        observation_id = payload.get("observation_id")
+        if not isinstance(observation_id, str) or payload.get("end_time") is None:
+            return False
+        observation = self._active_v4_root_observations.pop(observation_id, None)
+        if observation is None:
+            return False
+
+        update = getattr(observation, "update", None)
+        if update is not None:
+            result = update(
+                **_drop_none(
+                    {
+                        "name": payload.get("name"),
+                        "as_type": as_type,
+                        "input": payload.get("input"),
+                        "output": payload.get("output"),
+                        "metadata": metadata,
+                        "level": _langfuse_level(
+                            payload.get("status"), payload.get("error")
+                        ),
+                        "status_message": payload.get("error"),
+                        "model": payload.get("model"),
+                        "model_parameters": payload.get("model_parameters"),
+                        "usage_details": _langfuse_usage_details(
+                            payload.get("usage_details")
+                        ),
+                        "cost_details": _langfuse_cost_details(
+                            payload.get("cost_details")
+                        ),
+                    }
+                )
+            )
+            if inspect.isawaitable(result):
+                await result
+
+        end = getattr(observation, "end", None)
+        if end is not None:
+            result = end(end_time=_datetime_to_epoch_ns(payload.get("end_time")))
+            if inspect.isawaitable(result):
+                await result
+        return True
+
+    def _remember_active_v4_root_observation(
+        self,
+        payload: dict[str, JsonSafe],
+        observation: Any,
+    ) -> None:
+        """Remember open root observations so later completion updates them."""
+        observation_id = payload.get("observation_id")
+        if (
+            isinstance(observation_id, str)
+            and payload.get("end_time") is None
+            and _is_root_observation_payload(payload)
+        ):
+            self._active_v4_root_observations[observation_id] = observation
 
     async def _emit_v4_non_current_observation(
         self,
@@ -283,37 +391,41 @@ class LangfuseTelemetrySink:
                 as_type=as_type,
             )
             return
-        with self._v4_module_propagation_context():
-            observation = method(
-                **_drop_none(
-                    {
-                        "trace_context": _trace_context(payload, self._v4_observation_ids),
-                        "name": payload.get("name"),
-                        "as_type": as_type,
-                        "input": payload.get("input"),
-                        "output": payload.get("output"),
-                        "metadata": observation_metadata,
-                        "level": _langfuse_level(
-                            payload.get("status"), payload.get("error")
-                        ),
-                        "status_message": payload.get("error"),
-                        "model": payload.get("model"),
-                        "model_parameters": payload.get("model_parameters"),
-                        "usage_details": _langfuse_usage_details(
-                            payload.get("usage_details")
-                        ),
-                        "cost_details": _langfuse_cost_details(
-                            payload.get("cost_details")
-                        ),
-                    }
+        with self._v4_clean_root_context(payload):
+            with self._v4_pre_start_propagation_context(payload):
+                observation = method(
+                    **_drop_none(
+                        {
+                            "trace_context": self._v4_trace_context(payload),
+                            "name": payload.get("name"),
+                            "as_type": as_type,
+                            "input": payload.get("input"),
+                            "output": payload.get("output"),
+                            "metadata": observation_metadata,
+                            "level": _langfuse_level(
+                                payload.get("status"), payload.get("error")
+                            ),
+                            "status_message": payload.get("error"),
+                            "model": payload.get("model"),
+                            "model_parameters": payload.get("model_parameters"),
+                            "usage_details": _langfuse_usage_details(
+                                payload.get("usage_details")
+                            ),
+                            "cost_details": _langfuse_cost_details(
+                                payload.get("cost_details")
+                            ),
+                        }
+                    )
                 )
-            )
-            self._remember_v4_observation_id(payload, observation)
-            end = getattr(observation, "end", None)
-            if end is not None:
-                result = end(end_time=_datetime_to_epoch_ns(payload.get("end_time")))
-                if inspect.isawaitable(result):
-                    await result
+                self._remember_v4_observation_id(payload, observation)
+                self._remember_v4_trace_id(payload, observation)
+                self._apply_v4_trace_name(payload, observation)
+                self._remember_active_v4_root_observation(payload, observation)
+                end = getattr(observation, "end", None)
+                if end is not None and payload.get("end_time") is not None:
+                    result = end(end_time=_datetime_to_epoch_ns(payload.get("end_time")))
+                    if inspect.isawaitable(result):
+                        await result
 
     def _can_emit_v4_historical_observation(
         self,
@@ -321,7 +433,8 @@ class LangfuseTelemetrySink:
     ) -> bool:
         """Return whether the client can create a v4 observation with start time."""
         return (
-            payload.get("start_time") is not None
+            self.config.enable_private_v4_historical_otel
+            and payload.get("start_time") is not None
             and payload.get("end_time") is not None
             and getattr(self.client, "_otel_tracer", None) is not None
             and getattr(self.client, "_create_remote_parent_span", None) is not None
@@ -340,8 +453,8 @@ class LangfuseTelemetrySink:
         tracer = getattr(self.client, "_otel_tracer")
         start_time = _datetime_to_epoch_ns(payload.get("start_time"))
         end_time = _datetime_to_epoch_ns(payload.get("end_time"))
-        trace_context = _trace_context(payload, self._v4_observation_ids)
-        with self._v4_historical_propagation_context():
+        trace_context = self._v4_trace_context(payload) or {}
+        with self._v4_historical_propagation_context(payload):
             remote_parent = self._v4_remote_parent_span(trace_context)
             with self._v4_use_span(remote_parent):
                 otel_span = tracer.start_span(
@@ -349,7 +462,7 @@ class LangfuseTelemetrySink:
                     start_time=start_time,
                 )
                 set_attribute = getattr(otel_span, "set_attribute", None)
-                if set_attribute is not None:
+                if set_attribute is not None and _is_root_observation_payload(payload):
                     set_attribute("langfuse.internal.as_root", True)
                 observation_factory = getattr(
                     self.client,
@@ -379,6 +492,8 @@ class LangfuseTelemetrySink:
                     )
                 )
                 self._remember_v4_observation_id(payload, observation)
+                self._remember_v4_trace_id(payload, observation)
+                self._apply_v4_trace_name(payload, observation)
         end = getattr(observation, "end", None)
         if end is not None:
             result = end(end_time=end_time)
@@ -401,6 +516,50 @@ class LangfuseTelemetrySink:
             parent_span_id=parent_span_id,
         )
 
+    def _v4_trace_context(self, payload: dict[str, JsonSafe]) -> dict[str, JsonSafe] | None:
+        """Return v4 trace context, omitting it for root observations."""
+        if _is_root_observation_payload(payload):
+            return None
+        return _trace_context(payload, self._v4_observation_ids, self._v4_trace_ids)
+
+    def _remember_v4_trace_id(
+        self,
+        payload: dict[str, JsonSafe],
+        observation: Any,
+    ) -> None:
+        """Map internal trace IDs to SDK-generated Langfuse v4 trace IDs."""
+        internal_trace_id = payload.get("trace_id")
+        sdk_trace_id = getattr(observation, "trace_id", None)
+        if isinstance(internal_trace_id, str) and isinstance(sdk_trace_id, str):
+            self._v4_trace_ids[internal_trace_id] = sdk_trace_id
+
+    def _apply_v4_trace_name(
+        self,
+        payload: dict[str, JsonSafe],
+        observation: Any,
+    ) -> None:
+        """Set the v4 trace-name attribute on an observation's OTel span when exposed."""
+        trace_name = self._v4_payload_trace_name(payload)
+        if trace_name is None:
+            return
+        otel_span = getattr(observation, "_otel_span", None)
+        set_attribute = getattr(otel_span, "set_attribute", None)
+        if set_attribute is not None:
+            set_attribute("langfuse.trace.name", trace_name)
+
+    def _remember_v4_trace_name(self, payload: dict[str, JsonSafe]) -> None:
+        """Remember the intended Langfuse trace name for later child observations."""
+        trace_id = payload.get("trace_id")
+        trace_name = self._v4_payload_trace_name(payload)
+        if isinstance(trace_id, str) and trace_name is not None:
+            self._v4_trace_names[trace_id] = trace_name
+
+    def _v4_clean_root_context(self, payload: dict[str, JsonSafe]) -> Any:
+        """Detach ambient OTel span context while creating v4 root observations."""
+        if not _is_root_observation_payload(payload):
+            return nullcontext()
+        return _OtelDetachedContext()
+
     def _v4_use_span(self, span: Any | None) -> Any:
         """Return an OpenTelemetry use_span context or a no-op fallback."""
         if span is None:
@@ -414,11 +573,11 @@ class LangfuseTelemetrySink:
             return nullcontext()
         return use_span(span)
 
-    def _v4_historical_propagation_context(self) -> Any:
+    def _v4_historical_propagation_context(self, payload: dict[str, JsonSafe]) -> Any:
         """Return a trace-attribute propagation context for historical spans."""
         if getattr(self.client, "propagate_attributes", None) is not None:
-            return self._v4_client_propagation_context()
-        return self._v4_module_propagation_context()
+            return self._v4_client_propagation_context(payload)
+        return self._v4_module_propagation_context(payload)
 
     async def _emit_v4_event(
         self,
@@ -433,11 +592,11 @@ class LangfuseTelemetrySink:
         observation_id = payload.get("observation_id")
         if observation_id is not None:
             event_metadata["observation_id"] = observation_id
-        with self._v4_module_propagation_context():
+        with self._v4_pre_start_propagation_context(payload):
             result = method(
                 **_drop_none(
                     {
-                        "trace_context": _trace_context(payload, self._v4_observation_ids),
+                            "trace_context": self._v4_trace_context(payload),
                         "name": payload.get("name"),
                         "input": payload.get("input"),
                         "output": payload.get("output"),
@@ -465,29 +624,62 @@ class LangfuseTelemetrySink:
         if _is_lower_hex(sdk_id, _LANGFUSE_SPAN_ID_HEX_LENGTH):
             self._v4_observation_ids[internal_id] = sdk_id
 
-    def _v4_propagation_kwargs(self) -> dict[str, JsonSafe]:
+    def _v4_propagation_kwargs(
+        self,
+        payload: dict[str, JsonSafe] | None = None,
+    ) -> dict[str, JsonSafe]:
         config_context = _config_export_context(self.config, self.redactor)
         return _drop_none(
             {
                 "user_id": config_context.metadata.get("user_id"),
                 "session_id": config_context.metadata.get("session_id"),
                 "tags": config_context.metadata.get("tags"),
+                "trace_name": self._v4_payload_trace_name(payload),
             }
         )
 
-    def _v4_client_propagation_context(self) -> Any:
+    def _v4_payload_trace_name(
+        self,
+        payload: dict[str, JsonSafe] | None,
+    ) -> str | None:
+        """Return the intended v4 trace-level name for this payload."""
+        if payload is None:
+            return None
+        trace_id = payload.get("trace_id")
+        if isinstance(trace_id, str) and trace_id in self._v4_trace_names:
+            return self._v4_trace_names[trace_id]
+        if payload.get("kind") == "trace" and payload.get("name") == "user.turn":
+            return "user.turn"
+        return None
+
+    def _v4_pre_start_propagation_context(
+        self,
+        payload: dict[str, JsonSafe],
+    ) -> Any:
+        """Return propagation active before creating a v4 observation span."""
+        if getattr(self.client, "propagate_attributes", None) is not None:
+            return self._v4_client_propagation_context(payload)
+        return self._v4_module_propagation_context(payload)
+
+    def _v4_client_propagation_context(
+        self,
+        payload: dict[str, JsonSafe] | None = None,
+    ) -> Any:
         method = getattr(self.client, "propagate_attributes", None)
         if method is None:
             return nullcontext()
-        propagation = self._v4_propagation_kwargs()
+        propagation = self._v4_propagation_kwargs(payload)
         if not propagation:
             return nullcontext()
         return method(**propagation)
 
-    def _v4_module_propagation_context(self) -> Any:
+    def _v4_module_propagation_context(
+        self,
+        payload: dict[str, JsonSafe] | None = None,
+    ) -> Any:
         if getattr(self.client, "propagate_attributes", None) is not None:
             return nullcontext()
-        propagation = self._v4_propagation_kwargs()
+        propagation = self._v4_propagation_kwargs(payload)
         if not propagation:
             return nullcontext()
         try:
@@ -542,6 +734,7 @@ def _create_langfuse_client(config: LangfuseConfig) -> Any:
         "release": config.release,
         "flush_at": config.flush_at,
         "flush_interval": config.flush_interval,
+        "timeout": config.timeout,
     }
     return langfuse_class(**_drop_none(kwargs))
 
@@ -556,6 +749,51 @@ def _first_method(client: Any, method_names: tuple[str, ...]) -> Any | None:
 
 def _drop_none(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if value is not None}
+
+
+class _OtelDetachedContext:
+    """Context manager that temporarily clears the active OpenTelemetry span."""
+
+    def __init__(self) -> None:
+        self._context_api: Any | None = None
+        self._token: object | None = None
+
+    def __enter__(self) -> None:
+        try:
+            context_api = importlib.import_module("opentelemetry.context")
+        except ImportError:
+            return
+        context_factory = getattr(context_api, "Context", None)
+        attach = getattr(context_api, "attach", None)
+        if context_factory is None or attach is None:
+            return
+        self._context_api = context_api
+        self._token = attach(context_factory())
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object | None,
+    ) -> None:
+        if self._context_api is None or self._token is None:
+            return
+        detach = getattr(self._context_api, "detach", None)
+        if detach is not None:
+            detach(self._token)
+
+
+def _apply_capture_policy(
+    payload: dict[str, JsonSafe],
+    config: LangfuseConfig,
+) -> dict[str, JsonSafe]:
+    """Return a payload copy with raw input/output capture policy applied."""
+    filtered = dict(payload)
+    if not config.capture_input:
+        filtered["input"] = None
+    if not config.capture_output:
+        filtered["output"] = None
+    return filtered
 
 
 def _langfuse_usage_details(value: JsonSafe) -> dict[str, int] | None:
@@ -601,11 +839,16 @@ def _as_dict(payload: JsonSafe) -> dict[str, JsonSafe]:
 def _trace_context(
     payload: dict[str, JsonSafe],
     v4_observation_ids: dict[str, str] | None = None,
+    v4_trace_ids: dict[str, str] | None = None,
 ) -> dict[str, JsonSafe]:
     context: dict[str, JsonSafe] = {}
     trace_id = payload.get("trace_id")
     if trace_id is not None:
-        context["trace_id"] = trace_id
+        context["trace_id"] = (
+            v4_trace_ids.get(trace_id, trace_id)
+            if v4_trace_ids is not None and isinstance(trace_id, str)
+            else trace_id
+        )
     parent_observation_id = payload.get("parent_observation_id")
     parent_span_id = _langfuse_parent_span_id(parent_observation_id, v4_observation_ids)
     if parent_span_id is not None:
@@ -629,6 +872,23 @@ def _langfuse_parent_span_id(
 
 def _is_lower_hex(value: str, length: int) -> bool:
     return len(value) == length and all(char in "0123456789abcdef" for char in value)
+
+
+def _is_root_trace_payload(payload: dict[str, JsonSafe]) -> bool:
+    """Return whether a payload represents the top-level trace root."""
+    return payload.get("kind") == "trace" and payload.get("parent_observation_id") is None
+
+
+def _is_trace_container_payload(payload: dict[str, JsonSafe]) -> bool:
+    """Return whether a payload should create/update a Langfuse trace container."""
+    return _is_root_trace_payload(payload) and payload.get("name") != "user.turn"
+
+
+def _is_root_observation_payload(payload: dict[str, JsonSafe]) -> bool:
+    """Return whether a payload is an unparented Langfuse observation root."""
+    return payload.get("parent_observation_id") is None and not _is_trace_container_payload(
+        payload
+    )
 
 
 def _metadata_with_context(
@@ -731,6 +991,8 @@ def _langfuse_observation_type(kind: JsonSafe) -> str:
         return "tool"
     if kind == "event":
         return "event"
+    if kind == "trace":
+        return "span"
     return "span"
 
 
