@@ -669,6 +669,20 @@ class SubagentConfig:
     inheritance_policy: InheritancePolicy = field(default_factory=InheritancePolicy)
 
 
+@dataclass(slots=True)
+class FreeSubagentConfig:
+    """Opt-in defaults for dynamically named subagent delegation."""
+
+    enabled: bool = False
+    system_prompt_template: str = (
+        "You are a focused subagent named '{name}'. Complete the delegated task "
+        "independently and return a concise final answer."
+    )
+    skills: list[str] = field(default_factory=list)
+    max_ticks: int | None = None
+    inheritance_policy: InheritancePolicy = field(default_factory=InheritancePolicy)
+
+
 SubagentLifecycleStatus = Literal[
     "queued",
     "running",
@@ -1006,6 +1020,7 @@ __all__ = [
     "StreamEndEvent",
     "StreamStartEvent",
     "SubagentConfig",
+    "FreeSubagentConfig",
     "SubagentLifecycleStatus",
     "SubagentStreamDeltaEvent",
     "SubagentStreamEndEvent",

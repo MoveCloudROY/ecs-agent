@@ -16,6 +16,7 @@ from ecs_agent.types import (
     ConversationMessage,
     DroppableContextKind,
     EntityId,
+    FreeSubagentConfig,
     InterruptionReason,
     Message,
     SubagentConfig,
@@ -400,9 +401,10 @@ class MessageBusConversationComponent:
 
 @dataclass(slots=True)
 class SubagentRegistryComponent:
-    """Registry of named subagents available for delegation."""
+    """Registry and opt-in free-form defaults for subagent delegation."""
 
     subagents: dict[str, SubagentConfig] = field(default_factory=dict)
+    free_subagent_config: FreeSubagentConfig = field(default_factory=FreeSubagentConfig)
 
 
 @dataclass(slots=True)
