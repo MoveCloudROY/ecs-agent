@@ -321,6 +321,15 @@ class WorldSerializer:
                     "provider": NON_SERIALIZABLE_PLACEHOLDER,
                 }
             serialized["subagents"] = subagents_serialized
+            serialized["free_subagent_config"] = {
+                "enabled": component.free_subagent_config.enabled,
+                "system_prompt_template": component.free_subagent_config.system_prompt_template,
+                "skills": list(component.free_subagent_config.skills),
+                "max_ticks": component.free_subagent_config.max_ticks,
+                "inheritance_policy": asdict(
+                    component.free_subagent_config.inheritance_policy
+                ),
+            }
 
         if isinstance(component, ConversationComponent):
             serialized["messages"] = [
@@ -489,7 +498,7 @@ class WorldSerializer:
 
         # SubagentRegistryComponent: reconstruct SubagentConfig and InheritancePolicy
         if component_name == SubagentRegistryComponent.__name__:
-            from ecs_agent.types import SubagentConfig, InheritancePolicy
+            from ecs_agent.types import FreeSubagentConfig, SubagentConfig, InheritancePolicy
 
             subagents_dict = {}
             for name, config_data in normalized_data.get("subagents", {}).items():
@@ -523,6 +532,30 @@ class WorldSerializer:
                 )
                 subagents_dict[name] = subagent_config
             normalized_data["subagents"] = subagents_dict
+            free_config_data = normalized_data.get("free_subagent_config", {})
+            if isinstance(free_config_data, FreeSubagentConfig):
+                free_config = free_config_data
+            else:
+                if not isinstance(free_config_data, dict):
+                    free_config_data = {}
+                free_policy_data = free_config_data.get("inheritance_policy", {})
+                if isinstance(free_policy_data, InheritancePolicy):
+                    free_policy = free_policy_data
+                elif isinstance(free_policy_data, dict):
+                    free_policy = InheritancePolicy(**free_policy_data)
+                else:
+                    free_policy = InheritancePolicy()
+                free_config = FreeSubagentConfig(
+                    enabled=bool(free_config_data.get("enabled", False)),
+                    system_prompt_template=free_config_data.get(
+                        "system_prompt_template",
+                        FreeSubagentConfig().system_prompt_template,
+                    ),
+                    skills=list(free_config_data.get("skills", [])),
+                    max_ticks=free_config_data.get("max_ticks"),
+                    inheritance_policy=free_policy,
+                )
+            normalized_data["free_subagent_config"] = free_config
 
         # ScratchbookRefComponent: no special handling needed (all fields are primitives)
         # ScratchbookRefComponent fields (artifact_id, category, content_hash, timestamp) are all strings

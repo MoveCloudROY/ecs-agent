@@ -11,6 +11,7 @@ from ecs_agent.components import (
     ConversationComponent,
     EmbeddingComponent,
     ErrorComponent,
+    SubagentRegistryComponent,
     KVStoreComponent,
     LLMComponent,
     MessageBusConfigComponent,
@@ -42,8 +43,11 @@ from ecs_agent.types import (
     CachedToolResultRef,
     EntityId,
     FileRefPart,
+    FreeSubagentConfig,
+    InheritancePolicy,
     ImageUrlPart,
     Message,
+    SubagentConfig,
     SubagentNotificationRecord,
     SubagentSessionRecord,
     ToolCall,
@@ -1183,6 +1187,72 @@ def test_new_components_in_registry() -> None:
     assert len(COMPONENT_REGISTRY) >= 28, (
         f"Registry has {len(COMPONENT_REGISTRY)} components, expected at least 28"
     )
+
+
+def test_subagent_registry_free_config_roundtrip() -> None:
+    model = DummyProvider()
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        SubagentRegistryComponent(
+            subagents={
+                "registered": SubagentConfig(name="registered", model=model),
+            },
+            free_subagent_config=FreeSubagentConfig(
+                enabled=True,
+                system_prompt_template='Worker {name}; JSON example {"ok": true}.',
+                skills=["read-file"],
+                max_ticks=7,
+                inheritance_policy=InheritancePolicy(
+                    inherit_system_prompt=False,
+                    inherit_tools=["read_file"],
+                    inherit_permissions=True,
+                ),
+            ),
+        ),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(
+        serialized,
+        providers={"default": model},
+        tool_handlers={},
+    )
+
+    restored_registry = restored.get_component(entity, SubagentRegistryComponent)
+    assert restored_registry is not None
+    assert restored_registry.free_subagent_config.enabled is True
+    assert restored_registry.free_subagent_config.system_prompt_template == (
+        'Worker {name}; JSON example {"ok": true}.'
+    )
+    assert restored_registry.free_subagent_config.skills == ["read-file"]
+    assert restored_registry.free_subagent_config.max_ticks == 7
+    assert restored_registry.free_subagent_config.inheritance_policy.inherit_tools == [
+        "read_file"
+    ]
+    assert restored_registry.free_subagent_config.inheritance_policy.inherit_permissions is True
+
+
+def test_subagent_registry_free_config_defaults_when_legacy_checkpoint_missing_field() -> None:
+    model = DummyProvider()
+    entity_id = "1"
+    data = {
+        "next_entity_id": 2,
+        "entities": {
+            entity_id: {
+                "SubagentRegistryComponent": {
+                    "subagents": {},
+                }
+            }
+        },
+    }
+
+    restored = WorldSerializer.from_dict(data, providers={"default": model}, tool_handlers={})
+
+    restored_registry = restored.get_component(EntityId(1), SubagentRegistryComponent)
+    assert restored_registry is not None
+    assert restored_registry.free_subagent_config.enabled is False
 
 
 def test_message_bus_config_roundtrip() -> None:
