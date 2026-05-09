@@ -96,7 +96,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 
 - **Named Worlds** — Pass `name="my-agent"` to `World(name=...)` to tag every log event (`entity_created`, `component_added`, `run_start`, `tick_start`, etc.) with `world_name` once logging is enabled via `configure_logging()`. Child worlds spawned by `SubagentSystem` are automatically named `<subagent_name>-<hex8>` for end-to-end log correlation across nested agent calls.
 ### Multi-Agent Orchestration
-- **Subagent Delegation** — Spawn child agents for subtasks with skill and permission inheritance. Control the `queued/running/succeeded/failed` lifecycle via a process-global FIFO scheduler.
+- **Subagent Delegation** — Spawn child agents for subtasks with skill and permission inheritance. Use registered named subagents by default, or opt into free-form subagents so the model can call arbitrary descriptive worker names. Control the `queued/running/succeeded/failed` lifecycle via a process-global FIFO scheduler.
 - **MessageBus** — Parent-child and sibling messaging via pub/sub or request-response patterns.
 - **Unified API** — Control lifecycle with `subagent`, `subagent_status`, `subagent_result`, `subagent_wait`, and `subagent_cancel` tools. Supports explicit wait/callback model for background sessions.
 
@@ -118,7 +118,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **`SystemPromptRenderSystem`** — ECS system (recommended priority -20) that resolves all `${name}` placeholders and writes a `RenderedSystemPromptComponent` for LLM callers.
 - **`UserPromptNormalizationSystem`** — ECS system (recommended priority -10) that injects trigger templates into outbound user messages and writes a `RenderedUserPromptComponent`. Slash-command skill context and ContextPool entries are injected later at call-time by `prepare_outbound_messages()`.
 - **Workflow State & Gates** — Declarative state machine DSL for building stateful agents. Define states, prompt profiles, and transition gates (`has`, `field`, `all_of`, etc.) that drive behavior over multiple ticks.
-- **Built-in Placeholders** — `${_installed_tools}`, `${_installed_skills}`, `${_installed_mcps}`, `${_installed_subagents}` automatically expand to the current inventory.
+- **Built-in Placeholders** — `${_installed_tools}`, `${_installed_skills}`, `${_installed_mcps}`, `${_installed_subagents}` automatically expand to the current inventory, including a free-form subagent hint when unregistered subagent names are enabled.
 - **Provider Extension Seam** — A synchronous, narrow provider protocol (`BuiltinPlaceholderProvider`) for injecting domain-specific context into system prompts. Used by the scratchbook prompt provider.
 - **Callable Placeholders** — Pass a `() -> str` callable as a placeholder resolver for dynamic content; must be side-effect-free and return a string.
 - **Trigger Templates** — `@keyword` or `event:<name>` trigger patterns transform outbound user messages without mutating conversation history. Three action kinds are supported:

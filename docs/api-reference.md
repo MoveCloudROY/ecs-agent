@@ -23,7 +23,7 @@ The following types and classes are re-exported for convenience:
 - `StreamStartEvent`, `StreamReasoningDeltaEvent`, `StreamReasoningEndEvent`, `StreamContentStartEvent`, `StreamContentDeltaEvent`, `StreamEndEvent`, `CheckpointCreatedEvent`, `CheckpointRestoredEvent`, `CompactionCompleteEvent`, `ToolApprovalRequestedEvent`, `ToolApprovedEvent`, `ToolDeniedEvent`, `RAGRetrievalCompletedEvent`, `UserInputRequestedEvent`, `MCTSNodeScoredEvent`, `MessageBusPublishedEvent`, `MessageBusDeliveredEvent`, `MessageBusResponseEvent`, `MessageBusTimeoutEvent` from `ecs_agent.types`
 - `scan_module`, `sandboxed_execute`, `tool` from `ecs_agent.tools`
 - `ScratchbookRef`, `ScratchbookRefComponent`, `ScratchbookIndexComponent` from `ecs_agent.types` and `ecs_agent.components`
-- `SubagentConfig`, `SubagentLifecycleStatus`, `SubagentSessionRecord`, `InheritancePolicy` from `ecs_agent.types`
+- `SubagentConfig`, `FreeSubagentConfig`, `SubagentLifecycleStatus`, `SubagentSessionRecord`, `InheritancePolicy` from `ecs_agent.types`
 - `ScratchbookService`, `ScratchbookIndexer`, `ToolResultsSink` from `ecs_agent.scratchbook`
 - `AgentSpec`, `validate_agent_spec`, `discover_agent_sources`, `load_json_agents`, `load_markdown_agent`, `resolve_agent_specs`, `compile_agent_specs`, `resolve_prompt_file` from `ecs_agent.dsl`
 
@@ -138,6 +138,14 @@ class SubagentConfig:
     system_prompt: str = ""
     skills: list[str] = field(default_factory=list)
     max_ticks: int = 10
+    inheritance_policy: InheritancePolicy = field(default_factory=InheritancePolicy)
+
+@dataclass(slots=True)
+class FreeSubagentConfig:
+    enabled: bool = False
+    system_prompt_template: str = "...{name}..."
+    skills: list[str] = field(default_factory=list)
+    max_ticks: int | None = None
     inheritance_policy: InheritancePolicy = field(default_factory=InheritancePolicy)
 
 @dataclass(slots=True)
@@ -589,7 +597,14 @@ opt-in helper for interactive runtimes. It clears selected `TerminalComponent` r
 ### SubagentSystem
 
 ```python
-class SubagentSystem(priority: int = -1, default_timeout: float | None = None):
+class SubagentSystem(
+    priority: int = -1,
+    default_timeout: float | None = None,
+    registry: ArtifactRegistry | None = None,
+    max_background_concurrency: int = 5,
+    allow_unregistered_subagents: bool = False,
+    free_subagent_config: FreeSubagentConfig | None = None,
+):
      async def process(self, world: World) -> None: ...
      def install_subagent_tool(self, world: World, entity_id: EntityId, tool_name: str = "subagent", override: bool = False) -> None: ...
      def install_subagent_control_tools(self, world: World, entity_id: EntityId) -> None: ...
