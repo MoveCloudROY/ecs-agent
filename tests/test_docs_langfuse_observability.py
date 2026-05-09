@@ -54,6 +54,21 @@ def test_langfuse_docs_mention_configuration() -> None:
         assert has_host, f"{source} missing LANGFUSE_HOST or LANGFUSE_BASE_URL alias policy"
 
 
+def test_langfuse_docs_describe_export_timeout_controls() -> None:
+    """Docs must explain how to tune self-hosted Langfuse export timeouts."""
+    docs = get_langfuse_docs_content()
+
+    required_phrases = [
+        "LangfuseConfig(timeout=",
+        "LANGFUSE_TIMEOUT",
+        "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
+        "read timeout",
+        "flush_interval",
+    ]
+    for phrase in required_phrases:
+        assert phrase in docs, f"docs/features/langfuse.md missing timeout guidance: {phrase}"
+
+
 def test_langfuse_docs_describe_session_attribute_propagation() -> None:
     """Docs must explain Langfuse Sessions need trace-level session propagation."""
     readme = get_readme_content()
@@ -104,6 +119,40 @@ def test_langfuse_docs_mention_credential_rotation() -> None:
 
     for content, source in [(readme, "README"), (docs, "docs/features/langfuse.md")]:
         assert "rotation" in content.lower() or "rotate" in content.lower(), f"{source} must mention credential rotation"
+
+
+def test_langfuse_docs_describe_capture_controls_and_private_otel_opt_in() -> None:
+    """Docs must keep Langfuse safety controls visible where behavior is advertised."""
+    readme = get_readme_content()
+    docs = get_langfuse_docs_content()
+    plan_task_readme = (PROJECT_ROOT / "examples" / "e2e" / "plan_and_task" / "README.md").read_text(
+        encoding="utf-8"
+    )
+
+    for content, source in [
+        (readme, "README"),
+        (docs, "docs/features/langfuse.md"),
+        (plan_task_readme, "examples/e2e/plan_and_task/README.md"),
+    ]:
+        assert "capture_input=False" in content, f"{source} missing capture_input opt-out guidance"
+        assert "capture_output=False" in content, f"{source} missing capture_output opt-out guidance"
+        assert "enable_private_v4_historical_otel" in content, f"{source} missing private OTel opt-in guidance"
+
+
+def test_langfuse_docs_explain_trace_and_observation_roots() -> None:
+    """Dedicated docs must distinguish Langfuse trace containers from root observations."""
+    docs = get_langfuse_docs_content()
+
+    required_phrases = [
+        "Session > Trace > Observation",
+        "trace container",
+        "root observation",
+        "root_observation_id",
+        "parent_observation_id",
+        "Span / Generation / Event",
+    ]
+    for phrase in required_phrases:
+        assert phrase in docs, f"docs/features/langfuse.md missing trace-root concept: {phrase}"
 
 
 def test_langfuse_docs_do_not_include_secret_values() -> None:

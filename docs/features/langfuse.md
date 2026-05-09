@@ -47,8 +47,42 @@ The integration uses the following environment variables for configuration:
 - `LANGFUSE_PUBLIC_KEY`: Your Langfuse project public key.
 - `LANGFUSE_SECRET_KEY`: Your Langfuse project secret key.
 - `LANGFUSE_HOST` or `LANGFUSE_BASE_URL`: The Langfuse API host.
+- `LANGFUSE_TIMEOUT`: Langfuse SDK HTTP timeout in seconds. This also controls the default HTTP OTLP span exporter timeout in Langfuse SDK v4.
+
+`LangfuseConfig` also exposes runtime safety controls:
+
+- `capture_input` / `capture_output`: Enabled by default for backward-compatible full-fidelity traces. Set either value to `False` to suppress raw inputs or outputs from Langfuse export while preserving metadata, timing, model, usage, and redaction reports.
+- `enable_private_v4_historical_otel`: Disabled by default. When enabled, the adapter may use Langfuse SDK v4 private OpenTelemetry hooks to backdate observation start times. Keep this off unless you have validated the exact Langfuse SDK version you run in production.
+- `timeout`: Optional Langfuse SDK HTTP timeout in seconds. Use `LangfuseConfig(timeout=30)` or `LANGFUSE_TIMEOUT` for slower self-hosted deployments.
+
+### Export timeout tuning
+
+Langfuse SDK v4 exports observations through the OpenTelemetry HTTP OTLP exporter. A log such as `Failed to export span batch ... Read timed out. (read timeout=...)` means the background span batch upload to the configured Langfuse host timed out; it does not indicate a failed agent run. For slower self-hosted endpoints, raise the SDK timeout explicitly:
+
+```python
+install_langfuse_observability(
+    world,
+    LangfuseConfig(
+        timeout=30,
+        flush_at=32,
+        flush_interval=2.0,
+    ),
+)
+```
+
+`flush_at` and `flush_interval` control how often batches are sent. They do not increase the per-request read timeout. If you configure OpenTelemetry directly, the corresponding OTLP environment variable is `OTEL_EXPORTER_OTLP_TRACES_TIMEOUT` (or the generic `OTEL_EXPORTER_OTLP_TIMEOUT`), in seconds.
 
 > **Security Note**: Never hardcode your secret keys in source code. Use environment variables or a secret manager. If your credentials have been exposed outside a secure environment, we recommend a full credential rotation immediately.
+
+## Langfuse Data Model
+
+Langfuse organizes telemetry as **Session > Trace > Observation**:
+
+- **Session**: A conversation or workflow grouping that can contain many traces. `LangfuseConfig.session_id` sets this grouping attribute.
+- **Trace**: A trace container for one request, user turn, or one-shot agent run. The trace owns the shared `trace_id` and groups the observation tree.
+- **Observation**: A node inside a trace. Span / Generation / Event records are observation types with different payload shapes.
+
+The distinction between a trace container and a root observation is important. A trace container is the Langfuse grouping object; the root observation is the first visible node in that trace's tree. In ecs-agent, `trace_id` identifies the trace container, `root_observation_id` is the conceptual root node for child observations, and `parent_observation_id` links each child observation to its parent. The current internal `TelemetryRecord(kind="trace")` represents a trace root record; if such a record also has `parent_observation_id`, the Langfuse adapter treats it as a child span observation rather than as a second top-level trace container.
 
 ## Langfuse Sessions
 
@@ -114,7 +148,7 @@ Observations captured include:
 - **Context Pressure**: Information about conversation compaction or windowing.
 - **Scores**: Automated evaluation scores if provided.
 
-For Langfuse SDK v4, completed ECS records are exported with the manual observation lifecycle. When the SDK exposes its OpenTelemetry-backed manual span hooks, the adapter creates the observation with the recorded operation `start_time` and then calls `end(end_time=...)` with the recorded operation end timestamp, both converted to Langfuse's nanosecond epoch format. This keeps LLM reasoning, tool execution, and subagent span durations aligned with the actual work rather than the telemetry export call duration, preventing the Langfuse UI from displaying zero-latency observations for operations that already completed before export. Older or test clients that do not expose historical OTel start hooks fall back to `start_observation(...)` plus `end(end_time=...)`. Active root observations still use `start_as_current_observation(...)` so `session_id` can be propagated while the trace context is current.
+For Langfuse SDK v4, completed ECS records are exported with the public manual observation lifecycle by default: the adapter starts the observation when it exports the record, then calls `end(end_time=...)` with the recorded operation end timestamp. If you explicitly set `LangfuseConfig(enable_private_v4_historical_otel=True)` and your validated SDK version exposes the required private OpenTelemetry-backed span hooks, the adapter can also backdate the observation start using the recorded operation `start_time`; older, unsupported, or non-opted-in clients fall back to `start_observation(...)` plus `end(end_time=...)`. Active root observations still use `start_as_current_observation(...)` so `session_id` can be propagated while the trace context is current.
 
 ## Alerts and Monitoring
 
@@ -127,6 +161,7 @@ The integration follows a strict data privacy policy. While raw prompts, respons
 - **Mandatory Redaction**: Sensitive patterns (like API keys or tokens) are automatically redacted from payloads.
 - **Redaction Reports**: Exported metadata includes counts and names of applied redaction rules, but never the redacted content itself.
 - **Model Names**: `LLM_MODEL` is intentionally not redacted because model identifiers drive Langfuse generation grouping and dashboard filters. Do not encode credentials, tenant secrets, or private data in model names.
+- **Raw Payload Capture**: Redaction is not a general privacy filter. User prompts, tool arguments, tool results, and model outputs may contain business-sensitive data that does not look like a secret. Use `LangfuseConfig(capture_input=False, capture_output=False)` when raw content should not leave the process.
 
 ## Telemetry Resilience
 
