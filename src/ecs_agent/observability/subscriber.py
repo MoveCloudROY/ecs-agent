@@ -96,6 +96,7 @@ class TraceState:
     last_generation_observation_ids: dict[int, str] = field(default_factory=dict)
     active_subagents: dict[str, SubagentSpanState] = field(default_factory=dict)
     stream_sequences: dict[int, int] = field(default_factory=dict)
+    pending_turn_records: list[TelemetryRecord] = field(default_factory=list)
     emit_root_trace: bool = True
 
 
@@ -460,6 +461,8 @@ class ObservabilitySubscriber:
         }
 
         try:
+            await self._emit_pending_turn_records(state, state.pending_turn_records)
+            state.pending_turn_records.clear()
             await self.sink.emit(root_record)
             await self.sink.score(
                 TelemetryScore(
@@ -650,8 +653,24 @@ class ObservabilitySubscriber:
             has_user_turn=True,
             metadata=metadata,
         )
+        pending_records = list(state.pending_turn_records)
+        state.pending_turn_records.clear()
         self.trace_states[run_id] = next_state
+        await self.sink.emit(root_record)
+        await self._emit_pending_turn_records(next_state, pending_records)
         return next_state
+
+    async def _emit_pending_turn_records(
+        self,
+        state: TraceState,
+        records: list[TelemetryRecord],
+    ) -> None:
+        """Emit records that were waiting for the active user-turn root."""
+        for record in records:
+            record.trace_id = state.trace_id
+            record.run_id = state.run_id
+            record.parent_observation_id = state.observation_id
+            await self.sink.emit(record)
 
     async def _emit_root_record(
         self,
@@ -674,6 +693,8 @@ class ObservabilitySubscriber:
         if ticks is not None:
             metadata["ticks"] = ticks
         root_record.metadata = metadata
+        await self._emit_pending_turn_records(state, state.pending_turn_records)
+        state.pending_turn_records.clear()
         await self.sink.emit(root_record)
 
     async def handle_stream_start(self, event: StreamStartEvent) -> None:
@@ -895,30 +916,32 @@ class ObservabilitySubscriber:
         if state is None:
             return
 
-        await self.sink.emit(
-            self._event_record(
-                state,
-                name="workflow.state",
-                kind="event",
-                status="error" if event.status == "ambiguous" else "success",
-                entity_id=int(event.entity_id),
-                tick=event.tick,
-                input={
-                    "workflow_id": event.workflow_id,
-                    "state_id": event.state_id,
-                    "matched_transition_ids": list(event.matched_transition_ids),
-                },
-                output={
-                    "current_state_id": event.current_state_id,
-                    "committed_transition_id": event.committed_transition_id,
-                    "from_state_id": event.from_state_id,
-                    "to_state_id": event.to_state_id,
-                    "transition_history": list(event.transition_history),
-                },
-                metadata={"status": event.status},
-                error=event.error,
-            )
+        record = self._event_record(
+            state,
+            name="workflow.state",
+            kind="event",
+            status="error" if event.status == "ambiguous" else "success",
+            entity_id=int(event.entity_id),
+            tick=event.tick,
+            input={
+                "workflow_id": event.workflow_id,
+                "state_id": event.state_id,
+                "matched_transition_ids": list(event.matched_transition_ids),
+            },
+            output={
+                "current_state_id": event.current_state_id,
+                "committed_transition_id": event.committed_transition_id,
+                "from_state_id": event.from_state_id,
+                "to_state_id": event.to_state_id,
+                "transition_history": list(event.transition_history),
+            },
+            metadata={"status": event.status},
+            error=event.error,
         )
+        if not state.has_user_turn:
+            state.pending_turn_records.append(record)
+            return
+        await self.sink.emit(record)
 
     async def handle_error_occurred(self, event: ErrorOccurredEvent) -> None:
         """Emit an error event and increment the current run's error count."""

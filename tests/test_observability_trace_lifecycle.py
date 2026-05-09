@@ -26,6 +26,7 @@ from ecs_agent.observability import (
     reset_run_context,
     set_run_context,
 )
+from ecs_agent.observability.schema import TelemetryRecord
 from ecs_agent.types import (
     CompletionResult,
     ErrorOccurredEvent,
@@ -39,6 +40,7 @@ from ecs_agent.types import (
     SubagentConfig,
     Usage,
     UserInputReceivedEvent,
+    WorkflowStateEvaluatedEvent,
 )
 from ecs_agent.providers.fake_model import FakeModel
 from ecs_agent.systems.subagent import SubagentSystem
@@ -278,6 +280,16 @@ class ScoreFailingSink(RecordingTelemetrySink):
         raise RuntimeError("score failed")
 
 
+def _unique_turn_traces(sink: RecordingTelemetrySink) -> list[TelemetryRecord]:
+    """Return each user-turn trace once while preserving first-emission order."""
+    traces_by_id = {
+        record.observation_id: record
+        for record in sink.records
+        if record.kind == "trace" and record.name == "user.turn"
+    }
+    return list(traces_by_id.values())
+
+
 @pytest.mark.asyncio
 async def test_runner_success_creates_one_trace() -> None:
     """A successful runner run creates one closed trace without empty tick spans."""
@@ -490,9 +502,7 @@ async def test_user_inputs_create_separate_turn_traces_with_child_generations() 
 
     await Runner().run(world, max_ticks=5)
 
-    turn_traces = [
-        record for record in sink.records if record.kind == "trace" and record.name == "user.turn"
-    ]
+    turn_traces = _unique_turn_traces(sink)
     assert len(turn_traces) == 2
     assert [trace.input for trace in turn_traces] == [
         {"text": "first question"},
@@ -508,6 +518,106 @@ async def test_user_inputs_create_separate_turn_traces_with_child_generations() 
     assert [generation.parent_observation_id for generation in generations] == [
         trace.observation_id for trace in turn_traces
     ]
+
+
+@pytest.mark.asyncio
+async def test_user_turn_root_is_emitted_before_workflow_children() -> None:
+    """Interactive turn roots are visible before child observations are emitted."""
+    world = World()
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+    token = set_run_context(trace_id="run-trace", run_id="run-one")
+
+    try:
+        await world.event_bus.publish(
+            RunStartedEvent(max_ticks=1, start_tick=0, active_entities=0)
+        )
+        entity_id = world.create_entity()
+        await world.event_bus.publish(
+            UserInputReceivedEvent(
+                entity_id=entity_id,
+                prompt="You> ",
+                text="draft the plan",
+            )
+        )
+        await world.event_bus.publish(
+            WorkflowStateEvaluatedEvent(
+                entity_id=entity_id,
+                workflow_id="plan_flow",
+                state_id="draft",
+                current_state_id="review",
+                tick=0,
+                matched_transition_ids=["draft_to_review"],
+                committed_transition_id="draft_to_review",
+                from_state_id="draft",
+                to_state_id="review",
+                transition_history=["draft_to_review"],
+                status="transition",
+            )
+        )
+        await world.event_bus.publish(
+            RunCompletedEvent(
+                status="success",
+                reason="manual",
+                duration_seconds=0.01,
+                ticks=1,
+                active_entities=1,
+            )
+        )
+    finally:
+        reset_run_context(token)
+
+    user_turn = next(record for record in sink.records if record.name == "user.turn")
+    workflow_state = next(record for record in sink.records if record.name == "workflow.state")
+
+    assert sink.records.index(user_turn) < sink.records.index(workflow_state)
+    assert workflow_state.trace_id == user_turn.trace_id
+    assert workflow_state.parent_observation_id == user_turn.observation_id
+
+
+@pytest.mark.asyncio
+async def test_pre_turn_workflow_state_is_reparented_to_user_turn() -> None:
+    """Workflow telemetry before input waits for the interactive turn root."""
+    world = World()
+    sink = RecordingTelemetrySink()
+    install_observability(world, sink)
+    token = set_run_context(trace_id="run-trace", run_id="run-one")
+
+    try:
+        await world.event_bus.publish(
+            RunStartedEvent(max_ticks=1, start_tick=0, active_entities=0)
+        )
+        entity_id = world.create_entity()
+        await world.event_bus.publish(
+            WorkflowStateEvaluatedEvent(
+                entity_id=entity_id,
+                workflow_id="plan_flow",
+                state_id="draft",
+                current_state_id="draft",
+                tick=0,
+                matched_transition_ids=[],
+                transition_history=[],
+                status="no_match",
+            )
+        )
+        assert not any(record.name == "workflow.state" for record in sink.records)
+
+        await world.event_bus.publish(
+            UserInputReceivedEvent(
+                entity_id=entity_id,
+                prompt="You> ",
+                text="continue the plan",
+            )
+        )
+    finally:
+        reset_run_context(token)
+
+    user_turn = next(record for record in sink.records if record.name == "user.turn")
+    workflow_state = next(record for record in sink.records if record.name == "workflow.state")
+
+    assert sink.records.index(user_turn) < sink.records.index(workflow_state)
+    assert workflow_state.trace_id == user_turn.trace_id
+    assert workflow_state.parent_observation_id == user_turn.observation_id
 
 
 @pytest.mark.asyncio
@@ -661,9 +771,7 @@ async def test_background_subagent_completion_uses_launch_turn_when_later_turn_a
 
     await Runner().run(world, max_ticks=5)
 
-    turn_traces = [
-        record for record in sink.records if record.kind == "trace" and record.name == "user.turn"
-    ]
+    turn_traces = _unique_turn_traces(sink)
     assert [trace.input for trace in turn_traces] == [
         {"text": "turn one launches background"},
         {"text": "turn two is active"},
