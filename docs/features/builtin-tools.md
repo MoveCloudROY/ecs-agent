@@ -10,7 +10,7 @@ The `BuiltinToolsSkill` includes ten primary tools:
 |------|-------------|
 | `read_file` | Read content from the workspace with optional line range. |
 | `write_file` | Create or overwrite files. |
-| `edit_file` | Perform precise, hash-anchored line edits. |
+| `edit_file` | Perform precise, snapshot-protected text edits. |
 | `bash` | Execute shell commands in a sandboxed-ready environment. |
 | `glob` | Find files matching a glob pattern in the workspace. |
 | `interactive_bash` | Execute persistent tmux commands for interactive sessions. |
@@ -60,11 +60,11 @@ Reads content from a file relative to the workspace root.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `file_path` | `str` | — | Workspace-relative path. |
-| `offset` | `int` | `1` | 1-based starting line number. |
-| `limit` | `int` | `0` | Maximum lines to return. `0` reads all lines. |
+| `offset` | `int \| str` | `1` | 1-based starting line number. Numeric strings such as `"10"` are accepted. |
+| `limit` | `int \| str` | `0` | Maximum lines to return. `0` reads all lines. Numeric strings such as `"20"` are accepted. |
 
 - **Security**: Prevents path traversal outside the workspace.
-- **Output**: Lines with `LINE#HASH|content` format, enabling safe use with `edit_file`.
+- **Output**: Clean file content only. The framework records internal line-hash snapshots for later safe edits without exposing hashes, snapshot IDs, or read IDs to the LLM.
 - **Best practice**: Always specify `offset` and `limit` for large files to avoid reading oversized content into the context window.
 
 Example:
@@ -75,9 +75,10 @@ result = await read_file("src/module.py", workspace_root=workspace, offset=10, l
 
 ### `write_file(file_path, content) -> str`
 Writes full content to a file. Creates the file (and any parent directories) if it does not exist.
+Overwriting an existing file requires a fresh prior `read_file` call; the framework rejects the write if the file changed after that read.
 
 ### `edit_file(file_path, op, pos, end=None, content="") -> str`
-Applies a single precise, hash-anchored edit to a file. Preferred for LLM code edits — avoids rewriting entire files and detects stale anchors.
+Applies a precise, snapshot-protected edit to a file. `pos` and `end` are 1-based file line numbers; the framework resolves internal hashes from entity-scoped snapshots and does not expose hash anchors to the LLM.
 
 #### Parameters
 
@@ -85,25 +86,33 @@ Applies a single precise, hash-anchored edit to a file. Preferred for LLM code e
 |-----------|------|----------|-------------|
 | `file_path` | `str` | Yes | Workspace-relative path to the target file. |
 | `op` | `"replace" \| "append" \| "prepend"` | Yes | Edit operation. |
-| `pos` | `str` | Yes | Start position in `LINE#HASH` format. Obtain from `read_file` output. |
-| `end` | `str \| None` | No | End position for range replace. Omit for single-line operations. |
-| `content` | `str` | No | New content. Use `\n` to separate multiple lines. |
+| `pos` | `int \| str` | Yes | 1-based file line number to edit, e.g. `12` or `"12"`. |
+| `end` | `int \| str \| None` | No | End 1-based file line number for range replace, e.g. `20` or `"20"`. Omit for single-line operations. |
+| `content` | `str` | No | New content to insert or replace. Use `\n` to separate multiple lines. |
 
-#### Hash-Anchored Editing
+#### Snapshot-Protected Editing
 
-`read_file` returns lines in `LINE#HASH|content` format:
+`read_file` returns clean content:
 ```
-1#a1b2|def my_function():
-2#c3d4|    return 42
+def my_function():
+    return 42
 ```
 
-`edit_file` verifies the hash before applying the edit. If the hash does not match (stale anchor), the edit is rejected — preventing edits based on outdated content.
+Internally, the framework stores snapshots containing line hashes and a full-file digest. During normal agent execution these snapshots live on `ToolRuntimeStateComponent` under the current ECS entity, reached through the internal `ToolExecutionContext`; they are not function parameters and never appear in tool schemas. This means two agents, or two entities using the same `BuiltinToolsSkill` instance, cannot authorize edits with each other's reads.
+
+`read_file` may record multiple snapshots for the same file, including parallel reads of different ranges. `edit_file` verifies that the file has not changed since a matching read, then resolves the requested line numbers against recent snapshots for that unchanged digest. If the snapshot is stale or the line was not part of the last read range, the edit is rejected and the model should call `read_file` again with a range that includes the target lines.
+
+Direct Python calls outside `ToolExecutionSystem` keep a private fallback snapshot store for backward compatibility. That fallback is only used when no `ToolExecutionContext` is active; framework-managed tool calls always prefer ECS runtime state.
+
+### Runtime State Extension Pattern
+
+`ToolRuntimeStateComponent` is the reusable ECS-native place for cross-tool internal state. Tool families should create a typed accessor backed by a namespace, just like file tools use `FileSnapshotState` in the `"file"` namespace. This keeps hidden state reusable for future browser, search, shell, or database tools without adding schema-visible parameters such as `snapshot_store`, `context`, `world`, or `entity_id`.
 
 #### Operations
 
-- `replace`: Replace a single line (no `end`) or a range of lines (`end` provided).
-- `append`: Insert `content` after the line at `pos`.
-- `prepend`: Insert `content` before the line at `pos`.
+- Replace a line with `op="replace"`, `pos=12` or `pos="12"`, and `content` set to the replacement line.
+- Replace a line range with `op="replace"`, `pos` set to the first line number, `end` set to the last line number, and `content` set to the replacement block.
+- Append/prepend with `op="append"` or `op="prepend"`, `pos` set to the target line number, and `content` set to the inserted text.
 
 ### `bash(command, timeout) -> str`
 Executes a shell command and returns stdout (or combined output on error).
@@ -219,7 +228,7 @@ Tools that do not operate on the workspace (`webfetch`, `code_execution`) do not
 
 ## Best Practices
 
-1. **Read Before Edit**: Use `read_file` (with appropriate `offset`/`limit`) before `edit_file` to get fresh `LINE#HASH` anchors.
+1. **Read Before Edit**: Use `read_file` (with appropriate `offset`/`limit`) before `edit_file` so the framework has a fresh internal snapshot.
 2. **One Edit Per Call**: Re-read after each `edit_file` if line numbers may have shifted.
 3. **Discover Before Reading**: Use `glob` or `explore` to discover files in unfamiliar workspaces.
 4. **Search Before Reading Large Files**: Use `grep` to locate relevant lines, then use `read_file` with a narrow range.
