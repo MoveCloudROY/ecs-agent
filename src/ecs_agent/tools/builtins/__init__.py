@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.skills.script_skill import ScriptSkill
+from ecs_agent.tools.builtins.file_snapshot import FileSnapshotStore, use_snapshot_store
 from ecs_agent.tools.discovery import scan_module
 from ecs_agent.types import EntityId, ToolSchema
 
@@ -24,6 +25,20 @@ from ecs_agent.tools.builtins import (
 logger = get_logger(__name__)
 
 
+def _hide_internal_schema_params(schema: ToolSchema) -> ToolSchema:
+    params = schema.parameters
+    return ToolSchema(
+        name=schema.name,
+        description=schema.description,
+        parameters={
+            "type": params.get("type", "object"),
+            "properties": dict(params.get("properties", {})),
+            "required": list(params.get("required", [])),
+        },
+        sandbox_compatible=schema.sandbox_compatible,
+    )
+
+
 class BuiltinToolsSkill(ScriptSkill):
     name = "builtin-tools"
     description = (
@@ -35,6 +50,7 @@ class BuiltinToolsSkill(ScriptSkill):
         self._bound_tools: (
             dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]] | None
         ) = None
+        self._snapshot_store = FileSnapshotStore()
 
     def tools(self) -> dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]]:
         if self._bound_tools is not None:
@@ -52,7 +68,10 @@ class BuiltinToolsSkill(ScriptSkill):
             code_execution_tool,
         ):
             discovered.update(scan_module(module))
-        return discovered
+        return {
+            tool_name: (_hide_internal_schema_params(schema), handler)
+            for tool_name, (schema, handler) in discovered.items()
+        }
 
     def bind_workspace(self, workspace_root: str) -> "BuiltinToolsSkill":
         """Bind workspace_root into all tool handlers and strip it from schemas.
@@ -66,13 +85,16 @@ class BuiltinToolsSkill(ScriptSkill):
         for tool_name, (schema, handler) in original_tools.items():
             params = schema.parameters
             has_workspace_root = "workspace_root" in params.get("properties", {})
+            uses_snapshot_store = tool_name in {"read_file", "write_file", "edit_file"}
             filtered_props = {
                 k: v
                 for k, v in params.get("properties", {}).items()
                 if k != "workspace_root"
             }
             filtered_required = [
-                r for r in params.get("required", []) if r != "workspace_root"
+                r
+                for r in params.get("required", [])
+                if r != "workspace_root"
             ]
             new_schema = ToolSchema(
                 name=schema.name,
@@ -85,11 +107,20 @@ class BuiltinToolsSkill(ScriptSkill):
                 sandbox_compatible=schema.sandbox_compatible,
             )
 
-            if has_workspace_root:
+            if has_workspace_root or uses_snapshot_store:
                 async def _bound(
-                    _h: Callable[..., Awaitable[str]] = handler, **kwargs: object
+                    _h: Callable[..., Awaitable[str]] = handler,
+                    _has_workspace_root: bool = has_workspace_root,
+                    _uses_snapshot_store: bool = uses_snapshot_store,
+                    **kwargs: object,
                 ) -> str:
-                    return await _h(workspace_root=workspace_root, **kwargs)
+                    injected: dict[str, object] = dict(kwargs)
+                    if _has_workspace_root:
+                        injected["workspace_root"] = workspace_root
+                    if _uses_snapshot_store:
+                        with use_snapshot_store(self._snapshot_store):
+                            return await _h(**injected)
+                    return await _h(**injected)
 
                 bound[tool_name] = (new_schema, _bound)
             else:

@@ -1,24 +1,31 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 from pathlib import Path
 
 import pytest
 
-from ecs_agent.components import ToolRegistryComponent
+from ecs_agent.components import (
+    ConversationComponent,
+    PendingToolCallsComponent,
+    ToolRegistryComponent,
+    ToolResultsComponent,
+)
 from ecs_agent.components.definitions import SkillComponent
 from ecs_agent.core import World
 from ecs_agent.skills import SkillManager
 from ecs_agent.skills.script_skill import ScriptSkill
+from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.tools.builtins import BuiltinToolsSkill
 from ecs_agent.tools.builtins.bash_tool import bash
 from ecs_agent.tools.builtins.edit_tool import (
-    compute_line_hash,
     format_file_with_hashes,
     edit_file,
 )
 from ecs_agent.tools.builtins.file_tools import read_file, write_file
+from ecs_agent.types import ToolCall
 
 # Try importing glob; will fail if not implemented yet (expected for TDD red phase)
 try:
@@ -61,9 +68,7 @@ async def test_read_file_valid(tmp_path: Path) -> None:
 
     result = await read_file("note.txt", str(workspace))
 
-    expected_hash_1 = compute_line_hash(1, "hello")
-    expected_hash_2 = compute_line_hash(2, "world")
-    assert result == f"1#{expected_hash_1}|hello\n2#{expected_hash_2}|world"
+    assert result == "hello\nworld"
 
 
 @pytest.mark.asyncio
@@ -85,17 +90,39 @@ async def test_read_file_blank_line_preserved(tmp_path: Path) -> None:
 
     result = await read_file("blank.txt", str(workspace))
 
-    expected_hash_1 = compute_line_hash(1, "line1")
-    expected_hash_2 = compute_line_hash(2, "")  # blank line
-    expected_hash_3 = compute_line_hash(3, "line3")
-    assert (
-        result
-        == f"1#{expected_hash_1}|line1\n2#{expected_hash_2}|\n3#{expected_hash_3}|line3"
-    )
+    assert result == "line1\n\nline3"
 
 
 @pytest.mark.asyncio
-async def test_read_file_hash_matches_compute_line_hash(tmp_path: Path) -> None:
+async def test_read_file_accepts_numeric_string_offset_and_limit(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "numbers.txt"
+    target.write_text("one\ntwo\nthree", encoding="utf-8")
+
+    result = await read_file("numbers.txt", str(workspace), offset="2", limit="1")
+
+    assert result == "two"
+
+
+@pytest.mark.asyncio
+async def test_read_file_rejects_boolean_numeric_inputs(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "numbers.txt"
+    target.write_text("one\ntwo\nthree", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="offset must be a numeric value"):
+        await read_file("numbers.txt", str(workspace), offset=True)
+
+    with pytest.raises(ValueError, match="limit must be a numeric value"):
+        await read_file("numbers.txt", str(workspace), limit=False)
+
+
+@pytest.mark.asyncio
+async def test_read_file_output_does_not_expose_hash_anchors(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     target = workspace / "multi.txt"
@@ -104,15 +131,9 @@ async def test_read_file_hash_matches_compute_line_hash(tmp_path: Path) -> None:
 
     result = await read_file("multi.txt", str(workspace))
 
-    # Verify each line matches compute_line_hash output
-    lines = result.split("\n")
-    for i, line in enumerate(lines, start=1):
-        line_num_str, rest = line.split("#", 1)
-        hash_part, content_part = rest.split("|", 1)
-        expected_hash = compute_line_hash(i, content_part)
-        assert hash_part == expected_hash, (
-            f"Line {i} hash mismatch: {hash_part} != {expected_hash}"
-        )
+    assert result == content
+    assert "#" not in result
+    assert "|" not in result
 
 
 @pytest.mark.asyncio
@@ -180,6 +201,53 @@ async def test_write_file_creates_parent_dirs(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_write_file_requires_fresh_read_before_overwriting_existing_file(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "existing.txt"
+    target.write_text("old", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="read_file before overwriting"):
+        await write_file("existing.txt", "new", str(workspace))
+
+    assert target.read_text(encoding="utf-8") == "old"
+
+
+@pytest.mark.asyncio
+async def test_write_file_allows_overwrite_after_fresh_read(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "existing.txt"
+    target.write_text("old", encoding="utf-8")
+
+    assert await read_file("existing.txt", str(workspace)) == "old"
+    result = await write_file("existing.txt", "new", str(workspace))
+
+    assert result == "Wrote 3 bytes to existing.txt"
+    assert target.read_text(encoding="utf-8") == "new"
+
+
+@pytest.mark.asyncio
+async def test_write_file_rejects_stale_overwrite_after_external_change(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "existing.txt"
+    target.write_text("old", encoding="utf-8")
+
+    assert await read_file("existing.txt", str(workspace)) == "old"
+    target.write_text("changed", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="changed since it was last read"):
+        await write_file("existing.txt", "new", str(workspace))
+
+    assert target.read_text(encoding="utf-8") == "changed"
+
+
+@pytest.mark.asyncio
 async def test_write_file_rejects_parent_traversal(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -217,12 +285,12 @@ async def test_edit_file_applies_edits_and_persists(tmp_path: Path) -> None:
     workspace.mkdir()
     target = workspace / "edit.txt"
     target.write_text("alpha\nbeta\ngamma", encoding="utf-8")
-    beta_hash = compute_line_hash(2, "beta")
+    assert await read_file("edit.txt", str(workspace)) == "alpha\nbeta\ngamma"
 
     result = await edit_file(
         "edit.txt",
         "replace",
-        f"2#{beta_hash}",
+        "2",
         content="BETA",
         workspace_root=str(workspace),
     )
@@ -237,12 +305,12 @@ async def test_edit_file_multiline_content(tmp_path: Path) -> None:
     workspace.mkdir()
     target = workspace / "edit.txt"
     target.write_text("alpha\nbeta\ngamma", encoding="utf-8")
-    beta_hash = compute_line_hash(2, "beta")
+    await read_file("edit.txt", str(workspace))
 
     result = await edit_file(
         "edit.txt",
         "replace",
-        f"2#{beta_hash}",
+        "2",
         content="BETA\nEXTRA",
         workspace_root=str(workspace),
     )
@@ -257,14 +325,13 @@ async def test_edit_file_range_replace(tmp_path: Path) -> None:
     workspace.mkdir()
     target = workspace / "edit.txt"
     target.write_text("alpha\nbeta\ngamma", encoding="utf-8")
-    alpha_hash = compute_line_hash(1, "alpha")
-    beta_hash = compute_line_hash(2, "beta")
+    await read_file("edit.txt", str(workspace))
 
     result = await edit_file(
         "edit.txt",
         "replace",
-        f"1#{alpha_hash}",
-        end=f"2#{beta_hash}",
+        "1",
+        end="2",
         content="NEW",
         workspace_root=str(workspace),
     )
@@ -279,12 +346,12 @@ async def test_edit_file_append(tmp_path: Path) -> None:
     workspace.mkdir()
     target = workspace / "edit.txt"
     target.write_text("alpha\nbeta", encoding="utf-8")
-    alpha_hash = compute_line_hash(1, "alpha")
+    await read_file("edit.txt", str(workspace))
 
     await edit_file(
         "edit.txt",
         "append",
-        f"1#{alpha_hash}",
+        "1",
         content="inserted",
         workspace_root=str(workspace),
     )
@@ -298,12 +365,12 @@ async def test_edit_file_prepend(tmp_path: Path) -> None:
     workspace.mkdir()
     target = workspace / "edit.txt"
     target.write_text("alpha\nbeta", encoding="utf-8")
-    alpha_hash = compute_line_hash(1, "alpha")
+    await read_file("edit.txt", str(workspace))
 
     await edit_file(
         "edit.txt",
         "prepend",
-        f"1#{alpha_hash}",
+        "1",
         content="before",
         workspace_root=str(workspace),
     )
@@ -324,13 +391,12 @@ async def test_edit_file_multi_step_two_edits_on_real_python_file(
     )
 
     first_read = await read_file("sample.py", str(workspace))
-    first_hashed = _get_hashed_view(first_read)
-    first_line_hash = _parse_hash_from_hashed_content(first_hashed, 1)
+    assert "#" not in first_read
 
     first_result = await edit_file(
         "sample.py",
         "replace",
-        f"1#{first_line_hash}",
+        "1",
         content="def greet():",
         workspace_root=str(workspace),
     )
@@ -338,13 +404,12 @@ async def test_edit_file_multi_step_two_edits_on_real_python_file(
     assert first_result == "Applied edit to sample.py"
 
     second_read = await read_file("sample.py", str(workspace))
-    second_hashed = _get_hashed_view(second_read)
-    second_line_hash = _parse_hash_from_hashed_content(second_hashed, 2)
+    assert "#" not in second_read
 
     second_result = await edit_file(
         "sample.py",
         "replace",
-        f"2#{second_line_hash}",
+        "2",
         content='    return "earth"',
         workspace_root=str(workspace),
     )
@@ -365,19 +430,126 @@ async def test_edit_file_stale_hash_rejected_after_external_modification(
     target.write_text("alpha = 1\nbeta = 2\ngamma = 3\n", encoding="utf-8")
 
     initial_read = await read_file("target.py", str(workspace))
-    initial_hashed = _get_hashed_view(initial_read)
-    stale_hash = _parse_hash_from_hashed_content(initial_hashed, 2)
+    assert initial_read == "alpha = 1\nbeta = 2\ngamma = 3"
 
     target.write_text("alpha = 1\nbeta = 200\ngamma = 3\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Hash mismatch"):
+    with pytest.raises(ValueError, match="changed since it was last read"):
         await edit_file(
             "target.py",
             "replace",
-            f"2#{stale_hash}",
+            "2",
             content="beta = 20",
             workspace_root=str(workspace),
         )
+
+
+@pytest.mark.asyncio
+async def test_edit_file_requires_read_snapshot_before_editing(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "target.txt"
+    target.write_text("alpha\nbeta", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="read_file before editing"):
+        await edit_file(
+            "target.txt",
+            "replace",
+            "2",
+            content="BETA",
+            workspace_root=str(workspace),
+        )
+
+    assert target.read_text(encoding="utf-8") == "alpha\nbeta"
+
+
+@pytest.mark.asyncio
+async def test_edit_file_edits_duplicate_content_by_line_number(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "target.txt"
+    target.write_text("same\nother\nsame", encoding="utf-8")
+    await read_file("target.txt", str(workspace))
+
+    await edit_file(
+        "target.txt",
+        "replace",
+        "3",
+        content="changed",
+        workspace_root=str(workspace),
+    )
+
+    assert target.read_text(encoding="utf-8") == "same\nother\nchanged"
+
+
+@pytest.mark.asyncio
+async def test_edit_file_accepts_numeric_pos_and_end(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "target.txt"
+    target.write_text("one\ntwo\nthree\nfour", encoding="utf-8")
+    await read_file("target.txt", str(workspace))
+
+    await edit_file(
+        "target.txt",
+        "replace",
+        2,
+        end=3,
+        content="TWO THREE",
+        workspace_root=str(workspace),
+    )
+
+    assert target.read_text(encoding="utf-8") == "one\nTWO THREE\nfour"
+
+
+@pytest.mark.asyncio
+async def test_edit_file_rejects_boolean_line_inputs(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "target.txt"
+    target.write_text("one\ntwo\nthree", encoding="utf-8")
+    await read_file("target.txt", str(workspace))
+
+    with pytest.raises(ValueError, match="line number"):
+        await edit_file(
+            "target.txt",
+            "replace",
+            True,
+            content="ONE",
+            workspace_root=str(workspace),
+        )
+
+    with pytest.raises(ValueError, match="line number"):
+        await edit_file(
+            "target.txt",
+            "replace",
+            1,
+            end=True,
+            content="ONE",
+            workspace_root=str(workspace),
+        )
+
+
+@pytest.mark.asyncio
+async def test_edit_file_rejects_line_outside_last_read_range(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "target.txt"
+    target.write_text("one\ntwo\nthree", encoding="utf-8")
+    assert await read_file("target.txt", str(workspace), offset=1, limit=1) == "one"
+
+    with pytest.raises(ValueError, match="line not found in the last read"):
+        await edit_file(
+            "target.txt",
+            "replace",
+            "2",
+            content="TWO",
+            workspace_root=str(workspace),
+        )
+
+    assert target.read_text(encoding="utf-8") == "one\ntwo\nthree"
 
 
 @pytest.mark.asyncio
@@ -400,13 +572,12 @@ async def test_edit_file_repeated_cycles_on_python_file(tmp_path: Path) -> None:
         (5, "    return result"),
     ]:
         read_result = await read_file("cycles.py", str(workspace))
-        hashed_content = _get_hashed_view(read_result)
-        line_hash = _parse_hash_from_hashed_content(hashed_content, line_number)
+        assert "#" not in read_result
 
         result = await edit_file(
             "cycles.py",
             "replace",
-            f"{line_number}#{line_hash}",
+            str(line_number),
             content=replacement,
             workspace_root=str(workspace),
         )
@@ -426,14 +597,13 @@ async def test_edit_file_repeated_cycles_on_python_file(tmp_path: Path) -> None:
 async def test_edit_file_rejects_parent_traversal(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    alpha_hash = compute_line_hash(1, "x")
 
     with pytest.raises(ValueError, match="outside workspace"):
         await edit_file(
             "../edit.txt",
             "replace",
-            f"1#{alpha_hash}",
-            content="x",
+            "1",
+            content="y",
             workspace_root=str(workspace),
         )
 
@@ -442,14 +612,13 @@ async def test_edit_file_rejects_parent_traversal(tmp_path: Path) -> None:
 async def test_edit_file_rejects_absolute_path(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    alpha_hash = compute_line_hash(1, "x")
 
     with pytest.raises(ValueError, match="outside workspace"):
         await edit_file(
             "/etc/passwd",
             "replace",
-            f"1#{alpha_hash}",
-            content="x",
+            "1",
+            content="y",
             workspace_root=str(workspace),
         )
 
@@ -463,14 +632,13 @@ async def test_edit_file_rejects_symlink_outside_workspace(tmp_path: Path) -> No
     outside_file = outside / "secret.txt"
     outside_file.write_text("secret", encoding="utf-8")
     (workspace / "link.txt").symlink_to(outside_file)
-    alpha_hash = compute_line_hash(1, "x")
 
     with pytest.raises(ValueError, match="outside workspace"):
         await edit_file(
             "link.txt",
             "replace",
-            f"1#{alpha_hash}",
-            content="x",
+            "1",
+            content="y",
             workspace_root=str(workspace),
         )
 
@@ -549,6 +717,231 @@ def test_builtin_skill_tools_returns_all_schemas() -> None:
         assert schema.description
         assert schema.parameters["type"] == "object"
         assert callable(handler)
+
+
+def test_file_tool_function_signatures_do_not_expose_snapshot_store() -> None:
+    signatures = [
+        inspect.signature(read_file),
+        inspect.signature(write_file),
+        inspect.signature(edit_file),
+    ]
+
+    for signature in signatures:
+        assert "snapshot_store" not in signature.parameters
+
+
+def test_edit_file_preserves_original_public_signature() -> None:
+    signature = inspect.signature(edit_file)
+
+    assert list(signature.parameters) == [
+        "file_path",
+        "op",
+        "pos",
+        "end",
+        "content",
+        "workspace_root",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_edit_file_accepts_clean_line_position_after_read(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "clean.txt"
+    target.write_text("alpha\nbeta\ngamma", encoding="utf-8")
+
+    assert await read_file("clean.txt", str(workspace)) == "alpha\nbeta\ngamma"
+
+    result = await edit_file(
+        "clean.txt",
+        "replace",
+        "2",
+        content="BETA",
+        workspace_root=str(workspace),
+    )
+
+    assert result == "Applied edit to clean.txt"
+    assert target.read_text(encoding="utf-8") == "alpha\nBETA\ngamma"
+
+
+@pytest.mark.asyncio
+async def test_edit_file_rejects_public_hash_anchor_input(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "hash.txt"
+    target.write_text("alpha\nbeta", encoding="utf-8")
+    await read_file("hash.txt", str(workspace))
+
+    with pytest.raises(ValueError, match="line number"):
+        await edit_file(
+            "hash.txt",
+            "replace",
+            "2#a1b2",
+            content="BETA",
+            workspace_root=str(workspace),
+        )
+
+
+@pytest.mark.asyncio
+async def test_edit_file_rejects_public_text_anchor_input(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "text.txt"
+    target.write_text("alpha\nbeta", encoding="utf-8")
+    await read_file("text.txt", str(workspace))
+
+    with pytest.raises(ValueError, match="line number"):
+        await edit_file(
+            "text.txt",
+            "replace",
+            "beta",
+            content="BETA",
+            workspace_root=str(workspace),
+        )
+
+
+@pytest.mark.asyncio
+async def test_bound_builtin_tools_do_not_share_edit_snapshots(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "shared.txt"
+    target.write_text("alpha\nbeta", encoding="utf-8")
+    skill_a = BuiltinToolsSkill().bind_workspace(str(workspace))
+    skill_b = BuiltinToolsSkill().bind_workspace(str(workspace))
+    tools_a = skill_a.tools()
+    tools_b = skill_b.tools()
+
+    _, read_a = tools_a["read_file"]
+    _, edit_b = tools_b["edit_file"]
+
+    assert await read_a(file_path="shared.txt") == "alpha\nbeta"
+    with pytest.raises(ValueError, match="read_file before editing"):
+        await edit_b(
+            file_path="shared.txt",
+            op="replace",
+            pos="2",
+            content="BETA",
+        )
+
+    assert target.read_text(encoding="utf-8") == "alpha\nbeta"
+
+
+@pytest.mark.asyncio
+async def test_bound_builtin_tools_do_not_share_write_snapshots(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "shared.txt"
+    target.write_text("alpha", encoding="utf-8")
+    skill_a = BuiltinToolsSkill().bind_workspace(str(workspace))
+    skill_b = BuiltinToolsSkill().bind_workspace(str(workspace))
+    tools_a = skill_a.tools()
+    tools_b = skill_b.tools()
+
+    _, read_a = tools_a["read_file"]
+    _, write_b = tools_b["write_file"]
+
+    assert await read_a(file_path="shared.txt") == "alpha"
+    with pytest.raises(ValueError, match="read_file before overwriting"):
+        await write_b(file_path="shared.txt", content="new")
+
+    assert target.read_text(encoding="utf-8") == "alpha"
+
+
+@pytest.mark.asyncio
+async def test_file_snapshots_are_entity_scoped_even_with_shared_skill_instance(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "shared.txt"
+    target.write_text("alpha\nbeta", encoding="utf-8")
+    skill = BuiltinToolsSkill().bind_workspace(str(workspace))
+    tools = skill.tools()
+    schemas = {name: schema for name, (schema, _) in tools.items()}
+    handlers = {name: handler for name, (_, handler) in tools.items()}
+    world = World()
+    reader = world.create_entity()
+    editor = world.create_entity()
+    for entity_id in (reader, editor):
+        world.add_component(entity_id, ConversationComponent(messages=[]))
+        world.add_component(
+            entity_id,
+            ToolRegistryComponent(tools=schemas, handlers=handlers),
+        )
+
+    world.add_component(
+        reader,
+        PendingToolCallsComponent(
+            tool_calls=[
+                ToolCall(id="read-1", name="read_file", arguments={"file_path": "shared.txt"})
+            ]
+        ),
+    )
+    await ToolExecutionSystem().process(world)
+
+    world.add_component(
+        editor,
+        PendingToolCallsComponent(
+            tool_calls=[
+                ToolCall(
+                    id="edit-1",
+                    name="edit_file",
+                        arguments={
+                            "file_path": "shared.txt",
+                            "op": "replace",
+                            "pos": "2",
+                            "content": "BETA",
+                        },
+                )
+            ]
+        ),
+    )
+    await ToolExecutionSystem().process(world)
+
+    assert target.read_text(encoding="utf-8") == "alpha\nbeta"
+    results = world.get_component(editor, ToolResultsComponent)
+    assert results is not None
+    assert "read_file before editing" in results.results["edit-1"]
+
+
+@pytest.mark.asyncio
+async def test_parallel_read_snapshots_preserve_multiple_ranges_for_later_edits(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "ranges.txt"
+    target.write_text("one\ntwo\nthree\nfour", encoding="utf-8")
+
+    await read_file("ranges.txt", str(workspace), offset=1, limit=1)
+    await read_file("ranges.txt", str(workspace), offset=4, limit=1)
+
+    await edit_file(
+        "ranges.txt",
+        "replace",
+        "1",
+        content="ONE",
+        workspace_root=str(workspace),
+    )
+    await edit_file(
+        "ranges.txt",
+        "replace",
+        "4",
+        content="FOUR",
+        workspace_root=str(workspace),
+    )
+
+    assert target.read_text(encoding="utf-8") == "ONE\ntwo\nthree\nFOUR"
 
 
 def test_builtin_skill_install() -> None:
@@ -881,6 +1274,31 @@ def test_edit_file_schema_exposes_direct_params_not_edits_json() -> None:
     props = schema.parameters.get("properties", {})
 
     assert "edits_json" not in props, "edits_json should not appear in new API schema"
+    assert "read_id" not in props
+    assert "snapshot_id" not in props
+    assert "old_text" not in props
+    assert "new_text" not in props
+    assert "replace_all" not in props
     assert "op" in props
     assert "pos" in props
     assert "content" in props
+
+    required = schema.parameters.get("required", [])
+    assert "file_path" in required
+    assert "op" in required
+    assert "pos" in required
+
+
+def test_file_tool_schemas_accept_numeric_strings_and_numbers() -> None:
+    skill = BuiltinToolsSkill()
+    discovered = skill.tools()
+
+    read_schema, _ = discovered["read_file"]
+    read_props = read_schema.parameters.get("properties", {})
+    assert read_props["offset"]["type"] == ["integer", "string"]
+    assert read_props["limit"]["type"] == ["integer", "string"]
+
+    edit_schema, _ = discovered["edit_file"]
+    edit_props = edit_schema.parameters.get("properties", {})
+    assert edit_props["pos"]["type"] == ["integer", "string"]
+    assert edit_props["end"]["type"] == ["integer", "string", "null"]
