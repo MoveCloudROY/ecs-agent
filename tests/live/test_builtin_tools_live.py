@@ -19,7 +19,6 @@ from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.tools.builtins import BuiltinToolsSkill
-from ecs_agent.tools.builtins.edit_tool import compute_line_hash
 from ecs_agent.types import Message
 
 
@@ -87,10 +86,9 @@ async def test_live_edit_file_tool_called_by_llm(
     target = workspace / "greet.py"
     target.write_text('def hello():\n    return "world"\n', encoding="utf-8")
 
-    line1_hash = compute_line_hash(1, "def hello():")
     user_msg = (
-        f"Please use edit_file to rename the function on line 1 of greet.py. "
-        f"Use op='replace', pos='1#{line1_hash}', content='def greet():'."
+        "Please use read_file on greet.py first. Then use edit_file to rename "
+        "the function with op='replace', pos='1', and content='def greet():'."
     )
 
     world, agent = _build_world(live_api_key, tmp_path, user_msg)

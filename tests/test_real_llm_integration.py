@@ -856,9 +856,7 @@ async def test_real_provider_smoke_with_dashscope_defaults() -> None:
 
 
 @pytest.mark.asyncio
-async def test_real_read_file_returns_hashed_format(tmp_path: Any) -> None:
-    import re
-
+async def test_real_read_file_returns_clean_content(tmp_path: Any) -> None:
     from ecs_agent.tools.builtins.file_tools import read_file
 
     test_file = tmp_path / "test.txt"
@@ -866,13 +864,10 @@ async def test_real_read_file_returns_hashed_format(tmp_path: Any) -> None:
     test_file.write_text("\n".join(raw_lines) + "\n", encoding="utf-8")
 
     result = await read_file(file_path="test.txt", workspace_root=str(tmp_path))
-    hashed_lines = result.splitlines()
 
-    assert result.startswith("1#")
-    assert len(hashed_lines) == 3
-    for idx, line in enumerate(hashed_lines):
-        assert re.match(r"^\d+#[0-9a-f]{4}\|", line) is not None
-        assert line.split("|", 1)[1] == raw_lines[idx]
+    assert result == "\n".join(raw_lines)
+    assert "#" not in result
+    assert "|" not in result
 
 
 @pytest.mark.asyncio
@@ -982,8 +977,9 @@ async def test_real_llm_builtin_tools_read_file_smoke(tmp_path: Any) -> None:
     second_turn_messages = model.recorded_messages[1]
     tool_messages = [msg for msg in second_turn_messages if msg.role == "tool"]
     assert len(tool_messages) >= 1
-    assert tool_messages[-1].content.startswith("1#")
-    assert "|one" in tool_messages[-1].content
+    assert tool_messages[-1].content == "one\ntwo\nthree"
+    assert "#" not in tool_messages[-1].content
+    assert "|" not in tool_messages[-1].content
 
 
 @pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")

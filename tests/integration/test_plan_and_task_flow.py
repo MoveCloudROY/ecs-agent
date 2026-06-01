@@ -2790,7 +2790,13 @@ def test_edit_file_schema_exposes_direct_params() -> None:
     assert "file_path" in props
     assert "op" in props
     assert "pos" in props
+    assert "end" in props
     assert "content" in props
+    assert "old_text" not in props
+    assert "new_text" not in props
+    assert "replace_all" not in props
+    assert "read_id" not in props
+    assert "snapshot_id" not in props
     assert "edits_json" not in props
     required = schema.parameters.get("required", [])
     assert "file_path" in required
@@ -2799,17 +2805,17 @@ def test_edit_file_schema_exposes_direct_params() -> None:
 
 
 async def test_edit_file_direct_params_replaces_content(tmp_path: Path) -> None:
-    from ecs_agent.tools.builtins.edit_tool import edit_file, format_file_with_hashes
+    from ecs_agent.tools.builtins.edit_tool import edit_file
+    from ecs_agent.tools.builtins.file_tools import read_file
 
     target = tmp_path / "draft.md"
     target.write_text("## Scope\n(to be filled)\n\n## Next\n", encoding="utf-8")
-    rendered = format_file_with_hashes(target.read_text(encoding="utf-8"))
-    line2_hash = rendered.splitlines()[1].split("|")[0].split("#")[1]
+    assert await read_file("draft.md", str(tmp_path)) == "## Scope\n(to be filled)\n\n## Next"
     result = await edit_file._tool_handler(  # type: ignore[attr-defined]
         file_path="draft.md",
         workspace_root=str(tmp_path),
         op="replace",
-        pos=f"2#{line2_hash}",
+        pos="2",
         content="In scope: everything",
     )
     assert "draft.md" in result
@@ -2817,20 +2823,24 @@ async def test_edit_file_direct_params_replaces_content(tmp_path: Path) -> None:
     assert "In scope: everything" in target.read_text(encoding="utf-8")
 
 
-async def test_edit_file_raises_when_old_str_not_found(tmp_path: Path) -> None:
+async def test_edit_file_raises_when_line_not_found(tmp_path: Path) -> None:
     import pytest
     from ecs_agent.tools.builtins.edit_tool import edit_file
+    from ecs_agent.tools.builtins.file_tools import read_file
 
     (tmp_path / "file.md").write_text("hello world", encoding="utf-8")
+    await read_file("file.md", str(tmp_path))
     with pytest.raises(Exception):
         await edit_file._tool_handler(  # type: ignore[attr-defined]
             file_path="file.md",
             workspace_root=str(tmp_path),
-            edits_json='[{"op": "replace", "pos": "99#aaaa", "lines": ["x"]}]',
+            op="replace",
+            pos="2",
+            content="x",
         )
 
 
-async def test_edit_file_raises_on_invalid_edits_json(tmp_path: Path) -> None:
+async def test_edit_file_requires_recent_read(tmp_path: Path) -> None:
     import pytest
     from ecs_agent.tools.builtins.edit_tool import edit_file
 
@@ -2839,7 +2849,9 @@ async def test_edit_file_raises_on_invalid_edits_json(tmp_path: Path) -> None:
         await edit_file._tool_handler(  # type: ignore[attr-defined]
             file_path="file.md",
             workspace_root=str(tmp_path),
-            edits_json="not-valid-json",
+            op="replace",
+            pos="1",
+            content="bar",
         )
 
 

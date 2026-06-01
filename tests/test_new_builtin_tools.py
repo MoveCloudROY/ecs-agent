@@ -183,11 +183,8 @@ async def test_read_file_with_offset_and_limit(tmp_path: Path) -> None:
 
     result = await read_file("big.txt", str(workspace), offset=2, limit=3)
 
-    assert "2#" in result
-    assert "3#" in result
-    assert "4#" in result
-    assert "1#" not in result
-    assert "5#" not in result
+    assert result == "line2\nline3\nline4"
+    assert "#" not in result
 
 
 @pytest.mark.asyncio
