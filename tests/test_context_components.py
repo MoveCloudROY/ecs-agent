@@ -10,6 +10,8 @@ from ecs_agent.components import (
     ConversationArchiveComponent,
     RunnerStateComponent,
     StreamingComponent,
+    ToolRuntimeStateComponent,
+    ToolStateNamespace,
 )
 from ecs_agent.types import CachedToolResultRef
 
@@ -277,6 +279,30 @@ def test_context_cache_component_is_dataclass_with_slots() -> None:
     component = ContextCacheComponent()
 
     assert hasattr(component, "__slots__")
+
+
+def test_tool_runtime_state_component_defaults_empty_namespaces() -> None:
+    component = ToolRuntimeStateComponent()
+
+    assert component.namespaces == {}
+
+
+def test_tool_state_namespace_tracks_values_and_version() -> None:
+    namespace = ToolStateNamespace()
+    namespace.values["key"] = "value"
+    namespace.version += 1
+
+    assert namespace.values == {"key": "value"}
+    assert namespace.version == 1
+
+
+def test_tool_runtime_state_component_default_factory_independence() -> None:
+    first = ToolRuntimeStateComponent()
+    second = ToolRuntimeStateComponent()
+
+    first.namespaces["file"] = ToolStateNamespace(values={"snapshots": []})
+
+    assert second.namespaces == {}
 
 
 def test_context_cache_component_field_type() -> None:

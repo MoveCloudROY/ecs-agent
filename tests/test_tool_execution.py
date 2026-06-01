@@ -11,6 +11,7 @@ from ecs_agent.components import (
 from ecs_agent.core import World
 from ecs_agent.scratchbook import ArtifactRegistry
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
+from ecs_agent.tools.context import current_tool_context
 from ecs_agent.types import Message, ToolCall, ToolExecutionCompletedEvent, ToolSchema
 
 
@@ -84,6 +85,47 @@ async def test_process_executes_pending_tool_calls_and_appends_tool_messages() -
         "call-1": "sunny in Paris",
         "call-2": "10:00 in UTC",
     }
+
+
+@pytest.mark.asyncio
+async def test_process_exposes_internal_tool_execution_context() -> None:
+    world = World()
+    entity_id = world.create_entity()
+
+    async def inspect_context() -> str:
+        context = current_tool_context()
+        assert context.world is world
+        assert context.entity_id == entity_id
+        assert context.tool_name == "inspect_context"
+        assert context.tool_call_id == "ctx-1"
+        return "context-ok"
+
+    world.add_component(entity_id, ConversationComponent(messages=[]))
+    world.add_component(
+        entity_id,
+        ToolRegistryComponent(
+            tools={
+                "inspect_context": ToolSchema(
+                    name="inspect_context",
+                    description="Inspect context",
+                    parameters={"type": "object"},
+                )
+            },
+            handlers={"inspect_context": inspect_context},
+        ),
+    )
+    world.add_component(
+        entity_id,
+        PendingToolCallsComponent(
+            tool_calls=[ToolCall(id="ctx-1", name="inspect_context", arguments={})]
+        ),
+    )
+
+    await ToolExecutionSystem().process(world)
+
+    results = world.get_component(entity_id, ToolResultsComponent)
+    assert results is not None
+    assert results.results == {"ctx-1": "context-ok"}
 
 
 @pytest.mark.asyncio

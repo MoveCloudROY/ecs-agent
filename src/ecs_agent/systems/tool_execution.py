@@ -18,6 +18,7 @@ from ecs_agent.components import (
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.scratchbook import ArtifactRegistry, ScratchbookService, ToolResultsSink
+from ecs_agent.tools.context import ToolExecutionContext, use_tool_context
 from ecs_agent.tools.sandbox import sandboxed_execute
 from ecs_agent.types import (
     CachedToolResultRef,
@@ -179,15 +180,22 @@ class ToolExecutionSystem:
         try:
             arguments = tool_call.arguments
             sandbox_config = world.get_component(entity_id, SandboxConfigComponent)
-            if sandbox_config is None:
-                result = await handler(**arguments)
-            else:
-                result = await sandboxed_execute(
-                    handler,
-                    arguments,
-                    timeout=sandbox_config.timeout,
-                    max_output_size=sandbox_config.max_output_size,
-                )
+            context = ToolExecutionContext(
+                world=world,
+                entity_id=entity_id,
+                tool_name=tool_call.name,
+                tool_call_id=tool_call.id,
+            )
+            with use_tool_context(context):
+                if sandbox_config is None:
+                    result = await handler(**arguments)
+                else:
+                    result = await sandboxed_execute(
+                        handler,
+                        arguments,
+                        timeout=sandbox_config.timeout,
+                        max_output_size=sandbox_config.max_output_size,
+                    )
 
             duration_ms = (time.monotonic() - start_time) * 1000
             result_str = str(result)

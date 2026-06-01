@@ -139,6 +139,21 @@ class ToolResultsComponent:
 
 
 @dataclass(slots=True)
+class ToolStateNamespace:
+    """Namespaced internal runtime state shared by related tools."""
+
+    values: dict[str, object] = field(default_factory=dict)
+    version: int = 0
+
+
+@dataclass(slots=True)
+class ToolRuntimeStateComponent:
+    """Entity-scoped internal state shared across tool calls."""
+
+    namespaces: dict[str, ToolStateNamespace] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class PlanComponent:
     """ReAct plan."""
 
