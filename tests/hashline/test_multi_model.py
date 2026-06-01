@@ -26,7 +26,7 @@ MODEL = os.getenv("LLM_MODEL", "qwen3.5-flash")
 
 @pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
 @pytest.mark.asyncio
-async def test_real_llm_hashline_read_edit_workflow(tmp_path: Path) -> None:
+async def test_real_llm_clean_read_snapshot_edit_workflow(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     target = workspace / "config.txt"
@@ -58,8 +58,8 @@ async def test_real_llm_hashline_read_edit_workflow(tmp_path: Path) -> None:
                     role="user",
                     content=(
                         "Use builtin tools only. First call read_file on config.txt. "
-                        "Then call edit_file to change only the port line from 3000 to 8080 using the "
-                        "fresh LINE#HASH anchor. Do not use write_file. After editing, give a one-line confirmation."
+                        "Then call edit_file with op='replace', pos set to the port line number, and content set to the replacement line "
+                        "from 3000 to 8080. Do not use write_file. After editing, give a one-line confirmation."
                     ),
                 )
             ]
@@ -84,11 +84,6 @@ async def test_real_llm_hashline_read_edit_workflow(tmp_path: Path) -> None:
     assert conv is not None
     tool_messages = [message for message in conv.messages if message.role == "tool"]
     assert len(tool_messages) >= 2
-    assert any(message.content.startswith("1#") for message in tool_messages)
-    assert any(
-        ("Applied" in message.content)
-        or ("unexpected keyword argument" in message.content)
-        or ("edits_json must be a JSON array" in message.content)
-        for message in tool_messages
-    )
+    assert not any("#" in message.content for message in tool_messages)
+    assert any("Applied" in message.content for message in tool_messages)
     assert conv.messages[-1].role == "assistant"
