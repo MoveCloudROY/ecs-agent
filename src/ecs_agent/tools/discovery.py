@@ -3,17 +3,28 @@
 import asyncio
 import inspect
 from functools import partial
-from types import ModuleType
-from typing import Annotated, Any, Awaitable, Callable, cast, get_args, get_origin
+from types import NoneType, UnionType, ModuleType
+from typing import Annotated, Any, Awaitable, Callable, Union, cast, get_args, get_origin
 
 from ecs_agent.types import ToolSchema
 
 _TOOL_REGISTRY: dict[str, ToolSchema] = {}
 
 
-def _map_parameter_type(annotation: Any) -> str:
+def _map_parameter_type(annotation: Any) -> str | list[str]:
     if get_origin(annotation) is Annotated:
         annotation = get_args(annotation)[0]
+
+    origin = get_origin(annotation)
+    if origin in (Union, UnionType):
+        mapped_types = [_map_parameter_type(arg) for arg in get_args(annotation)]
+        flattened: list[str] = []
+        for mapped in mapped_types:
+            if isinstance(mapped, list):
+                flattened.extend(mapped)
+            else:
+                flattened.append(mapped)
+        return list(dict.fromkeys(flattened))
 
     if annotation in ("str", "builtins.str"):
         return "string"
@@ -32,6 +43,8 @@ def _map_parameter_type(annotation: Any) -> str:
         return "number"
     if annotation is bool:
         return "boolean"
+    if annotation is None or annotation is NoneType:
+        return "null"
     return "string"
 
 
@@ -51,7 +64,7 @@ def _build_parameters_schema(fn: Callable[..., Any]) -> dict[str, Any]:
         hints = {}
 
     signature = inspect.signature(fn)
-    properties: dict[str, dict[str, str]] = {}
+    properties: dict[str, dict[str, Any]] = {}
     required: list[str] = []
 
     for name, parameter in signature.parameters.items():
@@ -62,7 +75,7 @@ def _build_parameters_schema(fn: Callable[..., Any]) -> dict[str, Any]:
             continue
 
         annotation = hints.get(name, parameter.annotation)
-        param_schema: dict[str, str] = {"type": _map_parameter_type(annotation)}
+        param_schema: dict[str, Any] = {"type": _map_parameter_type(annotation)}
 
         description = _extract_param_description(annotation)
         if description:

@@ -139,6 +139,16 @@ def test_parameter_type_mapping_str_int_float_bool_and_unknown() -> None:
     assert properties["custom"]["type"] == "string"
 
 
+def test_parameter_type_mapping_supports_scalar_unions() -> None:
+    @tool(name="union_types", description="Map union types")
+    async def typed(value: int | str, maybe: int | str | None = None) -> str:
+        return str(value)
+
+    properties = getattr(typed, "_tool_schema").parameters["properties"]
+    assert properties["value"]["type"] == ["integer", "string"]
+    assert properties["maybe"]["type"] == ["integer", "string", "null"]
+
+
 def test_required_fields_only_include_parameters_without_defaults() -> None:
     @tool(name="requireds", description="Required fields")
     async def mixed(
