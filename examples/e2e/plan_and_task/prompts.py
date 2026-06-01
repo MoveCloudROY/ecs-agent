@@ -207,28 +207,29 @@ Ask **one question at a time**. After each user answer, immediately update the r
 ## File Editing Rules
 
 1. Use `edit_file` for all edits — never use `write_file` to rewrite the entire draft.
-2. First call `read_file` on `draft.md` to get the current content with LINE#HASH annotations.
-3. Copy the exact `N#HASH` reference from the line you want to replace.
-4. Call `edit_file` with `edits_json` containing an array of replace operations.
+2. First call `read_file` on `draft.md` to get the current clean content.
+3. Identify the 1-based file line number of the placeholder or section line you want to replace.
+4. Call `edit_file` with `op="replace"`, `pos` set to that line number string, and `content` set to the replacement. Do not include hashes or snapshot IDs.
 
 Example — replacing the Scope placeholder:
 
-Step 1 — read the file to get hashes:
+Step 1 — read the file:
 ```
 read_file(file_path="draft.md")
 ```
-Output (example):
+Output (example, line 2 is the placeholder to replace):
 ```
-1#a3f2|## Scope
-2#b1c4|(to be filled during interview — what is in and out of scope)
-3#d5e6|
+## Scope
+(to be filled during interview — what is in and out of scope)
 ```
 
-Step 2 — replace the placeholder line using the LINE#HASH from step 1:
+Step 2 — replace the placeholder text from step 1:
 ```
 edit_file(
   file_path="draft.md",
-  edits_json='[{{"op": "replace", "pos": "2#b1c4", "lines": ["In scope: web-novel creation, LLM brainstorming.", "Out of scope: mobile app."]}}]'
+  op="replace",
+  pos="2",
+  content="In scope: web-novel creation, LLM brainstorming.\nOut of scope: mobile app."
 )
 ```
 
@@ -245,9 +246,9 @@ Work through these sections in order, one per turn:
 - **Open Questions** — Any unresolved questions?
 
 After each user answer:
-1. Call `read_file` on `draft.md` to get the LINE#HASH annotated content.
-2. Find the placeholder line in the matching section; copy its `N#HASH` reference.
-3. Use `edit_file` with `edits_json` to replace that line.
+1. Call `read_file` on `draft.md` to get the clean content.
+2. Find the 1-based line number of the placeholder line in the matching section.
+3. Use `edit_file(op="replace", pos="<line-number>", content=...)` to replace that line.
 4. Then ask the next question.
 
 Do not invent implementation details. Summarize only what the user confirms.
@@ -282,7 +283,7 @@ QA prompt format:
 
 When advisor verdict is "revise" or "blocked":
 1. Read the advisor's feedback carefully from the tool result.
-2. Call read_file on draft.md to get the current LINE#HASH annotated content.
+2. Call read_file on draft.md to get the current clean content.
 3. Apply every suggested change using edit_file.
 4. Re-read draft.md to confirm the edits landed correctly.
 5. Call subagent(category="advisor", prompt=<updated advisor review prompt>) again with the revised draft.
@@ -326,7 +327,7 @@ When QA returns "approved":
 
 When QA returns "revise" or "blocked":
 1. Read the QA feedback from the tool result.
-2. Call `read_file(file_path="workflow_plan.md")` to get the current LINE#HASH annotated content.
+2. Call `read_file(file_path="workflow_plan.md")` to get the current clean content.
 3. Apply every suggested fix using `edit_file`.
 4. Re-read `workflow_plan.md` to confirm edits landed correctly.
 5. Call `subagent(category="plan_qa", prompt=<updated plan qa review prompt>)` with the revised plan content.
