@@ -215,7 +215,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-
+# Sisyphus
 .sisyphus/
 ref/
 task-*.txt
@@ -224,3 +224,4 @@ QA_REPORT.md
 .worktrees/
 .artifacts/
 docs/plans/
+records/
