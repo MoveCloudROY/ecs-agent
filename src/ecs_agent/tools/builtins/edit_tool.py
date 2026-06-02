@@ -1,4 +1,4 @@
-"""Hash-anchored edit tool core logic."""
+"""Snapshot-protected edit tool core logic."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from ecs_agent.logging import get_logger
+from ecs_agent.tools.builtins._numeric import parse_bounded_integer
 from ecs_agent.tools.builtins.file_snapshot import (
     compute_content_digest,
     compute_snapshot_line_hash,
@@ -40,8 +41,9 @@ def parse_edit_instruction(pos: str) -> tuple[int, str]:
     if separator == "" or hash_id == "":
         raise ValueError(f"Invalid LINE#ID format: {pos}")
 
-    line_number = _parse_positive_line_number(
+    line_number = parse_bounded_integer(
         line_number_str,
+        minimum=1,
         invalid_message=f"Invalid line number in LINE#ID format: {pos}",
         range_message=f"Line numbers are 1-based in LINE#ID format: {pos}",
     )
@@ -173,34 +175,9 @@ def _resolve_edit_position(
 
 
 def _parse_public_line_number(position: int | str) -> int:
-    if type(position) is int:
-        return _parse_positive_line_number(
-            position,
-            invalid_message=f"Invalid line number: {position}",
-            range_message=f"Line numbers are 1-based: {position}",
-        )
-
-    if not isinstance(position, str) or not position.isdecimal():
-        raise ValueError(f"edit_file pos/end must be a 1-based line number: {position}")
-    line_number = _parse_positive_line_number(
+    return parse_bounded_integer(
         position,
-        invalid_message=f"Invalid line number: {position}",
+        minimum=1,
+        invalid_message=f"edit_file pos/end must be a 1-based line number: {position}",
         range_message=f"Line numbers are 1-based: {position}",
     )
-    return line_number
-
-
-def _parse_positive_line_number(
-    value: int | str,
-    *,
-    invalid_message: str,
-    range_message: str,
-) -> int:
-    try:
-        line_number = int(value)
-    except ValueError as exc:
-        raise ValueError(invalid_message) from exc
-
-    if line_number < 1:
-        raise ValueError(range_message)
-    return line_number

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Annotated
 
 from ecs_agent.logging import get_logger
+from ecs_agent.tools.builtins._numeric import parse_bounded_integer
 from ecs_agent.tools.builtins.file_snapshot import (
     compute_content_digest,
     current_file_snapshot_state,
@@ -88,20 +89,13 @@ def _parse_non_negative_numeric_input(
     field_name: str,
     minimum: int,
 ) -> int:
-    if type(value) is int:
-        parsed = value
-    elif isinstance(value, str) and value.isdecimal():
-        parsed = int(value)
-    else:
-        raise ValueError(
-            f"read_file {field_name} must be an integer >= {minimum}: {value}"
-        )
-
-    if parsed < minimum:
-        raise ValueError(
-            f"read_file {field_name} must be an integer >= {minimum}: {value}"
-        )
-    return parsed
+    message = f"read_file {field_name} must be an integer >= {minimum}: {value}"
+    return parse_bounded_integer(
+        value,
+        minimum=minimum,
+        invalid_message=message,
+        range_message=message,
+    )
 
 
 @tool(description="Write UTF-8 content to file in workspace.")
