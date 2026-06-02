@@ -493,7 +493,7 @@ class TestRunnerResume:
         )
 
     @pytest.mark.asyncio
-    async def test_restored_running_session_enqueues_one_failure_notification(
+    async def test_restored_running_session_does_not_enqueue_failure_notification(
         self,
         world: World,
         runner: Runner,
@@ -567,15 +567,9 @@ class TestRunnerResume:
         assert table.sessions["running-z"].error == "restored_without_live_task_handle"
 
         queue = loaded_world.get_component(parent, SubagentNotificationQueueComponent)
-        assert queue is not None
-        assert [item.notification_id for item in queue.notifications] == [
-            "running-z:failed"
-        ]
-        assert queue.notifications[0].error == "restored_without_live_task_handle"
-        assert queue.notifications[0].delivered_at is None
+        assert queue is None or queue.notifications == []
 
         await system.process(loaded_world)
 
-        assert [item.notification_id for item in queue.notifications] == [
-            "running-z:failed"
-        ]
+        queue = loaded_world.get_component(parent, SubagentNotificationQueueComponent)
+        assert queue is None or queue.notifications == []

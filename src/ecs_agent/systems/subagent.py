@@ -627,7 +627,6 @@ class SubagentSystem:
                 session.error = "restored_without_live_task_handle"
                 session.updated_at = now_iso
                 session.finished_at = now_iso
-                self._enqueue_parent_notification(world, session)
 
             await self._runtime_manager.restore_session_metadata(session)
             self._reconciled_session_ids.add(session.session_id)
