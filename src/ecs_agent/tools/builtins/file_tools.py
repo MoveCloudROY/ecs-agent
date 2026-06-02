@@ -88,17 +88,19 @@ def _parse_non_negative_numeric_input(
     field_name: str,
     minimum: int,
 ) -> int:
-    if isinstance(value, bool):
-        raise ValueError(f"read_file {field_name} must be a numeric value: {value}")
-    if isinstance(value, int):
+    if type(value) is int:
         parsed = value
-    elif value.isdecimal():
+    elif isinstance(value, str) and value.isdecimal():
         parsed = int(value)
     else:
-        raise ValueError(f"read_file {field_name} must be a numeric value: {value}")
+        raise ValueError(
+            f"read_file {field_name} must be an integer >= {minimum}: {value}"
+        )
 
     if parsed < minimum:
-        raise ValueError(f"read_file {field_name} must be >= {minimum}: {value}")
+        raise ValueError(
+            f"read_file {field_name} must be an integer >= {minimum}: {value}"
+        )
     return parsed
 
 

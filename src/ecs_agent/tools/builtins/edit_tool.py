@@ -173,16 +173,14 @@ def _resolve_edit_position(
 
 
 def _parse_public_line_number(position: int | str) -> int:
-    if isinstance(position, bool):
-        raise ValueError(f"edit_file pos/end must be a 1-based line number: {position}")
-    if isinstance(position, int):
+    if type(position) is int:
         return _parse_positive_line_number(
             position,
             invalid_message=f"Invalid line number: {position}",
             range_message=f"Line numbers are 1-based: {position}",
         )
 
-    if not position.isdecimal():
+    if not isinstance(position, str) or not position.isdecimal():
         raise ValueError(f"edit_file pos/end must be a 1-based line number: {position}")
     line_number = _parse_positive_line_number(
         position,

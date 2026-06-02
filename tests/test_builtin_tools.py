@@ -90,10 +90,10 @@ async def test_read_file_rejects_boolean_numeric_inputs(tmp_path: Path) -> None:
     target = workspace / "numbers.txt"
     target.write_text("one\ntwo\nthree", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="offset must be a numeric value"):
+    with pytest.raises(ValueError, match="offset must be an integer >= 1"):
         await read_file("numbers.txt", str(workspace), offset=True)
 
-    with pytest.raises(ValueError, match="limit must be a numeric value"):
+    with pytest.raises(ValueError, match="limit must be an integer >= 0"):
         await read_file("numbers.txt", str(workspace), limit=False)
 
 
