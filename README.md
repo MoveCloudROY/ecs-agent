@@ -135,7 +135,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 
 ### Production Infrastructure
 - **5 LLM Providers + Streaming** — OpenAI, Claude, LiteLLM (100+ models), Fake, and Retry providers with real-time SSE token delivery.
-- **Context Management** — Checkpoints (undo/resume), conversation compaction (XML system-prompt summaries), and memory windowing.
+- **Context Management** — Checkpoints (undo/resume), conversation compaction (XML system-prompt summaries), and memory windowing. Restored background subagent sessions that lost their live task handle are marked terminal for explicit inspection without being surfaced as fresh parent notifications.
 - **Tool Ecosystem** — Auto-discovery via `@tool` decorator, manual approval flows, secure `bwrap` sandboxing, and composable skills.
 - **MCP Integration** — Connect to external MCP tool servers via stdio, SSE, or HTTP transports with namespaced tool mapping.
 - **Prometheus Metrics**, Install low-cardinality runtime, LLM, tool, streaming, and runtime-control metrics on any `World` and expose them via render, ASGI/WSGI, or a standalone `/metrics` server.

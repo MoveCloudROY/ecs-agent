@@ -154,7 +154,7 @@ The `SubagentSystem` manages a process-global FIFO queue for background sessions
 When a `World` is restored from a serialized state (e.g., after a process restart):
 
 - **Queued Sessions**: Automatically re-enqueued in the scheduler to resume their wait.
-- **Running Sessions**: Since the live task handle is lost, these are marked as `failed` with the error `restored_without_live_task_handle`. They do not automatically resume execution.
+- **Running Sessions**: Since the live task handle is lost, these are marked as `failed` with the error `restored_without_live_task_handle`. They do not automatically resume execution and do not emit parent notifications, because this is restore-time lifecycle reconciliation rather than a subagent execution result.
 
 ### Subagent Control Installer
 
