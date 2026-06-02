@@ -108,8 +108,6 @@ async def test_read_file_output_does_not_expose_hash_anchors(tmp_path: Path) -> 
     result = await read_file("multi.txt", str(workspace))
 
     assert result == content
-    assert "#" not in result
-    assert "|" not in result
 
 
 @pytest.mark.asyncio

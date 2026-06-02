@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ecs_agent.components import ToolRuntimeStateComponent
 from ecs_agent.core import World
 from ecs_agent.tools.builtins.file_snapshot import (
@@ -121,9 +123,8 @@ def test_file_snapshot_state_rejects_ambiguous_line_anchor(tmp_path: Path) -> No
         limit=1,
     )
 
-    try:
+    with pytest.raises(
+        ValueError,
+        match="line is not unique in multiple read_file snapshots",
+    ):
         state.find_anchor(target, 1)
-    except ValueError as exc:
-        assert "line is not unique in multiple read_file snapshots" in str(exc)
-    else:
-        raise AssertionError("ambiguous line anchor should be rejected")
