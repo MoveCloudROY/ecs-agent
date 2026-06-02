@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.skills.script_skill import ScriptSkill
-from ecs_agent.tools.builtins.file_snapshot import FileSnapshotStore, use_snapshot_store
+from ecs_agent.tools.builtins.file_snapshot import FileSnapshotState, use_snapshot_state
 from ecs_agent.tools.discovery import scan_module
 from ecs_agent.types import EntityId, ToolSchema
 
@@ -50,7 +50,7 @@ class BuiltinToolsSkill(ScriptSkill):
         self._bound_tools: (
             dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]] | None
         ) = None
-        self._snapshot_store = FileSnapshotStore()
+        self._snapshot_state = FileSnapshotState()
 
     def tools(self) -> dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]]:
         if self._bound_tools is not None:
@@ -85,7 +85,7 @@ class BuiltinToolsSkill(ScriptSkill):
         for tool_name, (schema, handler) in original_tools.items():
             params = schema.parameters
             has_workspace_root = "workspace_root" in params.get("properties", {})
-            uses_snapshot_store = tool_name in {"read_file", "write_file", "edit_file"}
+            uses_snapshot_state = tool_name in {"read_file", "write_file", "edit_file"}
             filtered_props = {
                 k: v
                 for k, v in params.get("properties", {}).items()
@@ -107,18 +107,18 @@ class BuiltinToolsSkill(ScriptSkill):
                 sandbox_compatible=schema.sandbox_compatible,
             )
 
-            if has_workspace_root or uses_snapshot_store:
+            if has_workspace_root or uses_snapshot_state:
                 async def _bound(
                     _h: Callable[..., Awaitable[str]] = handler,
                     _has_workspace_root: bool = has_workspace_root,
-                    _uses_snapshot_store: bool = uses_snapshot_store,
+                    _uses_snapshot_state: bool = uses_snapshot_state,
                     **kwargs: object,
                 ) -> str:
                     injected: dict[str, object] = dict(kwargs)
                     if _has_workspace_root:
                         injected["workspace_root"] = workspace_root
-                    if _uses_snapshot_store:
-                        with use_snapshot_store(self._snapshot_store):
+                    if _uses_snapshot_state:
+                        with use_snapshot_state(self._snapshot_state):
                             return await _h(**injected)
                     return await _h(**injected)
 

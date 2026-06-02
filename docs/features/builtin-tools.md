@@ -102,7 +102,7 @@ Internally, the framework stores snapshots containing line hashes and a full-fil
 
 `read_file` may record multiple snapshots for the same file, including parallel reads of different ranges. `edit_file` verifies that the file has not changed since a matching read, then resolves the requested line numbers against recent snapshots for that unchanged digest. If the snapshot is stale or the line was not part of the last read range, the edit is rejected and the model should call `read_file` again with a range that includes the target lines.
 
-Direct Python calls outside `ToolExecutionSystem` keep a private fallback snapshot store for backward compatibility. That fallback is only used when no `ToolExecutionContext` is active; framework-managed tool calls always prefer ECS runtime state.
+Direct Python calls outside `ToolExecutionSystem` keep private fallback snapshot state for backward compatibility. That fallback is only used when no `ToolExecutionContext` is active; framework-managed tool calls always prefer ECS runtime state.
 
 ### Runtime State Extension Pattern
 

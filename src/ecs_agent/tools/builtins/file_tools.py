@@ -70,7 +70,7 @@ async def read_file(
         limit=normalized_limit,
     )
     content = target.read_text(encoding="utf-8")
-    current_file_snapshot_state().record_file_read(
+    current_file_snapshot_state().record_read(
         file_path,
         target,
         content,
@@ -130,7 +130,7 @@ async def write_file(
 
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
-    current_file_snapshot_state().record_file_read(
+    current_file_snapshot_state().record_read(
         file_path,
         target,
         content,

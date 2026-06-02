@@ -12,7 +12,6 @@ from ecs_agent.tools.builtins.file_snapshot import (
     compute_snapshot_line_hash,
     current_file_snapshot_state,
     FileSnapshotState,
-    FileSnapshotStore,
     normalize_snapshot_line,
 )
 from ecs_agent.tools.discovery import tool
@@ -166,13 +165,13 @@ async def edit_file(
     edit = EditOperation(op=op, pos=anchored_pos, end=anchored_end, lines=new_lines)
     updated = apply_edits(original, [edit])
     target.write_text(updated, encoding="utf-8")
-    snapshot_state.record_file_read(file_path, target, updated, offset=1, limit=0)
+    snapshot_state.record_read(file_path, target, updated, offset=1, limit=0)
     logger.info("edit_file", file_path=file_path, op=op, pos=pos)
     return f"Applied edit to {file_path}"
 
 
 def _resolve_edit_position(
-    snapshot_state: FileSnapshotState | FileSnapshotStore,
+    snapshot_state: FileSnapshotState,
     target: Path,
     position: int | str,
     content_digest: str,
