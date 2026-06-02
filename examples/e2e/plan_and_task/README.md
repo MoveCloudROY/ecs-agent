@@ -110,6 +110,8 @@ The workflow can be restarted at any time. On startup, no workflow ID is resolve
 2. State is restored from `scratchbook/<workflow_id>/state/runtime_state.json`.
 3. Any in-flight subagents are marked `stale` and the machine transitions to `TASK_BLOCKED` for safe resumption.
 
+Framework checkpoint restore may also mark a previously running background subagent as `failed` with `restored_without_live_task_handle` when its live task handle no longer exists. That lifecycle marker remains available through explicit subagent status/result inspection, but is not surfaced as a fresh review notification.
+
 > **Note**: Use the same description text (or the same slug) as the original `/plan:start` call so the derived workflow ID matches the existing scratchbook directory.
 
 ### Mid-flight State Reconciliation
