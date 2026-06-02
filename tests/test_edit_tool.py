@@ -14,6 +14,26 @@ from ecs_agent.tools.builtins.edit_tool import (
 )
 
 
+def _parse_bounded_integer(
+    value: int | str,
+    *,
+    minimum: int,
+    invalid_message: str,
+    range_message: str,
+) -> int:
+    try:
+        from ecs_agent.tools.builtins._numeric import parse_bounded_integer
+    except ModuleNotFoundError:
+        pytest.fail("shared numeric parser is missing")
+
+    return parse_bounded_integer(
+        value,
+        minimum=minimum,
+        invalid_message=invalid_message,
+        range_message=range_message,
+    )
+
+
 def test_compute_line_hash_deterministic() -> None:
     hash_a = compute_line_hash(1, "value")
     hash_b = compute_line_hash(1, "value")
@@ -36,6 +56,32 @@ def test_compute_line_hash_returns_4_hex_chars() -> None:
 
 def test_normalize_line_strips_trailing_but_preserves_leading() -> None:
     assert normalize_line("  keep-leading   \t") == "  keep-leading"
+
+
+def test_parse_bounded_integer_accepts_int_and_decimal_string() -> None:
+    assert _parse_bounded_integer(4, minimum=1, invalid_message="bad", range_message="low") == 4
+    assert _parse_bounded_integer("5", minimum=1, invalid_message="bad", range_message="low") == 5
+
+
+@pytest.mark.parametrize("value", [True, False, "abc", "-1"])
+def test_parse_bounded_integer_rejects_non_decimal_input(value: int | str) -> None:
+    with pytest.raises(ValueError, match="bad"):
+        _parse_bounded_integer(
+            value,
+            minimum=1,
+            invalid_message="bad",
+            range_message="low",
+        )
+
+
+def test_parse_bounded_integer_rejects_values_below_minimum() -> None:
+    with pytest.raises(ValueError, match="low"):
+        _parse_bounded_integer(
+            0,
+            minimum=1,
+            invalid_message="bad",
+            range_message="low",
+        )
 
 
 def test_parse_edit_instruction() -> None:
