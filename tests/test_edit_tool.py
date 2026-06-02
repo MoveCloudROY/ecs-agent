@@ -8,7 +8,6 @@ from ecs_agent.tools.builtins.edit_tool import (
     EditOperation,
     apply_edits,
     compute_line_hash,
-    format_file_with_hashes,
     normalize_line,
     parse_edit_instruction,
     validate_hash,
@@ -37,22 +36,6 @@ def test_compute_line_hash_returns_4_hex_chars() -> None:
 
 def test_normalize_line_strips_trailing_but_preserves_leading() -> None:
     assert normalize_line("  keep-leading   \t") == "  keep-leading"
-
-
-def test_format_file_with_hashes() -> None:
-    content = "alpha\nbeta"
-    expected_first_hash = compute_line_hash(1, "alpha")
-    expected_second_hash = compute_line_hash(2, "beta")
-
-    assert format_file_with_hashes(content) == (
-        f"1#{expected_first_hash}|alpha\n2#{expected_second_hash}|beta"
-    )
-
-
-def test_format_file_with_hashes_starts_line_numbers_at_1() -> None:
-    formatted = format_file_with_hashes("x")
-
-    assert formatted.startswith("1#")
 
 
 def test_parse_edit_instruction() -> None:
@@ -177,10 +160,6 @@ def test_apply_edits_multiple_operations_applied_bottom_up() -> None:
     ]
 
     assert apply_edits(original, edits) == "zero\none\ntwo\nTHREE\nfour"
-
-
-def test_format_file_with_hashes_empty_content_returns_empty_string() -> None:
-    assert format_file_with_hashes("") == ""
 
 
 def test_apply_edits_single_line_file_last_line_edit() -> None:

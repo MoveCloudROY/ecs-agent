@@ -27,15 +27,6 @@ def compute_line_hash(line_number: int, content: str) -> str:
     return compute_snapshot_line_hash(line_number, content)
 
 
-def format_file_with_hashes(file_content: str) -> str:
-    lines = file_content.splitlines()
-    rendered_lines = []
-    for line_number, content in enumerate(lines, start=1):
-        line_hash = compute_line_hash(line_number, content)
-        rendered_lines.append(f"{line_number}#{line_hash}|{content}")
-    return "\n".join(rendered_lines)
-
-
 @dataclass(slots=True)
 class EditOperation:
     op: Literal["replace", "append", "prepend"]

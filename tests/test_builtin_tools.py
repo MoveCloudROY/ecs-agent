@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import re
 from pathlib import Path
 
 import pytest
@@ -20,10 +19,7 @@ from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.tools.builtins import BuiltinToolsSkill
 from ecs_agent.tools.builtins.bash_tool import bash
-from ecs_agent.tools.builtins.edit_tool import (
-    format_file_with_hashes,
-    edit_file,
-)
+from ecs_agent.tools.builtins.edit_tool import edit_file
 from ecs_agent.tools.builtins.file_tools import read_file, write_file
 from ecs_agent.types import ToolCall
 
@@ -37,26 +33,6 @@ try:
     from ecs_agent.tools.builtins.bash_tool import interactive_bash
 except ImportError:
     interactive_bash = None  # type: ignore
-
-
-def _get_hashed_view(file_content: str) -> str:
-    if file_content == "":
-        return ""
-
-    if all(re.match(r"^\d+#[0-9a-f]{4}\|", line) for line in file_content.splitlines()):
-        return file_content
-
-    return format_file_with_hashes(file_content)
-
-
-def _parse_hash_from_hashed_content(hashed_content: str, line_number: int) -> str:
-    for line in hashed_content.splitlines():
-        prefix, _, _ = line.partition("|")
-        number_str, _, hash_value = prefix.partition("#")
-        if int(number_str) == line_number:
-            return hash_value
-
-    raise ValueError(f"Line {line_number} not found")
 
 
 @pytest.mark.asyncio

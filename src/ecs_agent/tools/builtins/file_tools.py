@@ -11,17 +11,8 @@ from ecs_agent.tools.builtins.file_snapshot import (
     current_file_snapshot_state,
 )
 from ecs_agent.tools.discovery import tool
-from ecs_agent.tools.builtins.edit_tool import compute_line_hash, format_file_with_hashes  # noqa: F401
 
 logger = get_logger(__name__)
-
-
-def format_file_with_hashes_range(lines: list[str], start_line: int) -> str:
-    rendered = []
-    for i, content in enumerate(lines, start=start_line):
-        line_hash = compute_line_hash(i, content)
-        rendered.append(f"{i}#{line_hash}|{content}")
-    return "\n".join(rendered)
 
 
 def _validate_path(file_path: str, workspace_root: str) -> Path:
