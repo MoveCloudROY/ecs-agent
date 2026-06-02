@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from ecs_agent.components import ToolRuntimeStateComponent
 from ecs_agent.core import World
 from ecs_agent.tools.builtins.file_snapshot import (
@@ -104,7 +102,9 @@ def test_file_snapshot_state_finds_unique_line_anchor_across_recent_snapshots(
     assert anchor.content == "one"
 
 
-def test_file_snapshot_state_rejects_ambiguous_line_anchor(tmp_path: Path) -> None:
+def test_file_snapshot_state_prefers_latest_matching_line_anchor(
+    tmp_path: Path,
+) -> None:
     component = ToolRuntimeStateComponent()
     state = FileSnapshotState(component)
     target = tmp_path / "same.txt"
@@ -118,13 +118,12 @@ def test_file_snapshot_state_rejects_ambiguous_line_anchor(tmp_path: Path) -> No
     state.record_read(
         file_path="same.txt",
         target=target,
-        content="repeat\ntwo",
+        content="updated\ntwo",
         offset=1,
         limit=1,
     )
 
-    with pytest.raises(
-        ValueError,
-        match="line is not unique in multiple read_file snapshots",
-    ):
-        state.find_anchor(target, 1)
+    anchor = state.find_anchor(target, 1)
+
+    assert anchor.line_number == 1
+    assert anchor.content == "updated"

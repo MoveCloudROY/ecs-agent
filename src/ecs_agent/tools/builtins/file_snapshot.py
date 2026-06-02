@@ -156,15 +156,14 @@ class FileSnapshotState:
         line_number: int,
         content_digest: str | None = None,
     ) -> LineAnchor:
-        """Find a unique line anchor across recent snapshots for a file."""
-        anchors: list[tuple[FileReadSnapshot, LineAnchor]] = []
-        for snapshot in self.snapshots_for(target):
+        """Find the latest matching line anchor across recent snapshots for a file."""
+        for snapshot in reversed(self.snapshots_for(target)):
             if content_digest is not None and snapshot.content_digest != content_digest:
                 continue
             for anchor in snapshot.anchors:
                 if anchor.line_number == line_number:
-                    anchors.append((snapshot, anchor))
-        return _resolve_unique_anchor(anchors)
+                    return anchor
+        raise ValueError("line not found in the last read_file result")
 
     def clear(self) -> None:
         """Clear all file snapshots."""
@@ -183,29 +182,6 @@ class FileSnapshotState:
     def _target_key(self, target: Path) -> tuple[str, str]:
         resolved = target.resolve()
         return (str(resolved.parent), resolved.name)
-
-def _resolve_unique_anchor(
-    anchors: list[tuple[FileReadSnapshot, LineAnchor]],
-) -> LineAnchor:
-    if not anchors:
-        raise ValueError("line not found in the last read_file result")
-
-    unique: dict[tuple[str, str, int, str], LineAnchor] = {}
-    for snapshot, anchor in anchors:
-        unique[
-            (
-                snapshot.absolute_path,
-                snapshot.content_digest,
-                anchor.line_number,
-                anchor.hash_id,
-            )
-        ] = anchor
-
-    deduplicated = list(unique.values())
-    if len(deduplicated) > 1:
-        raise ValueError("line is not unique in multiple read_file snapshots")
-    return deduplicated[0]
-
 
 SNAPSHOT_STATE = FileSnapshotState()
 _CURRENT_SNAPSHOT_STATE: ContextVar[FileSnapshotState] = ContextVar(
