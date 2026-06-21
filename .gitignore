@@ -217,6 +217,7 @@ __marimo__/
 
 # Sisyphus
 .sisyphus/
+.omo/
 ref/
 task-*.txt
 .evidence-task*
@@ -225,3 +226,6 @@ QA_REPORT.md
 .artifacts/
 docs/plans/
 records/
+
+
+.claude/
