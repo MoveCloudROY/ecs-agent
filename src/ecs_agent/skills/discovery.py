@@ -110,7 +110,13 @@ class SkillDiscovery:
                                     path=str(file_path),
                                     skill_name=skill_instance.name,
                                 )
-                        except Exception:
+                        except Exception as exc:
+                            logger.warning(
+                                "skill_instantiation_failed",
+                                path=str(file_path),
+                                class_name=attr_name,
+                                exception=str(exc),
+                            )
                             continue
 
                 except Exception as exc:

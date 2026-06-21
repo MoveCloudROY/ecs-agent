@@ -108,7 +108,9 @@ class MCPClient:
             if isinstance(dict_text, str):
                 return dict_text
 
-        return str(first)
+        raise TypeError(
+            f"MCP tool returned non-text content of type {type(first).__name__}"
+        )
 
     async def _create_transport_streams(
         self, transport_exit_stack: AsyncExitStack

@@ -242,9 +242,6 @@ class ScratchbookIndexer:
             content = self.index_file.read_text(encoding="utf-8")
             data: dict[str, Any] = json.loads(content)
             return data
-            content = self.index_file.read_text(encoding="utf-8")
-            data = json.loads(content)
-            return data
         except json.JSONDecodeError as exc:
             logger.error(
                 "index_file_corrupted_json",

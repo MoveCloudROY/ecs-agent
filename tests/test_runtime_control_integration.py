@@ -56,7 +56,7 @@ async def test_dynamic_system_lifecycle():
     world.replace_system(handle, system2)
     world.apply_pending_system_operations()
 
-    assert True  # Execution test in complete workflow
+    assert handle is not None
 
 
 async def test_multi_entity_model_switching_isolation():

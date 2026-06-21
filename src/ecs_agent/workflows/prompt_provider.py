@@ -88,10 +88,16 @@ class WorkflowPromptPlaceholderProvider:
         profile: CompiledPromptProfile, prompt_cache: dict[str, str]
     ) -> str:
         if profile.source_kind == "inline":
-            assert profile.prompt_text is not None
+            if profile.prompt_text is None:
+                raise ValueError(
+                    f"Profile source_kind='inline' but prompt_text is None"
+                )
             return profile.prompt_text
         if profile.source_kind == "path":
-            assert profile.prompt_path is not None
+            if profile.prompt_path is None:
+                raise ValueError(
+                    f"Profile source_kind='path' but prompt_path is None"
+                )
             cached = prompt_cache.get(profile.prompt_path)
             if cached is not None:
                 return cached
@@ -106,7 +112,10 @@ class WorkflowPromptPlaceholderProvider:
             prompt_cache[profile.prompt_path] = prompt_text
             return prompt_text
         if profile.source_kind == "callable":
-            assert profile.prompt_factory is not None
+            if profile.prompt_factory is None:
+                raise ValueError(
+                    f"Profile source_kind='callable' but prompt_factory is None"
+                )
             return profile.prompt_factory()
         raise ValueError(f"Unknown source_kind: {profile.source_kind}")
 

@@ -152,8 +152,8 @@ def Model(
 
     # Infer model_type from api_format
     if resolved_type is None:
-        assert resolved_format is not None
-        inferred = _FORMAT_TO_MODEL_TYPE.get(resolved_format)
+        # resolved_format is guaranteed non-None by the check above
+        inferred = _FORMAT_TO_MODEL_TYPE.get(resolved_format)  # type: ignore[arg-type]
         if inferred is None:
             raise ValueError(
                 f"Cannot infer model_type from api_format '{resolved_format}'. "

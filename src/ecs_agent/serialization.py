@@ -157,16 +157,16 @@ class WorldSerializer:
                 serialized_components[component_type.__name__] = (
                     WorldSerializer._serialize_component(component)
                 )
-            entities[str(int(entity_id))] = serialized_components
+            entities[str(entity_id)] = serialized_components
 
         next_entity_id = world._entity_gen._counter + 1
 
         # Serialize entity registry
         entity_registry = {
-            name: int(entity_id) for name, entity_id in world._entity_registry.items()
+            name: entity_id for name, entity_id in world._entity_registry.items()
         }
         entity_tags = {
-            tag: sorted([int(eid) for eid in entity_ids])
+            tag: sorted([eid for eid in entity_ids])
             for tag, entity_ids in world._entity_tags.items()
         }
 

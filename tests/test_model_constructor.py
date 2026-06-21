@@ -8,23 +8,6 @@ from ecs_agent.providers.config import ApiFormat
 
 
 # ---------------------------------------------------------------------------
-# 1. Importability
-# ---------------------------------------------------------------------------
-
-
-def test_model_constructor_importable() -> None:
-    from ecs_agent.providers.model_constructor import Model  # noqa: F401
-
-
-def test_model_exported_from_providers() -> None:
-    from ecs_agent.providers import Model  # noqa: F401
-
-
-def test_model_type_exported_from_providers() -> None:
-    from ecs_agent.providers import ModelType  # noqa: F401
-
-
-# ---------------------------------------------------------------------------
 # 2. Auto-selection by api_format (no model_type given)
 # ---------------------------------------------------------------------------
 

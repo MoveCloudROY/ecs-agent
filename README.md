@@ -157,11 +157,11 @@ src/ecs_agent/
 │   └── definitions.py        # Component dataclasses
 ├── providers/
 │   ├── protocol.py           # LLMModel Protocol
-│   ├── openai_provider.py    # OpenAI-compatible HTTP provider (httpx)
-│   ├── claude_provider.py    # Anthropic Claude provider
-│   ├── litellm_provider.py   # LiteLLM unified provider
-│   ├── fake_provider.py      # Deterministic test provider
-│   └── retry_provider.py     # Retry wrapper (tenacity)
+│   ├── openai_model.py      # OpenAI-compatible HTTP provider (httpx)
+│   ├── claude_model.py      # Anthropic Claude provider
+│   ├── litellm_model.py     # LiteLLM unified provider
+│   ├── fake_model.py        # Deterministic test provider
+│   └── retry_model.py       # Retry wrapper (tenacity)
 ├── systems/                  # Built-in systems
 │   ├── reasoning.py          # LLM inference
 │   ├── planning.py           # Multi-step plan execution
@@ -169,7 +169,6 @@ src/ecs_agent/
 │   ├── tool_execution.py     # Tool call dispatch
 │   ├── permission.py         # Tool whitelisting/blacklisting
 │   ├── memory.py             # Conversation memory management
-│   ├── collaboration.py      # (Removed in favor of MessageBusSystem)
 │   ├── message_bus.py        # Pub/sub and request-response messaging
 │   ├── error_handling.py     # Error capture and recovery
 │   ├── tree_search.py        # MCTS plan optimization

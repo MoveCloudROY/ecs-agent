@@ -103,14 +103,14 @@ def _create_async_handler(fn: Callable[..., Any]) -> Callable[..., Awaitable[str
 
         async def async_handler(**kwargs: Any) -> str:
             result = await cast(Callable[..., Awaitable[str]], fn)(**kwargs)
-            return str(result)
+            return result
 
         return async_handler
 
     async def sync_wrapper(**kwargs: Any) -> str:
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, partial(fn, **kwargs))
-        return str(result)
+        return result
 
     return sync_wrapper
 
