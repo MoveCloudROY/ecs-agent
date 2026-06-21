@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import datetime
 from enum import Enum
-from pathlib import Path
 from typing import Any
 
 from ecs_agent.logging import get_logger
