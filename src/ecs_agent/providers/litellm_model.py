@@ -14,6 +14,7 @@ from typing import Any
 from collections.abc import AsyncIterator
 
 from ecs_agent.logging import get_logger
+from ecs_agent.providers._openai_format import convert_tools_to_openai
 from ecs_agent.types import (
     Message,
     CompletionResult,
@@ -220,26 +221,7 @@ class LiteLLMModel:
         return openai_messages
 
     def _convert_tools_to_openai(self, tools: list[ToolSchema]) -> list[dict[str, Any]]:
-        """Convert ToolSchema objects to OpenAI format.
-
-        Args:
-            tools: List of ToolSchema objects
-
-        Returns:
-            List of dicts in OpenAI tool format
-        """
-        openai_tools: list[dict[str, Any]] = []
-        for tool in tools:
-            openai_tool = {
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.parameters,
-                },
-            }
-            openai_tools.append(openai_tool)
-        return openai_tools
+        return convert_tools_to_openai(tools)
 
     def _parse_response(self, response: dict[str, Any]) -> CompletionResult:
         """Parse litellm response to CompletionResult.

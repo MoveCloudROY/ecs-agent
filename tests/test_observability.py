@@ -1,5 +1,7 @@
 """Tests for observability.py W3C TraceContext utilities."""
 
+from pathlib import Path
+
 import pytest
 
 from ecs_agent.observability import (
@@ -169,3 +171,17 @@ def test_propagate_trace_context_chain() -> None:
         extract_parent_id(child3),
     ]
     assert len(set(parent_ids)) == 4, "All parent IDs should be unique"
+
+
+def test_observability_is_package() -> None:
+    import ecs_agent.observability as observability
+
+    assert Path(observability.__file__).name == "__init__.py"
+
+
+def test_user_input_received_event_legacy_observability_events_import() -> None:
+    """Legacy observability.events import remains an alias to the core event type."""
+    from ecs_agent.types import UserInputReceivedEvent as CoreUserInputReceivedEvent
+    from ecs_agent.observability.events import UserInputReceivedEvent
+
+    assert UserInputReceivedEvent is CoreUserInputReceivedEvent

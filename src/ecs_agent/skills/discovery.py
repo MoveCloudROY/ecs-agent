@@ -385,37 +385,21 @@ def _build_markdown_materializer(skill_path: Path) -> Callable[[], Any]:
 
 
 def _read_frontmatter_metadata(skill_file: Path) -> dict[str, Any]:
+    from ecs_agent.skills._frontmatter import parse_skill_frontmatter
+
     try:
-        raw = skill_file.read_bytes()
+        frontmatter_text, _ = parse_skill_frontmatter(skill_file)
     except Exception:
         return {}
 
-    lines = [line.rstrip(b"\r") for line in raw.split(b"\n")]
-    first_non_empty_idx: int | None = None
-    for idx, line in enumerate(lines):
-        if line.strip():
-            first_non_empty_idx = idx
-            break
-
-    if first_non_empty_idx is None or lines[first_non_empty_idx] != b"---":
+    if not frontmatter_text:
         return {}
 
-    closing_idx: int | None = None
-    for idx in range(first_non_empty_idx + 1, len(lines)):
-        if lines[idx] == b"---":
-            closing_idx = idx
-            break
-
-    if closing_idx is None:
-        return {}
-
-    frontmatter_bytes = b"\n".join(lines[first_non_empty_idx + 1 : closing_idx])
     try:
-        frontmatter_text = frontmatter_bytes.decode("utf-8")
-    except UnicodeDecodeError:
+        parsed = yaml.safe_load(frontmatter_text)
+    except yaml.YAMLError:
         return {}
 
-    parsed = yaml.safe_load(frontmatter_text)
     if isinstance(parsed, dict):
         return dict(parsed)
     return {}

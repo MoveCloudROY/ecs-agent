@@ -26,7 +26,8 @@ from ecs_agent.prompts.message_assembly import (
     prepare_outbound_messages,
 )
 from ecs_agent.scratchbook import ArtifactRegistry, ScratchbookService
-from ecs_agent.types import CompletionResult, Message, PlanStepCompletedEvent
+from ecs_agent.systems._plan_utils import derive_plan_name, render_plan_markdown
+from ecs_agent.types import CompletionResult, EntityId, Message, PlanStepCompletedEvent
 
 logger = get_logger(__name__)
 
@@ -150,14 +151,14 @@ class PlanningSystem:
                     plan.completed = True
 
                 if self._registry is not None:
-                    plan_name = _derive_plan_name(
+                    plan_name = derive_plan_name(
                         plan=plan,
                         conversation=conversation,
                         entity_id=entity_id,
                     )
                     self._registry.write_plan(
                         plan_name=plan_name,
-                        content=_render_plan_markdown(plan_name=plan_name, plan=plan),
+                        content=render_plan_markdown(plan_name=plan_name, plan=plan),
                     )
                     await self._registry.update_boulder(
                         plan_name=plan_name,
@@ -190,47 +191,6 @@ class PlanningSystem:
                     entity_id,
                     TerminalComponent(reason="planning_error"),
                 )
-
-
-def _derive_plan_name(
-    *, plan: PlanComponent, conversation: ConversationComponent, entity_id: int
-) -> str:
-    for message in conversation.messages:
-        if message.role == "user" and message.content.strip():
-            return message.content.strip()
-    if plan.steps:
-        first_step = plan.steps[0].strip()
-        if first_step:
-            return first_step
-    return f"plan-{entity_id}"
-
-
-def _render_plan_markdown(*, plan_name: str, plan: PlanComponent) -> str:
-    lines = [f"# Plan: {plan_name}", "", "## Steps"]
-
-    if not plan.steps:
-        lines.append("1. [ ] (no steps)")
-    else:
-        all_done = plan.completed and plan.current_step >= len(plan.steps)
-        for index, step in enumerate(plan.steps):
-            if index < plan.current_step or all_done:
-                marker = "DONE"
-            elif index == plan.current_step and not plan.completed:
-                marker = "CURRENT"
-            else:
-                marker = " "
-            lines.append(f"{index + 1}. [{marker}] {step}")
-
-    lines.extend(
-        [
-            "",
-            "## Status",
-            f"Current step: {plan.current_step + 1 if not plan.completed else len(plan.steps)}",
-            f"Total steps: {len(plan.steps)}",
-            f"Completed: {'yes' if plan.completed else 'no'}",
-        ]
-    )
-    return "\n".join(lines) + "\n"
 
 
 __all__ = ["PlanningSystem"]

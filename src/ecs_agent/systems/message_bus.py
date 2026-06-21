@@ -222,6 +222,10 @@ class MessageBusSystem:
             "bus_subscriber_removed", topic=topic, subscriber_id=subscriber_id
         )
 
+    @property
+    def _default_entity_id(self) -> EntityId:
+        return self._bus_entity_id if self._bus_entity_id is not None else EntityId(0)
+
     async def _emit_published_event(
         self,
         *,
@@ -231,12 +235,9 @@ class MessageBusSystem:
         if self._world is None:
             return
 
-        entity_id = (
-            self._bus_entity_id if self._bus_entity_id is not None else EntityId(0)
-        )
         await self._world.event_bus.publish(
             MessageBusPublishedEvent(
-                entity_id=entity_id, envelope=envelope, topic=topic
+                entity_id=self._default_entity_id, envelope=envelope, topic=topic
             )
         )
 
@@ -249,12 +250,9 @@ class MessageBusSystem:
         if self._world is None:
             return
 
-        entity_id = (
-            self._bus_entity_id if self._bus_entity_id is not None else EntityId(0)
-        )
         await self._world.event_bus.publish(
             MessageBusDeliveredEvent(
-                entity_id=entity_id,
+                entity_id=self._default_entity_id,
                 subscriber_id=self._subscriber_entity_id(subscriber_id),
                 envelope=envelope,
             )
@@ -263,12 +261,12 @@ class MessageBusSystem:
     def _subscriber_entity_id(self, subscriber_id: str) -> EntityId:
         if subscriber_id.isdigit():
             return EntityId(int(subscriber_id))
-        return self._bus_entity_id if self._bus_entity_id is not None else EntityId(0)
+        return self._default_entity_id
 
     def _build_envelope(self, payload: dict[str, Any]) -> MessageBusEnvelope:
         return MessageBusEnvelope(
             id=str(uuid.uuid4()),
-            source=f"ecs://entity/{self._bus_entity_id if self._bus_entity_id is not None else EntityId(0)}",
+            source=f"ecs://entity/{self._default_entity_id}",
             type="ecs.bus.publish",
             specversion="1.0",
             correlationid=str(uuid.uuid4()),
@@ -423,12 +421,9 @@ class MessageBusSystem:
         if self._world is None:
             return
 
-        entity_id = (
-            self._bus_entity_id if self._bus_entity_id is not None else EntityId(0)
-        )
         await self._world.event_bus.publish(
             MessageBusTimeoutEvent(
-                entity_id=entity_id,
+                entity_id=self._default_entity_id,
                 correlation_id=correlation_id,
             )
         )
@@ -442,12 +437,9 @@ class MessageBusSystem:
         if self._world is None:
             return
 
-        entity_id = (
-            self._bus_entity_id if self._bus_entity_id is not None else EntityId(0)
-        )
         await self._world.event_bus.publish(
             MessageBusResponseEvent(
-                entity_id=entity_id,
+                entity_id=self._default_entity_id,
                 correlation_id=correlation_id,
                 envelope=envelope,
             )

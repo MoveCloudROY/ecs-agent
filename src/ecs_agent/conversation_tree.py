@@ -55,6 +55,27 @@ def add_message(
     return msg
 
 
+def _walk_to_root(
+    tree: ConversationTreeComponent, leaf_message_id: str
+) -> list[str]:
+    """Walk from leaf to root, returning message IDs in reverse chronological order.
+
+    Args:
+        tree: ConversationTreeComponent to traverse
+        leaf_message_id: ID of leaf message to start from
+
+    Returns:
+        List of message IDs from leaf to root (reverse chronological).
+    """
+    path: list[str] = []
+    current_id: str | None = leaf_message_id
+    while current_id is not None:
+        path.append(current_id)
+        conv_msg = tree.messages[current_id]
+        current_id = conv_msg.parent_message_id
+    return path
+
+
 def linearize(tree: ConversationTreeComponent, leaf_message_id: str) -> list[Message]:
     """Convert tree branch to flat message list for LLM consumption.
 
@@ -70,13 +91,10 @@ def linearize(tree: ConversationTreeComponent, leaf_message_id: str) -> list[Mes
         List of Messages from root to leaf in chronological order
     """
     # Walk from leaf to root (reversed chronological order)
-    path: list[ConversationMessage] = []
-    current_id: str | None = leaf_message_id
-
-    while current_id is not None:
-        conv_msg = tree.messages[current_id]
-        path.append(conv_msg)
-        current_id = conv_msg.parent_message_id
+    path = [
+        tree.messages[msg_id]
+        for msg_id in _walk_to_root(tree, leaf_message_id)
+    ]
 
     # Reverse to get root-to-leaf chronological order
     path.reverse()
@@ -187,16 +205,7 @@ def get_branch_path(tree: ConversationTreeComponent, branch_id: str) -> list[str
     branch = tree.branches[branch_id]
     leaf_id = branch.leaf_message_id
 
-    # Walk from leaf to root
-    path: list[str] = []
-    current_id: str | None = leaf_id
-
-    while current_id is not None:
-        path.append(current_id)
-        conv_msg = tree.messages[current_id]
-        current_id = conv_msg.parent_message_id
-
-    # Reverse to get root-to-leaf order
+    path = _walk_to_root(tree, leaf_id)
     path.reverse()
     return path
 

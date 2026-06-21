@@ -448,14 +448,8 @@ class InterruptionComponent:
 
 
 @dataclass(slots=True)
-class ScratchbookRefComponent:
-    """Reference to a scratchbook artifact."""
-
-    artifact_id: str
-    category: str
-    content_hash: str
-    timestamp: str
-    record_path: str | None = None
+class ScratchbookRefComponent(ScratchbookRef):
+    """Reference to a scratchbook artifact (ECS component form)."""
 
 
 @dataclass(slots=True)

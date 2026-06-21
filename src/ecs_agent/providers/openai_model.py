@@ -9,6 +9,7 @@ import httpx
 
 from ecs_agent.accounting.normalization import normalize_openai_usage
 from ecs_agent.logging import get_logger
+from ecs_agent.providers._openai_format import convert_tools_to_openai
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.openai_chat_adapter import OpenAIChatAdapter
 from ecs_agent.providers.openai_responses_adapter import OpenAIResponsesAdapter
@@ -60,6 +61,17 @@ class OpenAIModel:
         """Low-cardinality provider label used for accounting and metrics."""
         return self._provider_config.provider_id
 
+    async def _fallback_to_chat(
+        self,
+        messages: list[Message],
+        tools: list[ToolSchema] | None,
+        response_format: dict[str, Any] | None,
+        stream: bool,
+    ) -> CompletionResult | AsyncIterator[StreamDelta]:
+        if stream:
+            return self._chat_adapter.stream(messages, tools, response_format)
+        return await self._chat_adapter.complete(messages, tools, response_format)
+
     async def complete(
         self,
         messages: list[Message],
@@ -72,10 +84,8 @@ class OpenAIModel:
 
         if api_format == ApiFormat.OPENAI_RESPONSES:
             if self._responses_api_available is False:
-                if stream:
-                    return self._chat_adapter.stream(messages, tools, response_format)
-                return await self._chat_adapter.complete(
-                    messages, tools, response_format
+                return await self._fallback_to_chat(
+                    messages, tools, response_format, stream
                 )
 
             if stream:
@@ -104,10 +114,8 @@ class OpenAIModel:
                     status_code=exc.response.status_code,
                     endpoint=f"{self._base_url}/responses",
                 )
-                if stream:
-                    return self._chat_adapter.stream(messages, tools, response_format)
-                return await self._chat_adapter.complete(
-                    messages, tools, response_format
+                return await self._fallback_to_chat(
+                    messages, tools, response_format, stream
                 )
 
         if api_format == ApiFormat.OPENAI_CHAT_COMPLETIONS:
@@ -139,17 +147,7 @@ class OpenAIModel:
         return normalize_openai_usage(usage_data)
 
     def _convert_tools_to_openai(self, tools: list[ToolSchema]) -> list[dict[str, Any]]:
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.parameters,
-                },
-            }
-            for tool in tools
-        ]
+        return convert_tools_to_openai(tools)
 
     def _convert_tools_to_responses(self, tools: list[ToolSchema]) -> list[dict[str, Any]]:
         return [

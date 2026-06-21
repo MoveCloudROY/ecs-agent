@@ -411,3 +411,41 @@ def test_model_openai_with_extra_kwargs() -> None:
         connect_timeout=5.0,
     )
     assert isinstance(m, OpenAIModel)
+
+
+# ---------------------------------------------------------------------------
+# Tests moved from test_model_factory.py (redundant file removed)
+# ---------------------------------------------------------------------------
+
+
+def test_get_model_returns_llm_model() -> None:
+    from ecs_agent.providers.protocol import LLMModel
+    from ecs_agent.providers.registry import ProviderRegistry, get_model
+
+    registry = ProviderRegistry.from_dict(
+        {
+            "openai": {
+                "base_url": "https://api.openai.com/v1",
+                "api_format": "openai_chat_completions",
+                "api_key": "test-key",
+            }
+        }
+    )
+    m = get_model("openai/gpt-4o", registry=registry)
+    assert isinstance(m, LLMModel)
+
+
+def test_get_model_model_id_matches_requested_model() -> None:
+    from ecs_agent.providers.registry import ProviderRegistry, get_model
+
+    registry = ProviderRegistry.from_dict(
+        {
+            "openai": {
+                "base_url": "https://api.openai.com/v1",
+                "api_format": "openai_chat_completions",
+                "api_key": "test-key",
+            }
+        }
+    )
+    m = get_model("openai/gpt-4-turbo", registry=registry)
+    assert m.model_id == "gpt-4-turbo"

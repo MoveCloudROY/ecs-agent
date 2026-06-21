@@ -20,6 +20,7 @@ from ecs_agent.components import (
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.scratchbook import ArtifactRegistry, ScratchbookService, ToolResultsSink
+from ecs_agent.systems._plan_utils import derive_plan_name
 from ecs_agent.tools.context import ToolExecutionContext, use_tool_context
 from ecs_agent.tools.sandbox import sandboxed_execute
 from ecs_agent.types import (
@@ -67,7 +68,7 @@ class ToolExecutionSystem:
             plan = world.get_component(entity_id, PlanComponent)
             plan_name: str | None = None
             if self._registry is not None and plan is not None:
-                plan_name = _derive_plan_name(
+                plan_name = derive_plan_name(
                     plan=plan,
                     conversation=conversation,
                     entity_id=entity_id,
@@ -299,16 +300,3 @@ class ToolExecutionSystem:
             len(message.content or "") for message in conversation.messages
         )
         return ceil(total_chars / safe_chars_per_token)
-
-
-def _derive_plan_name(
-    *, plan: PlanComponent, conversation: ConversationComponent, entity_id: EntityId
-) -> str:
-    for message in conversation.messages:
-        if message.role == "user" and message.content.strip():
-            return message.content.strip()
-    if plan.steps:
-        first_step = plan.steps[0].strip()
-        if first_step:
-            return first_step
-    return f"plan-{entity_id}"

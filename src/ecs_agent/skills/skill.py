@@ -104,58 +104,12 @@ class Skill:
         self._parse_skill_file()
 
     def _parse_skill_file(self) -> None:
-        """Parse YAML frontmatter and markdown body using strict line-delimited approach.
+        """Parse YAML frontmatter and markdown body from SKILL.md."""
+        from ecs_agent.skills._frontmatter import parse_skill_frontmatter
 
-        Reads the file in binary mode to allow the body to contain arbitrary bytes.
-        Only the frontmatter section (before the closing ---) needs to be valid UTF-8.
-        The body is stored as raw bytes and decoded lazily in system_prompt().
-        """
-        raw = self._skill_path.read_bytes()
-        # Try to decode up to potential frontmatter boundary in UTF-8
-        # We need to find b"---" line boundaries in raw bytes
-        # Split on newlines at byte level
-        separator = b"\n"
-        lines_bytes = raw.split(separator)
+        frontmatter_text, body_bytes = parse_skill_frontmatter(self._skill_path)
+        self._body_bytes: bytes = body_bytes
 
-        # Strip trailing \r from each line (handle CRLF)
-        stripped_lines = [line.rstrip(b"\r") for line in lines_bytes]
-
-        # Find first non-empty line — must be exactly b"---" to have frontmatter
-        first_non_empty_idx: int | None = None
-        for i, line in enumerate(stripped_lines):
-            if line.strip():
-                first_non_empty_idx = i
-                break
-
-        frontmatter_text = ""
-        # body_bytes will be decoded lazily
-        self._body_bytes: bytes = raw.strip()
-
-        if (
-            first_non_empty_idx is not None
-            and stripped_lines[first_non_empty_idx] == b"---"
-        ):
-            # Look for closing "---"
-            closing_idx: int | None = None
-            for i in range(first_non_empty_idx + 1, len(stripped_lines)):
-                if stripped_lines[i] == b"---":
-                    closing_idx = i
-                    break
-
-            if closing_idx is not None:
-                # Frontmatter bytes are safe UTF-8 YAML
-                fm_lines = stripped_lines[first_non_empty_idx + 1 : closing_idx]
-                try:
-                    frontmatter_text = b"\n".join(fm_lines).decode("utf-8")
-                except UnicodeDecodeError:
-                    frontmatter_text = b"\n".join(fm_lines).decode(
-                        "utf-8", errors="replace"
-                    )
-                # Body bytes: everything after closing ---
-                body_lines = stripped_lines[closing_idx + 1 :]
-                self._body_bytes = separator.join(body_lines).strip()
-
-        # Attempt YAML parse
         metadata: dict[str, Any] = {}
         if frontmatter_text:
             try:
