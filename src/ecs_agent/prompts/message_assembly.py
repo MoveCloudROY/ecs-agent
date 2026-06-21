@@ -58,7 +58,6 @@ def apply_outbound_budget(
     *,
     cache_component: ContextCacheComponent | None = None,
 ) -> list[Message]:
-    _ = cache_component
     reduced_messages = list(messages)
     reduced_context_entries = list(context_entries)
 

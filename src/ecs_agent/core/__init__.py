@@ -1,3 +1,5 @@
+"""Core module public API."""
+
 from .entity import EntityIdGenerator
 from .event_bus import EventBus
 from .query import Query

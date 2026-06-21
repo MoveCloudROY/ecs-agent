@@ -183,12 +183,14 @@ src/ecs_agent/
 │   ├── query.py             # Query engine
 │   └── event_bus.py         # Pub/sub EventBus
 ├── components/
-│   └── definitions.py       # All 12 component dataclasses
+│   └── definitions.py       # All component dataclasses
 ├── providers/
-│   ├── protocol.py          # LLMProvider Protocol
-│   ├── openai_provider.py   # OpenAI-compatible HTTP provider
-│   ├── fake_provider.py     # Deterministic test provider
-│   └── retry_provider.py    # Retry wrapper (tenacity)
+│   ├── protocol.py          # LLMModel Protocol
+│   ├── openai_model.py      # OpenAI-compatible HTTP provider
+│   ├── claude_model.py      # Anthropic Claude provider
+│   ├── litellm_model.py     # LiteLLM unified provider
+│   ├── fake_model.py        # Deterministic test provider
+│   └── retry_model.py       # Retry wrapper (tenacity)
 └── systems/                 # reasoning, planning, tool_execution, etc.
 ```
 
@@ -206,7 +208,7 @@ await runner.run(world, max_ticks=10)
 
 ### Exports
 
-- `from ecs_agent import RetryProvider` — NOT from `ecs_agent.providers`
+- `from ecs_agent import RetryModel` — NOT from `ecs_agent.providers`
 - `from ecs_agent.core import World` — core classes
-- `from ecs_agent.providers.openai_provider import OpenAIProvider` — direct module import
+- `from ecs_agent.providers.openai_model import OpenAIModel` — direct module import
 - Check `__init__.py` files for canonical import paths before adding new imports

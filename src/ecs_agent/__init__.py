@@ -155,10 +155,7 @@ from ecs_agent.providers import (
     parse_model_id,
 )
 
-try:
-    from ecs_agent.providers import LiteLLMModel
-except ImportError:
-    LiteLLMModel = None  # type: ignore[assignment, misc]
+from ecs_agent.providers import LiteLLMModel
 
 
 from ecs_agent.systems import (

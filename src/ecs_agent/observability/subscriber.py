@@ -533,8 +533,6 @@ class ObservabilitySubscriber:
             return
 
         if event.trace_id is not None and event.run_id is not None:
-            assert event.trace_id is not None
-            assert event.run_id is not None
             active_span_state = (
                 state.active_subagents.pop(event.correlation_id, None)
                 if state is not None

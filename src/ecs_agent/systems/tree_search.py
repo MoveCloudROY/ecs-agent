@@ -315,10 +315,8 @@ class TreeSearchSystem:
     def _depth(self, nodes: dict[int, TreeNode], node_id: int) -> int:
         depth = 0
         current_id = node_id
-        while nodes[current_id].parent_id is not None:
+        while (parent_id := nodes[current_id].parent_id) is not None:
             depth += 1
-            parent_id = nodes[current_id].parent_id
-            assert parent_id is not None
             current_id = parent_id
         return depth
 

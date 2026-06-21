@@ -1,3 +1,5 @@
+"""World entity, component, and system manager."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, TypeVar

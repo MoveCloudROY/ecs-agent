@@ -81,7 +81,6 @@ class Message:
     messages that carry only ``tool_call_id``).
 
     ``parts`` carries *non-text* media attachments only: ``ImageUrlPart``
-    ``parts`` carries *non-text* media attachments only: ``ImageUrlPart``
     and ``FileRefPart``.
     Doing so causes text to be sent twice to the LLM and breaks prompt
     normalisation (``UserPromptNormalizationSystem`` only reads

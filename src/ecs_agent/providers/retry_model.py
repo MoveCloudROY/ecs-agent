@@ -1,3 +1,5 @@
+"""Retry wrapper provider."""
+
 from collections.abc import AsyncIterator
 from typing import Any
 

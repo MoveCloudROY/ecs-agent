@@ -1,3 +1,5 @@
+"""Entity ID generation utilities."""
+
 from ecs_agent.types import EntityId
 
 

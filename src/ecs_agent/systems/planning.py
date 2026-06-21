@@ -1,3 +1,5 @@
+"""Multi-step plan execution system."""
+
 from __future__ import annotations
 
 import time

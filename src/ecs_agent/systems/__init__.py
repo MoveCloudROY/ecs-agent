@@ -1,3 +1,5 @@
+"""Systems module public API."""
+
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.checkpoint import CheckpointSystem
 from ecs_agent.systems.compaction import CompactionSystem

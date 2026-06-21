@@ -1,3 +1,5 @@
+"""MCP skill adapter."""
+
 from __future__ import annotations
 
 import asyncio

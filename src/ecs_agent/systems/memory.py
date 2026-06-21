@@ -1,3 +1,5 @@
+"""Conversation memory management system."""
+
 from __future__ import annotations
 
 from ecs_agent.components import (

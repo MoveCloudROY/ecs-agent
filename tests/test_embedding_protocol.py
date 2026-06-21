@@ -22,20 +22,11 @@ class NonConformingEmbedder:
 
 
 @pytest.mark.asyncio
-async def test_embedding_provider_is_runtime_checkable() -> None:
-    """EmbeddingProvider should be runtime checkable with isinstance."""
-    # This test verifies the protocol is decorated with @runtime_checkable
-    conformer = ConformingEmbedder()
-    assert isinstance(conformer, EmbeddingProvider)
-
-
-@pytest.mark.asyncio
-async def test_conforming_class_passes_isinstance_check() -> None:
-    """Class with async embed(texts: list[str]) -> list[list[float]] should pass isinstance."""
+async def test_conforming_class_passes_isinstance_and_embed_works() -> None:
+    """Class with async embed(texts: list[str]) -> list[list[float]] should pass isinstance and be callable."""
     embedder = ConformingEmbedder()
     assert isinstance(embedder, EmbeddingProvider)
 
-    # Verify the method is callable
     result = await embedder.embed(["hello", "world"])
     assert len(result) == 2
     assert all(isinstance(vec, list) for vec in result)

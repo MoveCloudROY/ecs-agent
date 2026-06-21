@@ -1,3 +1,5 @@
+"""Skills module public API."""
+
 from ecs_agent.skills.discovery import (
     DiscoveryManager,
     DiscoveryReport,

@@ -154,7 +154,7 @@ src/ecs_agent/
 │   ├── query.py              # Query engine for entity filtering
 │   └── event_bus.py          # Pub/sub EventBus
 ├── components/
-│   └── definitions.py        # 30 component dataclasses
+│   └── definitions.py        # Component dataclasses
 ├── providers/
 │   ├── protocol.py           # LLMModel Protocol
 │   ├── openai_provider.py    # OpenAI-compatible HTTP provider (httpx)
@@ -162,7 +162,7 @@ src/ecs_agent/
 │   ├── litellm_provider.py   # LiteLLM unified provider
 │   ├── fake_provider.py      # Deterministic test provider
 │   └── retry_provider.py     # Retry wrapper (tenacity)
-├── systems/                  # 15 built-in systems
+├── systems/                  # Built-in systems
 │   ├── reasoning.py          # LLM inference
 │   ├── planning.py           # Multi-step plan execution
 │   ├── replanning.py         # Dynamic plan adjustment

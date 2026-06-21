@@ -1,3 +1,5 @@
+"""Anthropic Messages API adapter."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
