@@ -25,7 +25,6 @@ from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeModel, Model
 from ecs_agent.providers.config import ApiFormat
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import CompletionResult, InterruptionReason, Message
 
@@ -80,7 +79,6 @@ async def main() -> None:
     print("\n[2] Dynamic System Lifecycle")
     reasoning = ReasoningSystem(priority=0)
     handle = world.register_system(reasoning, priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
     print(f"  ✓ Registered ReasoningSystem (handle: {handle})")
 

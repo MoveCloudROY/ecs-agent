@@ -31,7 +31,6 @@ from ecs_agent.providers.embedding_provider import OpenAIEmbeddingProvider
 from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider
 from ecs_agent.providers.vector_store import InMemoryVectorStore
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.rag import RAGSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import CompletionResult, Message
@@ -125,7 +124,6 @@ async def main() -> None:
     # RAG runs BEFORE reasoning (priority -10 < 0)
     world.register_system(RAGSystem(priority=-10), priority=-10)
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     # Run

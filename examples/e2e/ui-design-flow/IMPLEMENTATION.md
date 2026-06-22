@@ -25,7 +25,6 @@ Systems are registered with specific priorities to ensure correct data flow with
 | **ReasoningSystem** | 0 | Calls the LLM provider to generate the next response or tool call. |
 | **TerminalCleanupSystem** | 1 | Clears `TerminalComponent(reason="reasoning_complete")` so interactive turns can continue. |
 | **ToolExecutionSystem** | 5 | Dispatches pending tool calls to builtin file tools (read_file, write_file, etc.). |
-| **MemorySystem** | 10 | Updates conversation history and manages context window. |
 | **ErrorHandlingSystem** | 99 | Captures exceptions from other systems and attaches `ErrorComponent`. |
 
 ## Interactive Input Handling

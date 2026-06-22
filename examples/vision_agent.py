@@ -30,7 +30,6 @@ from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.systems.user_prompt_normalization_system import (
@@ -117,7 +116,6 @@ async def main() -> None:
     world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
     world.register_system(UserPromptNormalizationSystem(priority=-10), priority=-10)
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     runner = Runner()

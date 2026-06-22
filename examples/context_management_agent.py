@@ -41,7 +41,6 @@ from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.checkpoint import CheckpointSystem
 from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import CompletionResult, Message, Usage
 
@@ -135,7 +134,6 @@ async def part_1_undo() -> None:
     # Register systems
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(CheckpointSystem(), priority=1)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     # Run for 3 ticks
@@ -196,7 +194,6 @@ async def part_2_resume() -> None:
 
     # Register systems
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     # Run for 2 ticks
@@ -312,7 +309,6 @@ async def part_3_compact() -> None:
 
     # Register systems
     world.register_system(CompactionSystem(), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     # Run one tick to trigger compaction

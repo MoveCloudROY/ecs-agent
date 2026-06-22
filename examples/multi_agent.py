@@ -1,7 +1,7 @@
 """Multi-agent collaboration example with dual-mode LLM model selection.
 
 This example demonstrates:
-- Creating a World with ReasoningSystem, MessageBusSystem, MemorySystem, and ErrorHandlingSystem
+- Creating a World with ReasoningSystem, MessageBusSystem, and ErrorHandlingSystem
 - Creating two Agent Entities (researcher and summarizer)
 - Setting up agents to communicate via MessageBusSystem pub/sub
 - Agent A publishes a message to Agent B via MessageBusSystem
@@ -34,7 +34,6 @@ from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.message_bus import MessageBusSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import CompletionResult, Message
 
@@ -142,7 +141,6 @@ async def main() -> None:
     world.register_system(ReasoningSystem(priority=0), priority=0)
     message_bus_system = MessageBusSystem(priority=5)
     world.register_system(message_bus_system, priority=5)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     # Run initial tick to let Agent A reason

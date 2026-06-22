@@ -1,7 +1,7 @@
 """Tool-use agent example using the ECS-based LLM Agent framework.
 
 This example demonstrates:
-- Creating a World with ReasoningSystem, ToolExecutionSystem, MemorySystem, and ErrorHandlingSystem
+- Creating a World with ReasoningSystem, ToolExecutionSystem, and ErrorHandlingSystem
 - Defining async tool handlers (add, multiply)
 - Creating an Agent Entity with a real LLM model (OpenAIModel + RetryModel)
 - The LLM decides which tools to call and synthesizes the final answer
@@ -33,7 +33,6 @@ from ecs_agent.providers import Model
 from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.retry_model import RetryModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import Message, RetryConfig, ToolSchema
@@ -158,7 +157,6 @@ async def main() -> None:
     # Register Systems
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     # Run

@@ -34,7 +34,6 @@ from ecs_agent.core import Runner, World
 from ecs_agent.providers import Model
 from ecs_agent.providers.config import ApiFormat
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.planning import PlanningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import Message, PlanStepCompletedEvent, ToolSchema
@@ -200,7 +199,6 @@ async def main() -> None:
     # Register systems (order matters: planning → tool execution → memory → error)
     world.register_system(PlanningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     # Subscribe to plan step events for real-time progress

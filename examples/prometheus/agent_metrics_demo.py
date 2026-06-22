@@ -19,7 +19,6 @@ from ecs_agent.metrics import install_prometheus_metrics, start_metrics_server
 from ecs_agent.providers import Model
 from ecs_agent.providers.config import ApiFormat
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.providers.protocol import LLMModel
@@ -322,7 +321,6 @@ async def main(argv: Sequence[str] | None = None) -> None:
     metrics = install_prometheus_metrics(world)
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     handle = start_metrics_server(

@@ -5,7 +5,7 @@ This example demonstrates dual-mode LLM model selection:
 - With LLM_API_KEY: Uses OpenAIModel with DashScope/Qwen
 
 Also demonstrates:
-- Creating a World with ReasoningSystem, MemorySystem, and ErrorHandlingSystem
+- Creating a World with ReasoningSystem and ErrorHandlingSystem
 - Creating an Agent Entity with LLMComponent and ConversationComponent
 - Running the agent with a user message
 - Printing the conversation history
@@ -21,7 +21,6 @@ from ecs_agent.providers import FakeModel, Model
 from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import CompletionResult, Message
 
@@ -75,7 +74,6 @@ async def main() -> None:
 
     # Register Systems
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     # Run

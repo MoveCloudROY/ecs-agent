@@ -37,7 +37,6 @@ from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.types import (
     CompactionCompleteEvent,
     CompletionResult,
@@ -195,7 +194,6 @@ def _estimate_tokens(messages: list[Message]) -> int:
 def _register_compaction_world(world: World) -> None:
     """Register the systems needed for one compaction tick."""
     world.register_system(CompactionSystem(), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
 
