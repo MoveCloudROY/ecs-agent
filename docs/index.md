@@ -47,7 +47,6 @@ from ecs_agent.core import World, Runner
 from ecs_agent.components import LLMComponent, ConversationComponent
 from ecs_agent.providers import FakeModel
 from ecs_agent.systems.reasoning import ReasoningSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.types import CompletionResult, Message
 
@@ -58,7 +57,6 @@ async def main():
     world.add_component(agent, LLMComponent(model=model, system_prompt="You are helpful."))
     world.add_component(agent, ConversationComponent(messages=[Message(role="user", content="Hi!")]))
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
     runner = Runner()
     await runner.run(world, max_ticks=3)

@@ -41,7 +41,6 @@ from ecs_agent.core import Runner, World
 from ecs_agent.logging import configure_logging
 from ecs_agent.providers import Model
 from ecs_agent.systems.reasoning import ReasoningSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.types import Message
 from ecs_agent.providers.config import ApiFormat
@@ -72,7 +71,6 @@ async def main() -> None:
 
     # Register systems (priority controls execution order)
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     # Run the agent loop
@@ -135,7 +133,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 
 ### Production Infrastructure
 - **5 LLM Providers + Streaming** — OpenAI, Claude, LiteLLM (100+ models), Fake, and Retry providers with real-time SSE token delivery.
-- **Context Management** — Checkpoints (undo/resume), conversation compaction (XML system-prompt summaries), and memory windowing. Restored background subagent sessions that lost their live task handle are marked terminal for explicit inspection without being surfaced as fresh parent notifications.
+- **Context Management** — Checkpoints (undo/resume), conversation compaction (XML system-prompt summaries), and context-budget windowing. Restored background subagent sessions that lost their live task handle are marked terminal for explicit inspection without being surfaced as fresh parent notifications.
 - **Tool Ecosystem** — Auto-discovery via `@tool` decorator, manual approval flows, secure `bwrap` sandboxing, and composable skills.
 - **MCP Integration** — Connect to external MCP tool servers via stdio, SSE, or HTTP transports with namespaced tool mapping.
 - **Prometheus Metrics**, Install low-cardinality runtime, LLM, tool, streaming, and runtime-control metrics on any `World` and expose them via render, ASGI/WSGI, or a standalone `/metrics` server.
@@ -168,7 +166,6 @@ src/ecs_agent/
 │   ├── replanning.py         # Dynamic plan adjustment
 │   ├── tool_execution.py     # Tool call dispatch
 │   ├── permission.py         # Tool whitelisting/blacklisting
-│   ├── memory.py             # Conversation memory management
 │   ├── message_bus.py        # Pub/sub and request-response messaging
 │   ├── error_handling.py     # Error capture and recovery
 │   ├── tree_search.py        # MCTS plan optimization
@@ -211,8 +208,8 @@ For interactive agents that must continue after a successful reasoning turn, reg
 World
  ├── Entity 0 ── [LLMComponent, ConversationComponent, PlanComponent, ...]
  ├── Entity 1 ── [LLMComponent, ConversationComponent, MessageBusSubscriptionComponent, ...]
- └── Systems ─── [ReasoningSystem(0), PlanningSystem(0), MessageBusSystem(5), MemorySystem(10), ...]
- └── Systems ─── [ReasoningSystem(0), PlanningSystem(0), ToolExecutionSystem(5), MemorySystem(10), ...]
+ └── Systems ─── [ReasoningSystem(0), PlanningSystem(0), MessageBusSystem(5), ...]
+ └── Systems ─── [ReasoningSystem(0), PlanningSystem(0), ToolExecutionSystem(5), ...]
                           │
                     Runner.run()
                           │

@@ -49,7 +49,7 @@ Maintains the full history of messages for an agent's conversation.
 | `messages` | `list[Message]` | (none) | History of conversation messages |
 | `max_messages` | `int` | `100` | Maximum number of messages to retain |
 
-**Used by:** `ReasoningSystem`, `PlanningSystem`, `MemorySystem`, `MessageBusSystem`, `ToolExecutionSystem`, `ReplanningSystem`
+**Used by:** `ReasoningSystem`, `PlanningSystem`, `MessageBusSystem`, `ToolExecutionSystem`, `ReplanningSystem`
 
 **Usage:**
 ```python

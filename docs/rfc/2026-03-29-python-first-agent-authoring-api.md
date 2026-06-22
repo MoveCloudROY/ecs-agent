@@ -711,12 +711,12 @@ Presets are explicit named stacks that register known-good component + system bu
 
 | Preset | Purpose | Systems Installed |
 |---|---|---|
-| `chat` | Basic assistant loop | `ReasoningSystem`, `MemorySystem`, `ErrorHandlingSystem` |
-| `tool_use` | Tool-calling assistant | `ReasoningSystem`, `ToolExecutionSystem`, `MemorySystem`, `ErrorHandlingSystem` |
-| `plan_execute` | Plan + act loop | `PlanningSystem`, `ToolExecutionSystem`, `ReplanningSystem`, `MemorySystem`, `ErrorHandlingSystem` |
+| `chat` | Basic assistant loop | `ReasoningSystem`, `ErrorHandlingSystem` |
+| `tool_use` | Tool-calling assistant | `ReasoningSystem`, `ToolExecutionSystem`, `ErrorHandlingSystem` |
+| `plan_execute` | Plan + act loop | `PlanningSystem`, `ToolExecutionSystem`, `ReplanningSystem`, `ErrorHandlingSystem` |
 | `prompted` | Prompt rendering + normalization | `SystemPromptRenderSystem`, `UserPromptNormalizationSystem`, `PromptContextCollectorSystem`, plus `chat` or `tool_use` stack |
 | `approval` | Tool approval flow | `ToolApprovalSystem`, `ToolExecutionSystem`, plus reasoning stack |
-| `subagent_manager` | Delegation-oriented manager agent | `SystemPromptRenderSystem`, `UserPromptNormalizationSystem`, `SubagentSystem`, `ReasoningSystem`, `ToolExecutionSystem`, `MemorySystem`, `ErrorHandlingSystem` |
+| `subagent_manager` | Delegation-oriented manager agent | `SystemPromptRenderSystem`, `UserPromptNormalizationSystem`, `SubagentSystem`, `ReasoningSystem`, `ToolExecutionSystem`, `ErrorHandlingSystem` |
 | `message_bus` | Collaboration-heavy agent | `MessageBusSystem`, plus chosen reasoning stack |
 | `rag` | Retrieval-augmented agent | `RAGSystem`, plus chosen reasoning stack |
 | `durable` | Checkpoint / compaction capable stack | `CheckpointSystem`, `CompactionSystem`, plus chosen reasoning stack |
@@ -749,7 +749,7 @@ This section defines how the proposed API maps to existing runtime primitives.
 | `approval(policy=...)` | `ToolApprovalComponent` + `ToolApprovalSystem` | Approval is a separate concern and should remain explicit |
 | `sandbox(...)` | `SandboxConfigComponent` | Direct mapping |
 | `permissions(...)` | `PermissionComponent` | Preserve existing allow/deny model |
-| `memory(max_messages=...)` | `ConversationComponent.max_messages` + `MemorySystem` | Avoid introducing a second memory abstraction |
+| `memory(max_messages=...)` | `ConversationComponent.max_messages` + `ContextBudgetConfig` / `CompactionSystem` | Avoid introducing a second memory abstraction |
 | `checkpointing()` | `CheckpointComponent` + `CheckpointSystem` | Reuse durable snapshot flow |
 | `compaction(...)` | `CompactionConfigComponent` + `CompactionSystem` | Reuse existing archival / compaction flow |
 | `message_bus(...)` | `MessageBusConfigComponent`, `MessageBusSubscriptionComponent`, `MessageBusConversationComponent`, `MessageBusSystem` | Preserve collaboration model |
@@ -858,7 +858,6 @@ The following table describes how each currently documented component should be 
 | `SystemPromptRenderSystem` | preset / advanced | `prompted`, `subagent_manager`, or explicit `.system(...)` |
 | `UserPromptNormalizationSystem` | preset / advanced | `prompted`, or explicit `.system(...)` |
 | `ReasoningSystem` | default | `chat`, `tool_use`, `approval`, `subagent_manager` |
-| `MemorySystem` | default | `chat`, `tool_use`, `plan_execute` |
 | `PlanningSystem` | preset | `plan_execute` |
 | `ToolExecutionSystem` | preset | `tool_use`, `plan_execute`, `approval`, `subagent_manager` |
 | `MessageBusSystem` | advanced feature | `message_bus(...)` |
@@ -969,7 +968,6 @@ agent_id = world.create_entity()
 world.add_component(agent_id, LLMComponent(...))
 world.add_component(agent_id, ConversationComponent(...))
 world.register_system(ReasoningSystem(priority=0), priority=0)
-world.register_system(MemorySystem(), priority=10)
 world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 runner = Runner()
 await runner.run(world, max_ticks=3)

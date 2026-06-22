@@ -51,7 +51,6 @@ from ecs_agent.core import World, Runner
 from ecs_agent.components import LLMComponent, ConversationComponent
 from ecs_agent.providers import FakeModel
 from ecs_agent.systems.reasoning import ReasoningSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.types import CompletionResult, Message
 
@@ -77,7 +76,6 @@ async def main():
     # 4. Register systems
     # Systems contain the logic. Priority determines execution order.
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     # 5. Run with Runner
@@ -103,7 +101,7 @@ if __name__ == "__main__":
 3.  **Entity Configuration**: We add an `LLMComponent` to handle model settings and a `ConversationComponent` to store the chat history.
 4.  **System Registration**: 
     *   `ReasoningSystem` triggers the LLM call.
-    *   `MemorySystem` manages how context is stored or pruned.
+    *   Context management is handled by `ContextBudgetConfig` and compaction systems.
     *   `ErrorHandlingSystem` catches and logs failures during the tick.
 5.  **Execution**: The `Runner` executes the loop. Each tick allows systems to process the current state of entities.
 

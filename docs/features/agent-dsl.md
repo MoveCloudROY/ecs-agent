@@ -544,7 +544,6 @@ from ecs_agent.providers import Model
 from ecs_agent.providers.config import ApiFormat
 from ecs_agent.components import ConversationComponent
 from ecs_agent.systems.reasoning import ReasoningSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.types import Message
 
 # Create agent config
@@ -584,7 +583,6 @@ world.add_component(
     ConversationComponent(messages=[Message(role="user", content="Hello!")])
 )
 world.register_system(ReasoningSystem(), priority=0)
-world.register_system(MemorySystem(), priority=10)
 
 # Run
 runner = Runner()

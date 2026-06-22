@@ -259,7 +259,7 @@ world.register_system(SubagentWaitSystem(priority=-5), priority=-5)
 world.register_system(SubagentSystem(priority=-1), priority=-1)
 world.register_system(ReasoningSystem(priority=0), priority=0)
 world.register_system(ToolExecutionSystem(priority=5), priority=5)
-# ... register other systems (MemorySystem, ErrorHandlingSystem, etc.)
+# ... register other systems (ErrorHandlingSystem, etc.)
 
 # Run
 runner = Runner()

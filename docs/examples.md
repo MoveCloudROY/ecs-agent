@@ -92,7 +92,7 @@ uv run python examples/chat_agent.py
 - **File:** `examples/chat_agent.py`
 - **What it demonstrates:** Basic agent setup using the ECS pattern with a `FakeModel`.
 - **Run:** `python examples/chat_agent.py`
-- **Pattern:** `World` + entity + `LLMComponent` + `ConversationComponent` + `ReasoningSystem` + `MemorySystem` + `ErrorHandlingSystem` + `Runner`.
+- **Pattern:** `World` + entity + `LLMComponent` + `ConversationComponent` + `ReasoningSystem` + `ErrorHandlingSystem` + `Runner`.
 
 #### Key Code
 ```python
@@ -103,7 +103,6 @@ world.add_component(agent_id, ConversationComponent(messages=[Message(role="user
 
 # Register Systems
 world.register_system(ReasoningSystem(priority=0), priority=0)
-world.register_system(MemorySystem(), priority=10)
 world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 ```
 

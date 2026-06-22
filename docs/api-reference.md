@@ -173,11 +173,6 @@ class ToolTimeoutError(Exception): ...
 
 ```python
 @dataclass(slots=True)
-class ConversationTruncatedEvent:
-    entity_id: EntityId
-    removed_count: int
-
-@dataclass(slots=True)
 class ErrorOccurredEvent:
     entity_id: EntityId
     error: str
@@ -493,13 +488,6 @@ All components are implemented as `@dataclass(slots=True)`.
 
 ```python
 class ReasoningSystem(priority: int = 0):
-    async def process(self, world: World) -> None: ...
-```
-
-### MemorySystem
-
-```python
-class MemorySystem:
     async def process(self, world: World) -> None: ...
 ```
 

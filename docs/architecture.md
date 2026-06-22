@@ -83,7 +83,6 @@ Systems run based on their priority. Lower numbers execute first. We recommend t
 - **Priority 1**: `TerminalCleanupSystem`. Optional post-reasoning cleanup for interactive flows that must continue after `reasoning_complete`.
 - **Priority 5**: `ToolExecutionSystem` or `MessageBusSystem`. These handle the actual work or interactions with other agents.
 - **Priority 7**: `ReplanningSystem`. This checks results and updates the plan if needed.
-- **Priority 10**: `MemorySystem`. This persists important information to long-term storage.
 - **Priority 99**: `ErrorHandlingSystem`. This runs last to catch and process any issues that occurred during the tick.
 - **Priority 15+**: `CheckpointSystem`. Creates state snapshots.
 - **Priority 20+**: `CompactionSystem`. Compresses conversation when needed.
@@ -93,7 +92,6 @@ Systems run based on their priority. Lower numbers execute first. We recommend t
 The `EventBus` provides a typed pub/sub mechanism for asynchronous communication between systems. Subscribers register for specific event type classes. When an event is published, the bus triggers all handlers associated with that exact type.
 
 Common event types include:
-- `ConversationTruncatedEvent`: Triggered when context limits are reached.
 - `ErrorOccurredEvent`: Published when a system encounters an exception.
 - `MessageBusPublishedEvent`, `MessageBusDeliveredEvent`, `MessageBusResponseEvent`, `MessageBusTimeoutEvent`: Message bus lifecycle events.
 - `PlanStepCompletedEvent`: Published after a plan step finishes successfully.

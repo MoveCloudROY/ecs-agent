@@ -259,5 +259,4 @@ msg_0 (user)
 ## See Also
 
 - [Conversation Component](../components.md#conversationcomponent) — Flat conversation
-- [Memory System](../systems.md#memorysystem) — Message management
 - [Serialization](./serialization.md) — Persisting trees

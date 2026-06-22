@@ -79,7 +79,7 @@ The user asked about Python list comprehensions. We discussed syntax and perform
 
 This block is appended to the end of the effective system prompt. This approach ensures the LLM receives the summary as high-priority context without polluting the conversation history with artificial messages.
 
-The `MemorySystem` applies trailing-window truncation: it keeps the system message and the most recent `max_messages` messages. Since compaction leaves only the original system message plus a minimal user continuation anchor, the window naturally handles the post-compaction state while preserving a valid non-system message for runnable agents.
+Conversation truncation is handled by `ContextBudgetConfig` together with `CompactionSystem`, which keep the system message and the most recent messages within the configured budget while preserving a valid continuation anchor for runnable agents.
 
 ### Events
 
