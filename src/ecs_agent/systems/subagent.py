@@ -38,7 +38,6 @@ from ecs_agent.skills import catalog as _skill_catalog
 from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.compaction import CompactionSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.systems.subagent_wait import notification_matches_wait
@@ -2069,7 +2068,6 @@ class SubagentSystem:
             SystemPromptRenderSystem(priority=-20), priority=-20
         )
         child_world.register_system(ReasoningSystem(priority=0), priority=0)
-        child_world.register_system(MemorySystem(), priority=10)
         child_world.register_system(
             ErrorHandlingSystem(priority=99),
             priority=99,

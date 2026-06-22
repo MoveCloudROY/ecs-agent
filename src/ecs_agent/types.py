@@ -250,12 +250,6 @@ class CompletionResult:
 
 
 @dataclass(slots=True)
-class ConversationTruncatedEvent:
-    entity_id: EntityId
-    removed_count: int
-
-
-@dataclass(slots=True)
 class ErrorOccurredEvent:
     entity_id: EntityId
     error: str
@@ -969,7 +963,6 @@ __all__ = [
     "CompletionResult",
     "ConversationBranch",
     "ConversationMessage",
-    "ConversationTruncatedEvent",
     "DelegationCompletedEvent",
     "DelegationStartedEvent",
     "EntityId",

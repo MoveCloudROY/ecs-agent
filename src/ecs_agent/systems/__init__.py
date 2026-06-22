@@ -8,7 +8,6 @@ from ecs_agent.systems.permission import PermissionSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.terminal_cleanup import TerminalCleanupSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.message_bus import MessageBusSystem
 from ecs_agent.systems.replanning import ReplanningSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
@@ -27,7 +26,6 @@ __all__ = [
     "CheckpointSystem",
     "CompactionSystem",
     "ErrorHandlingSystem",
-    "MemorySystem",
     "MessageBusSystem",
     "PermissionSystem",
     "PlanningSystem",
