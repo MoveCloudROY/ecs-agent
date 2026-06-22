@@ -46,7 +46,6 @@ from ecs_agent.logging import FORBIDDEN_FIELDS
 from ecs_agent.providers import OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import (
     CompletionResult,
@@ -201,7 +200,6 @@ async def test_real_full_agent_loop_streaming() -> None:
     world.add_component(entity, StreamingComponent(enabled=True))
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     deltas: list[StreamContentDeltaEvent] = []
@@ -242,7 +240,6 @@ async def test_real_multi_turn_conversation() -> None:
     )
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     runner = Runner()
@@ -962,7 +959,6 @@ async def test_real_llm_builtin_tools_read_file_smoke(tmp_path: Any) -> None:
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     await Runner().run(world, max_ticks=5)
@@ -1022,7 +1018,6 @@ async def test_real_llm_agent_uses_glob_to_find_files(tmp_path: Any) -> None:
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     await Runner().run(world, max_ticks=5)
@@ -1074,7 +1069,6 @@ async def test_real_llm_agent_reads_and_reports_file_content(tmp_path: Any) -> N
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     await Runner().run(world, max_ticks=5)
@@ -1494,7 +1488,6 @@ async def test_real_subagent_child_world_name_in_logs(
     world.register_system(subagent_system, priority=0)
     world.register_system(ReasoningSystem(), priority=1)
     world.register_system(ToolExecutionSystem(), priority=5)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     runner = Runner()

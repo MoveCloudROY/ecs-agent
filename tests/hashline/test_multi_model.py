@@ -11,7 +11,6 @@ from ecs_agent.core import Runner, World
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers import OpenAIModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import Message
@@ -72,7 +71,6 @@ async def test_real_llm_clean_read_snapshot_edit_workflow(tmp_path: Path) -> Non
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     await Runner().run(world, max_ticks=8)

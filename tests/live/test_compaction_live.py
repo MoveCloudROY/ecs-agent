@@ -23,7 +23,6 @@ from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfig
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.systems.compaction import CompactionSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.types import CompletionResult, Message
 
@@ -420,8 +419,7 @@ async def test_live_memory_system_preserves_post_compaction_turns(
         ),
     )
 
-    memory_system = MemorySystem()
-    await memory_system.process(world)
+    # Post-compaction truncation no longer applies
 
     conv = world.get_component(entity_id, ConversationComponent)
 

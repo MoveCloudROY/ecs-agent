@@ -27,7 +27,6 @@ from ecs_agent.prompts.contracts import TriggerSpec
 from ecs_agent.providers import OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.user_prompt_normalization_system import (
     UserPromptNormalizationSystem,
@@ -93,7 +92,6 @@ async def test_live_script_action_rewrites_prompt_before_llm(live_api_key: str) 
 
     world.register_system(UserPromptNormalizationSystem(), priority=-10)
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     runner = Runner()
@@ -158,7 +156,6 @@ async def test_live_script_action_world_mutation_persists(live_api_key: str) -> 
 
     world.register_system(UserPromptNormalizationSystem(), priority=-10)
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     runner = Runner()

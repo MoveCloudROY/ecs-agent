@@ -39,7 +39,6 @@ from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.serialization import WorldSerializer
 from ecs_agent.skills.skill import Skill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.message_bus import MessageBusSystem
 from ecs_agent.systems.subagent import SubagentSystem
@@ -93,7 +92,6 @@ async def test_responses_api_with_real_llm() -> None:
     )
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     runner = Runner()
@@ -155,7 +153,6 @@ async def test_tree_conversation_with_reasoning_system() -> None:
     )
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     runner = Runner()
@@ -234,7 +231,6 @@ None
         )
 
         world.register_system(ReasoningSystem(priority=0), priority=0)
-        world.register_system(MemorySystem(), priority=10)
         world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
         runner = Runner()
@@ -778,7 +774,6 @@ async def test_enhanced_logging_in_system_execution() -> None:
     )
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     # Get logger and verify it works
