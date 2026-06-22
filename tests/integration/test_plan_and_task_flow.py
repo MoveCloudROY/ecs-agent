@@ -2119,20 +2119,6 @@ async def test_plan_task_langfuse_records_runner_trace_when_enabled(
     assert any(record.kind == "generation" for record in sink.records)
 
 
-def test_plan_task_world_does_not_register_memory_system(tmp_path: Path) -> None:
-    from ecs_agent.providers.fake_model import FakeModel
-    from ecs_agent.systems.memory import MemorySystem
-    from examples.e2e.plan_and_task.main import build_plan_task_world
-
-    model = FakeModel(responses=["ok"])
-    world, _, _, _ = build_plan_task_world(model=model, base_dir=tmp_path)
-    world.apply_pending_system_operations()
-
-    assert not any(
-        isinstance(entry.system, MemorySystem) for entry in world._systems._systems
-    )
-
-
 @pytest.mark.asyncio
 async def test_plan_task_compaction_summarizes_before_prompt_render(
     tmp_path: Path,

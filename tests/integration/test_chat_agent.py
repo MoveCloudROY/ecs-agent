@@ -6,7 +6,6 @@ from ecs_agent.components import ConversationComponent, LLMComponent, TerminalCo
 from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import CompletionResult, Message, ToolSchema
 
@@ -69,7 +68,6 @@ async def test_simple_chat_agent_end_to_end() -> None:
     )
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     runner = Runner()
@@ -109,7 +107,6 @@ async def test_terminal_on_reasoning_complete() -> None:
 
     counter = CounterSystem()
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(counter, priority=50)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 

@@ -17,7 +17,6 @@ from ecs_agent.core import Runner, World
 from ecs_agent.observability import generate_traceparent
 from ecs_agent.providers import FakeModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.message_bus import MessageBusSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import (
@@ -222,7 +221,6 @@ async def test_multi_agent_full_loop() -> None:
     world.register_system(message_bus, priority=5)
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     await Runner().run(world, max_ticks=5)

@@ -24,7 +24,6 @@ from ecs_agent.skills.discovery import DiscoveryManager
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.skill import Skill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.systems.user_input import UserInputSystem
@@ -98,7 +97,6 @@ async def test_ui_design_flow_fake_provider(tmp_path: Path) -> None:
     # Register Systems
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     # Setup interactive input simulation
@@ -343,7 +341,6 @@ async def test_ui_design_flow_real_llm(
     # Register Systems
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     input_responses = iter(

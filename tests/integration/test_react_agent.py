@@ -16,7 +16,6 @@ from ecs_agent.components import (
 from ecs_agent.core import Runner, World
 from ecs_agent.providers.fake_model import FakeModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.planning import PlanningSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
@@ -71,11 +70,9 @@ def _build_react_world(
     # PlanningSystem runs first (builds step context + calls LLM)
     # ToolExecutionSystem runs next (executes any tool calls)
     # ReasoningSystem is NOT registered — PlanningSystem drives the LLM directly
-    # MemorySystem runs after to truncate if needed
     # ErrorHandlingSystem runs last as cleanup
     world.register_system(PlanningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     return world, agent_id

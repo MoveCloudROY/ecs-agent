@@ -15,7 +15,6 @@ from ecs_agent.components import (
 from ecs_agent.core import Runner, World
 from ecs_agent.providers.fake_model import FakeModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.planning import PlanningSystem
 from ecs_agent.systems.replanning import ReplanningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
@@ -81,7 +80,6 @@ def _build_plan_execute_world(
     world.register_system(PlanningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
     world.register_system(ReplanningSystem(priority=7), priority=7)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     return world, agent_id

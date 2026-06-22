@@ -16,7 +16,6 @@ from ecs_agent.core import Runner, World
 from ecs_agent.providers import FakeModel
 from ecs_agent.prompts.contracts import SystemPromptConfigSpec, PromptTemplateSource, TriggerSpec
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.memory import MemorySystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.systems.user_prompt_normalization_system import UserPromptNormalizationSystem
@@ -285,7 +284,6 @@ async def test_workflow_end_to_end_with_fake_model() -> None:
     world.register_system(WorkflowStateSystem(priority=-25), priority=-25)
     world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(MemorySystem(), priority=10)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     runner = Runner()
