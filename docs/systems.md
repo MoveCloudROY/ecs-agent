@@ -532,20 +532,24 @@ world.register_system(SubagentSystem(priority=-1), priority=-1)
 
 The `SubagentWaitSystem` handles the `subagent_wait` tool and manages the delivery of background session completion notifications to the parent agent.
 
-- **Constructor**: `__init__(self, priority: int = -5)`
-- **Queries**: `SubagentWaitComponent`, `SubagentNotificationQueueComponent`, `ConversationComponent`
-- **Modifies**: `SubagentWaitComponent` (resolves future), `ConversationComponent` (appends notification messages), `SubagentNotificationQueueComponent` (marks notifications as delivered).
+- **Constructor**: `__init__(self, priority: int = -5, resume_callback: ResumeCallback | None = None)`
+- **Queries**: `SubagentWaitComponent`, `SubagentNotificationQueueComponent`, `SubagentSessionTableComponent`, `ConversationComponent`
+- **Modifies**: `SubagentWaitComponent` (resolves future, updates timeout/scope), `ConversationComponent` (appends notification messages), `SubagentNotificationQueueComponent` (marks notifications as delivered).
 - **Recommended Priority**: -5 (REQUIRED to run before `ReasoningSystem`)
 
 ### Behavior
-The system monitors entities for `SubagentWaitComponent`. When a matching background session (or any session if `session_ids` is `None`) reaches a terminal state (`succeeded`, `failed`, or `timed_out`), the system:
-1. Resolves the wait future to wake the parent agent.
-2. Batches all unread terminal notifications into a single system message.
-3. Appends the notification message to the parent's conversation history.
-4. Marks the notifications as delivered.
-5. Removes the `SubagentWaitComponent`.
+The system monitors entities for `SubagentWaitComponent`. It uses **wait-all semantics**: the future is only resolved when every session in the wait scope reaches a terminal state.
+1. On first processing, snapshots all currently active sessions as the wait scope (when `session_ids` is `None`).
+2. When all scoped sessions are terminal, resolves the wait future to wake the parent agent.
+3. Batches all unread terminal notifications into a single `role="user"` message.
+4. Appends the notification message to the parent's conversation history.
+5. Marks the notifications as delivered.
+6. Removes the `SubagentWaitComponent`.
 
-If a timeout is specified in the `subagent_wait` call, the system will terminate the wait and attach an `ErrorComponent` if the timeout is exceeded.
+On timeout, the system evaluates session statuses:
+- If any sessions are still running, the deadline is extended (wait continues).
+- If any sessions have failed, a `role="user"` failure notification is injected containing `subagent_resume` instructions so the LLM can restart failed sessions.
+- If `auto_restart_budget > 0` and a `resume_callback` is configured, the system automatically restarts failed sessions up to the budget before surfacing failures.
 
 ### Usage Example
 ```python
@@ -553,6 +557,16 @@ from ecs_agent.systems.subagent_wait import SubagentWaitSystem
 
 # Register system (priority -5 REQUIRED)
 world.register_system(SubagentWaitSystem(priority=-5), priority=-5)
+
+# With auto-restart enabled
+subagent_system = SubagentSystem()
+world.register_system(
+    SubagentWaitSystem(
+        priority=-5,
+        resume_callback=subagent_system.make_resume_callback(),
+    ),
+    priority=-5,
+)
 ```
 
 ---

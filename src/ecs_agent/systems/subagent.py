@@ -40,7 +40,11 @@ from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
-from ecs_agent.systems.subagent_wait import notification_matches_wait
+from ecs_agent.systems.subagent_wait import (
+    ResumeCallback,
+    notification_matches_wait,
+    wait_scope_is_terminal,
+)
 from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
 from ecs_agent.scratchbook.artifact_registry import ArtifactKind, ArtifactRegistry
 from ecs_agent.systems.subagent_runtime import SubagentRuntimeManager
@@ -354,6 +358,21 @@ class SubagentSystem:
         world.add_component(parent_entity_id, queue)
         return queue
 
+    def _all_waited_sessions_terminal(
+        self,
+        world: World,
+        parent_entity_id: EntityId,
+        wait_component: SubagentWaitComponent,
+    ) -> bool:
+        """Return True when every session in the wait scope is terminal."""
+        from ecs_agent.components.definitions import SubagentSessionTableComponent
+
+        table = world.get_component(parent_entity_id, SubagentSessionTableComponent)
+        effective_ids = (
+            wait_component.resolved_session_ids or wait_component.session_ids
+        )
+        return wait_scope_is_terminal(table, effective_ids).all_terminal
+
     def _enqueue_parent_notification(
         self,
         world: World,
@@ -400,7 +419,10 @@ class SubagentSystem:
         if not notification_matches_wait(notification, wait_component):
             return
         if isinstance(future, asyncio.Future) and not future.done():
-            future.set_result(None)
+            if self._all_waited_sessions_terminal(
+                world, metadata.parent_entity_id, wait_component
+            ):
+                future.set_result(None)
 
     def _config_for_session(
         self,
@@ -488,8 +510,8 @@ class SubagentSystem:
                     category=category,
                 )
                 await self._runtime_manager.update_timeout(session_id, error_msg)
-                self._enqueue_parent_notification(world, metadata)
                 await self._runtime_manager.sync_to_component(world, parent_entity_id)
+                self._enqueue_parent_notification(world, metadata)
                 await self._publish_delegation_events(
                     world,
                     parent_entity_id,
@@ -514,8 +536,8 @@ class SubagentSystem:
                 metadata.finished_at = self._utc_now_iso()
                 metadata.updated_at = metadata.finished_at
                 await self._runtime_manager.update_status(session_id, metadata.status)
-                self._enqueue_parent_notification(world, metadata)
                 await self._runtime_manager.sync_to_component(world, parent_entity_id)
+                self._enqueue_parent_notification(world, metadata)
                 await self._publish_delegation_events(
                     world,
                     parent_entity_id,
@@ -566,8 +588,8 @@ class SubagentSystem:
                 result_length=len(result) if success else 0,
                 error=error,
             )
-            self._enqueue_parent_notification(world, metadata)
             await self._runtime_manager.sync_to_component(world, parent_entity_id)
+            self._enqueue_parent_notification(world, metadata)
             await self._publish_delegation_events(
                 world,
                 parent_entity_id,
@@ -586,6 +608,70 @@ class SubagentSystem:
             )
 
         return run_in_background
+
+    async def _launch_background_session(
+        self,
+        world: World,
+        parent_entity_id: EntityId,
+        *,
+        category: str,
+        prompt: str,
+        effective_config: SubagentConfig,
+        normalized_skills: list[str],
+        stream: bool,
+        timeout_seconds: float | None,
+    ) -> tuple[str, SubagentSessionRecord]:
+        """Create, enqueue, and sync a background subagent session.
+
+        Shared by ``subagent_handler(background=True)`` and ``_resume_session``.
+        Returns ``(session_id, metadata)``.
+        """
+        correlation_id = str(uuid.uuid4())
+        traceparent = generate_traceparent()
+        resolved_timeout = self._resolve_timeout(timeout_seconds)
+        (
+            launch_trace_id,
+            launch_run_id,
+            launch_parent_observation_id,
+        ) = self._active_observability_context(world)
+
+        session_id = self._runtime_manager.create_session()
+        now_iso = self._utc_now_iso()
+        metadata = SubagentSessionRecord(
+            session_id=session_id,
+            category=category,
+            prompt=prompt,
+            parent_entity_id=parent_entity_id,
+            created_at=now_iso,
+            updated_at=now_iso,
+            load_skills=normalized_skills,
+            stream=stream,
+            background=True,
+            correlation_id=correlation_id,
+            traceparent=traceparent,
+            launch_trace_id=launch_trace_id,
+            launch_run_id=launch_run_id,
+            launch_parent_observation_id=launch_parent_observation_id,
+            timeout_seconds=timeout_seconds,
+        )
+        run_in_background = self._build_background_coroutine(
+            world,
+            parent_entity_id,
+            category,
+            prompt,
+            session_id,
+            metadata,
+            effective_config,
+            resolved_timeout,
+        )
+
+        await self._runtime_manager.enqueue_session(
+            session_id,
+            metadata,
+            run_in_background,
+        )
+        await self._runtime_manager.sync_to_component(world, parent_entity_id)
+        return session_id, metadata
 
     async def _reconcile_restored_sessions(
         self,
@@ -889,12 +975,17 @@ class SubagentSystem:
         tool_registry.tools["subagent_wait"] = ToolSchema(
             name="subagent_wait",
             description=(
-                "Explicitly wait for background subagent completion notifications. Use this "
-                "after launching all useful background subagents so the parent can stop "
-                "polling and resume when a matching session finishes.\n\n"
+                "Wait as a barrier until ALL background subagent sessions in the scope "
+                "reach a terminal state. Use this after launching all useful background "
+                "subagents so the parent can stop polling and resume only when every "
+                "session has completed (succeeded, failed, timed_out, or cancelled).\n\n"
                 "INTERFACE:\n"
-                "  session_ids (optional) — restrict wakeup to specific session IDs.\n"
-                "  timeout     (optional) — max seconds to wait; null = wait indefinitely.\n\n"
+                "  session_ids (optional) — the wait scope. Omit to snapshot all currently "
+                "    active sessions at wait-start. Explicit IDs define a fixed scope.\n"
+                "  timeout     (optional) — per-period check interval in seconds. If running "
+                "    sessions remain at timeout, the deadline is extended automatically. "
+                "    If any sessions have failed or are missing, a role=\"user\" notification "
+                "    with subagent_resume instructions is injected. null = wait indefinitely.\n\n"
                 "RETURNS: acknowledgment string immediately; waiting happens in "
                 "SubagentWaitSystem."
             ),
@@ -904,11 +995,16 @@ class SubagentSystem:
                     "session_ids": {
                         "type": ["array", "null"],
                         "items": {"type": "string"},
-                        "description": "Optional session IDs to wait for. Omit or null to wake on any matching background completion notification.",
+                        "description": "Optional session IDs to wait for. Omit or null to wait for all currently active background sessions. The wait resolves only when every session in the scope reaches a terminal status.",
                     },
                     "timeout": {
                         "type": ["number", "null"],
-                        "description": "Max seconds to wait before failing with subagent_wait_timeout. null = wait indefinitely.",
+                        "description": "Max seconds per wait period. If sessions are still running when the timeout fires, the deadline is extended automatically. If any sessions have failed, a failure notification is injected for the LLM to act on. null = wait indefinitely.",
+                    },
+                    "auto_restart_budget": {
+                        "type": "integer",
+                        "description": "Max automatic restarts per failed session before surfacing failures to the LLM. 0 (default) = disabled; failed sessions are immediately surfaced for LLM-driven subagent_resume. >0 = the wait system auto-restarts failed sessions up to this budget before surfacing.",
+                        "default": 0,
                     },
                 },
                 "required": [],
@@ -1006,6 +1102,42 @@ class SubagentSystem:
             world, entity_id
         )
 
+        # Install subagent_resume tool
+        tool_registry.tools["subagent_resume"] = ToolSchema(
+            name="subagent_resume",
+            description=(
+                "Restart a failed, timed-out, or cancelled background subagent session.\n\n"
+                "WHEN TO CALL:\n"
+                "  - After a background subagent has failed, timed out, or been cancelled.\n"
+                "  - When you want to retry a failed subtask with the same configuration.\n"
+                "  - After subagent_wait surfaces timeout failures, call this for each\n"
+                "    failed session_id to restart it, then call subagent_wait again.\n\n"
+                "INTERFACE:\n"
+                "  session_id (required) — the session_id of the failed/timed_out/cancelled session.\n\n"
+                "RETURNS: JSON {status, original_session_id, new_session_id, category, lifecycle_status}.\n\n"
+                "EXAMPLES:\n"
+                '  subagent_resume(session_id="ses_abc123")'
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": (
+                            "Session ID of the failed/timed_out/cancelled "
+                            "background subagent to restart. The new session "
+                            "inherits the original category, prompt, skills, "
+                            "and timeout."
+                        ),
+                    }
+                },
+                "required": ["session_id"],
+            },
+        )
+        tool_registry.handlers["subagent_resume"] = self._make_resume_handler(
+            world, entity_id
+        )
+
         logger.info("subagent_control_tools_installed", entity_id=entity_id)
 
     def _make_status_handler(self, world: World, parent_entity_id: EntityId) -> Any:
@@ -1069,6 +1201,7 @@ class SubagentSystem:
         async def wait_handler(
             session_ids: list[str] | None = None,
             timeout: float | str | None = None,
+            auto_restart_budget: int = 0,
         ) -> str:
             if isinstance(timeout, str):
                 timeout = float(timeout)
@@ -1078,6 +1211,7 @@ class SubagentSystem:
                 timeout=timeout,
                 future=None,
                 started_at=self._utc_now_iso(),
+                auto_restart_budget=auto_restart_budget,
             )
             world.add_component(parent_entity_id, wait_component)
             logger.info(
@@ -1085,9 +1219,11 @@ class SubagentSystem:
                 parent_entity=parent_entity_id,
                 session_ids=session_ids,
                 timeout=timeout,
+                auto_restart_budget=auto_restart_budget,
             )
             return (
-                "Waiting for background subagents. Will be notified when they complete."
+                "Waiting for background subagents. "
+                "Will be notified when all sessions complete."
             )
 
         return wait_handler
@@ -1320,6 +1456,113 @@ class SubagentSystem:
 
         return cancel_handler
 
+    def _make_resume_handler(self, world: World, parent_entity_id: EntityId) -> Any:
+        async def resume_handler(session_id: str) -> str:
+            logger.info(
+                "subagent_resume_requested",
+                parent_entity=parent_entity_id,
+                session_id=session_id,
+            )
+            try:
+                new_session_id = await self._resume_session(
+                    world, parent_entity_id, session_id
+                )
+            except ValueError as exc:
+                return json.dumps({"error": str(exc), "session_id": session_id})
+
+            new_session = await self._runtime_manager.get_session(new_session_id)
+            return json.dumps(
+                {
+                    "status": "resumed",
+                    "original_session_id": session_id,
+                    "new_session_id": new_session_id,
+                    "session_id": new_session_id,
+                    "category": new_session.category if new_session else "",
+                    "lifecycle_status": new_session.status if new_session else "queued",
+                }
+            )
+
+        return resume_handler
+
+    async def _resume_session(
+        self,
+        world: World,
+        parent_entity_id: EntityId,
+        original_session_id: str,
+    ) -> str:
+        """Restart a failed/timed_out/cancelled session with the same config.
+
+        Returns the new session_id. The original session record is preserved
+        as history; the new session starts fresh in ``queued`` status.
+        """
+        original = await self._runtime_manager.get_session(original_session_id)
+        if original is None:
+            raise ValueError(f"Session not found: {original_session_id}")
+
+        if original.status not in ("failed", "timed_out", "cancelled"):
+            raise ValueError(
+                f"Session {original_session_id} is not in a resumable state: "
+                f"{original.status}. Only failed, timed_out, or cancelled "
+                "sessions can be resumed."
+            )
+
+        registry_comp = world.get_component(
+            parent_entity_id, SubagentRegistryComponent
+        )
+        if registry_comp is None:
+            raise ValueError(
+                f"SubagentRegistryComponent not found on entity {parent_entity_id}"
+            )
+
+        parent_llm = world.get_component(parent_entity_id, LLMComponent)
+        config = self._resolve_subagent_config(
+            registry_comp,
+            original.category,
+            parent_model=parent_llm.model if parent_llm is not None else None,
+        )
+        normalized_skills = self._normalize_load_skills(
+            config, original.load_skills
+        )
+        effective_config = (
+            config
+            if normalized_skills == config.skills
+            else replace(config, skills=normalized_skills)
+        )
+
+        session_id, metadata = await self._launch_background_session(
+            world,
+            parent_entity_id,
+            category=original.category,
+            prompt=original.prompt,
+            effective_config=effective_config,
+            normalized_skills=normalized_skills,
+            stream=original.stream,
+            timeout_seconds=original.timeout_seconds,
+        )
+
+        logger.info(
+            "subagent_resumed",
+            parent_entity=parent_entity_id,
+            original_session_id=original_session_id,
+            new_session_id=session_id,
+            category=original.category,
+        )
+        return session_id
+
+    def make_resume_callback(self) -> ResumeCallback:
+        """Return a callback suitable for SubagentWaitSystem auto-restart."""
+
+        async def callback(
+            original_session_id: str,
+            parent_entity_id: EntityId,
+            world: World,
+        ) -> str:
+            return await self._resume_session(
+                world, parent_entity_id, original_session_id
+            )
+
+        return callback
+
     def _make_subagent_handler(self, world: World, parent_entity_id: EntityId) -> Any:
         async def subagent_handler(
             category: str,
@@ -1424,34 +1667,15 @@ class SubagentSystem:
                 )
                 return result
 
-            session_id = self._runtime_manager.create_session()
-            now_iso = self._utc_now_iso()
-            metadata = SubagentSessionRecord(
-                session_id=session_id,
-                category=category,
-                prompt=prompt,
-                parent_entity_id=parent_entity_id,
-                created_at=now_iso,
-                updated_at=now_iso,
-                load_skills=normalized_skills,
-                stream=stream,
-                background=True,
-                correlation_id=correlation_id,
-                traceparent=traceparent,
-                launch_trace_id=launch_trace_id,
-                launch_run_id=launch_run_id,
-                launch_parent_observation_id=launch_parent_observation_id,
-                timeout_seconds=timeout,
-            )
-            run_in_background = self._build_background_coroutine(
+            session_id, metadata = await self._launch_background_session(
                 world,
                 parent_entity_id,
-                category,
-                prompt,
-                session_id,
-                metadata,
-                effective_config,
-                resolved_timeout,
+                category=category,
+                prompt=prompt,
+                effective_config=effective_config,
+                normalized_skills=normalized_skills,
+                stream=stream,
+                timeout_seconds=timeout,
             )
 
             logger.info(
@@ -1461,13 +1685,6 @@ class SubagentSystem:
                 category=category,
                 timeout=resolved_timeout,
             )
-            await self._runtime_manager.enqueue_session(
-                session_id,
-                metadata,
-                run_in_background,
-            )
-            # Hook: Sync to component after launch
-            await self._runtime_manager.sync_to_component(world, parent_entity_id)
 
             return json.dumps(
                 {
@@ -1475,7 +1692,7 @@ class SubagentSystem:
                     "status": "queued",
                     "lifecycle_status": metadata.status,
                     "category": category,
-                    "created_at": now_iso,
+                    "created_at": metadata.created_at,
                     "timeout": timeout,
                     "stream": stream,
                 }

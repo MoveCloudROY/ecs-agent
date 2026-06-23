@@ -251,7 +251,13 @@ def _build_world(
     subagent_system.install_subagent_control_tools(world, manager_id)
     _install_demo_session_ids(subagent_system)
 
-    world.register_system(SubagentWaitSystem(priority=-5), priority=-5)
+    world.register_system(
+        SubagentWaitSystem(
+            priority=-5,
+            resume_callback=subagent_system.make_resume_callback(),
+        ),
+        priority=-5,
+    )
     world.register_system(subagent_system, priority=-1)
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)

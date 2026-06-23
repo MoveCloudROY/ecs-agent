@@ -96,7 +96,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 ### Multi-Agent Orchestration
 - **Subagent Delegation** — Spawn child agents for subtasks with skill and permission inheritance. Use registered named subagents by default, or opt into free-form subagents so the model can call arbitrary descriptive worker names. Control the `queued/running/succeeded/failed` lifecycle via a process-global FIFO scheduler.
 - **MessageBus** — Parent-child and sibling messaging via pub/sub or request-response patterns.
-- **Unified API** — Control lifecycle with `subagent`, `subagent_status`, `subagent_result`, `subagent_wait`, and `subagent_cancel` tools. Supports explicit wait/callback model for background sessions.
+- **Unified API** — Control lifecycle with `subagent`, `subagent_status`, `subagent_result`, `subagent_wait`, `subagent_cancel`, and `subagent_resume` tools. Supports wait-all barrier semantics for background sessions and automatic or LLM-driven failure recovery.
 
 ### Advanced Reasoning & Tree Search
 - **Tree Conversations** — Branch reasoning paths, navigate multiple strategies, and linearize history for LLM compatibility.

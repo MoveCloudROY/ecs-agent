@@ -225,7 +225,8 @@ async def _execute_live_notification_flow(
     wait_ack = await tools.handlers["subagent_wait"](session_ids=[session_id])
     assert (
         wait_ack
-        == "Waiting for background subagents. Will be notified when they complete."
+        == "Waiting for background subagents. "
+        "Will be notified when all sessions complete."
     )
     assert world.has_component(entity_id, SubagentWaitComponent)
 

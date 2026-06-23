@@ -188,6 +188,16 @@ world.register_system(SubagentSystem(priority=-1), priority=-1)
 # Register SubagentWaitSystem (priority -5 REQUIRED to run before ReasoningSystem)
 # This system handles the subagent_wait tool and notification delivery.
 world.register_system(SubagentWaitSystem(priority=-5), priority=-5)
+
+# With auto-restart enabled, pass a resume_callback:
+# subagent_system = SubagentSystem()
+# world.register_system(
+#     SubagentWaitSystem(
+#         priority=-5,
+#         resume_callback=subagent_system.make_resume_callback(),
+#     ),
+#     priority=-5,
+# )
 ```
 
 
@@ -316,6 +326,7 @@ When running in `background: true` mode, use control tools to manage the session
 1. **Check Status**: `subagent_status(session_id="session_123")` returns current lifecycle state (including `queue_position` if `queued`) and a summary table if `session_id` is omitted.
 2. **Retrieve Result**: `subagent_result(session_id="session_123", read_method="full", timeout=10.0)` polls durable metadata and returns the result once the session is terminal. It does not require a live task handle. Supports `read_method="summary"` for cached summary retrieval.
 3. **Cancel**: `subagent_cancel(session_id="session_123")` terminates the session. For `queued` sessions, this is an atomic removal from the scheduler.
+4. **Resume**: `subagent_resume(session_id="session_123")` restarts a failed, timed-out, or cancelled session with the same configuration. The new session gets a fresh `session_id`; the original is preserved as history.
 
 ## Non-Polling Background Workflow
 
@@ -335,9 +346,10 @@ The `subagent_wait` tool puts the parent agent into a future-based wait state un
 }
 ```
 
-- **`session_ids`**: Optional list of session IDs to wait for. If `null` or omitted, waits for ANY background session to complete.
-- **`timeout`**: Optional maximum seconds to wait.
-- **Behavior**: The parent agent is woken up automatically when a matching session reaches a terminal state.
+- **`session_ids`**: Optional list of session IDs to wait for. If `null` or omitted, snapshots all currently active sessions and waits for **all** of them to complete.
+- **`timeout`**: Optional per-period timeout in seconds. If sessions are still running when the timeout fires, the deadline is extended. If any sessions have failed, a failure notification is injected for the LLM to act on.
+- **`auto_restart_budget`**: Maximum automatic restarts per failed session (default 0 = disabled). When >0 and the wait system has a `resume_callback`, failed sessions are automatically restarted up to this budget before surfacing to the LLM.
+- **Behavior**: The parent agent is woken only when **all** sessions in the wait scope reach a terminal state (wait-all semantics). On timeout with running sessions, the wait deadline is extended. On timeout with failed sessions, a `role="user"` failure notification is injected so the LLM can call `subagent_resume` to restart failed sessions.
 
 ### Durable Notification Semantics
 
@@ -348,7 +360,7 @@ When a background session completes, the system enqueues a durable unread notifi
 
 ### Wake Notification Delivery
 
-When the parent agent is woken by `SubagentWaitSystem`, it receives ONE compact `system` message per wake cycle, even if multiple sessions completed (batched delivery).
+When the parent agent is woken by `SubagentWaitSystem`, it receives ONE compact `role="user"` message per wake cycle, even if multiple sessions completed (batched delivery). The notification contains actionable instructions for the LLM, such as calling `subagent_result` or `subagent_resume`.
 
 **Example Notification:**
 > Background subagent updates:
@@ -389,7 +401,7 @@ subagent(category="researcher", prompt="...", background=true) # returns "sessio
 # 2. Enter explicit wait
 subagent_wait()
 
-# 3. Receive system notification when session-a completes
+# 3. Receive user notification when all sessions complete
 
 # 4. Read result (using summary for efficiency)
 subagent_result(session_id="session-a", read_method="summary")

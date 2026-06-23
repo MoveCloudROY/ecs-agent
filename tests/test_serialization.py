@@ -733,6 +733,9 @@ def test_serialization_subagent_wait_component_excludes_future_runtime_state() -
         "timeout": 15.0,
         "future": None,
         "started_at": "2026-04-06T12:00:00Z",
+        "resolved_session_ids": None,
+        "auto_restart_budget": 0,
+        "restart_counts": {},
     }
 
     restored_wait = restored.get_component(entity, SubagentWaitComponent)

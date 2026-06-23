@@ -2935,7 +2935,8 @@ async def test_subagent_wait_returns_ack_and_attaches_wait_component() -> None:
     )
 
     assert result == (
-        "Waiting for background subagents. Will be notified when they complete."
+        "Waiting for background subagents. "
+        "Will be notified when all sessions complete."
     )
     wait_component = world.get_component(parent_entity, SubagentWaitComponent)
     assert wait_component is not None
@@ -2945,7 +2946,7 @@ async def test_subagent_wait_returns_ack_and_attaches_wait_component() -> None:
     assert wait_component.started_at is not None
 
 
-async def test_waiting_parent_resumes_without_polling_when_matching_unread_notification_exists() -> (
+async def test_wait_all_resolves_immediately_when_all_sessions_already_terminal() -> (
     None
 ):
     world = World()
@@ -2981,10 +2982,11 @@ async def test_waiting_parent_resumes_without_polling_when_matching_unread_notif
     assert world.get_component(parent_entity, ErrorComponent) is None
 
 
-async def test_subagent_wait_timeout_attaches_error_and_terminal_components() -> None:
+async def test_subagent_wait_timeout_with_no_sessions_resolves_immediately() -> None:
     world = World()
     parent_entity = world.create_entity()
     world.add_component(parent_entity, SubagentNotificationQueueComponent())
+    world.add_component(parent_entity, SubagentSessionTableComponent())
     world.add_component(
         parent_entity,
         SubagentWaitComponent(
@@ -2996,16 +2998,136 @@ async def test_subagent_wait_timeout_attaches_error_and_terminal_components() ->
     system = SubagentWaitSystem()
     await system.process(world)
 
-    error = world.get_component(parent_entity, ErrorComponent)
-    terminal = world.get_component(parent_entity, TerminalComponent)
-    wait_component = world.get_component(parent_entity, SubagentWaitComponent)
+    assert world.get_component(parent_entity, SubagentWaitComponent) is None
+    assert world.get_component(parent_entity, TerminalComponent) is None
+    assert world.get_component(parent_entity, ErrorComponent) is None
 
+
+async def test_subagent_wait_timeout_with_running_sessions_extends_deadline() -> None:
+    world = World()
+    parent_entity = world.create_entity()
+    world.add_component(parent_entity, SubagentNotificationQueueComponent())
+    world.add_component(
+        parent_entity,
+        SubagentSessionTableComponent(
+            sessions={
+                "ses-running": SubagentSessionRecord(
+                    session_id="ses-running",
+                    category="worker",
+                    prompt="do work",
+                    parent_entity_id=parent_entity,
+                    created_at="2026-06-22T00:00:00Z",
+                    updated_at="2026-06-22T00:00:00Z",
+                    status="running",
+                ),
+            }
+        ),
+    )
+    original_started_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    world.add_component(
+        parent_entity,
+        SubagentWaitComponent(
+            session_ids=["ses-running"],
+            timeout=0.01,
+            started_at=original_started_at,
+        ),
+    )
+
+    system = SubagentWaitSystem()
+    await system.process(world)
+
+    wait_component = world.get_component(parent_entity, SubagentWaitComponent)
     assert wait_component is not None
-    assert error is not None
-    assert error.system_name == "SubagentWaitSystem"
-    assert "timeout" in error.error.lower()
-    assert terminal is not None
-    assert terminal.reason == "subagent_wait_timeout"
+    assert wait_component.started_at != original_started_at
+    assert world.get_component(parent_entity, TerminalComponent) is None
+    assert world.get_component(parent_entity, ErrorComponent) is None
+
+
+async def test_subagent_wait_timeout_with_failed_session_injects_failure_message() -> (
+    None
+):
+    world = World()
+    parent_entity = world.create_entity()
+    world.add_component(
+        parent_entity,
+        ConversationComponent(
+            messages=[Message(role="user", content="Start work")]
+        ),
+    )
+    world.add_component(parent_entity, SubagentNotificationQueueComponent())
+    world.add_component(
+        parent_entity,
+        SubagentSessionTableComponent(
+            sessions={
+                "ses-failed": SubagentSessionRecord(
+                    session_id="ses-failed",
+                    category="worker",
+                    prompt="do work",
+                    parent_entity_id=parent_entity,
+                    created_at="2026-06-22T00:00:00Z",
+                    updated_at="2026-06-22T00:00:00Z",
+                    status="failed",
+                    error="Connection refused",
+                ),
+            }
+        ),
+    )
+    component = SubagentWaitComponent(
+        session_ids=["ses-failed"],
+        timeout=0.01,
+        started_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    )
+    world.add_component(parent_entity, component)
+
+    system = SubagentWaitSystem()
+    system._maybe_snapshot_session_ids(world, parent_entity, component)
+    await system._handle_wait_timeout(world, parent_entity, component)
+
+    assert world.get_component(parent_entity, SubagentWaitComponent) is None
+    assert world.get_component(parent_entity, TerminalComponent) is None
+
+    conversation = world.get_component(parent_entity, ConversationComponent)
+    assert conversation is not None
+    last_msg = conversation.messages[-1]
+    assert last_msg.role == "user"
+    assert "ses-failed" in last_msg.content
+    assert "failed" in last_msg.content
+    assert "subagent_resume" in last_msg.content
+
+
+async def test_subagent_wait_timeout_with_missing_session_injects_error_message() -> (
+    None
+):
+    world = World()
+    parent_entity = world.create_entity()
+    world.add_component(
+        parent_entity,
+        ConversationComponent(
+            messages=[Message(role="user", content="Start work")]
+        ),
+    )
+    world.add_component(parent_entity, SubagentNotificationQueueComponent())
+    world.add_component(parent_entity, SubagentSessionTableComponent())
+    component = SubagentWaitComponent(
+        session_ids=["ses-nonexistent"],
+        timeout=0.01,
+        started_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    )
+    world.add_component(parent_entity, component)
+
+    system = SubagentWaitSystem()
+    system._maybe_snapshot_session_ids(world, parent_entity, component)
+    await system._handle_wait_timeout(world, parent_entity, component)
+
+    assert world.get_component(parent_entity, SubagentWaitComponent) is None
+    assert world.get_component(parent_entity, TerminalComponent) is None
+
+    conversation = world.get_component(parent_entity, ConversationComponent)
+    assert conversation is not None
+    last_msg = conversation.messages[-1]
+    assert last_msg.role == "user"
+    assert "ses-nonexistent" in last_msg.content
+    assert "subagent_status" in last_msg.content
 
 
 async def test_waiting_parent_future_is_resolved_when_background_completion_notification_arrives(
@@ -3026,19 +3148,6 @@ async def test_waiting_parent_future_is_resolved_when_background_completion_noti
     )
     world.add_component(parent_entity, SubagentSessionTableComponent())
     world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
-    world.add_component(
-        parent_entity,
-        SubagentWaitComponent(session_ids=None, timeout=1.0),
-    )
-
-    wait_system = SubagentWaitSystem()
-    wait_task = asyncio.create_task(wait_system.process(world))
-    await asyncio.sleep(0)
-
-    wait_component = world.get_component(parent_entity, SubagentWaitComponent)
-    assert wait_component is not None
-    assert wait_component.future is not None
-    assert wait_component.future.done() is False
 
     system = SubagentSystem()
     system.install_subagent_tool(world, parent_entity)
@@ -3055,6 +3164,20 @@ async def test_waiting_parent_future_is_resolved_when_background_completion_noti
         )
     )
     session_id = payload["session_id"]
+
+    world.add_component(
+        parent_entity,
+        SubagentWaitComponent(session_ids=[session_id], timeout=1.0),
+    )
+
+    wait_system = SubagentWaitSystem()
+    wait_task = asyncio.create_task(wait_system.process(world))
+    await asyncio.sleep(0)
+
+    wait_component = world.get_component(parent_entity, SubagentWaitComponent)
+    assert wait_component is not None
+    assert wait_component.future is not None
+    assert wait_component.future.done() is False
 
     task = await system._runtime_manager.get_task(session_id)
     assert task is not None
@@ -3113,7 +3236,7 @@ async def test_completion_notification_is_injected_before_next_reasoning_turn() 
     conversation = world.get_component(entity_id, ConversationComponent)
     assert conversation is not None
     assert conversation.messages[-1] == Message(
-        role="system",
+        role="user",
         content=(
             "Background subagent updates:\n"
             '- session-abc succeeded. Call subagent_result(session_id="session-abc") '
@@ -3129,7 +3252,7 @@ async def test_completion_notification_is_injected_before_next_reasoning_turn() 
 
     assert len(model.calls) == 1
     assert model.calls[0][-1] == Message(
-        role="system",
+        role="user",
         content=(
             "Background subagent updates:\n"
             '- session-abc succeeded. Call subagent_result(session_id="session-abc") '
@@ -3194,7 +3317,7 @@ async def test_restored_unread_notification_is_delivered_once() -> None:
     conversation = restored.get_component(entity_id, ConversationComponent)
     assert conversation is not None
     assert conversation.messages[-1] == Message(
-        role="system",
+        role="user",
         content=(
             "Background subagent updates:\n"
             '- session-restored succeeded. Call subagent_result(session_id="session-restored") '
@@ -3272,7 +3395,7 @@ def test_unread_notifications_are_batched() -> None:
     assert conversation.messages == [
         Message(role="user", content="Continue."),
         Message(
-            role="system",
+            role="user",
             content=(
                 "Background subagent updates:\n"
                 '- session-abc succeeded. Call subagent_result(session_id="session-abc") '
@@ -3300,7 +3423,7 @@ def test_unread_notifications_are_batched() -> None:
     assert conversation.messages == [
         Message(role="user", content="Continue."),
         Message(
-            role="system",
+            role="user",
             content=(
                 "Background subagent updates:\n"
                 '- session-abc succeeded. Call subagent_result(session_id="session-abc") '
@@ -3364,7 +3487,7 @@ def test_unread_notifications_are_filtered_to_wait_scope() -> None:
     assert conversation is not None
     assert queue is not None
     assert conversation.messages[-1] == Message(
-        role="system",
+        role="user",
         content=(
             "Background subagent updates:\n"
             '- session-match succeeded. Call subagent_result(session_id="session-match") '
@@ -3423,7 +3546,7 @@ def test_failure_notification_includes_error() -> None:
     conversation = world.get_component(entity_id, ConversationComponent)
     assert conversation is not None
     assert conversation.messages[-1] == Message(
-        role="system",
+        role="user",
         content=(
             "Background subagent updates:\n"
             "- session-xyz failed: Connection refused. Call "
@@ -3432,6 +3555,371 @@ def test_failure_notification_includes_error() -> None:
             'subagent_result(session_id="session-def") for details.'
         ),
     )
+
+
+async def test_subagent_resume_restarts_failed_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_global_scheduler(monkeypatch)
+
+    world = World()
+    parent_entity = world.create_entity()
+    success_model = FakeModel(
+        responses=[
+            CompletionResult(
+                message=Message(role="assistant", content="recovered result")
+            )
+        ]
+    )
+    config = SubagentConfig(
+        name="resilient-worker",
+        model=success_model,
+        max_ticks=5,
+    )
+
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"resilient-worker": config}),
+    )
+    world.add_component(parent_entity, SubagentSessionTableComponent())
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem()
+    system.install_subagent_tool(world, parent_entity)
+    system.install_subagent_control_tools(world, parent_entity)
+    tools = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tools is not None
+
+    failed_metadata = SubagentSessionRecord(
+        session_id="ses-failed-original",
+        category="resilient-worker",
+        prompt="do work",
+        parent_entity_id=parent_entity,
+        created_at="2026-06-22T00:00:00Z",
+        updated_at="2026-06-22T00:00:00Z",
+        status="failed",
+        error="Connection refused",
+        background=True,
+    )
+    await system._runtime_manager.restore_session_metadata(failed_metadata)
+    await system._runtime_manager.sync_to_component(world, parent_entity)
+
+    resume_payload = json.loads(
+        await tools.handlers["subagent_resume"](
+            session_id="ses-failed-original",
+        )
+    )
+    assert resume_payload["status"] == "resumed"
+    assert resume_payload["original_session_id"] == "ses-failed-original"
+    new_session_id = resume_payload["new_session_id"]
+    assert new_session_id != "ses-failed-original"
+
+    new_task = await system._runtime_manager.get_task(new_session_id)
+    assert new_task is not None
+    await new_task
+
+    new_session = await system._runtime_manager.get_session(new_session_id)
+    assert new_session is not None
+    assert new_session.status == "succeeded"
+
+
+async def test_subagent_resume_rejects_non_failed_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_global_scheduler(monkeypatch)
+
+    world = World()
+    parent_entity = world.create_entity()
+    model = FakeModel(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="done"))
+        ]
+    )
+    config = SubagentConfig(name="happy-worker", model=model, max_ticks=5)
+
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"happy-worker": config}),
+    )
+    world.add_component(parent_entity, SubagentSessionTableComponent())
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem()
+    system.install_subagent_tool(world, parent_entity)
+    system.install_subagent_control_tools(world, parent_entity)
+    tools = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tools is not None
+
+    payload = json.loads(
+        await tools.handlers["subagent"](
+            category="happy-worker",
+            prompt="do work",
+            load_skills=[],
+            background=True,
+            timeout=None,
+        )
+    )
+    session_id = payload["session_id"]
+
+    task = await system._runtime_manager.get_task(session_id)
+    assert task is not None
+    await task
+
+    session = await system._runtime_manager.get_session(session_id)
+    assert session is not None
+    assert session.status == "succeeded"
+
+    resume_result = json.loads(
+        await tools.handlers["subagent_resume"](session_id=session_id)
+    )
+    assert "error" in resume_result
+    assert "not in a resumable state" in resume_result["error"]
+
+
+async def test_subagent_wait_auto_restart_within_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_global_scheduler(monkeypatch)
+
+    world = World()
+    parent_entity = world.create_entity()
+    model = FakeModel(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="recovered"))
+        ]
+    )
+    config = SubagentConfig(name="resilient-worker", model=model, max_ticks=5)
+
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"resilient-worker": config}),
+    )
+    world.add_component(parent_entity, SubagentSessionTableComponent())
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(
+        parent_entity,
+        ConversationComponent(
+            messages=[Message(role="user", content="Start work")]
+        ),
+    )
+
+    subagent_system = SubagentSystem()
+    subagent_system.install_subagent_tool(world, parent_entity)
+    subagent_system.install_subagent_control_tools(world, parent_entity)
+
+    failed_metadata = SubagentSessionRecord(
+        session_id="ses-fail-1",
+        category="resilient-worker",
+        prompt="do work",
+        parent_entity_id=parent_entity,
+        created_at="2026-06-22T00:00:00Z",
+        updated_at="2026-06-22T00:00:00Z",
+        status="failed",
+        error="Connection refused",
+        background=True,
+    )
+    await subagent_system._runtime_manager.restore_session_metadata(
+        failed_metadata
+    )
+    await subagent_system._runtime_manager.sync_to_component(world, parent_entity)
+
+    wait_system = SubagentWaitSystem(
+        priority=-5,
+        resume_callback=subagent_system.make_resume_callback(),
+    )
+    wait_component = SubagentWaitComponent(
+        session_ids=["ses-fail-1"],
+        timeout=0.01,
+        started_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        auto_restart_budget=2,
+    )
+    world.add_component(parent_entity, wait_component)
+
+    await wait_system._handle_wait_timeout(world, parent_entity, wait_component)
+
+    sessions = await subagent_system._runtime_manager.get_all_sessions()
+    failed_still = [
+        s for s in sessions.values()
+        if s.status == "failed" and s.session_id == "ses-fail-1"
+    ]
+    assert len(failed_still) == 1
+    new_sessions = [
+        s for s in sessions.values()
+        if s.session_id != "ses-fail-1" and s.category == "resilient-worker"
+    ]
+    assert len(new_sessions) >= 1
+
+    counts = wait_component.restart_counts
+    assert counts.get("ses-fail-1") == 1
+    new_sid = new_sessions[0].session_id
+    assert counts.get(new_sid) == 1
+
+
+async def test_subagent_wait_auto_restart_budget_exhausted_surfaces_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_global_scheduler(monkeypatch)
+
+    world = World()
+    parent_entity = world.create_entity()
+    model = FakeModel(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="recovered"))
+        ]
+    )
+    config = SubagentConfig(name="worker", model=model, max_ticks=5)
+
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"worker": config}),
+    )
+    world.add_component(parent_entity, SubagentSessionTableComponent())
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    world.add_component(
+        parent_entity,
+        ConversationComponent(
+            messages=[Message(role="user", content="Start work")]
+        ),
+    )
+
+    subagent_system = SubagentSystem()
+    subagent_system.install_subagent_tool(world, parent_entity)
+    subagent_system.install_subagent_control_tools(world, parent_entity)
+
+    failed_metadata = SubagentSessionRecord(
+        session_id="ses-fail-budget",
+        category="worker",
+        prompt="do work",
+        parent_entity_id=parent_entity,
+        created_at="2026-06-22T00:00:00Z",
+        updated_at="2026-06-22T00:00:00Z",
+        status="failed",
+        error="Connection refused",
+        background=True,
+    )
+    await subagent_system._runtime_manager.restore_session_metadata(
+        failed_metadata
+    )
+    await subagent_system._runtime_manager.sync_to_component(world, parent_entity)
+
+    wait_system = SubagentWaitSystem(
+        priority=-5,
+        resume_callback=subagent_system.make_resume_callback(),
+    )
+    wait_component = SubagentWaitComponent(
+        session_ids=["ses-fail-budget"],
+        timeout=0.01,
+        started_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        auto_restart_budget=1,
+    )
+    wait_component.restart_counts["ses-fail-budget"] = 1
+    world.add_component(parent_entity, wait_component)
+
+    await wait_system._handle_wait_timeout(world, parent_entity, wait_component)
+
+    assert world.get_component(parent_entity, SubagentWaitComponent) is None
+
+    conversation = world.get_component(parent_entity, ConversationComponent)
+    assert conversation is not None
+    last_msg = conversation.messages[-1]
+    assert last_msg.role == "user"
+    assert "ses-fail-budget" in last_msg.content
+    assert "subagent_resume" in last_msg.content
+
+
+async def test_subagent_wait_all_does_not_wake_on_partial_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_global_scheduler(monkeypatch)
+
+    world = World()
+    parent_entity = world.create_entity()
+    world.add_component(parent_entity, SubagentNotificationQueueComponent())
+    world.add_component(
+        parent_entity,
+        SubagentSessionTableComponent(
+            sessions={
+                "ses-done": SubagentSessionRecord(
+                    session_id="ses-done",
+                    category="fast-worker",
+                    prompt="finish quickly",
+                    parent_entity_id=parent_entity,
+                    created_at="2026-06-22T00:00:00Z",
+                    updated_at="2026-06-22T00:00:00Z",
+                    status="succeeded",
+                ),
+                "ses-pending": SubagentSessionRecord(
+                    session_id="ses-pending",
+                    category="slow-worker",
+                    prompt="finish slowly",
+                    parent_entity_id=parent_entity,
+                    created_at="2026-06-22T00:00:00Z",
+                    updated_at="2026-06-22T00:00:00Z",
+                    status="running",
+                ),
+            }
+        ),
+    )
+    world.add_component(
+        parent_entity,
+        SubagentNotificationQueueComponent(
+            notifications=[
+                SubagentNotificationRecord(
+                    notification_id="ses-done:succeeded",
+                    session_id="ses-done",
+                    parent_entity_id=parent_entity,
+                    terminal_status="succeeded",
+                    summary=None,
+                    error=None,
+                    created_at="2026-06-22T00:00:00Z",
+                    delivered_at=None,
+                ),
+            ]
+        ),
+    )
+
+    world.add_component(
+        parent_entity,
+        SubagentWaitComponent(
+            session_ids=["ses-done", "ses-pending"],
+            timeout=0.5,
+        ),
+    )
+
+    wait_system = SubagentWaitSystem()
+    await wait_system.process(world)
+
+    wait_component = world.get_component(parent_entity, SubagentWaitComponent)
+    assert wait_component is not None
+    assert wait_component.future is not None
+    assert not wait_component.future.done()
+
+    table = world.get_component(parent_entity, SubagentSessionTableComponent)
+    assert table is not None
+    table.sessions["ses-pending"].status = "succeeded"
+    table.sessions["ses-pending"].updated_at = "2026-06-22T00:00:01Z"
+
+    queue = world.get_component(parent_entity, SubagentNotificationQueueComponent)
+    assert queue is not None
+    queue.notifications.append(
+        SubagentNotificationRecord(
+            notification_id="ses-pending:succeeded",
+            session_id="ses-pending",
+            parent_entity_id=parent_entity,
+            terminal_status="succeeded",
+            summary=None,
+            error=None,
+            created_at="2026-06-22T00:00:01Z",
+            delivered_at=None,
+        )
+    )
+
+    await asyncio.wait_for(
+        asyncio.create_task(wait_system.process(world)),
+        timeout=2.0,
+    )
+
+    assert world.get_component(parent_entity, SubagentWaitComponent) is None
 
 
 async def test_subagent_retry_default_wrap() -> None:

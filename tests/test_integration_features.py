@@ -558,7 +558,8 @@ async def test_subagent_wait_injects_notification_and_enables_explicit_reads(
     wait_ack = await tools.handlers["subagent_wait"](session_ids=[session_id])
     assert (
         wait_ack
-        == "Waiting for background subagents. Will be notified when they complete."
+        == "Waiting for background subagents. "
+        "Will be notified when all sessions complete."
     )
     assert world.has_component(parent, SubagentWaitComponent)
 
@@ -577,7 +578,8 @@ async def test_subagent_wait_injects_notification_and_enables_explicit_reads(
     conversation = world.get_component(parent, ConversationComponent)
     assert conversation is not None
     system_messages = [
-        message for message in conversation.messages if message.role == "system"
+        message for message in conversation.messages if message.role == "user"
+        and "Background subagent updates:" in message.content
     ]
     assert len(system_messages) == 1
     assert "Background subagent updates:" in system_messages[0].content

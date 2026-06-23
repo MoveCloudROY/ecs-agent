@@ -82,7 +82,7 @@ PARENT_SYSTEM_PROMPT = (
     "Follow the requested order exactly. When a background subagent returns a "
     "session_id, launch all required background work first, then call "
     "subagent_wait() exactly once for the slow and queued sessions. After the "
-    "system notification wakes you up, call subagent_result with the same "
+    "user notification wakes you up, call subagent_result with the same "
     'session_id values and include read_method="summary" or read_method="full" '
     "as requested. Only produce a final assistant answer after every required "
     "tool call succeeds. Do not call subagent_status or subagent_cancel in this "
@@ -97,7 +97,7 @@ PARENT_USER_PROMPT = (
     "3. launch queued-worker in background with max_concurrency=1 still in effect "
     "using the prompt '" + QUEUED_PROMPT + "'\n"
     "4. after both background launches, call subagent_wait() once for the slow and "
-    "queued session_ids, then wait for the system notification before reading "
+    "queued session_ids, then wait for the user notification before reading "
     "results\n"
     "5. after the notification, call subagent_result for slow-worker with "
     'read_method="summary" and call subagent_result for queued-worker with '
@@ -205,7 +205,13 @@ def _build_world(
     _install_demo_session_ids(subagent_system)
     _install_demo_tool_wrappers(world, parent_id)
 
-    world.register_system(SubagentWaitSystem(priority=-5), priority=-5)
+    world.register_system(
+        SubagentWaitSystem(
+            priority=-5,
+            resume_callback=subagent_system.make_resume_callback(),
+        ),
+        priority=-5,
+    )
     world.register_system(subagent_system, priority=-1)
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)

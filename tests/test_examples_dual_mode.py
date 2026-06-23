@@ -480,9 +480,9 @@ class TestSubagentDelegationDualMode:
                     "[Action] subagent_result({'session_id': 'session-queued-worker', 'read_method': 'full'})"
                     in output
                 )
-                assert "[System] Background subagent updates:" in output
+                assert "[User] Background subagent updates:" in output
                 assert output.index(
-                    "[System] Background subagent updates:"
+                    "[User] Background subagent updates:"
                 ) < output.index(
                     "[Action] subagent_result({'session_id': 'session-slow-worker', 'read_method': 'summary'})"
                 )
@@ -534,8 +534,8 @@ class TestSubagentDelegationDualMode:
             "[Action] subagent_result({'session_id': 'session-queued-worker', 'read_method': 'full'})"
             in output
         )
-        assert "[System] Background subagent updates:" in output
-        assert output.index("[System] Background subagent updates:") < output.index(
+        assert "[User] Background subagent updates:" in output
+        assert output.index("[User] Background subagent updates:") < output.index(
             "[Action] subagent_result({'session_id': 'session-slow-worker', 'read_method': 'summary'})"
         )
         assert "[Result]" in output

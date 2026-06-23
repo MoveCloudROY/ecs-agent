@@ -266,6 +266,9 @@ class WorldSerializer:
                 "timeout": component.timeout,
                 "future": None,
                 "started_at": component.started_at,
+                "resolved_session_ids": component.resolved_session_ids,
+                "auto_restart_budget": component.auto_restart_budget,
+                "restart_counts": dict(component.restart_counts),
             }
 
         if isinstance(component, SubagentNotificationQueueComponent):

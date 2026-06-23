@@ -477,6 +477,9 @@ class SubagentWaitComponent:
     timeout: float | None = None
     future: Any | None = field(default=None, repr=False)
     started_at: str | None = None
+    resolved_session_ids: list[str] | None = None
+    auto_restart_budget: int = 0
+    restart_counts: dict[str, int] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
