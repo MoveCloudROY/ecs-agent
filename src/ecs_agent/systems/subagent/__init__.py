@@ -21,7 +21,6 @@ from ecs_agent.components import (
     SubagentWaitComponent,
     ToolRegistryComponent,
 )
-from ecs_agent.core.runner import Runner
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.systems.subagent_wait import (
@@ -38,6 +37,10 @@ from ecs_agent.systems.subagent._contextvars import (
     _PUBLISH_COMPLETION_EVENT,
 )
 from ecs_agent.systems.subagent.child_world import ChildWorldBuilder
+from ecs_agent.systems.subagent.delegation import (
+    DelegationExecutor,
+    active_observability_context,
+)
 from ecs_agent.systems.subagent.result_envelope import (
     _build_background_child_prompt_template,
     _build_child_prompt_template,
@@ -51,8 +54,6 @@ from ecs_agent.systems.subagent.tool_schemas import (
     build_subagent_schema,
     build_wait_schema,
 )
-from ecs_agent.observability.context import current_run_id, current_trace_id
-from ecs_agent.observability.install import install_observability
 from ecs_agent.types import (
     DelegationCompletedEvent,
     DelegationStartedEvent,
@@ -62,15 +63,8 @@ from ecs_agent.types import (
     Message,
     render_subagent_session_reminder_table,
     RetryConfig,
-    StreamContentDeltaEvent,
-    StreamEndEvent,
-    StreamReasoningDeltaEvent,
-    StreamStartEvent,
     SubagentConfig,
     SubagentNotificationRecord,
-    SubagentStreamDeltaEvent,
-    SubagentStreamEndEvent,
-    SubagentStreamStartEvent,
     SubagentSessionRecord,
     ToolSchema,
     is_wake_worthy,
@@ -119,6 +113,7 @@ class SubagentSystem:
             enabled=allow_unregistered_subagents
         )
         self._child_world_builder = ChildWorldBuilder()
+        self._delegation_executor = DelegationExecutor()
         self._reconciled_session_ids: set[str] = set()
 
     def _persist_subagent_result(
@@ -201,25 +196,11 @@ class SubagentSystem:
         self,
         world: World,
     ) -> tuple[str | None, str | None, str | None]:
-        """Return active trace, run, and root observation IDs for this world."""
-        active_run_id = current_run_id()
-        active_trace_id = current_trace_id()
-        active_parent_observation_id: str | None = None
-        parent_subscriber = getattr(
-            world,
-            "_ecs_agent_observability_subscriber",
-            None,
-        )
-        trace_states = getattr(parent_subscriber, "trace_states", None)
-        if isinstance(active_run_id, str) and isinstance(trace_states, dict):
-            trace_state = trace_states.get(active_run_id)
-            trace_state_id = getattr(trace_state, "trace_id", None)
-            trace_state_observation_id = getattr(trace_state, "observation_id", None)
-            if isinstance(trace_state_id, str):
-                active_trace_id = trace_state_id
-            if isinstance(trace_state_observation_id, str):
-                active_parent_observation_id = trace_state_observation_id
-        return (active_trace_id, active_run_id, active_parent_observation_id)
+        """Return active trace, run, and root observation IDs for this world.
+
+        Thin seam delegating to delegation.active_observability_context.
+        """
+        return active_observability_context(world)
 
     def _utc_now_iso(self) -> str:
         return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -1418,7 +1399,7 @@ class SubagentSystem:
                     child_world_entity_id,
                     StreamingComponent(enabled=True),
                 )
-                bridge_cleanup = self._bridge_subagent_stream_events(
+                bridge_cleanup = self._delegation_executor.bridge_subagent_stream_events(
                     parent_world=world,
                     child_world=child_world,
                     parent_entity_id=parent_entity_id,
@@ -1444,7 +1425,7 @@ class SubagentSystem:
             launch_run_id: str | None = None
             if launch_context is not None:
                 launch_trace_id, launch_run_id, _ = launch_context
-            self._install_child_observability(
+            self._delegation_executor.install_child_observability(
                 parent_world=world,
                 child_world=child_world,
                 trace_id=launch_trace_id,
@@ -1572,101 +1553,6 @@ class SubagentSystem:
                 )
             return (error_msg, False, error_msg)
 
-    def _bridge_subagent_stream_events(
-        self,
-        *,
-        parent_world: World,
-        child_world: World,
-        parent_entity_id: EntityId,
-        session_id: str,
-        category: str,
-        child_world_name: str,
-    ) -> Any:
-        seq = 0
-
-        def next_seq() -> int:
-            nonlocal seq
-            current = seq
-            seq += 1
-            return current
-
-        def publish_translated_event(event: object) -> None:
-            asyncio.create_task(parent_world.event_bus.publish(event))
-
-        async def on_start(event: StreamStartEvent) -> None:
-            publish_translated_event(
-                SubagentStreamStartEvent(
-                    session_id=session_id,
-                    parent_entity_id=parent_entity_id,
-                    category=category,
-                    child_world_name=child_world_name,
-                    seq=next_seq(),
-                    timestamp=self._iso_timestamp(event.timestamp),
-                )
-            )
-
-        async def on_reasoning_delta(event: StreamReasoningDeltaEvent) -> None:
-            publish_translated_event(
-                SubagentStreamDeltaEvent(
-                    session_id=session_id,
-                    parent_entity_id=parent_entity_id,
-                    category=category,
-                    child_world_name=child_world_name,
-                    seq=next_seq(),
-                    timestamp=self._utc_now_iso(),
-                    delta="",
-                    reasoning_delta=event.reasoning_delta,
-                )
-            )
-
-        async def on_content_delta(event: StreamContentDeltaEvent) -> None:
-            publish_translated_event(
-                SubagentStreamDeltaEvent(
-                    session_id=session_id,
-                    parent_entity_id=parent_entity_id,
-                    category=category,
-                    child_world_name=child_world_name,
-                    seq=next_seq(),
-                    timestamp=self._utc_now_iso(),
-                    delta=event.delta,
-                )
-            )
-
-        async def on_end(event: StreamEndEvent) -> None:
-            publish_translated_event(
-                SubagentStreamEndEvent(
-                    session_id=session_id,
-                    parent_entity_id=parent_entity_id,
-                    category=category,
-                    child_world_name=child_world_name,
-                    seq=next_seq(),
-                    timestamp=self._iso_timestamp(event.timestamp),
-                )
-            )
-
-        child_world.event_bus.subscribe(StreamStartEvent, on_start)
-        child_world.event_bus.subscribe(StreamReasoningDeltaEvent, on_reasoning_delta)
-        child_world.event_bus.subscribe(StreamContentDeltaEvent, on_content_delta)
-        child_world.event_bus.subscribe(StreamEndEvent, on_end)
-
-        def cleanup() -> None:
-            child_world.event_bus.unsubscribe(StreamStartEvent, on_start)
-            child_world.event_bus.unsubscribe(
-                StreamReasoningDeltaEvent,
-                on_reasoning_delta,
-            )
-            child_world.event_bus.unsubscribe(StreamContentDeltaEvent, on_content_delta)
-            child_world.event_bus.unsubscribe(StreamEndEvent, on_end)
-
-        return cleanup
-
-    def _iso_timestamp(self, timestamp: float) -> str:
-        return (
-            datetime.fromtimestamp(timestamp, tz=timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
-
     def _resolve_subagent_config(
         self,
         registry: SubagentRegistryComponent,
@@ -1788,80 +1674,17 @@ class SubagentSystem:
         task: str,
         config: SubagentConfig,
     ) -> str:
-        """Execute child world delegation run and return extracted result."""
-        child_world.add_component(
+        """Delegate to DelegationExecutor.run_delegation.
+
+        Retained as a thin instance method so white-box tests can monkeypatch this
+        seam while the run/extract logic lives in delegation.DelegationExecutor.
+        """
+        return await self._delegation_executor.run_delegation(
+            child_world,
             child_entity,
-            ConversationComponent(messages=[Message(role="user", content=task)]),
+            task,
+            config,
         )
-        runner = Runner()
-        await runner.run(
-            child_world,
-            max_ticks=config.max_ticks,
-            trace_id=getattr(
-                child_world,
-                "_ecs_agent_trace_id",
-                current_trace_id(),
-            ),
-            run_id=getattr(
-                child_world,
-                "_ecs_agent_run_id",
-                current_run_id(),
-            ),
-            parent_observation_id=getattr(
-                child_world,
-                "_ecs_agent_parent_observation_id",
-                None,
-            ),
-            emit_root_trace=False,
-        )
-        return self._extract_delegation_result(child_world, child_entity)
-
-    def _install_child_observability(
-        self,
-        *,
-        parent_world: World,
-        child_world: World,
-        trace_id: str | None = None,
-        run_id: str | None = None,
-        parent_observation_id: str,
-    ) -> None:
-        """Install parent observability sink on a child world when available."""
-        parent_sink = getattr(parent_world, "_ecs_agent_observability_sink", None)
-        if parent_sink is None:
-            return
-        parent_config = getattr(
-            parent_world,
-            "_ecs_agent_observability_config",
-            None,
-        )
-        install_observability(child_world, parent_sink, config=parent_config)
-        active_trace_id, active_run_id, _ = self._active_observability_context(parent_world)
-        if trace_id is not None:
-            active_trace_id = trace_id
-        if run_id is not None:
-            active_run_id = run_id
-        if active_trace_id is not None:
-            setattr(child_world, "_ecs_agent_trace_id", active_trace_id)
-        if active_run_id is not None:
-            setattr(child_world, "_ecs_agent_run_id", active_run_id)
-        setattr(
-            child_world,
-            "_ecs_agent_parent_observation_id",
-            parent_observation_id,
-        )
-
-    def _extract_delegation_result(
-        self, child_world: World, child_entity: EntityId
-    ) -> str:
-        """Extract terminal delegation result from child conversation."""
-        child_conv = child_world.get_component(child_entity, ConversationComponent)
-        if child_conv is None:
-            return "Error: No conversation found"
-
-        for message in reversed(child_conv.messages):
-            if message.role == "assistant":
-                return message.content
-        return "Error: No assistant message found in subagent conversation"
 
     async def _publish_delegation_events(
         self,
