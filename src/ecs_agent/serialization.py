@@ -319,6 +319,7 @@ class WorldSerializer:
                     "system_prompt": cfg.system_prompt,
                     "skills": list(cfg.skills),
                     "max_ticks": cfg.max_ticks,
+                    "runtime_profile": cfg.runtime_profile,
                     "inheritance_policy": {
                         "inherit_tools": cfg.inheritance_policy.inherit_tools,
                         "inherit_system_prompt": cfg.inheritance_policy.inherit_system_prompt,
@@ -534,6 +535,7 @@ class WorldSerializer:
                     skills=config_data.get("skills", []),
                     max_ticks=config_data.get("max_ticks", 10),
                     inheritance_policy=inheritance_policy,
+                    runtime_profile=config_data.get("runtime_profile"),
                 )
                 subagents_dict[name] = subagent_config
             normalized_data["subagents"] = subagents_dict

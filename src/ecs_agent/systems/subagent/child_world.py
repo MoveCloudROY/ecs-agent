@@ -36,20 +36,18 @@ from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfig
 from ecs_agent.skills import catalog as _skill_catalog
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.script_skill import ScriptSkill
-from ecs_agent.systems.compaction import CompactionSystem
-from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.subagent._contextvars import _BACKGROUND_RESULT_ENVELOPE_ENABLED
 from ecs_agent.systems.subagent.result_envelope import (
     _build_background_child_prompt_template,
     _build_child_prompt_template,
 )
-from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
+from ecs_agent.systems.subagent.runtime_profiles import (
+    ChildProfileContext,
+    resolve_child_runtime_profile,
+)
 from ecs_agent.types import EntityId, InheritancePolicy, SubagentConfig, ToolSchema
 
 logger = get_logger(__name__)
-
-_SUBAGENT_COMPACTION_PRIORITY = -30
 
 
 class _InheritedSkill:
@@ -237,18 +235,12 @@ class ChildWorldBuilder:
                 ConversationArchiveComponent(),
             )
 
-        if parent_compaction is not None:
-            child_world.register_system(
-                CompactionSystem(), priority=_SUBAGENT_COMPACTION_PRIORITY
-            )
-        child_world.register_system(
-            SystemPromptRenderSystem(priority=-20), priority=-20
+        profile_builder = resolve_child_runtime_profile(config.runtime_profile)
+        profile_ctx = ChildProfileContext(
+            parent_has_compaction=parent_compaction is not None
         )
-        child_world.register_system(ReasoningSystem(priority=0), priority=0)
-        child_world.register_system(
-            ErrorHandlingSystem(priority=99),
-            priority=99,
-        )
+        for spec in profile_builder(profile_ctx):
+            child_world.register_system(spec.factory(), priority=spec.priority)
         return child_world, child_world_entity_id
 
     def _effective_inherited_tool_names(self, policy: InheritancePolicy) -> list[str]:
@@ -368,4 +360,4 @@ class ChildWorldBuilder:
             registry.handlers[tool_name] = handler
 
 
-__all__ = ["ChildWorldBuilder", "_InheritedSkill", "_SUBAGENT_COMPACTION_PRIORITY"]
+__all__ = ["ChildWorldBuilder", "_InheritedSkill"]

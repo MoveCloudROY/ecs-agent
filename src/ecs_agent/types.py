@@ -660,6 +660,9 @@ class SubagentConfig:
     skills: list[str] = field(default_factory=list)  # skill names to install
     max_ticks: int | None = None
     inheritance_policy: InheritancePolicy = field(default_factory=InheritancePolicy)
+    # Name of the child-world runtime profile (see systems.subagent.runtime_profiles).
+    # None resolves to "default", which reproduces the historical child system set.
+    runtime_profile: str | None = None
 
 
 @dataclass(slots=True)
