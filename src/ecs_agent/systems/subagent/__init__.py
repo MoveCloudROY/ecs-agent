@@ -837,80 +837,16 @@ class SubagentSystem:
                 session_id=session_id,
                 timeout=timeout,
             )
+            # Event-driven wait (no polling): the runtime manager sets a sticky
+            # per-session Event on any terminal transition. Awaiting it wakes the
+            # caller immediately on completion; the Event's stickiness means a
+            # transition that lands before this await still resolves it.
+            event = self._runtime_manager.get_or_create_session_event(session_id)
             try:
-                loop = asyncio.get_running_loop()
-                deadline = None if timeout is None else loop.time() + timeout
-                # Backward-compat direct-result poll path:
-                # This loop polls the session table every 0.1s until the session
-                # reaches a terminal state. This is NOT the recommended path for
-                # background sessions — callers should instead use subagent_wait()
-                # (future-based, zero-poll) followed by subagent_result(). This
-                # polling path exists for callers that invoke subagent_result()
-                # directly without a preceding subagent_wait(), preserving
-                # backward compatibility.
-                while True:
-                    session = await self._runtime_manager.get_session(session_id)
-                    if session is None:
-                        return json.dumps(
-                            {
-                                "error": f"Session disappeared while waiting: {session_id}",
-                                "session_id": session_id,
-                            }
-                        )
-
-                    if session.status == "succeeded":
-                        logger.info(
-                            "subagent_result_collected",
-                            parent_entity=parent_entity_id,
-                            session_id=session_id,
-                            lifecycle_status=session.status,
-                        )
-                        if read_method == "summary":
-                            if session.result_summary is None:
-                                return json.dumps(
-                                    {
-                                        "error": 'Summary not available for this session. Retry with read_method="full".',
-                                        "read_method": "summary",
-                                        "session_id": session_id,
-                                    }
-                                )
-                            return json.dumps(
-                                self._summary_payload(session, status="success")
-                            )
-                        return json.dumps(
-                            self._session_payload(session, status="success")
-                        )
-
-                    if session.status in ("failed", "timed_out", "cancelled"):
-                        logger.info(
-                            "subagent_result_collected",
-                            parent_entity=parent_entity_id,
-                            session_id=session_id,
-                            lifecycle_status=session.status,
-                        )
-                        if read_method == "summary":
-                            if session.result_summary is None:
-                                return json.dumps(
-                                    {
-                                        "error": 'Summary not available for this session. Retry with read_method="full".',
-                                        "read_method": "summary",
-                                        "session_id": session_id,
-                                    }
-                                )
-                            return json.dumps(
-                                self._summary_payload(session, status="terminal")
-                            )
-                        return json.dumps(
-                            self._session_payload(session, status="terminal")
-                        )
-
-                    remaining = None if deadline is None else deadline - loop.time()
-                    if remaining is not None and remaining <= 0:
-                        raise asyncio.TimeoutError
-
-                    sleep_for = 0.1 if remaining is None else min(0.1, remaining)
-                    await asyncio.sleep(sleep_for)
-
+                if timeout is None:
+                    await event.wait()
+                else:
+                    await asyncio.wait_for(event.wait(), timeout)
             except asyncio.TimeoutError:
                 logger.warning(
                     "subagent_result_timeout",
@@ -938,7 +874,48 @@ class SubagentSystem:
                     }
                 )
 
+            session = await self._runtime_manager.get_session(session_id)
+            if session is None:
+                return json.dumps(
+                    {
+                        "error": f"Session disappeared while waiting: {session_id}",
+                        "session_id": session_id,
+                    }
+                )
+            logger.info(
+                "subagent_result_collected",
+                parent_entity=parent_entity_id,
+                session_id=session_id,
+                lifecycle_status=session.status,
+            )
+            return self._terminal_result_payload(session, read_method, session_id)
+
         return result_handler
+
+    def _terminal_result_payload(
+        self,
+        session: SubagentSessionRecord,
+        read_method: str,
+        session_id: str,
+    ) -> str:
+        """Render the subagent_result JSON for a (now terminal) session.
+
+        Preserves the historical shapes: succeeded -> status="success";
+        failed/timed_out/cancelled -> status="terminal"; read_method="summary"
+        returns the cached summary or a summary-unavailable error.
+        """
+        status_label = "success" if session.status == "succeeded" else "terminal"
+        if read_method == "summary":
+            if session.result_summary is None:
+                return json.dumps(
+                    {
+                        "error": 'Summary not available for this session. Retry with read_method="full".',
+                        "read_method": "summary",
+                        "session_id": session_id,
+                    }
+                )
+            return json.dumps(self._summary_payload(session, status=status_label))
+        return json.dumps(self._session_payload(session, status=status_label))
 
     def _make_cancel_handler(self, world: World, parent_entity_id: EntityId) -> Any:
         """Create handler for subagent_cancel tool."""

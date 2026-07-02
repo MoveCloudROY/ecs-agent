@@ -137,15 +137,32 @@ def get_global_scheduler(max_background_concurrency: int = 5) -> BackgroundSched
     return _GLOBAL_SCHEDULER
 
 
+_TERMINAL_STATUSES: frozenset[SubagentLifecycleStatus] = frozenset(
+    {"succeeded", "failed", "timed_out", "cancelled"}
+)
+
+
 class SubagentRuntimeManager:
     def __init__(self, max_background_concurrency: int = 5) -> None:
         self._sessions: dict[str, SubagentSessionRecord] = {}
         self._tasks: dict[str, asyncio.Task[Any]] = {}
+        # Per-session sticky terminal signal. subagent_result awaits this instead of
+        # polling; set on any terminal transition. Sticky (asyncio.Event), so a
+        # transition that lands before a waiter arrives still wakes it.
+        self._session_events: dict[str, asyncio.Event] = {}
         self._lock = asyncio.Lock()
         self._scheduler = get_global_scheduler(max_background_concurrency)
 
     def create_session(self) -> str:
         return uuid.uuid4().hex[:16]
+
+    def get_or_create_session_event(self, session_id: str) -> asyncio.Event:
+        """Return the per-session terminal Event, creating an unset one if needed."""
+        return self._session_events.setdefault(session_id, asyncio.Event())
+
+    def _signal_session_terminal(self, session_id: str) -> None:
+        """Mark a session's terminal Event as set (create-and-set if absent)."""
+        self._session_events.setdefault(session_id, asyncio.Event()).set()
 
     async def enqueue_session(
         self,
@@ -168,6 +185,9 @@ class SubagentRuntimeManager:
     async def restore_session_metadata(self, metadata: SubagentSessionRecord) -> None:
         async with self._lock:
             self._sessions[metadata.session_id] = metadata
+
+        if metadata.status in _TERMINAL_STATUSES:
+            self._signal_session_terminal(metadata.session_id)
 
         logger.info(
             "session_metadata_restored",
@@ -263,6 +283,9 @@ class SubagentRuntimeManager:
             old_status = metadata.status
             metadata.status = status
 
+        if status in _TERMINAL_STATUSES:
+            self._signal_session_terminal(session_id)
+
         logger.info(
             "session_status_updated",
             session_id=session_id,
@@ -288,6 +311,7 @@ class SubagentRuntimeManager:
                     metadata.updated_at = _utc_now_iso()
                     metadata.finished_at = metadata.updated_at
 
+            self._signal_session_terminal(session_id)
             logger.info("session_cancelled_while_queued", session_id=session_id)
             return
 
@@ -303,6 +327,8 @@ class SubagentRuntimeManager:
                 if metadata.finished_at is None:
                     metadata.finished_at = metadata.updated_at
 
+        self._signal_session_terminal(session_id)
+
         if task is not None and not task.done():
             task.cancel()
             logger.info("session_task_cancelled", session_id=session_id)
@@ -315,6 +341,7 @@ class SubagentRuntimeManager:
         async with self._lock:
             self._tasks.pop(session_id, None)
             self._sessions.pop(session_id, None)
+            self._session_events.pop(session_id, None)
 
         logger.info("session_cleaned_up", session_id=session_id)
 
@@ -341,6 +368,8 @@ class SubagentRuntimeManager:
             metadata.status = "timed_out"
             metadata.error = error
             metadata.updated_at = _utc_now_iso()
+
+        self._signal_session_terminal(session_id)
 
         logger.info(
             "session_timeout_updated",
