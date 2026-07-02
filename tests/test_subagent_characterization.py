@@ -13,14 +13,14 @@ had no direct unit test.
 
 from __future__ import annotations
 
-from ecs_agent.systems.subagent import SubagentSystem
+from ecs_agent.systems.subagent import parse_background_result_envelope
 
 
 def _parse(result: str) -> tuple[str, str] | None:
-    # Indirection point: currently a method on SubagentSystem. Task 2 relocates this
-    # to a module function in result_envelope.py (re-exported); update this helper's
-    # target then. The asserted contract below must not change.
-    return SubagentSystem()._parse_background_result_envelope(result)
+    # Relocated in Task 2 from a SubagentSystem method to a pure module function in
+    # result_envelope.py (re-exported from the package). The asserted contract below
+    # must not change across further extractions.
+    return parse_background_result_envelope(result)
 
 
 def test_envelope_parses_well_formed_summary_and_full_result() -> None:
