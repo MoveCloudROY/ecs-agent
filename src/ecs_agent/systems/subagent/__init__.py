@@ -31,6 +31,7 @@ from ecs_agent.systems.subagent._contextvars import (
     _BACKGROUND_RESULT_ENVELOPE_ENABLED,
     _PUBLISH_COMPLETION_EVENT,
 )
+from ecs_agent.systems.subagent.background import BackgroundSessionRunner
 from ecs_agent.systems.subagent.child_world import ChildWorldBuilder
 from ecs_agent.systems.subagent.delegation import (
     DelegationExecutor,
@@ -40,7 +41,7 @@ from ecs_agent.systems.subagent.notifications import NotificationCoordinator
 from ecs_agent.systems.subagent.result_envelope import (
     _build_background_child_prompt_template,
     _build_child_prompt_template,
-    parse_background_result_envelope,
+    parse_background_result_envelope,  # re-exported for backward-compat import path
 )
 from ecs_agent.systems.subagent.tool_schemas import (
     build_cancel_schema,
@@ -109,6 +110,9 @@ class SubagentSystem:
         self._child_world_builder = ChildWorldBuilder()
         self._delegation_executor = DelegationExecutor()
         self._notification_coordinator = NotificationCoordinator()
+        self._background_runner = BackgroundSessionRunner(
+            self._runtime_manager, self._notification_coordinator
+        )
         self._reconciled_session_ids: set[str] = set()
 
     def _persist_subagent_result(
@@ -211,180 +215,6 @@ class SubagentSystem:
 
         return replace(base_config, skills=list(session.load_skills))
 
-    def _build_background_coroutine(
-        self,
-        world: World,
-        parent_entity_id: EntityId,
-        category: str,
-        prompt: str,
-        session_id: str,
-        metadata: SubagentSessionRecord,
-        config: SubagentConfig,
-        resolved_timeout: float | None,
-    ) -> Any:
-        async def execute_with_config() -> tuple[str, bool, str | None]:
-            token = _PUBLISH_COMPLETION_EVENT.set(False)
-            launch_context_token = _BACKGROUND_LAUNCH_OBSERVABILITY_CONTEXT.set(
-                (
-                    metadata.launch_trace_id,
-                    metadata.launch_run_id,
-                    metadata.launch_parent_observation_id,
-                )
-            )
-            try:
-                if metadata.stream:
-                    return await self._execute_subagent_core(
-                        world,
-                        parent_entity_id,
-                        category,
-                        prompt,
-                        metadata.correlation_id,
-                        metadata.traceparent,
-                        config,
-                        session_id=session_id,
-                        stream=True,
-                    )
-
-                return await self._execute_subagent_core(
-                    world,
-                    parent_entity_id,
-                    category,
-                    prompt,
-                    metadata.correlation_id,
-                    metadata.traceparent,
-                    config,
-                )
-            finally:
-                _BACKGROUND_LAUNCH_OBSERVABILITY_CONTEXT.reset(launch_context_token)
-                _PUBLISH_COMPLETION_EVENT.reset(token)
-
-        async def run_in_background() -> None:
-            metadata.status = "running"
-            metadata.started_at = self._utc_now_iso()
-            metadata.updated_at = metadata.started_at
-            await self._runtime_manager.update_status(session_id, metadata.status)
-            await self._runtime_manager.sync_to_component(world, parent_entity_id)
-            try:
-                if resolved_timeout is not None:
-                    result, success, error = await asyncio.wait_for(
-                        execute_with_config(), timeout=resolved_timeout
-                    )
-                else:
-                    result, success, error = await execute_with_config()
-            except asyncio.CancelledError:
-                metadata.finished_at = self._utc_now_iso()
-                metadata.updated_at = metadata.finished_at
-                await self._runtime_manager.sync_to_component(world, parent_entity_id)
-                raise
-            except asyncio.TimeoutError:
-                error_msg = f"Error: Subagent timeout after {resolved_timeout}s"
-                metadata.finished_at = self._utc_now_iso()
-                metadata.updated_at = metadata.finished_at
-                logger.error(
-                    "subagent_background_timeout",
-                    timeout=resolved_timeout,
-                    category=category,
-                )
-                await self._runtime_manager.update_timeout(session_id, error_msg)
-                await self._runtime_manager.sync_to_component(world, parent_entity_id)
-                self._notification_coordinator.enqueue_parent_notification(world, metadata)
-                await self._publish_delegation_events(
-                    world,
-                    parent_entity_id,
-                    category,
-                    correlation_id=metadata.correlation_id,
-                    traceparent=metadata.traceparent,
-                    task=metadata.prompt,
-                    result=error_msg,
-                    success=False,
-                    error=error_msg,
-                    trace_id=metadata.launch_trace_id,
-                    run_id=metadata.launch_run_id,
-                    parent_observation_id=metadata.launch_parent_observation_id,
-                    observation_id=metadata.correlation_id,
-                    publish_started=False,
-                )
-                return
-            except Exception as exc:
-                error_msg = str(exc)
-                metadata.status = "failed"
-                metadata.error = error_msg
-                metadata.finished_at = self._utc_now_iso()
-                metadata.updated_at = metadata.finished_at
-                await self._runtime_manager.update_status(session_id, metadata.status)
-                await self._runtime_manager.sync_to_component(world, parent_entity_id)
-                self._notification_coordinator.enqueue_parent_notification(world, metadata)
-                await self._publish_delegation_events(
-                    world,
-                    parent_entity_id,
-                    category,
-                    correlation_id=metadata.correlation_id,
-                    traceparent=metadata.traceparent,
-                    task=metadata.prompt,
-                    result=error_msg,
-                    success=False,
-                    error=error_msg,
-                    trace_id=metadata.launch_trace_id,
-                    run_id=metadata.launch_run_id,
-                    parent_observation_id=metadata.launch_parent_observation_id,
-                    observation_id=metadata.correlation_id,
-                    publish_started=False,
-                )
-                return
-
-            metadata.updated_at = self._utc_now_iso()
-            if success:
-                parsed_result = parse_background_result_envelope(result)
-                if parsed_result is None:
-                    metadata.result_summary = None
-                    full_result = result
-                else:
-                    metadata.result_summary, full_result = parsed_result
-                metadata.status = "succeeded"
-                metadata.finished_at = metadata.updated_at
-                metadata.result_excerpt = full_result[:200]
-                if len(full_result.encode("utf-8")) <= 8192:
-                    metadata.artifact_inline_content = full_result
-                persisted = self._persist_subagent_result(full_result)
-                if persisted is not None:
-                    artifact_id, record_path, inline_content = persisted
-                    metadata.artifact_id = artifact_id
-                    metadata.artifact_record_path = record_path
-                    metadata.artifact_inline_content = inline_content
-            else:
-                metadata.status = "failed"
-                metadata.finished_at = metadata.updated_at
-                metadata.error = error
-            await self._runtime_manager.update_status(session_id, metadata.status)
-            logger.info(
-                "subagent_background_finished",
-                session_id=session_id,
-                category=category,
-                status=metadata.status,
-                result_length=len(result) if success else 0,
-                error=error,
-            )
-            await self._runtime_manager.sync_to_component(world, parent_entity_id)
-            self._notification_coordinator.enqueue_parent_notification(world, metadata)
-            await self._publish_delegation_events(
-                world,
-                parent_entity_id,
-                category,
-                correlation_id=metadata.correlation_id,
-                traceparent=metadata.traceparent,
-                task=metadata.prompt,
-                result=result,
-                success=success,
-                error=error,
-                trace_id=metadata.launch_trace_id,
-                run_id=metadata.launch_run_id,
-                parent_observation_id=metadata.launch_parent_observation_id,
-                observation_id=metadata.correlation_id,
-                publish_started=False,
-            )
-
-        return run_in_background
-
     async def _launch_background_session(
         self,
         world: World,
@@ -430,7 +260,7 @@ class SubagentSystem:
             launch_parent_observation_id=launch_parent_observation_id,
             timeout_seconds=timeout_seconds,
         )
-        run_in_background = self._build_background_coroutine(
+        run_in_background = self._background_runner.build_coroutine(
             world,
             parent_entity_id,
             category,
@@ -439,6 +269,9 @@ class SubagentSystem:
             metadata,
             effective_config,
             resolved_timeout,
+            execute_core=self._execute_subagent_core,
+            persist_result=self._persist_subagent_result,
+            publish_events=self._publish_delegation_events,
         )
 
         await self._runtime_manager.enqueue_session(
@@ -495,7 +328,7 @@ class SubagentSystem:
         for session in queued_sessions:
             config = self._config_for_session(registry, session)
             resolved_timeout = self._resolve_timeout(session.timeout_seconds)
-            coroutine_factory = self._build_background_coroutine(
+            coroutine_factory = self._background_runner.build_coroutine(
                 world,
                 entity_id,
                 session.category,
@@ -504,6 +337,9 @@ class SubagentSystem:
                 session,
                 config,
                 resolved_timeout,
+                execute_core=self._execute_subagent_core,
+                persist_result=self._persist_subagent_result,
+                publish_events=self._publish_delegation_events,
             )
             await self._runtime_manager.enqueue_session(
                 session.session_id,
