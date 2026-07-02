@@ -1426,8 +1426,8 @@ async def test_subagent_skills_missing_skill_warn_policy() -> None:
     world.add_component(parent_entity, registry)
     _register_message_bus(world, parent_entity)
 
-    # Track warning logs
-    with patch("ecs_agent.systems.subagent.logger") as mock_logger:
+    # Track warning logs (emitted by child_world.ChildWorldBuilder as of Task 4)
+    with patch("ecs_agent.systems.subagent.child_world.logger") as mock_logger:
         system = SubagentSystem()
         await system.process(world)
 
