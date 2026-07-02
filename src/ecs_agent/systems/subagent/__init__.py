@@ -8,7 +8,7 @@ import time
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any
 
 from ecs_agent.components import (
     ChildStubComponent,
@@ -16,18 +16,13 @@ from ecs_agent.components import (
     LLMComponent,
     OwnerComponent,
     StreamingComponent,
-    SubagentNotificationQueueComponent,
     SubagentRegistryComponent,
     SubagentWaitComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
-from ecs_agent.systems.subagent_wait import (
-    ResumeCallback,
-    notification_matches_wait,
-    wait_scope_is_terminal,
-)
+from ecs_agent.systems.subagent_wait import ResumeCallback
 from ecs_agent.scratchbook.artifact_registry import ArtifactKind, ArtifactRegistry
 from ecs_agent.systems.subagent_runtime import SubagentRuntimeManager
 from ecs_agent.observability import generate_traceparent
@@ -41,6 +36,7 @@ from ecs_agent.systems.subagent.delegation import (
     DelegationExecutor,
     active_observability_context,
 )
+from ecs_agent.systems.subagent.notifications import NotificationCoordinator
 from ecs_agent.systems.subagent.result_envelope import (
     _build_background_child_prompt_template,
     _build_child_prompt_template,
@@ -64,10 +60,8 @@ from ecs_agent.types import (
     render_subagent_session_reminder_table,
     RetryConfig,
     SubagentConfig,
-    SubagentNotificationRecord,
     SubagentSessionRecord,
     ToolSchema,
-    is_wake_worthy,
 )
 
 from ecs_agent.providers.fake_model import FakeModel
@@ -114,6 +108,7 @@ class SubagentSystem:
         )
         self._child_world_builder = ChildWorldBuilder()
         self._delegation_executor = DelegationExecutor()
+        self._notification_coordinator = NotificationCoordinator()
         self._reconciled_session_ids: set[str] = set()
 
     def _persist_subagent_result(
@@ -205,93 +200,6 @@ class SubagentSystem:
     def _utc_now_iso(self) -> str:
         return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-    def _notification_summary(
-        self,
-        metadata: SubagentSessionRecord,
-    ) -> str | None:
-        return metadata.result_summary
-
-    def _get_or_create_notification_queue(
-        self,
-        world: World,
-        parent_entity_id: EntityId,
-    ) -> SubagentNotificationQueueComponent:
-        queue = world.get_component(
-            parent_entity_id, SubagentNotificationQueueComponent
-        )
-        if queue is not None:
-            return queue
-
-        queue = SubagentNotificationQueueComponent()
-        world.add_component(parent_entity_id, queue)
-        return queue
-
-    def _all_waited_sessions_terminal(
-        self,
-        world: World,
-        parent_entity_id: EntityId,
-        wait_component: SubagentWaitComponent,
-    ) -> bool:
-        """Return True when every session in the wait scope is terminal."""
-        from ecs_agent.components.definitions import SubagentSessionTableComponent
-
-        table = world.get_component(parent_entity_id, SubagentSessionTableComponent)
-        effective_ids = (
-            wait_component.resolved_session_ids or wait_component.session_ids
-        )
-        return wait_scope_is_terminal(table, effective_ids).all_terminal
-
-    def _enqueue_parent_notification(
-        self,
-        world: World,
-        metadata: SubagentSessionRecord,
-    ) -> None:
-        if not metadata.background or not is_wake_worthy(metadata.status):
-            return
-
-        terminal_status: Literal["succeeded", "failed", "timed_out"]
-        if metadata.status == "succeeded":
-            terminal_status = "succeeded"
-        elif metadata.status == "failed":
-            terminal_status = "failed"
-        else:
-            terminal_status = "timed_out"
-
-        notification_id = f"{metadata.session_id}:{terminal_status}"
-        queue = self._get_or_create_notification_queue(world, metadata.parent_entity_id)
-        if any(
-            notification.notification_id == notification_id
-            for notification in queue.notifications
-        ):
-            return
-
-        notification = SubagentNotificationRecord(
-            notification_id=notification_id,
-            session_id=metadata.session_id,
-            parent_entity_id=metadata.parent_entity_id,
-            terminal_status=terminal_status,
-            summary=self._notification_summary(metadata),
-            error=metadata.error,
-            created_at=datetime.now(tz=timezone.utc).isoformat(),
-            delivered_at=None,
-        )
-        queue.notifications.append(notification)
-
-        wait_component = world.get_component(
-            metadata.parent_entity_id, SubagentWaitComponent
-        )
-        if wait_component is None:
-            return
-
-        future = wait_component.future
-        if not notification_matches_wait(notification, wait_component):
-            return
-        if isinstance(future, asyncio.Future) and not future.done():
-            if self._all_waited_sessions_terminal(
-                world, metadata.parent_entity_id, wait_component
-            ):
-                future.set_result(None)
-
     def _config_for_session(
         self,
         registry: SubagentRegistryComponent,
@@ -379,7 +287,7 @@ class SubagentSystem:
                 )
                 await self._runtime_manager.update_timeout(session_id, error_msg)
                 await self._runtime_manager.sync_to_component(world, parent_entity_id)
-                self._enqueue_parent_notification(world, metadata)
+                self._notification_coordinator.enqueue_parent_notification(world, metadata)
                 await self._publish_delegation_events(
                     world,
                     parent_entity_id,
@@ -405,7 +313,7 @@ class SubagentSystem:
                 metadata.updated_at = metadata.finished_at
                 await self._runtime_manager.update_status(session_id, metadata.status)
                 await self._runtime_manager.sync_to_component(world, parent_entity_id)
-                self._enqueue_parent_notification(world, metadata)
+                self._notification_coordinator.enqueue_parent_notification(world, metadata)
                 await self._publish_delegation_events(
                     world,
                     parent_entity_id,
@@ -457,7 +365,7 @@ class SubagentSystem:
                 error=error,
             )
             await self._runtime_manager.sync_to_component(world, parent_entity_id)
-            self._enqueue_parent_notification(world, metadata)
+            self._notification_coordinator.enqueue_parent_notification(world, metadata)
             await self._publish_delegation_events(
                 world,
                 parent_entity_id,
