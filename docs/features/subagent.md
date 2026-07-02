@@ -828,12 +828,15 @@ importable from `ecs_agent.systems.subagent`):
 
 | Module | Responsibility |
 |--------|----------------|
-| `__init__.py` | `SubagentSystem` — ECS system + tool installers + background/sync orchestration; façade re-exports |
+| `__init__.py` | `SubagentSystem` — ECS system + sync/background delegation orchestration (`_execute_subagent_core`, launch/resume/reconcile); façade re-exports |
 | `tool_schemas.py` | Declarative `ToolSchema` builders for `subagent` + the five control tools |
+| `tools.py` | Tool installers + the five control-tool handlers (status/wait/result/cancel/resume) |
+| `service.py` | `SubagentService` — config resolution (registry + free-form + RetryModel), param validation, skill normalization, timeout resolution, result-payload builders, artifact persistence |
 | `result_envelope.py` | `<subagent_background_result>` parse/format + child prompt-template builders |
 | `child_world.py` | `ChildWorldBuilder` — isolated child-world assembly + inheritance (tools/skills/permissions/workspace/compaction) |
 | `runtime_profiles.py` | Process-level registry choosing the child-world system set (see [Runtime Profiles](#runtime-profiles)) |
 | `delegation.py` | `DelegationExecutor` — run the child world, extract result, bridge stream events, install child observability |
+| `background.py` | `BackgroundSessionRunner` — builds the run-in-background coroutine (mark running → run with timeout → finalize success/failure/timeout) |
 | `notifications.py` | `NotificationCoordinator` — single owner of terminal-notification enqueue + wait-future resolution |
 | `_contextvars.py` | Per-call delegation ContextVars (shared, cycle-safe home) |
 
