@@ -14,6 +14,7 @@ from ecs_agent.logging import get_logger
 from ecs_agent.types import (
     SubagentLifecycleStatus,
     SubagentSessionRecord,
+    render_subagent_session_reminder_table,
     validate_subagent_lifecycle_transition,
 )
 
@@ -372,39 +373,9 @@ class SubagentRuntimeManager:
         )
 
 
-def render_subagent_session_reminder_table(
-    sessions: dict[str, SubagentSessionRecord],
-) -> str:
-    if not sessions:
-        return "No active subagent sessions."
-
-    def iso_to_sortable(iso_str: str) -> float:
-        try:
-            return datetime.fromisoformat(iso_str.replace("Z", "+00:00")).timestamp()
-        except ValueError:
-            return 0.0
-
-    sorted_sessions = sorted(
-        sessions.items(),
-        key=lambda item: (-iso_to_sortable(item[1].updated_at), item[0]),
-    )
-
-    lines = [
-        "Session ID       | Category        | Status    | Updated At          | Last Message",
-        "-" * 95,
-    ]
-    for session_id, metadata in sorted_sessions:
-        last_message = metadata.result_excerpt or ""
-        if len(last_message) > 50:
-            last_message = last_message[:47] + "..."
-
-        lines.append(
-            f"{session_id:16} | {metadata.category:15} | {metadata.status:9} | "
-            f"{metadata.updated_at:19} | {last_message}"
-        )
-
-    return "\n".join(lines)
-
+# render_subagent_session_reminder_table is imported from ecs_agent.types at the top
+# and re-exported below to preserve the historical import path (Task 11 — the divergent
+# duplicate that lived here was removed in favor of the canonical implementation).
 
 __all__ = [
     "BackgroundScheduler",
