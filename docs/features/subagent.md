@@ -36,8 +36,13 @@ researcher_config = SubagentConfig(
     max_ticks=10,
     skills=[],  # Skill names to load and install on this subagent
     inheritance_policy=InheritancePolicy(inherit_system_prompt=True),  # Optional configuration
+    runtime_profile=None,  # None -> "default" child-world system set (see Runtime Profiles)
 )
 ```
+
+`runtime_profile` is a serialization-safe field: it names a child-world runtime
+profile (a string), so it round-trips through `WorldSerializer`. See
+[Runtime Profiles](#runtime-profiles) below.
 ### Automatic Placeholder Injection
 
 When `_assemble_child_world` builds the child world, it calls `_build_child_prompt_template` on the effective system prompt before storing it in `SystemPromptConfigSpec`. This helper appends standard sections for `${_installed_tools}` and `${_installed_skills}` unless those placeholders are already present in the prompt string:
@@ -66,6 +71,47 @@ SubagentConfig(
     ),
 )
 ```
+
+### Runtime Profiles
+
+Each delegated subagent runs in its own isolated child `World` with a set of ECS
+systems. Which systems is chosen by a **runtime profile** — a name resolved against a
+process-level registry to a builder that returns the whole system set. The default
+profile `"default"` reproduces the historical set exactly:
+`SystemPromptRenderSystem(-20)`, `ReasoningSystem(0)`, `ErrorHandlingSystem(99)`, plus
+`CompactionSystem(-30)` when the parent entity has a `CompactionConfigComponent`.
+
+`SubagentConfig.runtime_profile` selects the profile by name (`None` → `"default"`).
+Because it is a plain string, it is serialization-safe and round-trips through
+`WorldSerializer`. Profiles fully replace the system set (coarse-grained); the callables
+live only in the registry, never on the serializable `SubagentConfig`.
+
+```python
+from ecs_agent.systems.subagent.runtime_profiles import (
+    ChildProfileContext,
+    ChildSystemSpec,
+    register_child_runtime_profile,
+)
+from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
+
+# Register a lean profile: prompt rendering + reasoning only (no error/compaction systems).
+def _lean(ctx: ChildProfileContext) -> list[ChildSystemSpec]:
+    return [
+        ChildSystemSpec(factory=lambda: SystemPromptRenderSystem(priority=-20), priority=-20),
+        ChildSystemSpec(factory=lambda: ReasoningSystem(priority=0), priority=0),
+    ]
+
+register_child_runtime_profile("lean", _lean)
+
+# Subagents that opt in run the lean system set:
+SubagentConfig(name="worker", model=model, runtime_profile="lean")
+```
+
+`ChildProfileContext.parent_has_compaction` lets a builder branch on whether the
+parent has compaction configured (the `"default"` profile uses it to conditionally add
+`CompactionSystem`). An unknown profile name raises a clear `ValueError` at
+child-world assembly.
 
 ### SubagentRegistryComponent
 
@@ -324,7 +370,7 @@ The `subagent` tool enables parent agents to delegate subtasks with support for 
 When running in `background: true` mode, use control tools to manage the session:
 
 1. **Check Status**: `subagent_status(session_id="session_123")` returns current lifecycle state (including `queue_position` if `queued`) and a summary table if `session_id` is omitted.
-2. **Retrieve Result**: `subagent_result(session_id="session_123", read_method="full", timeout=10.0)` polls durable metadata and returns the result once the session is terminal. It does not require a live task handle. Supports `read_method="summary"` for cached summary retrieval.
+2. **Retrieve Result**: `subagent_result(session_id="session_123", read_method="full", timeout=10.0)` returns the result once the session is terminal. If the session is still running it waits **event-driven** (no polling): the `SubagentRuntimeManager` holds a sticky per-session `asyncio.Event` that is set on any terminal transition, so the call wakes immediately on completion (and resolves even if completion lands before the wait begins). Multiple concurrent waiters on the same session are supported. It does not require a live task handle. Supports `read_method="summary"` for cached summary retrieval.
 3. **Cancel**: `subagent_cancel(session_id="session_123")` terminates the session. For `queued` sessions, this is an atomic removal from the scheduler.
 4. **Resume**: `subagent_resume(session_id="session_123")` restarts a failed, timed-out, or cancelled session with the same configuration. The new session gets a fresh `session_id`; the original is preserved as history.
 
@@ -772,6 +818,30 @@ async def track_delegations(event: DelegationStartedEvent) -> None:
 
 - `TerminalComponent` from child world is NOT copied to parent (prevents premature runner termination). Additionally, the parent-world stub entity for each delegation carries a `ChildStubComponent`, which causes `ReasoningSystem` to skip it — preventing unintended LLM inference on completed delegation stubs
 - After child world completes, the stub entity's `LLMComponent.system_prompt` reflects the effective rendered prompt (including expanded `${_installed_tools}` and `${_installed_skills}` sections) produced by `SystemPromptRenderSystem` in the child world during execution.
+
+## Package Architecture
+
+`SubagentSystem` orchestrates delegation; the mechanism is split across the
+`ecs_agent.systems.subagent` package (all historical import paths — `SubagentSystem`,
+`_build_child_prompt_template`, `_build_background_child_prompt_template` — remain
+importable from `ecs_agent.systems.subagent`):
+
+| Module | Responsibility |
+|--------|----------------|
+| `__init__.py` | `SubagentSystem` — ECS system + tool installers + background/sync orchestration; façade re-exports |
+| `tool_schemas.py` | Declarative `ToolSchema` builders for `subagent` + the five control tools |
+| `result_envelope.py` | `<subagent_background_result>` parse/format + child prompt-template builders |
+| `child_world.py` | `ChildWorldBuilder` — isolated child-world assembly + inheritance (tools/skills/permissions/workspace/compaction) |
+| `runtime_profiles.py` | Process-level registry choosing the child-world system set (see [Runtime Profiles](#runtime-profiles)) |
+| `delegation.py` | `DelegationExecutor` — run the child world, extract result, bridge stream events, install child observability |
+| `notifications.py` | `NotificationCoordinator` — single owner of terminal-notification enqueue + wait-future resolution |
+| `_contextvars.py` | Per-call delegation ContextVars (shared, cycle-safe home) |
+
+Background session lifecycle and the sticky per-session terminal `asyncio.Event`
+(awaited by `subagent_result`) live in `ecs_agent.systems.subagent_runtime`
+(`SubagentRuntimeManager` + the process-global `BackgroundScheduler`). `subagent_wait`
+semantics live in `ecs_agent.systems.subagent_wait` (`SubagentWaitSystem`).
+
 ## See Also
 
 - [Multi-Agent Collaboration](./multi-agent.md) — Entity-to-entity messaging

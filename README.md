@@ -95,8 +95,9 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **Named Worlds** — Pass `name="my-agent"` to `World(name=...)` to tag every log event (`entity_created`, `component_added`, `run_start`, `tick_start`, etc.) with `world_name` once logging is enabled via `configure_logging()`. Child worlds spawned by `SubagentSystem` are automatically named `<subagent_name>-<hex8>` for end-to-end log correlation across nested agent calls.
 ### Multi-Agent Orchestration
 - **Subagent Delegation** — Spawn child agents for subtasks with skill and permission inheritance. Use registered named subagents by default, or opt into free-form subagents so the model can call arbitrary descriptive worker names. Control the `queued/running/succeeded/failed` lifecycle via a process-global FIFO scheduler.
+- **Runtime Profiles** — Each subagent's child-world system set is chosen by a serialization-safe `SubagentConfig.runtime_profile` name; register custom profiles with `register_child_runtime_profile(...)`. The `"default"` profile reproduces the standard child system set. See [`docs/features/subagent.md`](docs/features/subagent.md#runtime-profiles).
 - **MessageBus** — Parent-child and sibling messaging via pub/sub or request-response patterns.
-- **Unified API** — Control lifecycle with `subagent`, `subagent_status`, `subagent_result`, `subagent_wait`, `subagent_cancel`, and `subagent_resume` tools. Supports wait-all barrier semantics for background sessions and automatic or LLM-driven failure recovery.
+- **Unified API** — Control lifecycle with `subagent`, `subagent_status`, `subagent_result`, `subagent_wait`, `subagent_cancel`, and `subagent_resume` tools. Supports wait-all barrier semantics for background sessions and automatic or LLM-driven failure recovery. `subagent_result` waits event-driven (a sticky per-session signal, no polling) and supports concurrent waiters.
 
 ### Advanced Reasoning & Tree Search
 - **Tree Conversations** — Branch reasoning paths, navigate multiple strategies, and linearize history for LLM compatibility.
@@ -174,7 +175,10 @@ src/ecs_agent/
 │   ├── checkpoint.py         # World state snapshots
 │   ├── compaction.py         # Conversation compaction
 │   ├── user_input.py         # Async user input
-│   └── subagent.py           # Subagent delegation
+│   ├── subagent/             # Subagent delegation package (system, child_world,
+│   │                         #   delegation, notifications, runtime_profiles, ...)
+│   ├── subagent_runtime.py   # Background scheduler + per-session terminal signals
+│   └── subagent_wait.py      # subagent_wait barrier + notification delivery
 ├── tools/
 │   ├── __init__.py           # Tool utilities
 │   ├── discovery.py          # Auto-discovery of tools

@@ -454,6 +454,16 @@ world.register_system(UserInputSystem(priority=-10), priority=-10)
 
 The SubagentSystem manages subagent delegation, allowing parent agents to spawn child agents for subtask execution with isolated contexts and automatic result aggregation.
 
+> The implementation lives in the `ecs_agent.systems.subagent` **package** —
+> `SubagentSystem` orchestrates, while child-world assembly (`ChildWorldBuilder`),
+> delegation execution (`DelegationExecutor`), terminal notifications
+> (`NotificationCoordinator`), tool schemas, and the child-world runtime-profile
+> registry are separate modules. All historical import paths still resolve from
+> `ecs_agent.systems.subagent`. Child-world system sets are configurable via
+> `SubagentConfig.runtime_profile` (serialization-safe); `subagent_result` waits on a
+> sticky per-session signal (no polling). See
+> [`features/subagent.md`](./features/subagent.md#package-architecture).
+
 - **Constructor**: `__init__(self, priority: int = -1, default_timeout: float | None = None, registry: ArtifactRegistry | None = None, max_background_concurrency: int = 5, allow_unregistered_subagents: bool = False, free_subagent_config: FreeSubagentConfig | None = None)`
 - **Queries**: `SubagentRegistryComponent`, `ToolRegistryComponent` (`ToolRegistryComponent` alone when free-form mode is enabled)
 - **Modifies**: `ToolRegistryComponent.tools` (registers `subagent` tool), `ToolRegistryComponent.handlers` (registers subagent handler).
