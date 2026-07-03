@@ -135,7 +135,7 @@ def test_subagent_config_defaults() -> None:
     # Verify inheritance_policy has correct defaults
     assert config.inheritance_policy is not None
     assert config.inheritance_policy.enabled is True
-    assert config.inheritance_policy.inherit_system_prompt is True
+    assert config.inheritance_policy.inherit_system_prompt is False
     assert config.inheritance_policy.inherit_tools == []
     assert config.inheritance_policy.inherit_permissions is False
     assert config.inheritance_policy.tool_conflict_policy == "skip"
@@ -1176,6 +1176,26 @@ async def test_inheritance_policy_inherit_system_prompt_when_child_empty() -> No
     assert child_llm.system_prompt.startswith("parent inherited prompt"), (
         "inherit_system_prompt=True should copy parent prompt when child prompt is empty"
     )
+    assert "## Available Tools" in child_llm.system_prompt
+    assert "## Available Skills" in child_llm.system_prompt
+
+
+async def test_inheritance_policy_default_does_not_leak_parent_system_prompt() -> None:
+    # Default policy (inherit_system_prompt=False) keeps the child context clean.
+    policy = InheritancePolicy(enabled=True)
+    assert policy.inherit_system_prompt is False
+    world, _, child_entity, _ = await _delegate_with_policy(
+        policy=policy,
+        parent_system_prompt="parent inherited prompt",
+        child_system_prompt="",
+    )
+
+    child_llm = world.get_component(child_entity, LLMComponent)
+    assert child_llm is not None
+    assert "parent inherited prompt" not in child_llm.system_prompt, (
+        "default inherit_system_prompt=False must not leak the parent prompt"
+    )
+    # The child still receives its own tool/skill inventory sections.
     assert "## Available Tools" in child_llm.system_prompt
     assert "## Available Skills" in child_llm.system_prompt
 

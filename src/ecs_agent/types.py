@@ -649,7 +649,10 @@ class InheritancePolicy:
     """
 
     enabled: bool = True
-    inherit_system_prompt: bool = True
+    # Default False so a subagent starts with a clean, task-scoped context and
+    # does not leak the parent's (often large, unrelated) system prompt (ISSUE-7).
+    # Set True explicitly when the child should inherit the parent prompt.
+    inherit_system_prompt: bool = False
     inherit_tools: list[str] = field(default_factory=list)  # whitelist of tool names
     inherit_permissions: bool = False
     tool_conflict_policy: str = "skip"  # skip|error|override
