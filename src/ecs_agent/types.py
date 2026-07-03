@@ -103,6 +103,13 @@ class Message:
     reasoning_content: str | None = None
     reasoning_signature: str | None = None
     compaction_metadata: dict[str, Any] | None = field(default=None)
+    cache_control: bool = False
+    """Provider-neutral prompt-cache breakpoint marker.
+
+    When ``True``, provider adapters that support prompt caching (currently the
+    Anthropic Messages adapter) place a ``cache_control`` breakpoint at this
+    message's boundary. Adapters without caching support ignore it.
+    """
 
 
 @dataclass(slots=True)

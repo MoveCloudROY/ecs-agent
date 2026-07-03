@@ -451,3 +451,33 @@ async def test_multiple_skill_manager_facades_share_world_state() -> None:
     assert any(isinstance(p, ImageUrlPart) for p in substituted.parts), (
         "ImageUrlPart must be preserved after substitution"
     )
+
+
+def test_assemble_messages_marks_stable_system_and_appends_volatile_suffix() -> None:
+    assembled = assemble_messages(
+        conversation_messages=[Message(role="user", content="hi")],
+        system_prompt="STABLE PREFIX",
+        system_volatile_suffix="<chat_history_summary>S</chat_history_summary>",
+    )
+
+    # Stable system first, marked as a cache breakpoint.
+    assert assembled[0].role == "system"
+    assert assembled[0].content == "STABLE PREFIX"
+    assert assembled[0].cache_control is True
+    # Volatile system second, unmarked.
+    assert assembled[1].role == "system"
+    assert assembled[1].content == "<chat_history_summary>S</chat_history_summary>"
+    assert assembled[1].cache_control is False
+    # Conversation follows.
+    assert assembled[2].role == "user"
+
+
+def test_assemble_messages_omits_volatile_suffix_when_absent() -> None:
+    assembled = assemble_messages(
+        conversation_messages=[Message(role="user", content="hi")],
+        system_prompt="STABLE PREFIX",
+    )
+
+    system_messages = [m for m in assembled if m.role == "system"]
+    assert len(system_messages) == 1
+    assert system_messages[0].cache_control is True

@@ -1381,9 +1381,12 @@ async def test_legacy_agent_gets_xml_tail_without_explicit_placeholder() -> None
     llm = world.get_component(entity_id, LLMComponent)
     assert rendered is not None
     assert llm is not None
+    # Full text keeps its historical shape; the split only adds stable/volatile.
     assert rendered.text == (
         "Legacy base\n<chat_history_summary></chat_history_summary>"
     )
+    assert rendered.stable_text == "Legacy base"
+    assert rendered.volatile_text == "<chat_history_summary></chat_history_summary>"
     assert llm.system_prompt == rendered.text
 
 
@@ -2065,3 +2068,133 @@ async def test_provider_resolution_preserves_existing_installed_placeholder_outp
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
     assert rendered.text == "- none\n- none\n- none\n- none"
+
+
+# ---------------------------------------------------------------------------
+# ISSUE-6: stable/volatile split for prompt-cache prefix stability
+# ---------------------------------------------------------------------------
+
+
+def test_split_stable_volatile_relocates_volatile_to_tail() -> None:
+    from ecs_agent.systems.system_prompt_render_system import _split_stable_volatile
+
+    template = (
+        "Base instructions\n"
+        "${_installed_tools}\n"
+        "${_workflow_state_prompt}\n"
+        "${_chat_history_summary_xml}"
+    )
+    snapshot = {
+        "_installed_tools": "- toolA",
+        "_workflow_state_prompt": "WF-STATE-BODY",
+        "_chat_history_summary_xml": "<chat_history_summary>S</chat_history_summary>",
+    }
+
+    stable, volatile = _split_stable_volatile(template, snapshot)
+
+    # Stable prefix keeps static content, drops volatile values entirely.
+    assert "Base instructions" in stable
+    assert "- toolA" in stable
+    assert "WF-STATE-BODY" not in stable
+    assert "chat_history_summary" not in stable
+    # Volatile tail carries both, workflow first (deterministic order).
+    assert volatile == (
+        "WF-STATE-BODY\n\n<chat_history_summary>S</chat_history_summary>"
+    )
+
+
+def test_split_stable_volatile_is_byte_stable_across_volatile_changes() -> None:
+    from ecs_agent.systems.system_prompt_render_system import _split_stable_volatile
+
+    template = (
+        "Base instructions\n"
+        "${_installed_tools}\n"
+        "${_workflow_state_prompt}\n"
+        "${_chat_history_summary_xml}"
+    )
+    base_snapshot = {
+        "_installed_tools": "- toolA",
+        "_workflow_state_prompt": "state-1",
+        "_chat_history_summary_xml": "<chat_history_summary>first</chat_history_summary>",
+    }
+    changed_snapshot = {
+        "_installed_tools": "- toolA",
+        "_workflow_state_prompt": "state-2-different-length",
+        "_chat_history_summary_xml": (
+            "<chat_history_summary>second summary text</chat_history_summary>"
+        ),
+    }
+
+    stable_a, _ = _split_stable_volatile(template, base_snapshot)
+    stable_b, _ = _split_stable_volatile(template, changed_snapshot)
+
+    # ISSUE-6 acceptance: only volatile values differ -> stable prefix identical.
+    assert stable_a == stable_b
+
+
+def test_split_stable_volatile_expands_nested_placeholder_in_volatile_value() -> None:
+    from ecs_agent.systems.system_prompt_render_system import _split_stable_volatile
+
+    # Whole prompt body comes from a volatile placeholder whose value itself
+    # references a non-volatile placeholder (the workflow-prompt scenario).
+    template = "${_workflow_state_prompt}\n${_chat_history_summary_xml}"
+    snapshot = {
+        "_workflow_state_prompt": "You are agent.\n${_installed_tools}",
+        "_installed_tools": "- toolA",
+        "_chat_history_summary_xml": "<chat_history_summary></chat_history_summary>",
+    }
+
+    stable, volatile = _split_stable_volatile(template, snapshot)
+
+    # All-volatile body -> empty stable prefix (nothing to cache).
+    assert stable == ""
+    # Nested non-volatile placeholder is expanded, not left as literal.
+    assert "${_installed_tools}" not in volatile
+    assert "- toolA" in volatile
+    assert volatile.startswith("You are agent.\n- toolA")
+
+
+def test_split_stable_volatile_no_volatile_keys_leaves_full_equal_stable() -> None:
+    from ecs_agent.systems.system_prompt_render_system import _split_stable_volatile
+
+    template = "Base instructions\n${_installed_tools}"
+    snapshot = {"_installed_tools": "- toolA"}
+
+    stable, volatile = _split_stable_volatile(template, snapshot)
+
+    assert volatile == ""
+    assert stable == "Base instructions\n- toolA"
+
+
+@pytest.mark.asyncio
+async def test_render_system_populates_stable_and_volatile_fields() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(
+                inline="Base prompt\n${_chat_history_summary_xml}"
+            )
+        ),
+    )
+    world.add_component(entity_id, CompactionConfigComponent(threshold_tokens=100))
+    world.add_component(
+        entity_id,
+        CurrentCompactionSummaryComponent(summary="hello world"),
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    # Stable prefix excludes the summary; volatile tail carries it.
+    assert "chat_history_summary" not in rendered.stable_text
+    assert rendered.stable_text == "Base prompt"
+    assert rendered.volatile_text == (
+        "<chat_history_summary>hello world</chat_history_summary>"
+    )
+    # Full text is the faithful render (unchanged historical whitespace).
+    assert rendered.text == (
+        "Base prompt\n<chat_history_summary>hello world</chat_history_summary>"
+    )

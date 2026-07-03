@@ -525,6 +525,15 @@ class PromptContextReservationComponent:
 class RenderedSystemPromptComponent:
     text: str
     placeholder_snapshot: dict[str, str] = field(default_factory=dict)
+    stable_text: str = ""
+    """Cache-stable prefix: base template with volatile placeholders emptied.
+
+    Byte-stable across turns given fixed stable-provider fingerprints, so it can
+    serve as an Anthropic prompt-cache prefix. Empty for legacy render paths that
+    predate the split (consumers fall back to ``text``)."""
+    volatile_text: str = ""
+    """Volatile tail: compaction summary + workflow state, rendered after the
+    cache breakpoint. ``text`` == ``stable_text`` + this tail (when non-empty)."""
 
 
 @dataclass(slots=True)

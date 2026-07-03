@@ -33,11 +33,9 @@ from ecs_agent.components import (
     PendingToolCallsComponent,
     PromptContextQueueComponent,
     PromptContextReservationComponent,
-    RenderedSystemPromptComponent,
     ResponsesAPIStateComponent,
     RunnerStateComponent,
     StreamingComponent,
-    SystemPromptComponent,
     TerminalComponent,
     ToolRegistryComponent,
 )
@@ -47,6 +45,7 @@ from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.prompts.message_assembly import (
     commit_prompt_context_reservation,
     prepare_outbound_messages,
+    resolve_system_prompt_parts,
 )
 from ecs_agent.types import (
     StreamContentStartEvent,
@@ -116,18 +115,10 @@ class ReasoningSystem:
                 llm_component.model = llm_component.pending_model
                 llm_component.pending_model = None
 
-            rendered_system_prompt = world.get_component(
-                entity_id, RenderedSystemPromptComponent
-            )
-            system_prompt = world.get_component(entity_id, SystemPromptComponent)
-            system_prompt_text = (
-                rendered_system_prompt.text
-                if rendered_system_prompt is not None
-                else (
-                    system_prompt.content
-                    if system_prompt is not None
-                    else (llm_component.system_prompt or None)
-                )
+            # Split the rendered prompt into a cache-stable prefix and a volatile
+            # tail (ISSUE-6). Components predating the split fall back to full text.
+            system_prompt_text, system_volatile_suffix = resolve_system_prompt_parts(
+                world, entity_id
             )
             conversation = world.get_component(entity_id, ConversationComponent)
             context_queue = world.get_component(entity_id, PromptContextQueueComponent)
@@ -144,6 +135,7 @@ class ReasoningSystem:
                 world,
                 entity_id,
                 system_prompt=system_prompt_text,
+                system_volatile_suffix=system_volatile_suffix,
                 current_tick=current_tick,
             )
             if not any(message.role != "system" for message in messages):

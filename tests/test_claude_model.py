@@ -50,12 +50,16 @@ def _anthropic_config(
     *,
     api_key: str = "test-key",
     base_url: str = "https://api.anthropic.com",
+    enable_prompt_caching: bool = False,
 ) -> ProviderConfig:
+    # Prompt caching defaults OFF here so message/tool-conversion tests assert the
+    # plain wire shape. Caching behaviour has its own dedicated tests below.
     return ProviderConfig(
         provider_id="anthropic",
         base_url=base_url,
         api_key=api_key,
         api_format=ApiFormat.ANTHROPIC_MESSAGES,
+        enable_prompt_caching=enable_prompt_caching,
     )
 
 
@@ -934,3 +938,107 @@ async def test_streaming_timeout_uses_read_none_and_custom_values() -> None:
     assert timeout.read is None
     assert timeout.write == 8.0
     assert timeout.pool == 6.0
+
+
+# ---------------------------------------------------------------------------
+# ISSUE-1: Anthropic prompt-caching breakpoints
+# ---------------------------------------------------------------------------
+
+
+def _caching_model() -> ClaudeModel:
+    return ClaudeModel(
+        config=_anthropic_config(enable_prompt_caching=True),
+        model="claude-3-haiku-20240307",
+    )
+
+
+def test_caching_marks_stable_system_block_not_volatile() -> None:
+    model = _caching_model()
+    messages = [
+        Message(role="system", content="STABLE PREFIX", cache_control=True),
+        Message(role="system", content="VOLATILE TAIL"),
+        Message(role="user", content="Hello"),
+    ]
+
+    system, _ = model._build_messages(messages)
+
+    assert system == [
+        {
+            "type": "text",
+            "text": "STABLE PREFIX",
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"type": "text", "text": "VOLATILE TAIL"},
+    ]
+
+
+def test_caching_marks_last_message_content_block() -> None:
+    model = _caching_model()
+    messages = [
+        Message(role="system", content="STABLE", cache_control=True),
+        Message(role="user", content="first"),
+        Message(role="user", content="latest"),
+    ]
+
+    _, anthropic_messages = model._build_messages(messages)
+
+    # Only the last message's last content block carries the breakpoint.
+    assert "cache_control" not in anthropic_messages[0]["content"][-1]
+    assert anthropic_messages[-1]["content"][-1]["cache_control"] == {
+        "type": "ephemeral"
+    }
+
+
+def test_caching_marks_only_last_tool() -> None:
+    model = _caching_model()
+    tools = [
+        ToolSchema(name="a", description="tool a", parameters={"type": "object"}),
+        ToolSchema(name="b", description="tool b", parameters={"type": "object"}),
+    ]
+
+    anthropic_tools = model._build_tools(tools)
+
+    assert "cache_control" not in anthropic_tools[0]
+    assert anthropic_tools[-1]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_caching_disabled_keeps_plain_system_string_and_no_breakpoints() -> None:
+    model = ClaudeModel(
+        config=_anthropic_config(enable_prompt_caching=False),
+        model="claude-3-haiku-20240307",
+    )
+    messages = [
+        Message(role="system", content="STABLE", cache_control=True),
+        Message(role="user", content="Hello"),
+    ]
+    tools = [ToolSchema(name="a", description="d", parameters={"type": "object"})]
+
+    system, anthropic_messages = model._build_messages(messages)
+    anthropic_tools = model._build_tools(tools)
+
+    assert system == "STABLE"
+    assert "cache_control" not in anthropic_messages[-1]["content"][-1]
+    assert "cache_control" not in anthropic_tools[-1]
+
+
+def test_caching_headers_have_no_beta_header() -> None:
+    # Anthropic prompt caching is GA; no anthropic-beta header is required.
+    model = _caching_model()
+    headers = model._messages_adapter.headers()
+    assert not any(key.lower() == "anthropic-beta" for key in headers)
+
+
+def test_caching_build_request_body_emits_system_block_list() -> None:
+    model = _caching_model()
+    from ecs_agent.providers.anthropic_messages_adapter import AnthropicMessagesRequest
+
+    request = AnthropicMessagesRequest(
+        messages=[
+            Message(role="system", content="STABLE", cache_control=True),
+            Message(role="user", content="Hi"),
+        ]
+    )
+    body = model._messages_adapter.build_request_body(request)
+
+    assert isinstance(body["system"], list)
+    assert body["system"][0]["cache_control"] == {"type": "ephemeral"}

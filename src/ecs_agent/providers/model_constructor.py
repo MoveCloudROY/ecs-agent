@@ -112,6 +112,7 @@ def Model(
     extra_headers: dict[str, str] | None = None,
     timeout: float | None = None,
     enable_store: bool = False,
+    enable_prompt_caching: bool = True,
     **kwargs: Any,
 ) -> LLMModel:
     """Unified factory for constructing LLMModel instances.
@@ -131,6 +132,8 @@ def Model(
         extra_headers: Additional HTTP headers forwarded on every request.
         timeout: Global request timeout in seconds (overrides per-phase defaults).
         enable_store: Enable conversation storage (Responses API feature).
+        enable_prompt_caching: Emit Anthropic prompt-cache breakpoints (Claude
+            adapter only; ignored by other formats). Defaults to True.
         **kwargs: Extra keyword arguments forwarded to the underlying model
             constructor (e.g. connect_timeout, max_tokens).
 
@@ -196,6 +199,7 @@ def Model(
         extra_headers=extra_headers or {},
         timeout=timeout,
         enable_store=enable_store,
+        enable_prompt_caching=enable_prompt_caching,
     )
 
     if resolved_type == ModelType.OPENAI:

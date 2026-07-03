@@ -202,6 +202,7 @@ def assemble_messages(
     *,
     conversation_messages: list[Message],
     system_prompt: str | None = None,
+    system_volatile_suffix: str | None = None,
     prefix_messages: list[Message] | None = None,
     enable_context_pool: bool = False,
     context_pool_items: Sequence[ContextEntryProtocol] | None = None,
@@ -211,13 +212,22 @@ def assemble_messages(
     """Assemble model-call messages with stable ordering.
 
     Ordering is always:
-    1) optional system prompt
-    2) optional prefix/system context messages
-    3) conversation messages (with transient final-user injection when enabled)
+    1) optional system prompt (cache-stable prefix, marked as a cache breakpoint)
+    2) optional volatile system suffix (compaction summary / workflow state)
+    3) optional prefix/system context messages
+    4) conversation messages (with transient final-user injection when enabled)
+
+    The stable system prompt carries ``cache_control=True`` so caching-capable
+    adapters place a prompt-cache breakpoint after it; the volatile suffix sits
+    after the breakpoint and is never marked.
     """
     assembled: list[Message] = []
     if system_prompt is not None:
-        assembled.append(Message(role="system", content=system_prompt))
+        assembled.append(
+            Message(role="system", content=system_prompt, cache_control=True)
+        )
+    if system_volatile_suffix:
+        assembled.append(Message(role="system", content=system_volatile_suffix))
 
     if prefix_messages is not None:
         assembled.extend(prefix_messages)
@@ -265,11 +275,50 @@ def commit_prompt_context_reservation(
     ]
 
 
+def resolve_system_prompt_parts(
+    world: World, entity_id: EntityId
+) -> tuple[str | None, str | None]:
+    """Resolve ``(stable_prefix, volatile_suffix)`` for an entity's system prompt.
+
+    Prefers the split :class:`RenderedSystemPromptComponent` (ISSUE-6); falls back
+    to the legacy ``SystemPromptComponent`` / ``LLMComponent.system_prompt`` with an
+    empty volatile suffix. Shared by the reasoning/planning/replanning systems so
+    the cache-stable prefix is derived identically everywhere.
+    """
+    from ecs_agent.components.definitions import (
+        LLMComponent,
+        RenderedSystemPromptComponent,
+        SystemPromptComponent,
+    )
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    if rendered is not None:
+        # A split render sets stable_text and/or volatile_text. When the whole
+        # prompt body is volatile (e.g. a workflow-driven prompt), stable_text is
+        # empty and there is simply no cacheable prefix — send the volatile tail
+        # as the sole system message rather than falling back to the full text
+        # (which would duplicate the volatile content).
+        if rendered.stable_text or rendered.volatile_text:
+            return (rendered.stable_text or None, rendered.volatile_text or None)
+        return (rendered.text or None, None)
+
+    system_prompt = world.get_component(entity_id, SystemPromptComponent)
+    if system_prompt is not None:
+        return (system_prompt.content, None)
+
+    llm_component = world.get_component(entity_id, LLMComponent)
+    if llm_component is not None:
+        return (llm_component.system_prompt or None, None)
+
+    return (None, None)
+
+
 def prepare_outbound_messages(
     world: World,
     entity_id: EntityId,
     *,
     system_prompt: str | None = None,
+    system_volatile_suffix: str | None = None,
     prefix_messages: list[Message] | None = None,
     current_tick: int,
     conversation_override: list[Message] | None = None,
@@ -401,6 +450,7 @@ def prepare_outbound_messages(
 
     messages = assemble_messages(
         system_prompt=system_prompt,
+        system_volatile_suffix=system_volatile_suffix,
         prefix_messages=prefix_messages,
         conversation_messages=messages_for_assembly,
         enable_context_pool=enable_context_pool_for_assembly,
@@ -413,7 +463,7 @@ def prepare_outbound_messages(
 
         messages = apply_outbound_budget(
             messages,
-            system_prompt=system_prompt or "",
+            system_prompt=(system_prompt or "") + (system_volatile_suffix or ""),
             context_entries=list(context_pool_items_for_assembly or []),
             config=budget_config,
             cache_component=world.get_component(entity_id, ContextCacheComponent),

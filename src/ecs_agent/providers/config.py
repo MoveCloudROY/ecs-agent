@@ -22,6 +22,9 @@ class ProviderConfig:
     extra_headers: dict[str, str] = field(default_factory=dict)
     timeout: float | None = None
     enable_store: bool = False
+    enable_prompt_caching: bool = True
+    """Emit Anthropic ``cache_control`` breakpoints (tools, stable system prefix,
+    latest message). Set ``False`` to revert to the pre-caching request shape."""
 
 
 @dataclass(slots=True)

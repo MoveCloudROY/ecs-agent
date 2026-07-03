@@ -165,7 +165,9 @@ async def test_system_prompt_component_is_prepended_to_messages() -> None:
 
     assert len(model.calls) == 1
     sent_messages, _ = model.calls[0]
-    assert sent_messages[0] == Message(role="system", content="You are concise")
+    assert sent_messages[0] == Message(
+        role="system", content="You are concise", cache_control=True
+    )
     assert sent_messages[1] == Message(role="user", content="Hello")
 
 

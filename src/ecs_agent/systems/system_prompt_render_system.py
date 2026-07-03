@@ -34,6 +34,17 @@ _BUILTIN_PLACEHOLDER_PROVIDERS: list[BuiltinPlaceholderProvider] = [
 
 logger = get_logger(__name__)
 
+# Placeholders whose value changes *during* a conversation (compaction summary
+# refreshes on compaction; workflow state prompt changes on state transitions).
+# They are emptied from the cache-stable prefix and relocated to a volatile tail
+# so the prefix stays byte-stable for Anthropic prompt caching (ISSUE-6).
+# Ordering here defines the deterministic tail order.
+_VOLATILE_PLACEHOLDER_KEYS: tuple[str, ...] = (
+    "_workflow_state_prompt",
+    "_chat_history_summary_xml",
+)
+VOLATILE_PLACEHOLDER_KEYS = frozenset(_VOLATILE_PLACEHOLDER_KEYS)
+
 PlaceholderProviderRegistry = list[BuiltinPlaceholderProvider]
 _PLACEHOLDER_NAME_RE = re.compile(
     r"\$(?:\{(?P<braced>[_a-zA-Z][_a-zA-Z0-9]*)\}|(?P<named>[_a-zA-Z][_a-zA-Z0-9]*))"
@@ -74,7 +85,7 @@ class SystemPromptRenderSystem:
                     entity_id,
                     prompt_config,
                 )
-                rendered, snapshot = _render_system_prompt(
+                rendered, stable_text, volatile_text, snapshot = _render_system_prompt(
                     world, entity_id, prompt_config
                 )
                 snapshot["_cache_key"] = cache_key
@@ -85,6 +96,8 @@ class SystemPromptRenderSystem:
                     RenderedSystemPromptComponent(
                         text=rendered,
                         placeholder_snapshot=snapshot,
+                        stable_text=stable_text,
+                        volatile_text=volatile_text,
                     ),
                 )
 
@@ -127,14 +140,58 @@ def _render_system_prompt(
     world: World,
     entity_id: EntityId,
     prompt_config: SystemPromptConfigSpec,
-) -> tuple[str, dict[str, str]]:
+) -> tuple[str, str, str, dict[str, str]]:
+    """Render a system prompt split into ``(full, stable, volatile, snapshot)``.
+
+    ``stable`` is the template with volatile placeholders emptied (byte-stable
+    across turns); ``volatile`` is the relocated tail; ``full`` == stable + tail.
+    """
     template_text = _normalized_template_text(world, entity_id, prompt_config)
-    rendered, snapshot = render_prompt_template(
+    full_text, snapshot = render_prompt_template(
         template=template_text,
         world=world,
         entity=entity_id,
     )
-    return rendered, snapshot
+    stable_text, volatile_text = _split_stable_volatile(template_text, snapshot)
+    return full_text, stable_text, volatile_text, snapshot
+
+
+def _split_stable_volatile(
+    template_text: str, snapshot: dict[str, str]
+) -> tuple[str, str]:
+    """Split a rendered prompt into a cache-stable prefix and a volatile tail.
+
+    The stable prefix is the template rendered with every
+    :data:`VOLATILE_PLACEHOLDER_KEYS` value emptied, then ``rstrip``-ed to drop
+    trailing whitespace left where a tail placeholder was removed. The volatile
+    tail concatenates each volatile value in deterministic order, with nested
+    (non-volatile) placeholders inside those values recursively expanded — a
+    volatile value may itself be a whole prompt body (e.g. a workflow-state
+    prompt referencing ``${_scratchbook_overview}``).
+
+    ``full`` text is NOT reconstructed here: the caller stores the faithful
+    render (``render_prompt_template`` output) as ``text``, so legacy/subagent
+    consumers keep byte-for-byte behaviour.
+    """
+    stable_snapshot = {
+        key: ("" if key in VOLATILE_PLACEHOLDER_KEYS else value)
+        for key, value in snapshot.items()
+    }
+    stable_text = _substitute_prompt_template(template_text, stable_snapshot).rstrip()
+
+    volatile_parts: list[str] = []
+    for key in _VOLATILE_PLACEHOLDER_KEYS:
+        raw_value = snapshot.get(key)
+        if not raw_value:
+            continue
+        # Expand nested placeholders using the volatile-emptied snapshot so a
+        # volatile value that references other volatile keys cannot re-inject them.
+        volatile_parts.append(
+            _substitute_prompt_template(raw_value, stable_snapshot)
+        )
+    volatile_text = "\n\n".join(volatile_parts)
+
+    return stable_text, volatile_text
 
 
 def _normalized_template_text(

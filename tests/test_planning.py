@@ -172,7 +172,9 @@ async def test_plan_context_is_injected_before_llm_call() -> None:
 
     assert len(model.calls) == 1
     sent = model.calls[0]
-    assert sent[0] == Message(role="system", content="You are concise")
+    assert sent[0] == Message(
+        role="system", content="You are concise", cache_control=True
+    )
     assert sent[1] == Message(role="system", content="Step 1/1: inspect state")
     assert sent[2] == Message(role="user", content="hello")
 
@@ -323,7 +325,9 @@ async def test_prompt_context_injection_is_transient_for_planning_provider_call(
     await PlanningSystem().process(world)
 
     sent = model.calls[0]
-    assert sent[0] == Message(role="system", content="You are concise")
+    assert sent[0] == Message(
+        role="system", content="You are concise", cache_control=True
+    )
     assert sent[1] == Message(role="system", content="Step 1/1: inspect state")
     assert sent[2].role == "user"
     assert "[PROMPT_CONTEXT_POOL]" in sent[2].content

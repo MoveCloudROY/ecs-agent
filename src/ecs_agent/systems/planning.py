@@ -12,9 +12,7 @@ from ecs_agent.components import (
     PlanComponent,
     PromptContextQueueComponent,
     PromptContextReservationComponent,
-    RenderedSystemPromptComponent,
     RunnerStateComponent,
-    SystemPromptComponent,
     TerminalComponent,
     ToolRegistryComponent,
 )
@@ -24,10 +22,11 @@ from ecs_agent.logging import get_logger
 from ecs_agent.prompts.message_assembly import (
     commit_prompt_context_reservation,
     prepare_outbound_messages,
+    resolve_system_prompt_parts,
 )
 from ecs_agent.scratchbook import ArtifactRegistry, ScratchbookService
 from ecs_agent.systems._plan_utils import derive_plan_name, render_plan_markdown
-from ecs_agent.types import CompletionResult, EntityId, Message, PlanStepCompletedEvent
+from ecs_agent.types import CompletionResult, Message, PlanStepCompletedEvent
 
 logger = get_logger(__name__)
 
@@ -70,18 +69,8 @@ class PlanningSystem:
                 content=f"Step {plan.current_step + 1}/{len(plan.steps)}: {step_description}",
             )
 
-            rendered_system_prompt = world.get_component(
-                entity_id, RenderedSystemPromptComponent
-            )
-            system_prompt = world.get_component(entity_id, SystemPromptComponent)
-            system_prompt_text = (
-                rendered_system_prompt.text
-                if rendered_system_prompt is not None
-                else (
-                    system_prompt.content
-                    if system_prompt is not None
-                    else (llm_component.system_prompt or None)
-                )
+            system_prompt_text, system_volatile_suffix = resolve_system_prompt_parts(
+                world, entity_id
             )
             context_queue = world.get_component(entity_id, PromptContextQueueComponent)
             runner_state = world.get_component(entity_id, RunnerStateComponent)
@@ -90,6 +79,7 @@ class PlanningSystem:
                 world,
                 entity_id,
                 system_prompt=system_prompt_text,
+                system_volatile_suffix=system_volatile_suffix,
                 prefix_messages=[plan_context],
                 current_tick=current_tick,
             )

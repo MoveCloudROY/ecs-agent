@@ -185,7 +185,11 @@ async def test_system_prompt_render_uses_workflow_placeholder() -> None:
 
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
+    # Full text keeps its historical shape; workflow state is also exposed as the
+    # volatile tail (with an empty stable prefix, since the whole body is volatile).
     assert rendered.text == "System: PLAN MODE"
+    assert rendered.stable_text == "System:"
+    assert rendered.volatile_text == "PLAN MODE"
 
 
 @pytest.mark.asyncio

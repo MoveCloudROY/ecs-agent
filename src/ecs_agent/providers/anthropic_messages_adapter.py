@@ -71,15 +71,15 @@ class AnthropicMessagesAdapter:
 
     def build_messages(
         self, messages: list[Message]
-    ) -> tuple[str | None, list[dict[str, Any]]]:
-        system_messages: list[str] = []
+    ) -> tuple[str | list[dict[str, Any]] | None, list[dict[str, Any]]]:
+        system_entries: list[tuple[str, bool]] = []
         anthropic_messages: list[dict[str, Any]] = []
 
         index = 0
         while index < len(messages):
             msg = messages[index]
             if msg.role == "system":
-                system_messages.append(msg.content)
+                system_entries.append((msg.content, msg.cache_control))
                 index += 1
                 continue
 
@@ -126,8 +126,35 @@ class AnthropicMessagesAdapter:
             )
             index += 1
 
-        system_prompt = "\n\n".join(system_messages) if system_messages else None
-        return system_prompt, anthropic_messages
+        caching = self._config.provider.enable_prompt_caching
+        system_value = self._build_system_value(system_entries, caching=caching)
+        if caching and anthropic_messages:
+            self._mark_cache_breakpoint(anthropic_messages[-1])
+        return system_value, anthropic_messages
+
+    @staticmethod
+    def _build_system_value(
+        system_entries: list[tuple[str, bool]], *, caching: bool
+    ) -> str | list[dict[str, Any]] | None:
+        if not system_entries:
+            return None
+        if not caching:
+            # Rollback / non-caching shape: single joined string.
+            return "\n\n".join(content for content, _ in system_entries)
+        blocks: list[dict[str, Any]] = []
+        for content, cache_control in system_entries:
+            block: dict[str, Any] = {"type": "text", "text": content}
+            if cache_control:
+                block["cache_control"] = {"type": "ephemeral"}
+            blocks.append(block)
+        return blocks
+
+    @staticmethod
+    def _mark_cache_breakpoint(message: dict[str, Any]) -> None:
+        """Place a cache breakpoint on the last content block of a message."""
+        content = message.get("content")
+        if isinstance(content, list) and content:
+            content[-1]["cache_control"] = {"type": "ephemeral"}
 
     def build_tools(
         self, tools: list[ToolSchema] | None
@@ -144,6 +171,10 @@ class AnthropicMessagesAdapter:
                     "input_schema": tool.parameters,
                 }
             )
+        # Tools render first (tools -> system -> messages), so a breakpoint on the
+        # last tool caches the entire — fully static — tool block.
+        if self._config.provider.enable_prompt_caching and anthropic_tools:
+            anthropic_tools[-1]["cache_control"] = {"type": "ephemeral"}
         return anthropic_tools
 
     def parse_response(self, response_data: dict[str, Any]) -> CompletionResult:

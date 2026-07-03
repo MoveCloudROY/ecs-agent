@@ -107,6 +107,7 @@ def test_telemetry_record_serializes_raw_input_output() -> None:
                 "reasoning_content": None,
                 "reasoning_signature": None,
                 "compaction_metadata": None,
+                "cache_control": False,
             }
         ],
         "tool_calls": [
@@ -127,6 +128,7 @@ def test_telemetry_record_serializes_raw_input_output() -> None:
             "reasoning_content": None,
             "reasoning_signature": None,
             "compaction_metadata": None,
+            "cache_control": False,
         }
     }
     assert payload["redaction"] == {"applied": False, "fields": []}
@@ -221,6 +223,7 @@ def test_telemetry_record_payload_contains_schema_fields_and_json_safe_values() 
                 "reasoning_content": None,
                 "reasoning_signature": None,
                 "compaction_metadata": None,
+                "cache_control": False,
             },
             {
                 "nested": {
@@ -255,6 +258,7 @@ def test_telemetry_record_payload_contains_schema_fields_and_json_safe_values() 
                 "reasoning_content": None,
                 "reasoning_signature": None,
                 "compaction_metadata": None,
+                "cache_control": False,
             },
             "object": "<ReprOnly stable>",
         },

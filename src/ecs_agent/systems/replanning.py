@@ -15,14 +15,13 @@ from ecs_agent.components import (
     PlanComponent,
     PromptContextQueueComponent,
     PromptContextReservationComponent,
-    RenderedSystemPromptComponent,
     RunnerStateComponent,
-    SystemPromptComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.prompts.message_assembly import (
     commit_prompt_context_reservation,
     prepare_outbound_messages,
+    resolve_system_prompt_parts,
 )
 from ecs_agent.scratchbook import ArtifactRegistry, ScratchbookService
 from ecs_agent.systems._plan_utils import derive_plan_name, render_plan_markdown
@@ -84,18 +83,8 @@ class ReplanningSystem:
                 continue
 
             # Build replanning prompt
-            rendered_system_prompt = world.get_component(
-                entity_id, RenderedSystemPromptComponent
-            )
-            system_prompt = world.get_component(entity_id, SystemPromptComponent)
-            system_prompt_text = (
-                rendered_system_prompt.text
-                if rendered_system_prompt is not None
-                else (
-                    system_prompt.content
-                    if system_prompt is not None
-                    else (llm_component.system_prompt or None)
-                )
+            system_prompt_text, system_volatile_suffix = resolve_system_prompt_parts(
+                world, entity_id
             )
             context_queue = world.get_component(entity_id, PromptContextQueueComponent)
             runner_state = world.get_component(entity_id, RunnerStateComponent)
@@ -107,6 +96,7 @@ class ReplanningSystem:
                 world,
                 entity_id,
                 system_prompt=system_prompt_text,
+                system_volatile_suffix=system_volatile_suffix,
                 current_tick=current_tick,
                 conversation_override=[Message(role="user", content=replanning_prompt)],
             )

@@ -52,7 +52,9 @@ async def test_reasoning_uses_rendered_system_prompt() -> None:
     await ReasoningSystem().process(world)
 
     sent = model.calls[0]
-    assert sent[0] == Message(role="system", content="Rendered SYS")
+    assert sent[0] == Message(
+        role="system", content="Rendered SYS", cache_control=True
+    )
 
 
 @pytest.mark.asyncio
@@ -98,7 +100,9 @@ async def test_planning_uses_rendered_system_prompt() -> None:
     await PlanningSystem().process(world)
 
     sent = model.calls[0]
-    assert sent[0] == Message(role="system", content="Rendered SYS")
+    assert sent[0] == Message(
+        role="system", content="Rendered SYS", cache_control=True
+    )
 
 
 @pytest.mark.asyncio
@@ -132,7 +136,9 @@ async def test_replanning_uses_rendered_system_prompt() -> None:
     await ReplanningSystem().process(world)
 
     sent = model.calls[0]
-    assert sent[0] == Message(role="system", content="Rendered SYS")
+    assert sent[0] == Message(
+        role="system", content="Rendered SYS", cache_control=True
+    )
 
 
 @pytest.mark.asyncio
@@ -152,7 +158,9 @@ async def test_no_rendered_component_fallback() -> None:
     await ReasoningSystem().process(world)
 
     sent = model.calls[0]
-    assert sent[0] == Message(role="system", content="legacy sys")
+    assert sent[0] == Message(
+        role="system", content="legacy sys", cache_control=True
+    )
 
 
 @pytest.mark.asyncio
