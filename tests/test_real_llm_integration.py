@@ -42,7 +42,7 @@ from ecs_agent.conversation_tree import (
     switch_branch,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.logging import FORBIDDEN_FIELDS
+from ecs_agent.logging import FORBIDDEN_FIELDS, configure_logging
 from ecs_agent.providers import OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
@@ -266,6 +266,9 @@ async def test_real_multi_turn_conversation() -> None:
 @pytest.mark.asyncio
 async def test_real_llm_reasoning_logging_contracts(capsys: object) -> None:
     """Verify structured logging contracts when ReasoningSystem uses real LLM model."""
+    # Structured JSON logs are emitted to stderr; enable them explicitly (the
+    # framework default is silent/non-JSON at ERROR level).
+    configure_logging(json_output=True, level="DEBUG")
     world = World()
     model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
@@ -283,7 +286,7 @@ async def test_real_llm_reasoning_logging_contracts(capsys: object) -> None:
     await world.process()
 
     captured = capsys.readouterr()  # type: ignore[attr-defined]
-    events = _json_events(captured.out)
+    events = _json_events(captured.err)
 
     reasoning_start_events = [e for e in events if e.get("event") == "reasoning_start"]
     assert len(reasoning_start_events) > 0, (
@@ -321,6 +324,7 @@ async def test_real_llm_reasoning_logging_contracts(capsys: object) -> None:
 @pytest.mark.asyncio
 async def test_real_llm_streaming_logging_metadata(capsys: object) -> None:
     """Verify streaming mode logs contain correct metadata fields."""
+    configure_logging(json_output=True, level="DEBUG")
     world = World()
     model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
 
@@ -339,7 +343,7 @@ async def test_real_llm_streaming_logging_metadata(capsys: object) -> None:
     await world.process()
 
     captured = capsys.readouterr()  # type: ignore[attr-defined]
-    events = _json_events(captured.out)
+    events = _json_events(captured.err)
 
     reasoning_start_events = [e for e in events if e.get("event") == "reasoning_start"]
     assert len(reasoning_start_events) > 0
@@ -368,6 +372,7 @@ async def test_real_llm_streaming_logging_metadata(capsys: object) -> None:
 @pytest.mark.asyncio
 async def test_real_llm_error_logging_contracts(capsys: object) -> None:
     """Verify error logging when LLM model fails (bad API key)."""
+    configure_logging(json_output=True, level="DEBUG")
     world = World()
     model = _openai_provider(api_key="sk-invalid-key-for-testing", base_url=BASE_URL, model=MODEL)
 
@@ -384,7 +389,7 @@ async def test_real_llm_error_logging_contracts(capsys: object) -> None:
     await world.process()
 
     captured = capsys.readouterr()  # type: ignore[attr-defined]
-    events = _json_events(captured.out)
+    events = _json_events(captured.err)
 
     error_events = [e for e in events if e.get("event") == "reasoning_error"]
     assert len(error_events) > 0, "Expected at least one reasoning_error event"
@@ -1494,7 +1499,7 @@ async def test_real_subagent_child_world_name_in_logs(
     await runner.run(world, max_ticks=10)
 
     captured = capsys.readouterr()
-    events = _json_events(captured.out)
+    events = _json_events(captured.err)
 
     # Parent world logs must carry world_name="test-parent"
     parent_run_start = next(
