@@ -2011,6 +2011,89 @@ async def test_plan_task_world_keeps_tool_results_inline_without_scratchbook_sin
 
 
 @pytest.mark.asyncio
+async def test_plan_task_world_persists_tool_results_via_sink_when_enabled(
+    tmp_path: Path,
+) -> None:
+    """ISSUE-3: with enable_tool_sink=True, the tool output is written to
+    scratchbook/records/tool/<id> and only the record_path is kept inline, so it
+    is not resent verbatim every turn."""
+    from ecs_agent.components import (
+        ConversationComponent,
+        PendingToolCallsComponent,
+        ToolRegistryComponent,
+        ToolResultsComponent,
+    )
+    from ecs_agent.providers.fake_model import FakeModel
+    from ecs_agent.systems.tool_execution import ToolExecutionSystem
+    from ecs_agent.types import Message, ToolCall, ToolSchema
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    async def emit_report(topic: str) -> str:
+        return f"report for {topic}"
+
+    model = FakeModel(responses=["ok"])
+    world, agent_id, _, _ = build_plan_task_world(
+        model=model, base_dir=tmp_path, enable_tool_sink=True
+    )
+    world.apply_pending_system_operations()
+
+    tool_registry = world.get_component(agent_id, ToolRegistryComponent)
+    assert tool_registry is not None
+    tool_registry.tools["emit_report"] = ToolSchema(
+        name="emit_report",
+        description="Emit a test report.",
+        parameters={
+            "type": "object",
+            "properties": {"topic": {"type": "string"}},
+            "required": ["topic"],
+        },
+    )
+    tool_registry.handlers["emit_report"] = emit_report
+
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.append(Message(role="user", content="run report"))
+    world.add_component(
+        agent_id,
+        PendingToolCallsComponent(
+            tool_calls=[
+                ToolCall(
+                    id="plan-tool-1",
+                    name="emit_report",
+                    arguments={"topic": "scratchbook"},
+                )
+            ]
+        ),
+    )
+
+    tool_systems = [
+        entry.system
+        for entry in world._systems._systems
+        if isinstance(entry.system, ToolExecutionSystem)
+    ]
+    assert len(tool_systems) == 1
+
+    await tool_systems[0].process(world)
+
+    results = world.get_component(agent_id, ToolResultsComponent)
+    assert results is not None
+    result_ref = results.results["plan-tool-1"]
+
+    # Inline history carries only the record_path reference, not the raw output.
+    assert result_ref.startswith("scratchbook/records/tool/")
+    assert result_ref != "report for scratchbook"
+    tool_messages = [
+        message for message in conversation.messages if message.role == "tool"
+    ]
+    assert [message.content for message in tool_messages] == [result_ref]
+
+    # The full result is persisted on disk and still recoverable.
+    record_file = tmp_path / result_ref
+    assert record_file.exists()
+    assert "report for scratchbook" in record_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
 async def test_plan_task_world_installs_auto_compaction(tmp_path: Path) -> None:
     from ecs_agent.components.definitions import (
         CompactionConfigComponent,

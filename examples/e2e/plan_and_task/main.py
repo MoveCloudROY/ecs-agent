@@ -48,6 +48,7 @@ from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
+from ecs_agent.scratchbook import ArtifactRegistry
 from ecs_agent.systems.user_prompt_normalization_system import (
     UserPromptNormalizationSystem,
 )
@@ -229,6 +230,7 @@ def build_plan_task_world(
     *,
     compaction_threshold_tokens: int = _DEFAULT_COMPACTION_THRESHOLD_TOKENS,
     compaction_method: CompactionMethod = _DEFAULT_COMPACTION_METHOD,
+    enable_tool_sink: bool = False,
 ) -> tuple[World, EntityId, list[ArtifactAdapter | None], list[RuntimeState | None]]:
     discover_skills([_SKILLS_DIR])
 
@@ -897,7 +899,14 @@ def build_plan_task_world(
     subagent_system.install_subagent_tool(world, agent_id, tool_name="subagent")
     subagent_system.install_subagent_control_tools(world, agent_id)
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(ToolExecutionSystem(priority=5), priority=5)
+    # ISSUE-3: with the tool sink on, large tool outputs are written to
+    # scratchbook/records/tool/<id> and only the record_path is kept inline, so
+    # they are not resent verbatim every turn. The agent reads the artifact via
+    # its file tools when it needs the content.
+    tool_sink_registry = ArtifactRegistry(root=_base_dir) if enable_tool_sink else None
+    world.register_system(
+        ToolExecutionSystem(priority=5, registry=tool_sink_registry), priority=5
+    )
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     return world, agent_id, adapter_ref, runtime_state
@@ -951,6 +960,7 @@ async def main() -> None:
     world, agent_id, _, _ = build_plan_task_world(
         model=llm_model,
         base_dir=_WORKFLOW_BASE_DIR,
+        enable_tool_sink=True,
     )
     langfuse_handle = install_plan_task_langfuse_observability(world)
 
