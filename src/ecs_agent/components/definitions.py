@@ -544,6 +544,12 @@ class TokenUsageComponent:
 
     call_count: int = 0
 
+    # Number of conversation messages that had accumulated when the last call was
+    # made (its input basis). Lets compaction calibrate: real last_prompt_tokens
+    # plus a local estimate of only the messages appended since. -1 means "no
+    # valid anchor" (fall back to a pure local estimate).
+    last_prompt_message_count: int = -1
+
 
 @dataclass(slots=True)
 class RenderedSystemPromptComponent:

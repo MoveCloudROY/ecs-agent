@@ -17,6 +17,7 @@ from ecs_agent.components import (
     SubagentSessionTableComponent,
     SystemPromptComponent,
     TerminalComponent,
+    TokenUsageComponent,
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.observability import RecordingTelemetrySink, install_observability
@@ -1257,3 +1258,87 @@ def test_compaction_config_component_new_fields_have_expected_defaults() -> None
     assert component.compaction_method == "full_history"
     assert component.summary_model_id is None
     assert component.compaction_prompt_template is None
+
+
+@pytest.mark.asyncio
+async def test_compaction_calibrates_on_real_prompt_tokens() -> None:
+    """Real last_prompt_tokens triggers compaction even when the local estimate
+    of the (small) conversation content is well below the threshold."""
+    world = World()
+    model = RecordingFakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content="brief"))]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    # Small conversation: a pure local estimate is far below threshold=1000.
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[_message("a"), _message("b", role="assistant"), _message("c")]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        CompactionConfigComponent(threshold_tokens=1000, summary_model="summary-model"),
+    )
+    world.add_component(entity_id, ConversationArchiveComponent())
+    # Ground truth: the last call actually used 5000 input tokens (huge system +
+    # tools), with a single message as its basis.
+    world.add_component(
+        entity_id,
+        TokenUsageComponent(
+            last_prompt_tokens=5000,
+            call_count=1,
+            last_prompt_message_count=1,
+        ),
+    )
+
+    # Sanity: without calibration the local estimate would NOT trigger.
+    assert CompactionSystem()._estimate_tokens(
+        world.get_component(entity_id, ConversationComponent).messages
+    ) <= 1000
+
+    await CompactionSystem().process(world)
+
+    # Calibration (5000 + delta) crossed the threshold -> compaction ran.
+    summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
+    assert summary == CurrentCompactionSummaryComponent(summary="brief")
+    assert len(model.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_compaction_falls_back_when_anchor_exceeds_conversation() -> None:
+    """A stale anchor (e.g. after the conversation shrank) is ignored and the
+    pure local estimate is used, so a small conversation does not compact."""
+    world = World()
+    model = RecordingFakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content="brief"))]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[_message("a"), _message("b", role="assistant"), _message("c")]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        CompactionConfigComponent(threshold_tokens=1000, summary_model="summary-model"),
+    )
+    world.add_component(entity_id, ConversationArchiveComponent())
+    # Anchor points past the current conversation length (stale) -> ignored.
+    world.add_component(
+        entity_id,
+        TokenUsageComponent(
+            last_prompt_tokens=5000,
+            call_count=1,
+            last_prompt_message_count=99,
+        ),
+    )
+
+    await CompactionSystem().process(world)
+
+    # Fell back to the local estimate (small) -> no compaction.
+    assert world.get_component(entity_id, CurrentCompactionSummaryComponent) is None
+    assert model.calls == []

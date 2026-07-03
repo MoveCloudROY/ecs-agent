@@ -89,7 +89,9 @@ if usage is not None:
     print(usage.last_prompt_tokens, usage.total_tokens, usage.call_count)
 ```
 
-The component is absent until the first call and is not created when the provider reports no usage. Local token estimation (`ecs_agent.token_counting`) is still used for pre-call budget/compaction decisions, where no API number exists yet.
+The component is absent until the first call and is not created when the provider reports no usage.
+
+**Compaction calibration.** Once this component exists, `CompactionSystem` calibrates its threshold check against ground truth: it uses the real `last_prompt_tokens` (the exact size of the last input — system, tools and history) plus a local estimate of only the messages appended since that call (`last_prompt_message_count` anchors the boundary). Before the first call — or after compaction shrinks the conversation below the anchor — it falls back to a pure local estimate (`ecs_agent.token_counting`).
 
 ### Selection Rules
 

@@ -559,6 +559,14 @@ class ReasoningSystem:
         component.total_cache_creation_tokens += cache_creation
         component.call_count += 1
 
+        # Anchor for compaction calibration: how many conversation messages were
+        # the input basis for this call. Recorded before the response is appended
+        # (see process()), so it counts exactly what was sent.
+        conversation = world.get_component(entity_id, ConversationComponent)
+        component.last_prompt_message_count = (
+            len(conversation.messages) if conversation is not None else -1
+        )
+
     async def _process_streaming(
         self,
         world: World,

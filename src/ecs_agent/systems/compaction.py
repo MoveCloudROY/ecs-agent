@@ -18,6 +18,7 @@ from ecs_agent.components import (
     RenderedSystemPromptComponent,
     SubagentNotificationQueueComponent,
     SubagentSessionTableComponent,
+    TokenUsageComponent,
 )
 from ecs_agent.core import World
 from ecs_agent.logging import get_logger
@@ -53,7 +54,7 @@ class CompactionSystem:
             if llm_component is None:
                 continue
 
-            original_tokens = self._estimate_tokens(conversation.messages)
+            original_tokens = self._current_context_tokens(world, entity_id, conversation)
             if original_tokens <= config.threshold_tokens:
                 continue
 
@@ -152,6 +153,32 @@ class CompactionSystem:
                 summary_model_id=config.summary_model_id,
                 resolved_summary_model=summary_model.model_id,
             )
+
+    def _current_context_tokens(
+        self,
+        world: World,
+        entity_id: EntityId,
+        conversation: ConversationComponent,
+    ) -> int:
+        """Best estimate of the next call's input token count.
+
+        Calibrated against ground truth when available: the provider-reported
+        ``last_prompt_tokens`` (the real size of the last input — system, tools
+        and history included) plus a local estimate of only the messages appended
+        since that call. Falls back to a pure local estimate before the first
+        call, or after compaction shrinks the conversation below the anchor
+        (``last_prompt_message_count``).
+        """
+        messages = conversation.messages
+        usage = world.get_component(entity_id, TokenUsageComponent)
+        if (
+            usage is not None
+            and usage.call_count > 0
+            and 0 <= usage.last_prompt_message_count <= len(messages)
+        ):
+            appended = messages[usage.last_prompt_message_count :]
+            return usage.last_prompt_tokens + self._estimate_tokens(appended)
+        return self._estimate_tokens(messages)
 
     def _estimate_tokens(self, messages: list[Message]) -> int:
         # Real BPE count when tiktoken is available; CJK-aware fallback otherwise.
