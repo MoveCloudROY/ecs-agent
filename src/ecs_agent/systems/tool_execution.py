@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
-from math import ceil
 from typing import Awaitable, Callable
 
 from ecs_agent.components import (
@@ -20,6 +19,7 @@ from ecs_agent.components import (
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.scratchbook import ArtifactRegistry, ScratchbookService, ToolResultsSink
+from ecs_agent.token_counting import count_tokens
 from ecs_agent.systems._plan_utils import derive_plan_name
 from ecs_agent.tools.context import ToolExecutionContext, use_tool_context
 from ecs_agent.tools.sandbox import sandboxed_execute
@@ -295,8 +295,9 @@ class ToolExecutionSystem:
         *,
         chars_per_token: float,
     ) -> int:
-        safe_chars_per_token = chars_per_token if chars_per_token > 0 else 4.0
-        total_chars = sum(
-            len(message.content or "") for message in conversation.messages
+        # Real BPE count when tiktoken is available; the CJK-aware fallback
+        # reduces to ceil(total_chars / chars_per_token) for ASCII (ISSUE-8).
+        text = "".join(
+            message.content or "" for message in conversation.messages
         )
-        return ceil(total_chars / safe_chars_per_token)
+        return count_tokens(text, fallback_chars_per_token=chars_per_token)

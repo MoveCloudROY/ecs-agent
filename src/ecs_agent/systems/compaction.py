@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import math
 from typing import cast
 
 from ecs_agent.accounting.instrumentation import complete_with_llm_invocation_event
@@ -22,6 +21,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import World
 from ecs_agent.logging import get_logger
+from ecs_agent.token_counting import count_tokens
 from ecs_agent.prompts.message_assembly import apply_outbound_budget
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.providers.registry import ProviderRegistry, get_model
@@ -154,8 +154,10 @@ class CompactionSystem:
             )
 
     def _estimate_tokens(self, messages: list[Message]) -> int:
-        word_count = sum(len(message.content.split()) for message in messages)
-        return int(math.ceil(word_count * 1.3))
+        # Real BPE count when tiktoken is available; CJK-aware fallback otherwise.
+        # (A word count catastrophically under-counts CJK/code — ISSUE-8.)
+        text = "".join(message.content or "" for message in messages)
+        return count_tokens(text)
 
     def _build_continuation_anchor(
         self,

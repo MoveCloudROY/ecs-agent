@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from math import ceil
+from ecs_agent.token_counting import count_tokens
 from typing import TYPE_CHECKING, Protocol, TypeVar
 
 from ecs_agent.prompts.contracts import (
@@ -676,10 +676,12 @@ def _estimate_total_tokens(
     context_entries: Sequence[ContextEntryProtocol],
     chars_per_token: float,
 ) -> int:
-    total_chars = sum(len(message.content or "") for message in messages)
-    total_chars += len(system_prompt)
-    total_chars += sum(len(entry.content) for entry in context_entries)
-    return ceil(total_chars / chars_per_token)
+    # Real BPE count when tiktoken is available; the CJK-aware fallback reduces
+    # to ceil(total_chars / chars_per_token) for ASCII text (ISSUE-8).
+    parts = [message.content or "" for message in messages]
+    parts.append(system_prompt)
+    parts.extend(entry.content for entry in context_entries)
+    return count_tokens("".join(parts), fallback_chars_per_token=chars_per_token)
 
 
 def _drop_oldest_tool_span(messages: list[Message]) -> list[Message]:

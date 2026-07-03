@@ -26,7 +26,13 @@ uv pip install -e ".[embeddings]"
 uv pip install -e ".[mcp]"
 # Install with Langfuse observability (optional)
 uv pip install -e ".[langfuse]"
+# Install a real BPE tokenizer for accurate context-budget/compaction token counts (optional)
+uv pip install -e ".[tokenizer]"
 ```
+
+> Without the `tokenizer` extra, token counts for compaction and context-budget
+> decisions fall back to a CJK-aware character heuristic. Install `[tokenizer]`
+> (tiktoken) for real BPE counts; it downloads its encoding data on first use.
 
 > **Requires Python ≥ 3.11**
 
