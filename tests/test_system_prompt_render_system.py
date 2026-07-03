@@ -184,10 +184,10 @@ async def test_render_system_renders_inline_template_and_bridges_to_llm() -> Non
     llm = world.get_component(entity_id, LLMComponent)
     assert rendered is not None
     assert llm is not None
-    assert rendered.text == "Hello roy\n- write_file: write"
+    assert rendered.text == "Hello roy\n- write_file"
     assert rendered.placeholder_snapshot == {
         "user_name": "roy",
-        "_installed_tools": "- write_file: write",
+        "_installed_tools": "- write_file",
         "_installed_skills": "- none",
         "_installed_mcps": "- none",
         "_installed_subagents": "- none",
@@ -376,7 +376,7 @@ async def test_render_system_renders_all_builtin_placeholders() -> None:
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
     assert rendered.text == (
-        "- bash: shell\n- read: read\n- alpha: a\n- zeta: z\n- none\n- planner\n- researcher"
+        "- bash\n- read\n- alpha: a\n- zeta: z\n- none\n- planner\n- researcher"
     )
 
 
@@ -517,9 +517,61 @@ async def test_render_system_built_in_installed_tools() -> None:
 
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
-    assert rendered.text == "- bash: bash\n- read_file: read file"
-    assert "- bash: bash" in rendered.text
-    assert "- read_file: read file" in rendered.text
+    assert rendered.text == "- bash\n- read_file"
+    assert "- bash" in rendered.text
+    assert "- read_file" in rendered.text
+
+
+@pytest.mark.asyncio
+async def test_installed_tools_omit_descriptions_but_skills_keep_them() -> None:
+    """ISSUE-7: tool descriptions are already carried by the native tool schema,
+    so ${_installed_tools} lists names only; skills (no native schema) keep them."""
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(
+                inline="Tools:\n${_installed_tools}\nSkills:\n${_installed_skills}"
+            )
+        ),
+    )
+    world.add_component(
+        entity_id,
+        ToolRegistryComponent(
+            tools={
+                "search": ToolSchema(
+                    name="search",
+                    description="Search the web for a query",
+                    parameters={"type": "object", "properties": {}},
+                ),
+            },
+            handlers={},
+        ),
+    )
+    world.add_component(
+        entity_id,
+        SkillComponent(
+            skills={
+                "navigator": SkillMetadata(
+                    name="navigator",
+                    description="Guide a design flow",
+                    tool_names=[],
+                    has_system_prompt=False,
+                ),
+            }
+        ),
+    )
+
+    await SystemPromptRenderSystem().process(world)
+
+    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered is not None
+    # Tool: name only (description is in the native schema, not duplicated here).
+    assert "- search\n" in rendered.text
+    assert "Search the web for a query" not in rendered.text
+    # Skill: description retained (progressive disclosure, no native schema).
+    assert "- navigator: Guide a design flow" in rendered.text
 
 
 @pytest.mark.asyncio
@@ -943,7 +995,7 @@ async def test_render_system_all_builtins_together(
     rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
     assert rendered is not None
     assert rendered.text == (
-        "Tools:\n- bash: bash\n- read: read\n"
+        "Tools:\n- bash\n- read\n"
         "Skills:\n- python: python skill\n"
         "MCPs:\n- filesystem.read\n- filesystem.write\n"
         "Subagents:\n- child"
@@ -1112,7 +1164,7 @@ def test_render_compaction_prompt_does_not_mutate_runtime_prompt_state() -> None
     runtime_cache = world.get_component(entity_id, RenderedSystemPromptComponent)
     llm = world.get_component(entity_id, LLMComponent)
     legacy_prompt = world.get_component(entity_id, SystemPromptComponent)
-    assert rendered == "Hello Compaction\n- write_file: write"
+    assert rendered == "Hello Compaction\n- write_file"
     assert runtime_cache is not None
     assert runtime_cache.text == "runtime cache"
     assert runtime_cache.placeholder_snapshot == {"_cache_key": "cached"}

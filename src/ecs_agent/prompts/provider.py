@@ -56,7 +56,14 @@ class InventoryPlaceholderProvider:
 
     def resolve_placeholders(self, world: World, entity_id: EntityId) -> dict[str, str]:
         return {
-            "_installed_tools": _format_bullets(self._tool_entries(world, entity_id)),
+            # Tools are also sent as native tool schemas (name + description +
+            # input_schema) every call, so repeating the description here would
+            # double-count it. List names only (ISSUE-7); the schema carries the
+            # description. Skills/subagents/MCPs are NOT native tool schemas, so
+            # they keep their descriptions.
+            "_installed_tools": _format_bullets(
+                self._tool_entries(world, entity_id), include_descriptions=False
+            ),
             "_installed_skills": _format_bullets(self._skill_entries(world, entity_id)),
             "_installed_mcps": _format_bullets(
                 self._mcp_tool_entries(world, entity_id)
@@ -185,12 +192,14 @@ def _extract_entry(tool: object) -> tuple[str, str] | None:
     return None
 
 
-def _format_bullets(entries: list[tuple[str, str]]) -> str:
+def _format_bullets(
+    entries: list[tuple[str, str]], *, include_descriptions: bool = True
+) -> str:
     if not entries:
         return "- none"
     lines: list[str] = []
     for name, description in entries:
-        if description:
+        if include_descriptions and description:
             lines.append(f"- {name}: {description}")
         else:
             lines.append(f"- {name}")
