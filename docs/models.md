@@ -77,6 +77,20 @@ To keep the cached prefix byte-stable, the rendered system prompt is split by `S
 
 When the entire prompt body is volatile (e.g. a workflow-driven prompt where the whole system prompt is `${_workflow_state_prompt}`), the stable prefix is empty and the volatile content is sent as the sole system message — nothing is cached, which is correct since such prompts change per state. Verify cache hits via `usage.cache_read_tokens` (populated from the response's `cache_read_input_tokens`).
 
+### Actual token usage per entity
+
+`ReasoningSystem` records the **provider-reported** token usage on the entity after every call as a `TokenUsageComponent` — the ground truth (more accurate than any local estimate). It carries the last call's counts (`last_prompt_tokens`, `last_completion_tokens`, `last_total_tokens`, `last_cache_read_tokens`, `last_cache_creation_tokens`) and running totals (`total_*`, `call_count`):
+
+```python
+from ecs_agent.components import TokenUsageComponent
+
+usage = world.get_component(agent_id, TokenUsageComponent)
+if usage is not None:
+    print(usage.last_prompt_tokens, usage.total_tokens, usage.call_count)
+```
+
+The component is absent until the first call and is not created when the provider reports no usage. Local token estimation (`ecs_agent.token_counting`) is still used for pre-call budget/compaction decisions, where no API number exists yet.
+
 ### Selection Rules
 
 - **`api_format` only**: infers `model_type` (`OPENAI_CHAT_COMPLETIONS` / `OPENAI_RESPONSES` → `openai`; `ANTHROPIC_MESSAGES` → `claude`).

@@ -11,6 +11,7 @@ from ecs_agent.components import (
     PendingToolCallsComponent,
     PromptContextQueueComponent,
     StreamingComponent,
+    TokenUsageComponent,
     UserPromptConfigComponent,
     SystemPromptComponent,
     TerminalComponent,
@@ -811,3 +812,97 @@ async def test_reasoning_context_capture_does_not_mutate_conversation() -> None:
         ("assistant", "done"),
     ]
     assert all("thought" not in message.content for message in conversation.messages)
+
+
+@pytest.mark.asyncio
+async def test_reasoning_records_api_token_usage_on_entity() -> None:
+    """The API-reported usage is persisted on the entity (real token info)."""
+    from ecs_agent.types import UsageRecord
+
+    world = World()
+    model = RecordingFakeModel(
+        responses=[
+            CompletionResult(
+                message=Message(role="assistant", content="one"),
+                usage=UsageRecord(
+                    prompt_tokens=100,
+                    completion_tokens=20,
+                    total_tokens=120,
+                    cache_read_tokens=40,
+                    cache_creation_tokens=10,
+                ),
+            ),
+            CompletionResult(
+                message=Message(role="assistant", content="two"),
+                usage=UsageRecord(
+                    prompt_tokens=200,
+                    completion_tokens=30,
+                    total_tokens=230,
+                    cache_read_tokens=150,
+                    cache_creation_tokens=0,
+                ),
+            ),
+        ]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="hi")]),
+    )
+
+    await ReasoningSystem().process(world)
+
+    usage = world.get_component(entity_id, TokenUsageComponent)
+    assert usage is not None
+    # First call is reflected in both last_* and total_*.
+    assert usage.last_prompt_tokens == 100
+    assert usage.last_completion_tokens == 20
+    assert usage.last_total_tokens == 120
+    assert usage.last_cache_read_tokens == 40
+    assert usage.last_cache_creation_tokens == 10
+    assert usage.total_prompt_tokens == 100
+    assert usage.call_count == 1
+
+    # Second call: last_* replaced, total_* accumulated.
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[
+                Message(role="user", content="hi"),
+                Message(role="assistant", content="one"),
+                Message(role="user", content="again"),
+            ]
+        ),
+    )
+    await ReasoningSystem().process(world)
+
+    usage = world.get_component(entity_id, TokenUsageComponent)
+    assert usage is not None
+    assert usage.last_prompt_tokens == 200
+    assert usage.last_cache_read_tokens == 150
+    assert usage.total_prompt_tokens == 300
+    assert usage.total_completion_tokens == 50
+    assert usage.total_tokens == 350
+    assert usage.total_cache_read_tokens == 190
+    assert usage.total_cache_creation_tokens == 10
+    assert usage.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_reasoning_without_usage_does_not_create_usage_component() -> None:
+    """A provider that reports no usage leaves TokenUsageComponent absent."""
+    world = World()
+    model = RecordingFakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="hi")]),
+    )
+
+    await ReasoningSystem().process(world)
+
+    assert world.get_component(entity_id, TokenUsageComponent) is None

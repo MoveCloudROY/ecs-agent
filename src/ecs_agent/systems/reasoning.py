@@ -37,6 +37,7 @@ from ecs_agent.components import (
     RunnerStateComponent,
     StreamingComponent,
     TerminalComponent,
+    TokenUsageComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
@@ -523,6 +524,40 @@ class ReasoningSystem:
             streaming=streaming,
             duration_seconds=duration_seconds,
         )
+        self._record_token_usage(world, entity_id, usage)
+
+    @staticmethod
+    def _record_token_usage(
+        world: World, entity_id: EntityId, usage: Usage | None
+    ) -> None:
+        """Persist the API-reported token usage on the entity (ground truth).
+
+        No-op when the provider returned no usage (e.g. error/aborted calls)."""
+        if usage is None:
+            return
+        component = world.get_component(entity_id, TokenUsageComponent)
+        if component is None:
+            component = TokenUsageComponent()
+            world.add_component(entity_id, component)
+
+        prompt = usage.prompt_tokens or 0
+        completion = usage.completion_tokens or 0
+        total = usage.total_tokens or (prompt + completion)
+        cache_read = usage.cache_read_tokens or 0
+        cache_creation = usage.cache_creation_tokens or 0
+
+        component.last_prompt_tokens = prompt
+        component.last_completion_tokens = completion
+        component.last_total_tokens = total
+        component.last_cache_read_tokens = cache_read
+        component.last_cache_creation_tokens = cache_creation
+
+        component.total_prompt_tokens += prompt
+        component.total_completion_tokens += completion
+        component.total_tokens += total
+        component.total_cache_read_tokens += cache_read
+        component.total_cache_creation_tokens += cache_creation
+        component.call_count += 1
 
     async def _process_streaming(
         self,

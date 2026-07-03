@@ -522,6 +522,30 @@ class PromptContextReservationComponent:
 
 
 @dataclass(slots=True)
+class TokenUsageComponent:
+    """Actual token usage reported by the LLM API for an entity.
+
+    Populated by ``ReasoningSystem`` after each invocation from the provider's
+    usage response — the ground truth, more accurate than any local estimate.
+    ``last_*`` reflects the most recent call; ``total_*`` accumulates across all
+    calls. Absent until the entity has completed at least one LLM call."""
+
+    last_prompt_tokens: int = 0
+    last_completion_tokens: int = 0
+    last_total_tokens: int = 0
+    last_cache_read_tokens: int = 0
+    last_cache_creation_tokens: int = 0
+
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    total_tokens: int = 0
+    total_cache_read_tokens: int = 0
+    total_cache_creation_tokens: int = 0
+
+    call_count: int = 0
+
+
+@dataclass(slots=True)
 class RenderedSystemPromptComponent:
     text: str
     placeholder_snapshot: dict[str, str] = field(default_factory=dict)
