@@ -11,6 +11,7 @@ Features exercised:
 - SystemPromptRenderSystem (priority -20) and UserPromptNormalizationSystem (priority -10)
 - Skill discovery + SkillManager lifecycle (ui-navigator, ui-prompt, BuiltinToolsSkill)
 - Interactive input handling via UserInputSystem
+- Auto-compaction (CompactionSystem, priority -30) to bound conversation history
 """
 
 from __future__ import annotations
@@ -46,7 +47,7 @@ from ecs_agent.systems.user_prompt_normalization_system import (
 from ecs_agent.tools.builtins import BuiltinToolsSkill
 from ecs_agent.types import CompletionResult, EntityId, Message
 
-from runtime import setup_interactive_input
+from runtime import install_auto_compaction, setup_interactive_input
 
 logger = get_logger(__name__)
 
@@ -189,6 +190,12 @@ async def main() -> None:
     # Skills are listed by name/description (${_installed_skills}).
     # Full details are loaded lazily via load_skill_details tool.
     world.add_component(agent_id, _build_system_prompt_config())
+
+    # Auto-compaction: cap unbounded conversation-history growth in long
+    # interactive sessions (ISSUE-2). Registers CompactionSystem (priority -30,
+    # ahead of SystemPromptRenderSystem) so summaries land in the volatile
+    # system-prompt tail on the tick they are produced.
+    install_auto_compaction(world, agent_id)
 
     # --- Register Systems (priority order: lower = earlier execution) ---
     world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)

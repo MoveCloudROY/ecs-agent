@@ -14,7 +14,12 @@ from pathlib import Path
 
 import pytest
 
-from ecs_agent.components import ConversationComponent, LLMComponent
+from ecs_agent.components import (
+    CompactionConfigComponent,
+    ConversationComponent,
+    CurrentCompactionSummaryComponent,
+    LLMComponent,
+)
 from ecs_agent.components.definitions import TerminalComponent
 from ecs_agent.core import World
 from ecs_agent.providers import FakeModel
@@ -672,4 +677,80 @@ async def test_ui_design_flow_ui_prompt_writes_artifact(tmp_path: Path) -> None:
     tool_messages = [msg for msg in conv.messages if msg.role == "tool"]
     assert tool_messages, (
         "Expected tool execution evidence; chat-only output is insufficient"
+    )
+
+
+def _load_runtime_module():
+    """Load the hyphenated-dir example runtime.py via importlib (not importable as a package)."""
+    runtime_path = (
+        Path(__file__).parent.parent.parent
+        / "examples"
+        / "e2e"
+        / "ui-design-flow"
+        / "runtime.py"
+    )
+    spec = importlib.util.spec_from_file_location("ui_design_runtime", runtime_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.asyncio
+async def test_install_auto_compaction_bounds_history() -> None:
+    """ISSUE-2: install_auto_compaction wires CompactionSystem so a conversation
+    exceeding the threshold is summarized instead of growing unbounded."""
+    runtime_module = _load_runtime_module()
+    install_auto_compaction = getattr(runtime_module, "install_auto_compaction", None)
+    assert callable(install_auto_compaction)
+
+    world = World()
+    agent_id = world.create_entity()
+
+    # FakeModel returns the compaction summary when CompactionSystem calls it.
+    model = FakeModel(
+        responses=[
+            CompletionResult(
+                message=Message(role="assistant", content="SUMMARY: earlier UI design turns")
+            )
+        ]
+    )
+    world.add_component(agent_id, LLMComponent(model=model))
+
+    original_messages = [
+        Message(role="user", content="Design a modern dashboard with cards and charts"),
+        Message(role="assistant", content="Sure, here is a first layout proposal for the dashboard"),
+        Message(role="user", content="Make the sidebar collapsible and add a dark theme"),
+        Message(role="assistant", content="Updated: collapsible sidebar plus a dark theme applied"),
+        Message(role="user", content="Now export the design tokens as JSON"),
+    ]
+    world.add_component(
+        agent_id, ConversationComponent(messages=list(original_messages))
+    )
+
+    # Tiny threshold forces compaction on this tick; full_history summarizes all.
+    install_auto_compaction(
+        world,
+        agent_id,
+        threshold_tokens=1,
+        compaction_method="full_history",
+    )
+
+    # Sanity: the helper wired the per-entity config.
+    config = world.get_component(agent_id, CompactionConfigComponent)
+    assert config is not None
+    assert config.threshold_tokens == 1
+    assert config.compaction_method == "full_history"
+
+    await Runner().run(world, max_ticks=1)
+
+    # History was compacted: a summary exists and the message list shrank.
+    summary = world.get_component(agent_id, CurrentCompactionSummaryComponent)
+    assert summary is not None
+    assert summary.summary == "SUMMARY: earlier UI design turns"
+
+    conv = world.get_component(agent_id, ConversationComponent)
+    assert conv is not None
+    assert len(conv.messages) < len(original_messages), (
+        "expected compaction to bound history growth"
     )

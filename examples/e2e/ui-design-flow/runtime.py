@@ -5,15 +5,62 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-from ecs_agent.components import UserInputComponent
+from ecs_agent.components import (
+    CompactionConfigComponent,
+    ConversationArchiveComponent,
+    UserInputComponent,
+)
 from ecs_agent.components.definitions import ConversationComponent, TerminalComponent
 from ecs_agent.systems import TerminalCleanupSystem
+from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.user_input import UserInputSystem
-from ecs_agent.types import ReasoningCompleteEvent, UserInputRequestedEvent
+from ecs_agent.types import (
+    CompactionMethod,
+    ReasoningCompleteEvent,
+    UserInputRequestedEvent,
+)
 
 if TYPE_CHECKING:
     from ecs_agent.core import World
     from ecs_agent.types import EntityId
+
+
+# Auto-compaction defaults (ISSUE-2: without compaction, conversation history
+# grows unbounded and is resent in full every turn). A generous threshold keeps
+# short sessions untouched while capping long interactive runs.
+DEFAULT_COMPACTION_THRESHOLD_TOKENS = 300_000
+DEFAULT_COMPACTION_METHOD: CompactionMethod = "predrop_then_compact"
+# Runs before SystemPromptRenderSystem (-20) so a fresh summary is rendered into
+# the (volatile) system-prompt tail on the same tick it is produced.
+COMPACTION_SYSTEM_PRIORITY = -30
+
+
+def install_auto_compaction(
+    world: World,
+    agent_id: EntityId,
+    *,
+    threshold_tokens: int = DEFAULT_COMPACTION_THRESHOLD_TOKENS,
+    compaction_method: CompactionMethod = DEFAULT_COMPACTION_METHOD,
+) -> None:
+    """Enable automatic conversation compaction for an agent (ISSUE-2).
+
+    Attaches the per-entity config/archive components and registers
+    ``CompactionSystem`` on the world so history is summarized once it exceeds
+    ``threshold_tokens`` instead of growing without bound.
+
+    Call once per world for the single-agent example.
+    """
+    world.add_component(
+        agent_id,
+        CompactionConfigComponent(
+            threshold_tokens=threshold_tokens,
+            compaction_method=compaction_method,
+        ),
+    )
+    world.add_component(agent_id, ConversationArchiveComponent())
+    world.register_system(
+        CompactionSystem(), priority=COMPACTION_SYSTEM_PRIORITY
+    )
 
 
 async def setup_interactive_input(world: World, agent_id: EntityId) -> None:
