@@ -1,8 +1,8 @@
 # Phase Graphs
 
 Explicit, auditable phase transitions for agents. Replaces the gate-polling
-workflow DSL (`docs/features/workflows.md`, deprecated) with a command-driven
-model: the graph is pure data, transitions are function calls.
+workflow DSL (removed in 2026-07) with a command-driven model: the graph is
+pure data, transitions are function calls.
 
 ## Model
 
