@@ -34,6 +34,7 @@ logger = get_logger(__name__)
 # Ordering here defines the deterministic tail order.
 _VOLATILE_PLACEHOLDER_KEYS: tuple[str, ...] = (
     "_workflow_state_prompt",
+    "_phase_prompt",
     "_chat_history_summary_xml",
 )
 VOLATILE_PLACEHOLDER_KEYS = frozenset(_VOLATILE_PLACEHOLDER_KEYS)

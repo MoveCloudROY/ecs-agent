@@ -10,8 +10,9 @@ from __future__ import annotations
 import re
 from string import Template
 
-from ecs_agent.components import WorkflowBindingComponent
+from ecs_agent.components import PhaseComponent, WorkflowBindingComponent
 from ecs_agent.core.world import World
+from ecs_agent.phases.prompt_provider import PhasePromptPlaceholderProvider
 from ecs_agent.prompts.contracts import SystemPromptConfigSpec
 from ecs_agent.prompts.provider import (
     BuiltinPlaceholderProvider,
@@ -107,6 +108,9 @@ def iter_placeholder_providers(
     workflow_provider = _resolve_entity_workflow_provider(world, entity_id)
     if workflow_provider is not None:
         providers.append(workflow_provider)
+    phase_provider = _resolve_entity_phase_provider(world, entity_id)
+    if phase_provider is not None:
+        providers.append(phase_provider)
     return providers
 
 
@@ -186,6 +190,15 @@ def _resolve_entity_workflow_provider(
     if binding is None:
         return None
     return WorkflowPromptPlaceholderProvider()
+
+
+def _resolve_entity_phase_provider(
+    world: World,
+    entity_id: EntityId,
+) -> BuiltinPlaceholderProvider | None:
+    if world.get_component(entity_id, PhaseComponent) is None:
+        return None
+    return PhasePromptPlaceholderProvider()
 
 
 __all__ = [
