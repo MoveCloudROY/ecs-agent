@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from string import Template
 
-from ecs_agent.components import PhaseComponent, WorkflowBindingComponent
+from ecs_agent.components import PhaseComponent
 from ecs_agent.core.world import World
 from ecs_agent.phases.prompt_provider import PhasePromptPlaceholderProvider
 from ecs_agent.prompts.contracts import SystemPromptConfigSpec
@@ -23,7 +23,6 @@ from ecs_agent.prompts.registry import resolve_placeholder_values
 from ecs_agent.scratchbook.prompt_definition import ScratchbookPromptConfig
 from ecs_agent.scratchbook.prompt_provider import ScratchbookPromptPlaceholderProvider
 from ecs_agent.types import EntityId
-from ecs_agent.workflows.prompt_provider import WorkflowPromptPlaceholderProvider
 
 _BUILTIN_PLACEHOLDER_PROVIDERS: list[BuiltinPlaceholderProvider] = [
     InventoryPlaceholderProvider(),
@@ -105,9 +104,6 @@ def iter_placeholder_providers(
     scratchbook_provider = _resolve_entity_scratchbook_provider(world, entity_id)
     if scratchbook_provider is not None:
         providers.append(scratchbook_provider)
-    workflow_provider = _resolve_entity_workflow_provider(world, entity_id)
-    if workflow_provider is not None:
-        providers.append(workflow_provider)
     phase_provider = _resolve_entity_phase_provider(world, entity_id)
     if phase_provider is not None:
         providers.append(phase_provider)
@@ -180,16 +176,6 @@ def _resolve_entity_scratchbook_provider(
     if config is None:
         return None
     return ScratchbookPromptPlaceholderProvider(config)
-
-
-def _resolve_entity_workflow_provider(
-    world: World,
-    entity_id: EntityId,
-) -> BuiltinPlaceholderProvider | None:
-    binding = world.get_component(entity_id, WorkflowBindingComponent)
-    if binding is None:
-        return None
-    return WorkflowPromptPlaceholderProvider()
 
 
 def _resolve_entity_phase_provider(

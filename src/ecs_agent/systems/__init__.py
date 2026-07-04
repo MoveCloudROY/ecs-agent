@@ -17,7 +17,6 @@ from ecs_agent.systems.tree_search import TreeSearchSystem
 from ecs_agent.systems.rag import RAGSystem
 from ecs_agent.systems.user_input import UserInputSystem
 from ecs_agent.systems.subagent_wait import SubagentWaitSystem
-from ecs_agent.systems.workflow_state import WorkflowStateSystem
 from ecs_agent.systems.user_prompt_normalization_system import (
     UserPromptNormalizationSystem,
 )
@@ -41,5 +40,4 @@ __all__ = [
     "TreeSearchSystem",
     "UserInputSystem",
     "UserPromptNormalizationSystem",
-    "WorkflowStateSystem",
 ]

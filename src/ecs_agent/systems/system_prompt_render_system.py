@@ -28,12 +28,11 @@ from ecs_agent.types import EntityId, PromptReplacementEvent
 logger = get_logger(__name__)
 
 # Placeholders whose value changes *during* a conversation (compaction summary
-# refreshes on compaction; workflow state prompt changes on state transitions).
+# refreshes on compaction; phase prompt changes on phase transitions).
 # They are emptied from the cache-stable prefix and relocated to a volatile tail
 # so the prefix stays byte-stable for Anthropic prompt caching (ISSUE-6).
 # Ordering here defines the deterministic tail order.
 _VOLATILE_PLACEHOLDER_KEYS: tuple[str, ...] = (
-    "_workflow_state_prompt",
     "_phase_prompt",
     "_chat_history_summary_xml",
 )

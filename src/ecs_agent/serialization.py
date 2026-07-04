@@ -53,11 +53,6 @@ from ecs_agent.components import (
     ToolRegistryComponent,
     ToolResultsComponent,
     VectorStoreComponent,
-    WorkflowBindingComponent,
-    WorkflowDefinitionComponent,
-    WorkflowGateSnapshotComponent,
-    WorkflowLastTransitionComponent,
-    WorkflowRuntimeComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.prompts.contracts import (
@@ -129,10 +124,6 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     ContextEntry.__name__: ContextEntry,
     PromptContextQueueComponent.__name__: PromptContextQueueComponent,
     PromptContextReservationComponent.__name__: PromptContextReservationComponent,
-    WorkflowRuntimeComponent.__name__: WorkflowRuntimeComponent,
-    WorkflowBindingComponent.__name__: WorkflowBindingComponent,
-    WorkflowGateSnapshotComponent.__name__: WorkflowGateSnapshotComponent,
-    WorkflowLastTransitionComponent.__name__: WorkflowLastTransitionComponent,
     PhaseComponent.__name__: PhaseComponent,
     PhaseApprovalsComponent.__name__: PhaseApprovalsComponent,
 }
@@ -156,11 +147,9 @@ class WorldSerializer:
                     continue
                 if isinstance(component, EPHEMERAL_COMPONENT_TYPES):
                     continue
-                if isinstance(
-                    component, (WorkflowDefinitionComponent, PhaseDefinitionComponent)
-                ):
+                if isinstance(component, PhaseDefinitionComponent):
                     # Definitions are skipped: re-bound at resume time
-                    # (install_workflow / bind_phase_graph).
+                    # (bind_phase_graph).
                     continue
                 serialized_components[component_type.__name__] = (
                     WorldSerializer._serialize_component(component)

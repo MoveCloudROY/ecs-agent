@@ -57,7 +57,6 @@ from ecs_agent.types import (
     ToolExecutionStartedEvent,
     ToolResultCachedEvent,
     UserInputReceivedEvent,
-    WorkflowStateEvaluatedEvent,
 )
 
 
@@ -69,7 +68,6 @@ _SUPPRESSED_SYSTEM_SPANS = {
     "ecs_agent.systems.tool_execution.ToolExecutionSystem",
     "ecs_agent.systems.terminal_cleanup.TerminalCleanupSystem",
     "ecs_agent.systems.compaction.CompactionSystem",
-    "ecs_agent.systems.workflow_state.WorkflowStateSystem",
     "ecs_agent.systems.system_prompt_render_system.SystemPromptRenderSystem",
     "ecs_agent.systems.user_prompt_normalization_system.UserPromptNormalizationSystem",
 }
@@ -128,7 +126,6 @@ class ObservabilitySubscriber:
             (SystemExecutionStartedEvent, self.handle_system_execution_started),
             (SystemExecutionCompletedEvent, self.handle_system_execution_completed),
             (PromptReplacementEvent, self.handle_prompt_replacement),
-            (WorkflowStateEvaluatedEvent, self.handle_workflow_state_evaluated),
             (PhaseChangedEvent, self.handle_phase_changed),
             (ErrorOccurredEvent, self.handle_error_occurred),
             (PlanStepCompletedEvent, self.handle_plan_step_completed),
@@ -907,41 +904,6 @@ class ObservabilitySubscriber:
                 },
             )
         )
-
-    async def handle_workflow_state_evaluated(
-        self, event: WorkflowStateEvaluatedEvent
-    ) -> None:
-        """Emit workflow state and transition payloads."""
-        state = self._state_for_current_run()
-        if state is None:
-            return
-
-        record = self._event_record(
-            state,
-            name="workflow.state",
-            kind="event",
-            status="error" if event.status == "ambiguous" else "success",
-            entity_id=int(event.entity_id),
-            tick=event.tick,
-            input={
-                "workflow_id": event.workflow_id,
-                "state_id": event.state_id,
-                "matched_transition_ids": list(event.matched_transition_ids),
-            },
-            output={
-                "current_state_id": event.current_state_id,
-                "committed_transition_id": event.committed_transition_id,
-                "from_state_id": event.from_state_id,
-                "to_state_id": event.to_state_id,
-                "transition_history": list(event.transition_history),
-            },
-            metadata={"status": event.status},
-            error=event.error,
-        )
-        if not state.has_user_turn:
-            state.pending_turn_records.append(record)
-            return
-        await self.sink.emit(record)
 
     async def handle_phase_changed(self, event: PhaseChangedEvent) -> None:
         """Emit a committed phase-graph transition."""

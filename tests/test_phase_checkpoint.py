@@ -1,7 +1,7 @@
 """Checkpoint/restore contract for phase graphs.
 
 These tests encode the fixes for the audit findings:
-- restoring + re-binding must NEVER reset progress (old install_workflow bug)
+- restoring + re-binding must NEVER reset progress (old workflow-DSL rebind bug)
 - using a half-restored entity must fail loudly (old silent-freeze bug)
 - structural drift is detected; on_resume policy is applied from data
 """
@@ -67,7 +67,7 @@ async def test_rebind_preserves_progress() -> None:
     assert component is not None
     assert component.phase == "READY"
 
-    # The critical regression test for the old install_workflow bug:
+    # The critical regression test for the old workflow-DSL rebind bug:
     # re-binding an entity mid-graph must NOT reset it to the initial phase.
     await advance(restored, eid, "RUNNING", reason="start")
     data = WorldSerializer.to_dict(restored)

@@ -4868,9 +4868,8 @@ async def test_build_plan_task_world_uses_plan_main_agent_system_prompt(tmp_path
 
 
 async def test_phase_graph_bound_in_world(tmp_path: Path) -> None:
-    """build_plan_task_world binds the phase graph; WorkflowStateSystem is gone."""
+    """build_plan_task_world binds the phase graph."""
     from ecs_agent.components import PhaseComponent
-    from ecs_agent.systems import WorkflowStateSystem
 
     world, agent_id, _, _ = await _build_test_world(tmp_path)
 
@@ -4878,11 +4877,6 @@ async def test_phase_graph_bound_in_world(tmp_path: Path) -> None:
     assert component is not None
     assert component.phase == "IDLE"
     assert component.agent_key == "main"
-
-    assert not any(
-        isinstance(entry.system, WorkflowStateSystem)
-        for entry in world._systems._systems
-    ), "WorkflowStateSystem must no longer be registered"
 
 
 @pytest.mark.asyncio

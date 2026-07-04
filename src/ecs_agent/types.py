@@ -157,7 +157,6 @@ RunnerLifecycleStatus = Literal[
 SystemExecutionStatus = Literal["success", "error"]
 ToolExecutionStatus = Literal["success", "error"]
 PromptReplacementKind = Literal["system", "user"]
-WorkflowStateEvaluationStatus = Literal["no_match", "transition", "ambiguous"]
 
 
 @dataclass(slots=True)
@@ -226,24 +225,6 @@ class PromptReplacementEvent:
     rendered_text: str
     replacements: dict[str, str] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class WorkflowStateEvaluatedEvent:
-    """Event emitted after workflow gate evaluation updates visible state."""
-
-    entity_id: EntityId
-    workflow_id: str
-    state_id: str
-    current_state_id: str
-    tick: int
-    matched_transition_ids: list[str] = field(default_factory=list)
-    committed_transition_id: str | None = None
-    from_state_id: str | None = None
-    to_state_id: str | None = None
-    transition_history: list[str] = field(default_factory=list)
-    status: WorkflowStateEvaluationStatus = "no_match"
-    error: str | None = None
 
 
 @dataclass(slots=True)
@@ -1075,8 +1056,6 @@ __all__ = [
     "Usage",
     "UserInputReceivedEvent",
     "UserInputRequestedEvent",
-    "WorkflowStateEvaluatedEvent",
-    "WorkflowStateEvaluationStatus",
     "render_subagent_session_reminder_table",
     "validate_subagent_lifecycle_transition",
 ]
