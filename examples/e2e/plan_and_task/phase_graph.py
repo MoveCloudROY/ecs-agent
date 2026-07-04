@@ -1,4 +1,4 @@
-"""Phase graph for the plan-and-task E2E example (supersedes workflow_spec.py)."""
+"""Phase graph for the plan-and-task E2E example (legacy workflow_spec removed in Stage 3)."""
 
 from __future__ import annotations
 

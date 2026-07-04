@@ -4867,19 +4867,6 @@ async def test_build_plan_task_world_uses_plan_main_agent_system_prompt(tmp_path
     assert spec.template_source.inline == "${_phase_prompt}"
 
 
-def test_workflow_spec_compiles_successfully() -> None:
-    """PLAN_TASK_WORKFLOW_SPEC compiles without errors."""
-    from ecs_agent.workflows.compiler import compile_workflow
-    from examples.e2e.plan_and_task.workflow_spec import PLAN_TASK_WORKFLOW_SPEC
-
-    compiled = compile_workflow(PLAN_TASK_WORKFLOW_SPEC)
-
-    assert compiled.workflow_id == "plan-task"
-    assert compiled.initial_state_id == "IDLE"
-    assert "IDLE" in compiled.state_ids
-    assert "TASK_RUNNING" in compiled.state_ids
-
-
 async def test_phase_graph_bound_in_world(tmp_path: Path) -> None:
     """build_plan_task_world binds the phase graph; WorkflowStateSystem is gone."""
     from ecs_agent.components import PhaseComponent
@@ -5243,21 +5230,6 @@ async def test_task_start_without_state_and_no_workflow_id_returns_error(
 # ---------------------------------------------------------------------------
 # Phase graph definition (Stage-2 migration)
 # ---------------------------------------------------------------------------
-
-
-def test_phase_graph_matches_legacy_workflow_spec_adjacency() -> None:
-    from ecs_agent.workflows.compiler import compile_workflow
-
-    from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
-    from examples.e2e.plan_and_task.workflow_spec import PLAN_TASK_WORKFLOW_SPEC
-
-    legacy = compile_workflow(PLAN_TASK_WORKFLOW_SPEC)
-    assert set(PLAN_TASK_PHASE_GRAPH.phases_by_id) == set(legacy.state_ids)
-    for phase_id, spec in PLAN_TASK_PHASE_GRAPH.phases_by_id.items():
-        legacy_targets = {
-            t.target_state_id for t in legacy.transitions_by_state.get(phase_id, ())
-        }
-        assert set(spec.to) == legacy_targets, f"adjacency mismatch in {phase_id}"
 
 
 def test_phase_graph_terminal_and_resume_policy() -> None:
