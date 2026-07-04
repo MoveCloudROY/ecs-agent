@@ -74,7 +74,7 @@ async def test_real_trim_then_summarize_pipeline() -> None:
     world.add_component(
         entity_id, CompactionConfigComponent(threshold_tokens=50)
     )
-    world.add_component(entity_id, ContextTrimConfig(max_tokens=50))
+    world.add_component(entity_id, ContextTrimConfig(max_tokens=50, protect_recent_turns=0))
 
     await CompactionSystem().process(world)
 

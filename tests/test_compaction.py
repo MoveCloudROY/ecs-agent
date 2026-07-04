@@ -1375,7 +1375,7 @@ async def test_trim_frees_space_and_skips_summary() -> None:
         entity_id,
         CompactionConfigComponent(threshold_tokens=1000, summary_model="summary-model"),
     )
-    world.add_component(entity_id, ContextTrimConfig(max_tokens=60))
+    world.add_component(entity_id, ContextTrimConfig(max_tokens=60, protect_recent_turns=0))
 
     await CompactionSystem().process(world)
 
@@ -1418,7 +1418,7 @@ async def test_trim_insufficient_falls_back_to_summary() -> None:
         entity_id,
         CompactionConfigComponent(threshold_tokens=1000, summary_model="summary-model"),
     )
-    world.add_component(entity_id, ContextTrimConfig(max_tokens=60))
+    world.add_component(entity_id, ContextTrimConfig(max_tokens=60, protect_recent_turns=0))
 
     await CompactionSystem().process(world)
 
@@ -1513,7 +1513,10 @@ def test_trim_reasoning_preserves_signature_continuity_and_latest() -> None:
         Message(role="assistant", content="z" * 40, reasoning_content="r3" * 100),
     ]
     config = ContextTrimConfig(
-        max_tokens=1, trim_tool_results=False, trim_reasoning=True
+        max_tokens=1,
+        trim_tool_results=False,
+        trim_reasoning=True,
+        protect_recent_turns=0,
     )
 
     result, changed = system._trim_history(messages, 1, config)

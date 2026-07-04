@@ -232,6 +232,7 @@ def test_context_budget_config_component_defaults() -> None:
     assert component.trim_reasoning is False
     assert component.token_estimation_chars_per_token == 4.0
     assert component.overflow_behavior == "warn"
+    assert component.protect_recent_turns == 100
 
 
 def test_context_budget_config_component_is_dataclass_with_slots() -> None:

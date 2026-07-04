@@ -293,9 +293,11 @@ class ContextTrimConfig:
     trim_reasoning: bool = False
     token_estimation_chars_per_token: float = 4.0
     overflow_behavior: str = "warn"
-    protect_recent_turns: int = 0
+    protect_recent_turns: int = 100
     """Most recent N messages never trimmed (tool spans reaching into them are
-    kept whole; their reasoning is not stripped). 0 = protect nothing."""
+    kept whole; their reasoning is not stripped). Defaults to 100 so short
+    conversations are untouched and only long histories get trimmed; set 0 to
+    allow trimming right up to the newest message."""
 
 
 @dataclass(slots=True)
