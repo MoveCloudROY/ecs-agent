@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import os
 import re as _re
@@ -20,12 +21,12 @@ from ecs_agent.components import (
     ConversationArchiveComponent,
     CurrentCompactionSummaryComponent,
     LLMComponent,
+    PhaseComponent,
     RenderedSystemPromptComponent,
     SubagentRegistryComponent,
     SubagentSessionTableComponent,
     ToolRegistryComponent,
     UserPromptConfigComponent,
-    WorkflowRuntimeComponent,
 )
 from ecs_agent.components.definitions import ScriptHandler
 from ecs_agent.core import Runner, World
@@ -35,10 +36,10 @@ from ecs_agent.prompts.contracts import (
     SystemPromptConfigSpec,
     TriggerSpec,
 )
+from ecs_agent.phases import bind_phase_graph
 from ecs_agent.providers import Model
 from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
-from ecs_agent.systems import WorkflowStateSystem
 from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.tools import BuiltinToolsSkill
@@ -63,13 +64,13 @@ from ecs_agent.types import (
 )
 
 from ecs_agent.accounting import AccountingSubscriber
-from ecs_agent.workflows import install_workflow
 from examples.e2e.plan_and_task.billing import BillingSubscriber
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
     build_scratchbook_prompt_config,
 )
 from examples.e2e.plan_and_task.controller import PlanController, ResumeAction
+from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
 from examples.e2e.plan_and_task.prompts import (
     ADVISOR_SYSTEM_PROMPT,
     PLAN_QA_REVIEW_SYSTEM_PROMPT,
@@ -81,9 +82,7 @@ from examples.e2e.plan_and_task.runtime import (
     setup_interactive_input,
     derive_workflow_id_from_llm,
 )
-from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
 from examples.e2e.plan_and_task.state_models import RuntimeState
-from examples.e2e.plan_and_task.workflow_spec import PLAN_TASK_WORKFLOW_SPEC
 
 if TYPE_CHECKING:
     from ecs_agent.observability.install import ObservabilityHandle
@@ -224,7 +223,7 @@ def _require_adapter(adapter: ArtifactAdapter | None) -> ArtifactAdapter:
     return adapter
 
 
-def build_plan_task_world(
+async def build_plan_task_world(
     model: LLMModel,
     base_dir: Path | None = None,
     *,
@@ -251,7 +250,7 @@ def build_plan_task_world(
     world.add_component(
         agent_id,
         SystemPromptConfigSpec(
-            template_source=PromptTemplateSource(inline="${_workflow_state_prompt}")
+            template_source=PromptTemplateSource(inline="${_phase_prompt}")
         ),
     )
     world.add_component(agent_id, ToolRegistryComponent(tools={}, handlers={}))
@@ -323,26 +322,17 @@ def build_plan_task_world(
     )
 
     adapter_ref: list[ArtifactAdapter | None] = [None]
-    controller = PlanController()
+    controller = PlanController(world, agent_id)
     runtime_state: list[RuntimeState | None] = [None]
     _base_dir = base_dir or _WORKFLOW_BASE_DIR
 
-    def _sync_workflow_state(w: World, eid: EntityId, phase: str) -> None:
-        runtime = w.get_component(eid, WorkflowRuntimeComponent)
-        if runtime is not None:
-            runtime.current_state_id = phase
-
-    def _activate_task_phase(
-        w: World, eid: EntityId, phase: str, trigger_text: str
-    ) -> None:
-        _sync_workflow_state(w, eid, phase)
+    def _reset_task_conversation(w: World, eid: EntityId, trigger_text: str) -> None:
         conv = w.get_component(eid, ConversationComponent)
         if conv is not None:
             conv.messages.clear()
             conv.messages.append(Message(role="user", content=trigger_text))
 
-
-    def _load_workflow(
+    async def _load_workflow(
         w: World,
         eid: EntityId,
         workflow_id: str,
@@ -351,23 +341,40 @@ def build_plan_task_world(
     ) -> RuntimeState:
         new_adapter = ArtifactAdapter(base_dir=_base_dir, workflow_id=workflow_id)
         state = new_adapter.read_state()
-        state = WorkflowStateMachine().handle_restart(state, new_adapter)
+        stale_task_ids = new_adapter.mark_stale_subagents(state)
+        # Jump the runtime phase to the persisted one, then re-bind: bind applies
+        # the graph's on_resume policy (TASK_RUNNING demotes to TASK_BLOCKED).
+        w.add_component(
+            eid,
+            PhaseComponent(
+                graph_id=PLAN_TASK_PHASE_GRAPH.graph_id,
+                phase=state.phase,
+                graph_hash=PLAN_TASK_PHASE_GRAPH.structure_hash,
+            ),
+        )
+        await bind_phase_graph(w, eid, PLAN_TASK_PHASE_GRAPH, agent_key="main")
+        component = w.get_component(eid, PhaseComponent)
+        if component is not None and component.phase != state.phase:
+            state.phase = component.phase
+            state.status = "blocked"
+            logger.info(
+                "plan_task_restart_blocked",
+                workflow_id=state.workflow_id,
+                stale_task_ids=stale_task_ids,
+            )
+        state.updated_at = datetime.datetime.now(datetime.UTC).isoformat()
+        new_adapter.write_state(state)
         adapter_ref[0] = new_adapter
         runtime_state[0] = state
-        _reset_workflow_boundary_state(
-            w,
-            eid,
-            preserve_user_text=preserve_user_text,
-        )
+        _reset_workflow_boundary_state(w, eid, preserve_user_text=preserve_user_text)
         w.add_component(eid, build_scratchbook_prompt_config(workflow_id))
-        _sync_workflow_state(w, eid, state.phase)
         return state
 
     def _workflow_id_from_command(user_text: str) -> str:
         parts = user_text.strip().split(None, 1)
         return parts[1].strip() if len(parts) > 1 else ""
 
-    def _ensure_task_workflow_loaded(
+    async def _ensure_task_workflow_loaded(
         w: World,
         eid: EntityId,
         user_text: str,
@@ -384,7 +391,7 @@ def build_plan_task_world(
                 f"Provide a workflow_id: {command_name} <workflow_id>, "
                 "or start a new workflow with /plan:start <description>."
             )
-        state = _load_workflow(
+        state = await _load_workflow(
             w,
             eid,
             workflow_id,
@@ -425,16 +432,14 @@ def build_plan_task_world(
             return
         try:
             if event.subagent_name == "advisor":
-                runtime_state[0] = controller.handle_advisor_review(
+                runtime_state[0] = await controller.handle_advisor_review(
                     current, adapter, verdict_str, notes=event.result[:500]
                 )
-                _sync_workflow_state(world, agent_id, _require_state(runtime_state[0]).phase)
             elif event.subagent_name == "qa":
-                new_state = controller.handle_qa_review(
+                new_state = await controller.handle_qa_review(
                     current, adapter, verdict_str, notes=event.result[:500]
                 )
                 runtime_state[0] = new_state
-                _sync_workflow_state(world, agent_id, new_state.phase)
                 if new_state.phase == "WRITE_PLAN":
                     conv = world.get_component(agent_id, ConversationComponent)
                     if conv is not None:
@@ -453,15 +458,13 @@ def build_plan_task_world(
                             workflow_id=new_state.workflow_id,
                         )
             elif event.subagent_name == "plan_qa":
-                runtime_state[0] = controller.handle_plan_qa_review(
+                runtime_state[0] = await controller.handle_plan_qa_review(
                     current, adapter, verdict_str, notes=event.result[:500]
                 )
-                _sync_workflow_state(world, agent_id, _require_state(runtime_state[0]).phase)
             elif event.subagent_name == "plan_writer":
-                runtime_state[0] = controller.handle_write_plan_completed(
+                runtime_state[0] = await controller.handle_write_plan_completed(
                     current, adapter
                 )
-                _sync_workflow_state(world, agent_id, _require_state(runtime_state[0]).phase)
         except ValueError as exc:
             logger.error(
                 "plan_task_verdict_recording_failed",
@@ -500,8 +503,7 @@ def build_plan_task_world(
             _world.add_component(
                 _entity_id, build_scratchbook_prompt_config(derived_id)
             )
-            runtime_state[0] = controller.handle_plan_start(adapter, description)
-            _sync_workflow_state(_world, _entity_id, _require_state(runtime_state[0]).phase)
+            runtime_state[0] = await controller.handle_plan_start(adapter, description)
             status = controller.get_plan_status(_require_state(runtime_state[0]))
             logger.info(
                 "plan_task_command_plan_start",
@@ -529,10 +531,9 @@ def build_plan_task_world(
         _world: World, _entity_id: EntityId, _user_text: str
     ) -> str | None:
         try:
-            runtime_state[0] = controller.handle_plan_finalize(
+            runtime_state[0] = await controller.handle_plan_finalize(
                 _require_state(runtime_state[0]), _require_adapter(adapter_ref[0])
             )
-            _sync_workflow_state(_world, _entity_id, _require_state(runtime_state[0]).phase)
             logger.info(
                 "plan_task_command_plan_finalize",
                 workflow_id=_require_state(runtime_state[0]).workflow_id,
@@ -552,15 +553,15 @@ def build_plan_task_world(
             # role="user" entry (tool results use role="tool"), so the trigger would
             # fire on every subsequent tick. Skip re-initialization once task execution
             # is already active.
-            workflow_runtime = _world.get_component(_entity_id, WorkflowRuntimeComponent)
+            phase_component = _world.get_component(_entity_id, PhaseComponent)
             if (
-                workflow_runtime is not None
-                and workflow_runtime.current_state_id == "TASK_RUNNING"
+                phase_component is not None
+                and phase_component.phase == "TASK_RUNNING"
             ):
                 return None
 
             if runtime_state[0] is None:
-                loaded_state = _ensure_task_workflow_loaded(
+                loaded_state = await _ensure_task_workflow_loaded(
                     _world,
                     _entity_id,
                     _user_text,
@@ -573,16 +574,11 @@ def build_plan_task_world(
                 )
 
             current = _require_state(runtime_state[0])
-            task_exec = TaskExec(state=current)
-            runtime_state[0] = task_exec.initialize_task_queue(
+            task_exec = TaskExec(state=current, world=_world, entity_id=_entity_id)
+            runtime_state[0] = await task_exec.initialize_task_queue(
                 current, _require_adapter(adapter_ref[0])
             )
-            _activate_task_phase(
-                _world,
-                _entity_id,
-                _require_state(runtime_state[0]).phase,
-                _user_text,
-            )
+            _reset_task_conversation(_world, _entity_id, _user_text)
             s = _require_state(runtime_state[0])
             logger.info(
                 "plan_task_command_task_start",
@@ -633,21 +629,16 @@ def build_plan_task_world(
         try:
             if runtime_state[0] is not None and runtime_state[0].phase == "TASK_RUNNING":
                 return None
-            _ensure_task_workflow_loaded(
+            await _ensure_task_workflow_loaded(
                 _world,
                 _entity_id,
                 _user_text,
                 command_name="/task:resume",
             )
-            runtime_state[0] = controller.handle_task_resume(
+            runtime_state[0] = await controller.handle_task_resume(
                 _require_state(runtime_state[0]), _require_adapter(adapter_ref[0])
             )
-            _activate_task_phase(
-                _world,
-                _entity_id,
-                _require_state(runtime_state[0]).phase,
-                _user_text,
-            )
+            _reset_task_conversation(_world, _entity_id, _user_text)
             logger.info(
                 "plan_task_command_task_resume",
                 workflow_id=_require_state(runtime_state[0]).workflow_id,
@@ -665,12 +656,11 @@ def build_plan_task_world(
         if not reason:
             return "Error: /task:replan requires a non-empty reason."
         try:
-            runtime_state[0] = controller.handle_task_replan(
+            runtime_state[0] = await controller.handle_task_replan(
                 _require_state(runtime_state[0]),
                 _require_adapter(adapter_ref[0]),
                 reason,
             )
-            _sync_workflow_state(_world, _entity_id, _require_state(runtime_state[0]).phase)
             s = _require_state(runtime_state[0])
             logger.info(
                 "plan_task_command_task_replan",
@@ -686,12 +676,11 @@ def build_plan_task_world(
         _world: World, _entity_id: EntityId, _user_text: str
     ) -> str | None:
         try:
-            runtime_state[0] = controller.handle_task_abort(
+            runtime_state[0] = await controller.handle_task_abort(
                 _require_state(runtime_state[0]),
                 _require_adapter(adapter_ref[0]),
                 reason="user abort",
             )
-            _sync_workflow_state(_world, _entity_id, _require_state(runtime_state[0]).phase)
             s = _require_state(runtime_state[0])
             logger.info(
                 "plan_task_command_task_abort",
@@ -711,14 +700,15 @@ def build_plan_task_world(
         if not workflow_id:
             return "Error: /plan:resume requires a non-empty workflow_id."
         try:
-            state = _load_workflow(
+            state = await _load_workflow(
                 _world,
                 _entity_id,
                 workflow_id,
                 preserve_user_text=user_text,
             )
-            actions = controller.reconcile_after_resume(state, _require_adapter(adapter_ref[0]))
-            _sync_workflow_state(_world, _entity_id, state.phase)
+            actions = await controller.reconcile_after_resume(
+                state, _require_adapter(adapter_ref[0])
+            )
             for action in actions:
                 if action == ResumeAction.TRIGGER_PLAN_WRITER:
                     conv = _world.get_component(_entity_id, ConversationComponent)
@@ -756,10 +746,9 @@ def build_plan_task_world(
     ) -> str | None:
         try:
             adapter = _require_adapter(adapter_ref[0])
-            runtime_state[0] = controller.handle_write_plan(
+            runtime_state[0] = await controller.handle_write_plan(
                 _require_state(runtime_state[0]), adapter
             )
-            _sync_workflow_state(_world, _entity_id, _require_state(runtime_state[0]).phase)
             s = _require_state(runtime_state[0])
             logger.info("plan_task_command_plan_write", workflow_id=s.workflow_id)
             draft_path = str(
@@ -782,13 +771,12 @@ def build_plan_task_world(
         if verdict not in {"approved", "revise", "blocked"}:
             return "Error: /plan:qa_review requires verdict: approved | revise | blocked"
         try:
-            runtime_state[0] = controller.handle_plan_qa_review(
+            runtime_state[0] = await controller.handle_plan_qa_review(
                 _require_state(runtime_state[0]),
                 _require_adapter(adapter_ref[0]),
                 verdict,
                 notes=notes,
             )
-            _sync_workflow_state(_world, _entity_id, _require_state(runtime_state[0]).phase)
             s = _require_state(runtime_state[0])
             logger.info(
                 "plan_task_command_plan_qa_review",
@@ -886,9 +874,8 @@ def build_plan_task_world(
         UserPromptConfigComponent(triggers=triggers, script_handlers=script_handlers),
     )
 
-    install_workflow(world, agent_id, PLAN_TASK_WORKFLOW_SPEC, agent_key="main")
+    await bind_phase_graph(world, agent_id, PLAN_TASK_PHASE_GRAPH, agent_key="main")
 
-    world.register_system(WorkflowStateSystem(priority=-25), priority=-25)
     world.register_system(
         CompactionSystem(), priority=_PLAN_TASK_COMPACTION_PRIORITY
     )
@@ -957,7 +944,7 @@ async def main() -> None:
             enable_store=api_format == ApiFormat.OPENAI_RESPONSES,
         )
 
-    world, agent_id, _, _ = build_plan_task_world(
+    world, agent_id, _, _ = await build_plan_task_world(
         model=llm_model,
         base_dir=_WORKFLOW_BASE_DIR,
         enable_tool_sink=True,

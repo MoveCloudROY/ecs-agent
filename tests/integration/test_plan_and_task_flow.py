@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from ecs_agent.components.definitions import TerminalComponent
 from ecs_agent.core import World
+from ecs_agent.phases import bind_phase_graph, force
 from ecs_agent.systems import TerminalCleanupSystem
 from ecs_agent.types import EntityId
 from examples.e2e.plan_and_task.scratchbook_adapter import (
@@ -151,6 +152,19 @@ def _make_approved_verdicts() -> list[ReviewVerdict]:
             decided_at="2026-01-01T00:00:00",
         ),
     ]
+
+
+async def _bound_world_at(phase: str):
+    """World with the plan-task graph bound and forced to `phase`."""
+    from ecs_agent.phases import force as _force
+    from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
+
+    world = World()
+    eid = world.create_entity()
+    await bind_phase_graph(world, eid, PLAN_TASK_PHASE_GRAPH, agent_key="main")
+    if phase != "IDLE":
+        await _force(world, eid, phase, reason="test setup")
+    return world, eid
 
 
 @pytest.mark.parametrize(
@@ -689,10 +703,11 @@ def test_plan_finalize_validate_plan_accepts_finalized_status() -> None:
     validate_plan(plan)
 
 
-def test_plan_interview_creates_draft(tmp_path: Path) -> None:
+async def test_plan_interview_creates_draft(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    world, eid = await _bound_world_at("IDLE")
 
-    state = PlanController().handle_plan_start(adapter, "Build a demo")
+    state = await PlanController(world, eid).handle_plan_start(adapter, "Build a demo")
 
     assert state.phase == "DRAFT_INTERVIEW"
     assert (adapter.plan_dir / "draft.md").exists()
@@ -702,26 +717,28 @@ def test_plan_interview_creates_draft(tmp_path: Path) -> None:
     assert loaded_state.phase == "DRAFT_INTERVIEW"
 
 
-def test_plan_start_does_not_write_workflow_plan(tmp_path: Path) -> None:
+async def test_plan_start_does_not_write_workflow_plan(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
-    controller = PlanController()
-    controller.handle_plan_start(adapter, "test description")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    await controller.handle_plan_start(adapter, "test description")
     assert not (adapter.plan_dir / "workflow_plan.md").exists()
 
 
-def test_plan_finalize_rejects_without_verdicts(tmp_path: Path) -> None:
+async def test_plan_finalize_rejects_without_verdicts(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
     state = _make_runtime_state()
     state.phase = "DRAFT_INTERVIEW"
     state.status = "active"
     state.review_verdicts = []
+    world, eid = await _bound_world_at(state.phase)
 
     with pytest.raises(ValueError, match="finalize"):
-        PlanController().handle_plan_finalize(state, adapter)
+        await PlanController(world, eid).handle_plan_finalize(state, adapter)
 
 
-def test_plan_finalize_rejects_with_only_advisor_approved(tmp_path: Path) -> None:
+async def test_plan_finalize_rejects_with_only_advisor_approved(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
     state = _make_runtime_state()
@@ -734,19 +751,21 @@ def test_plan_finalize_rejects_with_only_advisor_approved(tmp_path: Path) -> Non
             decided_at="2026-01-01T00:00:00",
         )
     ]
+    world, eid = await _bound_world_at(state.phase)
 
     with pytest.raises(ValueError, match="DRAFT_QA_REVIEW"):
-        PlanController().handle_plan_finalize(state, adapter)
+        await PlanController(world, eid).handle_plan_finalize(state, adapter)
 
 
-def test_plan_finalize_succeeds_when_both_approved(tmp_path: Path) -> None:
+async def test_plan_finalize_succeeds_when_both_approved(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "DRAFT_INTERVIEW"
     state.status = "active"
     state.review_verdicts = _make_approved_verdicts()
+    world, eid = await _bound_world_at(state.phase)
 
-    updated_state = PlanController().handle_plan_finalize(state, adapter)
+    updated_state = await PlanController(world, eid).handle_plan_finalize(state, adapter)
     plan_path = adapter.plan_dir / "workflow_plan.md"
 
     assert updated_state.phase == "TASK_READY"
@@ -834,7 +853,7 @@ def test_task_start_rejects_draft_plan(tmp_path: Path) -> None:
         TaskExec(state=state).load_plan(adapter)
 
 
-def test_task_start_rejects_plan_without_review_approval(tmp_path: Path) -> None:
+async def test_task_start_rejects_plan_without_review_approval(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.task_exec import TaskExec
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
@@ -842,12 +861,15 @@ def test_task_start_rejects_plan_without_review_approval(tmp_path: Path) -> None
     state.phase = "TASK_READY"
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
 
     with pytest.raises(ValueError, match="approved"):
-        TaskExec(state=state).initialize_task_queue(state, adapter)
+        await TaskExec(state=state, world=world, entity_id=eid).initialize_task_queue(
+            state, adapter
+        )
 
 
-def test_start_without_final_plan_rejects_task_start(tmp_path: Path) -> None:
+async def test_start_without_final_plan_rejects_task_start(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.task_exec import TaskExec
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
@@ -856,26 +878,30 @@ def test_start_without_final_plan_rejects_task_start(tmp_path: Path) -> None:
     state.status = "active"
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
 
     with pytest.raises(ValueError, match="approved"):
-        TaskExec(state=state).initialize_task_queue(state, adapter)
+        await TaskExec(state=state, world=world, entity_id=eid).initialize_task_queue(
+            state, adapter
+        )
 
 
-def test_task_exec_initialize_task_queue_raises_from_wrong_phase(
+async def test_task_exec_initialize_task_queue_raises_from_wrong_phase(
     tmp_path: Path,
 ) -> None:
     """initialize_task_queue must reject calls from non-task phases."""
     from examples.e2e.plan_and_task.task_exec import TaskExec
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-phase-gate")
-    controller = PlanController()
-    state = controller.handle_plan_start(adapter, "Phase gate test")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "Phase gate test")
     state.review_verdicts = _make_approved_verdicts()
     adapter.write_state(state)
     assert state.phase == "DRAFT_INTERVIEW"
-    task_exec = TaskExec(state=state)
+    task_exec = TaskExec(state=state, world=world, entity_id=eid)
     with pytest.raises(ValueError, match="Cannot initialize task queue from phase"):
-        task_exec.initialize_task_queue(state, adapter)
+        await task_exec.initialize_task_queue(state, adapter)
 
 
 def test_missing_acceptance_criteria_blocks_task_start() -> None:
@@ -956,7 +982,7 @@ execution_hints:
     assert [task.task_id for task in queue] == ["task-001", "task-002"]
 
 
-def test_task_queue_persisted_to_state(tmp_path: Path) -> None:
+async def test_task_queue_persisted_to_state(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.task_exec import TaskExec
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
@@ -965,8 +991,11 @@ def test_task_queue_persisted_to_state(tmp_path: Path) -> None:
     state.review_verdicts = _make_approved_verdicts()
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
 
-    updated_state = TaskExec(state=state).initialize_task_queue(state, adapter)
+    updated_state = await TaskExec(
+        state=state, world=world, entity_id=eid
+    ).initialize_task_queue(state, adapter)
     persisted_state = adapter.read_state()
     task_queue_path = (
         tmp_path / "scratchbook" / "test-workflow-001" / "state" / "task_queue.json"
@@ -1144,7 +1173,7 @@ def test_delegation_record_subagent_dispatch_updates_state(
     assert updated_state.active_subagents[0].session_id == "ses-001"
 
 
-def test_memory_update_record_task_completion_appends_knowledge_jsonl(
+async def test_memory_update_record_task_completion_appends_knowledge_jsonl(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from examples.e2e.plan_and_task.task_exec import TaskExec
@@ -1160,8 +1189,9 @@ def test_memory_update_record_task_completion_appends_knowledge_jsonl(
         "_utcnow_isoformat",
         lambda self: "2026-01-02T03:04:05",
     )
+    world, eid = await _bound_world_at(state.phase)
 
-    TaskExec(state=state).record_task_completion(
+    await TaskExec(state=state, world=world, entity_id=eid).record_task_completion(
         state,
         adapter,
         "task-001",
@@ -1184,7 +1214,7 @@ def test_memory_update_record_task_completion_appends_knowledge_jsonl(
     ]
 
 
-def test_memory_update_record_task_completion_updates_completed_ids(
+async def test_memory_update_record_task_completion_updates_completed_ids(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from examples.e2e.plan_and_task.task_exec import TaskExec
@@ -1208,8 +1238,11 @@ def test_memory_update_record_task_completion_updates_completed_ids(
         "_utcnow_isoformat",
         lambda self: "2026-01-02T03:04:05",
     )
+    world, eid = await _bound_world_at(state.phase)
 
-    updated_state = TaskExec(state=state).record_task_completion(
+    updated_state = await TaskExec(
+        state=state, world=world, entity_id=eid
+    ).record_task_completion(
         state,
         adapter,
         "task-001",
@@ -1249,9 +1282,38 @@ def test_retry_budget_exhausted_blocks_task() -> None:
     assert TaskExec(state=state).check_retry_budget_exhausted(state, "task-001") is True
 
 
-def test_stale_subagent_on_restart_increments_retry(tmp_path: Path) -> None:
-    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+async def _run_restart_flow(state: RuntimeState, adapter: ArtifactAdapter) -> RuntimeState:
+    """Drive the restart/load flow at the unit level (mirrors main._load_workflow).
 
+    Steps: mark stale subagents, overwrite PhaseComponent with the persisted
+    phase, re-bind the graph (applies the on_resume TASK_RUNNING→TASK_BLOCKED
+    demotion), mirror the demotion back into the state, persist.
+    """
+    from ecs_agent.components import PhaseComponent
+    from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
+
+    world = World()
+    eid = world.create_entity()
+    adapter.mark_stale_subagents(state)
+    world.add_component(
+        eid,
+        PhaseComponent(
+            graph_id=PLAN_TASK_PHASE_GRAPH.graph_id,
+            phase=state.phase,
+            graph_hash=PLAN_TASK_PHASE_GRAPH.structure_hash,
+        ),
+    )
+    await bind_phase_graph(world, eid, PLAN_TASK_PHASE_GRAPH, agent_key="main")
+    component = world.get_component(eid, PhaseComponent)
+    assert component is not None
+    if component.phase != state.phase:
+        state.phase = component.phase
+        state.status = "blocked"
+    adapter.write_state(state)
+    return state
+
+
+async def test_stale_subagent_on_restart_increments_retry(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "TASK_RUNNING"
@@ -1271,7 +1333,7 @@ def test_stale_subagent_on_restart_increments_retry(tmp_path: Path) -> None:
     adapter.write_plan("# draft")
     adapter.write_state(state)
 
-    result = WorkflowStateMachine().handle_restart(state, adapter)
+    result = await _run_restart_flow(state, adapter)
 
     assert result.phase == "TASK_BLOCKED"
     assert result.retry_budget["task-001"] == 1
@@ -1281,15 +1343,16 @@ def test_stale_subagent_on_restart_increments_retry(tmp_path: Path) -> None:
     assert result.active_subagents[0].status == "stale"
 
 
-def test_advisor_review_creates_verdict_artifact(tmp_path: Path) -> None:
+async def test_advisor_review_creates_verdict_artifact(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     adapter.write_plan("# draft")
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
 
-    PlanController().handle_advisor_review(state, adapter, "approved")
+    await PlanController(world, eid).handle_advisor_review(state, adapter, "approved")
 
     artifact = (
         tmp_path
@@ -1301,15 +1364,16 @@ def test_advisor_review_creates_verdict_artifact(tmp_path: Path) -> None:
     assert artifact.is_file()
 
 
-def test_advisor_review_appends_to_state_review_verdicts(tmp_path: Path) -> None:
+async def test_advisor_review_appends_to_state_review_verdicts(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     adapter.write_plan("# draft")
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
 
-    updated = PlanController().handle_advisor_review(
+    updated = await PlanController(world, eid).handle_advisor_review(
         state, adapter, "approved", notes="LGTM"
     )
 
@@ -1320,64 +1384,68 @@ def test_advisor_review_appends_to_state_review_verdicts(tmp_path: Path) -> None
     assert v.notes is None
 
 
-def test_qa_review_approved_allows_finalization(tmp_path: Path) -> None:
+async def test_qa_review_approved_allows_finalization(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     adapter.write_plan("# draft")
     adapter.write_state(state)
-    ctrl = PlanController()
-    ctrl.handle_advisor_review(state, adapter, "approved")
-    ctrl.handle_qa_review(state, adapter, "approved")
-    ctrl.handle_plan_qa_review(state, adapter, "approved")
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
+    await ctrl.handle_advisor_review(state, adapter, "approved")
+    await ctrl.handle_qa_review(state, adapter, "approved")
+    await ctrl.handle_plan_qa_review(state, adapter, "approved")
 
-    result = ctrl.handle_plan_finalize(state, adapter)
+    result = await ctrl.handle_plan_finalize(state, adapter)
 
     assert result.phase == "TASK_READY"
     assert result.status == "ready"
 
 
-def test_qa_review_revise_blocks_finalization(tmp_path: Path) -> None:
+async def test_qa_review_revise_blocks_finalization(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     adapter.write_plan("# draft")
     adapter.write_state(state)
-    ctrl = PlanController()
-    ctrl.handle_advisor_review(state, adapter, "approved")
-    ctrl.handle_qa_review(state, adapter, "revise", notes="needs more detail")
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
+    await ctrl.handle_advisor_review(state, adapter, "approved")
+    await ctrl.handle_qa_review(state, adapter, "revise", notes="needs more detail")
 
     with pytest.raises(ValueError, match="DRAFT_QA_REVIEW"):
-        ctrl.handle_plan_finalize(state, adapter)
+        await ctrl.handle_plan_finalize(state, adapter)
 
 
-def test_qa_review_blocked_blocks_finalization(tmp_path: Path) -> None:
+async def test_qa_review_blocked_blocks_finalization(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     adapter.write_plan("# draft")
     adapter.write_state(state)
-    ctrl = PlanController()
-    ctrl.handle_advisor_review(state, adapter, "approved")
-    ctrl.handle_qa_review(state, adapter, "blocked", notes="out of scope")
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
+    await ctrl.handle_advisor_review(state, adapter, "approved")
+    await ctrl.handle_qa_review(state, adapter, "blocked", notes="out of scope")
 
     with pytest.raises(ValueError, match="DRAFT_QA_REVIEW"):
-        ctrl.handle_plan_finalize(state, adapter)
+        await ctrl.handle_plan_finalize(state, adapter)
 
 
-def test_review_verdicts_persisted_in_state(tmp_path: Path) -> None:
+async def test_review_verdicts_persisted_in_state(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     adapter.write_plan("# draft")
     adapter.write_state(state)
-    ctrl = PlanController()
-    ctrl.handle_advisor_review(state, adapter, "approved")
-    ctrl.handle_qa_review(state, adapter, "approved")
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
+    await ctrl.handle_advisor_review(state, adapter, "approved")
+    await ctrl.handle_qa_review(state, adapter, "approved")
 
     persisted = adapter.read_state()
 
@@ -1387,7 +1455,7 @@ def test_review_verdicts_persisted_in_state(tmp_path: Path) -> None:
     assert "DRAFT_QA_REVIEW" in phases
 
 
-def test_replan_governance_scope_change_forces_review(
+async def test_replan_governance_scope_change_forces_review(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
@@ -1405,8 +1473,9 @@ def test_replan_governance_scope_change_forces_review(
         "_utcnow_isoformat",
         lambda self: "2026-01-02T03:04:05",
     )
+    world, eid = await _bound_world_at(state.phase)
 
-    updated = PlanController().handle_task_replan(
+    updated = await PlanController(world, eid).handle_task_replan(
         state,
         adapter,
         reason="dependency changed",
@@ -1424,7 +1493,7 @@ def test_replan_governance_scope_change_forces_review(
     assert persisted.status == "needs_review"
 
 
-def test_replan_governance_no_scope_change_stays_running(
+async def test_replan_governance_no_scope_change_stays_running(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
@@ -1441,8 +1510,9 @@ def test_replan_governance_no_scope_change_stays_running(
         "_utcnow_isoformat",
         lambda self: "2026-01-02T03:04:05",
     )
+    world, eid = await _bound_world_at(state.phase)
 
-    updated = PlanController().handle_task_replan(
+    updated = await PlanController(world, eid).handle_task_replan(
         state,
         adapter,
         reason="missing evidence artifact",
@@ -1456,7 +1526,7 @@ def test_replan_governance_no_scope_change_stays_running(
     assert persisted.phase == "TASK_RUNNING"
 
 
-def test_abort_transitions_to_terminal_aborted(
+async def test_abort_transitions_to_terminal_aborted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
@@ -1473,8 +1543,9 @@ def test_abort_transitions_to_terminal_aborted(
         "_utcnow_isoformat",
         lambda self: "2026-01-02T03:04:05",
     )
+    world, eid = await _bound_world_at(state.phase)
 
-    updated = PlanController().handle_task_abort(
+    updated = await PlanController(world, eid).handle_task_abort(
         state,
         adapter,
         reason="operator requested stop",
@@ -1488,7 +1559,7 @@ def test_abort_transitions_to_terminal_aborted(
     assert persisted.abort_reason == "operator requested stop"
 
 
-def test_abort_cannot_be_resumed(tmp_path: Path) -> None:
+async def test_abort_cannot_be_resumed(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
@@ -1498,12 +1569,13 @@ def test_abort_cannot_be_resumed(tmp_path: Path) -> None:
     state.abort_reason = "terminal stop"
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
 
     with pytest.raises(ValueError, match="terminal"):
-        PlanController().handle_task_resume(state, adapter)
+        await PlanController(world, eid).handle_task_resume(state, adapter)
 
 
-def test_task_resume_from_blocked_returns_running(
+async def test_task_resume_from_blocked_returns_running(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
@@ -1521,8 +1593,9 @@ def test_task_resume_from_blocked_returns_running(
         "_utcnow_isoformat",
         lambda self: "2026-01-02T03:04:05",
     )
+    world, eid = await _bound_world_at(state.phase)
 
-    updated = PlanController().handle_task_resume(state, adapter)
+    updated = await PlanController(world, eid).handle_task_resume(state, adapter)
 
     assert updated.phase == "TASK_RUNNING"
     assert updated.status == "active"
@@ -1530,91 +1603,87 @@ def test_task_resume_from_blocked_returns_running(
     assert persisted.phase == "TASK_RUNNING"
 
 
-def test_state_machine_valid_transition_from_idle() -> None:
-    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+async def test_phase_advance_valid_transition_from_idle() -> None:
+    from ecs_agent.phases import advance
 
-    state = _make_runtime_state()
-    state.phase = "IDLE"
-    sm = WorkflowStateMachine()
+    world, eid = await _bound_world_at("IDLE")
 
-    result = sm.transition(state, "DRAFT_INTERVIEW")
+    component = await advance(world, eid, "DRAFT_INTERVIEW", reason="test")
 
-    assert result.phase == "DRAFT_INTERVIEW"
+    assert component.phase == "DRAFT_INTERVIEW"
 
 
-def test_state_machine_illegal_transition_raises() -> None:
-    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+async def test_phase_advance_illegal_transition_raises() -> None:
+    from ecs_agent.phases import InvalidPhaseTransitionError, advance
 
-    state = _make_runtime_state()
-    state.phase = "IDLE"
-    sm = WorkflowStateMachine()
+    world, eid = await _bound_world_at("IDLE")
 
-    with pytest.raises(ValueError, match="Invalid transition"):
-        sm.transition(state, "TASK_RUNNING")
+    with pytest.raises(InvalidPhaseTransitionError, match="invalid transition"):
+        await advance(world, eid, "TASK_RUNNING", reason="test")
 
 
-def test_state_machine_terminal_states_cannot_transition() -> None:
-    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+async def test_phase_advance_terminal_phases_cannot_transition() -> None:
+    from ecs_agent.phases import InvalidPhaseTransitionError, advance
 
-    sm = WorkflowStateMachine()
     for terminal_phase in ("TASK_COMPLETED", "TASK_ABORTED"):
-        state = _make_runtime_state()
-        state.phase = terminal_phase
-        with pytest.raises(ValueError, match="Invalid transition"):
-            sm.transition(state, "DRAFT_INTERVIEW")
+        world, eid = await _bound_world_at(terminal_phase)
+        with pytest.raises(InvalidPhaseTransitionError, match="terminal"):
+            await advance(world, eid, "DRAFT_INTERVIEW", reason="test")
 
 
-def test_state_machine_is_terminal_for_completed_and_aborted() -> None:
-    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+def test_phase_graph_is_terminal_for_completed_and_aborted() -> None:
+    from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
 
-    sm = WorkflowStateMachine()
-    assert sm.is_terminal("TASK_COMPLETED") is True
-    assert sm.is_terminal("TASK_ABORTED") is True
-    assert sm.is_terminal("TASK_RUNNING") is False
-    assert sm.is_terminal("DRAFT_INTERVIEW") is False
-
-
-def test_state_machine_can_resume_non_terminal() -> None:
-    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
-
-    sm = WorkflowStateMachine()
-    assert sm.can_resume("DRAFT_INTERVIEW") is True
-    assert sm.can_resume("TASK_RUNNING") is True
-    assert sm.can_resume("TASK_BLOCKED") is True
-    assert sm.can_resume("TASK_COMPLETED") is False
-    assert sm.can_resume("TASK_ABORTED") is False
-    assert sm.can_resume("IDLE") is False
+    phases = PLAN_TASK_PHASE_GRAPH.phases_by_id
+    assert phases["TASK_COMPLETED"].terminal is True
+    assert phases["TASK_ABORTED"].terminal is True
+    assert phases["TASK_RUNNING"].terminal is False
+    assert phases["DRAFT_INTERVIEW"].terminal is False
 
 
-def test_state_machine_requires_continuation_for_active_workflows() -> None:
-    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+def test_phase_graph_can_resume_non_terminal() -> None:
+    from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
 
-    sm = WorkflowStateMachine()
+    phases = PLAN_TASK_PHASE_GRAPH.phases_by_id
+
+    def can_resume(phase: str) -> bool:
+        return not phases[phase].terminal and phase != "IDLE"
+
+    assert can_resume("DRAFT_INTERVIEW") is True
+    assert can_resume("TASK_RUNNING") is True
+    assert can_resume("TASK_BLOCKED") is True
+    assert can_resume("TASK_COMPLETED") is False
+    assert can_resume("TASK_ABORTED") is False
+    assert can_resume("IDLE") is False
+
+
+def test_phase_graph_requires_continuation_for_active_workflows() -> None:
+    from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
+
+    phases = PLAN_TASK_PHASE_GRAPH.phases_by_id
+
+    def requires_continuation(phase: str) -> bool:
+        return not phases[phase].terminal and phase != "IDLE"
+
     for active_phase in (
         "DRAFT_INTERVIEW",
         "TASK_RUNNING",
         "TASK_BLOCKED",
         "PLAN_FINALIZED",
     ):
-        state = _make_runtime_state()
-        state.phase = active_phase
-        assert sm.requires_continuation(state) is True, (
+        assert requires_continuation(active_phase) is True, (
             f"Expected True for {active_phase}"
         )
 
     for done_phase in ("TASK_COMPLETED", "TASK_ABORTED", "IDLE"):
-        state = _make_runtime_state()
-        state.phase = done_phase
-        assert sm.requires_continuation(state) is False, (
+        assert requires_continuation(done_phase) is False, (
             f"Expected False for {done_phase}"
         )
 
 
-def test_handle_restart_marks_stale_subagents_and_updates_phase(
+async def test_restart_flow_marks_stale_subagents_and_updates_phase(
     tmp_path: Path,
 ) -> None:
-    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
-
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "TASK_RUNNING"
@@ -1630,8 +1699,7 @@ def test_handle_restart_marks_stale_subagents_and_updates_phase(
     adapter.write_plan("# draft")
     adapter.write_state(state)
 
-    sm = WorkflowStateMachine()
-    result = sm.handle_restart(state, adapter)
+    result = await _run_restart_flow(state, adapter)
 
     assert result.phase == "TASK_BLOCKED"
     assert result.active_subagents[0].status == "stale"
@@ -1639,9 +1707,7 @@ def test_handle_restart_marks_stale_subagents_and_updates_phase(
     assert persisted.phase == "TASK_BLOCKED"
 
 
-def test_handle_restart_no_active_subagents_keeps_phase(tmp_path: Path) -> None:
-    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
-
+async def test_restart_flow_no_active_subagents_keeps_phase(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "TASK_BLOCKED"
@@ -1649,15 +1715,12 @@ def test_handle_restart_no_active_subagents_keeps_phase(tmp_path: Path) -> None:
     adapter.write_plan("# draft")
     adapter.write_state(state)
 
-    sm = WorkflowStateMachine()
-    result = sm.handle_restart(state, adapter)
+    result = await _run_restart_flow(state, adapter)
 
     assert result.phase == "TASK_BLOCKED"
 
 
-def test_handle_restart_running_without_subagents_becomes_blocked(tmp_path: Path) -> None:
-    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
-
+async def test_restart_flow_running_without_subagents_becomes_blocked(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "TASK_RUNNING"
@@ -1667,8 +1730,7 @@ def test_handle_restart_running_without_subagents_becomes_blocked(tmp_path: Path
     adapter.write_plan("# draft")
     adapter.write_state(state)
 
-    sm = WorkflowStateMachine()
-    result = sm.handle_restart(state, adapter)
+    result = await _run_restart_flow(state, adapter)
 
     assert result.phase == "TASK_BLOCKED"
     assert result.status == "blocked"
@@ -1707,13 +1769,14 @@ def test_readme_command_examples_match_supported_commands() -> None:
         )
 
 
-def test_plan_start_state_has_open_questions_and_confirmed_requirements(
+async def test_plan_start_state_has_open_questions_and_confirmed_requirements(
     tmp_path: Path,
 ) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
-    controller = PlanController()
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
 
-    state = controller.handle_plan_start(adapter, "test description")
+    state = await controller.handle_plan_start(adapter, "test description")
 
     assert state.open_questions == []
     assert state.confirmed_requirements == []
@@ -1724,13 +1787,14 @@ def test_plan_start_state_has_open_questions_and_confirmed_requirements(
     assert persisted_payload["confirmed_requirements"] == []
 
 
-def test_review_verdict_artifact_has_phase_and_verdict(tmp_path: Path) -> None:
+async def test_review_verdict_artifact_has_phase_and_verdict(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
-    controller = PlanController()
-    state = controller.handle_plan_start(adapter, "test description")
-    controller.handle_qa_review(state, adapter, "approved")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "test description")
+    await controller.handle_qa_review(state, adapter, "approved")
 
-    controller.handle_advisor_review(state, adapter, "approved")
+    await controller.handle_advisor_review(state, adapter, "approved")
 
     verdict_payload = json.loads(
         (adapter.review_dir / "draft_advisor_review_verdict.json").read_text(
@@ -1741,7 +1805,7 @@ def test_review_verdict_artifact_has_phase_and_verdict(tmp_path: Path) -> None:
     assert verdict_payload["verdict"] == "approved"
 
 
-def test_task_completion_writes_evidence_artifact(
+async def test_task_completion_writes_evidence_artifact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from examples.e2e.plan_and_task.task_exec import TaskExec
@@ -1757,8 +1821,9 @@ def test_task_completion_writes_evidence_artifact(
         "_utcnow_isoformat",
         lambda self: "2026-01-02T03:04:05",
     )
+    world, eid = await _bound_world_at(state.phase)
 
-    TaskExec(state=state).record_task_completion(
+    await TaskExec(state=state, world=world, entity_id=eid).record_task_completion(
         state,
         adapter,
         "task-001",
@@ -1775,10 +1840,10 @@ def test_task_completion_writes_evidence_artifact(
     assert "completed_at" in evidence_payload
 
 
-def test_main_world_registers_trigger_script_handlers(tmp_path: Path) -> None:
+async def test_main_world_registers_trigger_script_handlers(tmp_path: Path) -> None:
     from ecs_agent.components import UserPromptConfigComponent
 
-    world, agent_id, _, _ = _build_test_world(tmp_path)
+    world, agent_id, _, _ = await _build_test_world(tmp_path)
 
     config = world.get_component(agent_id, UserPromptConfigComponent)
     assert config is not None
@@ -1807,7 +1872,7 @@ async def test_trigger_plan_start_handler_creates_state(tmp_path: Path) -> None:
     from ecs_agent.components import ConversationComponent, UserPromptConfigComponent
     from ecs_agent.types import Message
 
-    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, _, runtime_state = await _build_test_world(tmp_path)
     config = world.get_component(agent_id, UserPromptConfigComponent)
     assert config is not None
     conversation = world.get_component(agent_id, ConversationComponent)
@@ -1836,7 +1901,7 @@ async def test_plan_start_trigger_is_not_reprocessed_for_same_user_message(
     )
     from ecs_agent.types import Message
 
-    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, _, runtime_state = await _build_test_world(tmp_path)
     conversation = world.get_component(agent_id, ConversationComponent)
     assert conversation is not None
     conversation.messages.append(Message(role="user", content="/plan:start Build demo"))
@@ -1858,9 +1923,9 @@ async def test_trigger_plan_status_handler_returns_status_string(
     from ecs_agent.components import UserPromptConfigComponent
     from examples.e2e.plan_and_task.controller import PlanController
 
-    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
-    controller = PlanController()
-    runtime_state[0] = controller.handle_plan_start(adapter, "Test plan")
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
+    controller = PlanController(world, agent_id)
+    runtime_state[0] = await controller.handle_plan_start(adapter, "Test plan")
 
     config = world.get_component(agent_id, UserPromptConfigComponent)
     assert config is not None
@@ -1884,7 +1949,7 @@ def test_runtime_setup_does_not_intercept_slash_commands(tmp_path: Path) -> None
     assert "command_handler" not in sig.parameters
 
 
-def _build_test_world(
+async def _build_test_world(
     tmp_path: Path,
 ) -> tuple[World, object, ArtifactAdapter, list[RuntimeState | None]]:
     from ecs_agent.providers import FakeModel
@@ -1898,7 +1963,7 @@ def _build_test_world(
         responses=[CompletionResult(message=Message(role="assistant", content="ready"))]
     )
 
-    world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
+    world, agent_id, adapter_ref, runtime_state = await build_plan_task_world(
         model=model,
         base_dir=tmp_path,
     )
@@ -1920,7 +1985,7 @@ async def test_main_world_setup_installs_subagent_infrastructure(
     )
     from ecs_agent.systems.subagent import SubagentSystem
 
-    world, agent_id, _, _ = _build_test_world(tmp_path)
+    world, agent_id, _, _ = await _build_test_world(tmp_path)
     world.apply_pending_system_operations()
 
     registry = world.get_component(agent_id, SubagentRegistryComponent)
@@ -1960,7 +2025,7 @@ async def test_plan_task_world_keeps_tool_results_inline_without_scratchbook_sin
         return f"report for {topic}"
 
     model = FakeModel(responses=["ok"])
-    world, agent_id, _, _ = build_plan_task_world(model=model, base_dir=tmp_path)
+    world, agent_id, _, _ = await build_plan_task_world(model=model, base_dir=tmp_path)
     world.apply_pending_system_operations()
 
     tool_registry = world.get_component(agent_id, ToolRegistryComponent)
@@ -2032,7 +2097,7 @@ async def test_plan_task_world_persists_tool_results_via_sink_when_enabled(
         return f"report for {topic}"
 
     model = FakeModel(responses=["ok"])
-    world, agent_id, _, _ = build_plan_task_world(
+    world, agent_id, _, _ = await build_plan_task_world(
         model=model, base_dir=tmp_path, enable_tool_sink=True
     )
     world.apply_pending_system_operations()
@@ -2104,7 +2169,7 @@ async def test_plan_task_world_installs_auto_compaction(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.main import build_plan_task_world
 
     model = FakeModel(responses=["ok"])
-    world, agent_id, _, _ = build_plan_task_world(model=model, base_dir=tmp_path)
+    world, agent_id, _, _ = await build_plan_task_world(model=model, base_dir=tmp_path)
     world.apply_pending_system_operations()
 
     compaction = world.get_component(agent_id, CompactionConfigComponent)
@@ -2118,11 +2183,11 @@ async def test_plan_task_world_installs_auto_compaction(tmp_path: Path) -> None:
     )
 
 
-def test_plan_task_langfuse_disabled_by_default(tmp_path: Path) -> None:
+async def test_plan_task_langfuse_disabled_by_default(tmp_path: Path) -> None:
     from ecs_agent.observability.sinks import RecordingTelemetrySink
     from examples.e2e.plan_and_task.main import install_plan_task_langfuse_observability
 
-    world, _, _, _ = _build_test_world(tmp_path)
+    world, _, _, _ = await _build_test_world(tmp_path)
     sink = RecordingTelemetrySink()
 
     handle = install_plan_task_langfuse_observability(
@@ -2135,11 +2200,11 @@ def test_plan_task_langfuse_disabled_by_default(tmp_path: Path) -> None:
     assert not hasattr(world, "_ecs_agent_observability_sink")
 
 
-def test_plan_task_langfuse_installs_when_enabled(tmp_path: Path) -> None:
+async def test_plan_task_langfuse_installs_when_enabled(tmp_path: Path) -> None:
     from ecs_agent.observability.sinks import RecordingTelemetrySink
     from examples.e2e.plan_and_task.main import install_plan_task_langfuse_observability
 
-    world, _, _, _ = _build_test_world(tmp_path)
+    world, _, _, _ = await _build_test_world(tmp_path)
     sink = RecordingTelemetrySink()
 
     handle = install_plan_task_langfuse_observability(
@@ -2182,7 +2247,7 @@ async def test_plan_task_langfuse_records_runner_trace_when_enabled(
     from ecs_agent.types import Message
     from examples.e2e.plan_and_task.main import install_plan_task_langfuse_observability
 
-    world, agent_id, _, _ = _build_test_world(tmp_path)
+    world, agent_id, _, _ = await _build_test_world(tmp_path)
     conversation = world.get_component(agent_id, ConversationComponent)
     assert conversation is not None
     conversation.messages.append(Message(role="user", content="Summarize plan status"))
@@ -2224,7 +2289,7 @@ async def test_plan_task_compaction_summarizes_before_prompt_render(
             )
         ]
     )
-    world, agent_id, _, _ = build_plan_task_world(
+    world, agent_id, _, _ = await build_plan_task_world(
         model=model,
         base_dir=tmp_path,
         compaction_threshold_tokens=1,
@@ -2254,11 +2319,11 @@ async def test_plan_task_compaction_summarizes_before_prompt_render(
 # ── DelegationCompletedEvent verdict tests ─────────────────────────────────────
 
 
-def test_main_world_does_not_register_record_verdict_tools(tmp_path: Path) -> None:
+async def test_main_world_does_not_register_record_verdict_tools(tmp_path: Path) -> None:
     """record_advisor_verdict and record_qa_verdict tools must NOT be registered."""
     from ecs_agent.components import ToolRegistryComponent
 
-    world, agent_id, _, _ = _build_test_world(tmp_path)
+    world, agent_id, _, _ = await _build_test_world(tmp_path)
     tool_registry = world.get_component(agent_id, ToolRegistryComponent)
     assert tool_registry is not None
     assert "record_advisor_verdict" not in tool_registry.tools
@@ -2278,7 +2343,7 @@ async def test_plan_start_resets_stale_compaction_state(tmp_path: Path) -> None:
     )
     from ecs_agent.types import Message
 
-    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, _, runtime_state = await _build_test_world(tmp_path)
     world.add_component(
         agent_id,
         CurrentCompactionSummaryComponent(summary="stale-summary"),
@@ -2329,7 +2394,7 @@ async def test_plan_resume_resets_stale_compaction_state(tmp_path: Path) -> None
     )
     from ecs_agent.types import Message
 
-    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
     state = _make_state_at_phase("TASK_BLOCKED")
     state.workflow_id = adapter.workflow_id
     state.status = "blocked"
@@ -2389,7 +2454,7 @@ async def test_task_start_auto_load_resets_stale_compaction_state(tmp_path: Path
     )
     from ecs_agent.types import Message
 
-    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
     state = _make_runtime_state()
     state.phase = "PLAN_FINALIZED"
@@ -2445,7 +2510,7 @@ async def test_plan_start_reset_does_not_retrigger_on_second_normalization(
         fake_derive_workflow_id,
     )
 
-    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, _, runtime_state = await _build_test_world(tmp_path)
     conversation = world.get_component(agent_id, ConversationComponent)
     assert conversation is not None
     conversation.messages.extend(
@@ -2477,7 +2542,7 @@ async def test_plan_resume_reset_does_not_retrigger_on_second_normalization(
     )
     from ecs_agent.types import Message
 
-    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
     state = _make_state_at_phase("TASK_BLOCKED")
     state.workflow_id = adapter.workflow_id
     state.status = "blocked"
@@ -2549,9 +2614,9 @@ async def test_delegation_completed_event_records_advisor_verdict(
     from ecs_agent.types import DelegationCompletedEvent
     from examples.e2e.plan_and_task.controller import PlanController
 
-    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
-    controller = PlanController()
-    runtime_state[0] = controller.handle_plan_start(adapter, "Test workflow")
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
+    controller = PlanController(world, agent_id)
+    runtime_state[0] = await controller.handle_plan_start(adapter, "Test workflow")
 
     await world.event_bus.publish(
         DelegationCompletedEvent(
@@ -2575,9 +2640,9 @@ async def test_delegation_completed_event_records_qa_verdict(tmp_path: Path) -> 
     from ecs_agent.types import DelegationCompletedEvent
     from examples.e2e.plan_and_task.controller import PlanController
 
-    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
-    controller = PlanController()
-    runtime_state[0] = controller.handle_plan_start(adapter, "Test workflow")
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
+    controller = PlanController(world, agent_id)
+    runtime_state[0] = await controller.handle_plan_start(adapter, "Test workflow")
 
     await world.event_bus.publish(
         DelegationCompletedEvent(
@@ -2601,9 +2666,9 @@ async def test_delegation_completed_event_ignores_other_entity(tmp_path: Path) -
     from ecs_agent.types import DelegationCompletedEvent, EntityId
     from examples.e2e.plan_and_task.controller import PlanController
 
-    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
-    controller = PlanController()
-    runtime_state[0] = controller.handle_plan_start(adapter, "Test workflow")
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
+    controller = PlanController(world, agent_id)
+    runtime_state[0] = await controller.handle_plan_start(adapter, "Test workflow")
 
     other_entity = EntityId(agent_id + 999)
     await world.event_bus.publish(
@@ -2657,7 +2722,7 @@ def test_build_scratchbook_prompt_config_artifacts_have_valid_paths() -> None:
         assert not artifact.path.startswith("/")
 
 
-def test_main_world_does_not_add_scratchbook_prompt_config_at_init(
+async def test_main_world_does_not_add_scratchbook_prompt_config_at_init(
     tmp_path: Path,
 ) -> None:
     """ScratchbookPromptConfig is NOT added at world init.
@@ -2667,7 +2732,7 @@ def test_main_world_does_not_add_scratchbook_prompt_config_at_init(
     """
     from ecs_agent.scratchbook.prompt_definition import ScratchbookPromptConfig
 
-    world, agent_id, _, _ = _build_test_world(tmp_path)
+    world, agent_id, _, _ = await _build_test_world(tmp_path)
     config = world.get_component(agent_id, ScratchbookPromptConfig)
     assert config is None, (
         "ScratchbookPromptConfig must NOT be present at world init; "
@@ -2689,10 +2754,10 @@ def test_build_scratchbook_prompt_config_includes_draft_md() -> None:
     assert draft.readonly is False
 
 
-def test_main_world_installs_builtin_tools(tmp_path: Path) -> None:
+async def test_main_world_installs_builtin_tools(tmp_path: Path) -> None:
     from ecs_agent.components import ToolRegistryComponent
 
-    world, agent_id, _, _ = _build_test_world(tmp_path)
+    world, agent_id, _, _ = await _build_test_world(tmp_path)
     tool_registry = world.get_component(agent_id, ToolRegistryComponent)
     assert tool_registry is not None
     for expected_tool in ("read_file", "write_file", "edit_file", "bash", "glob"):
@@ -2752,15 +2817,16 @@ def test_plan_interview_system_prompt_defines_interview_flow() -> None:
     )
 
 
-def test_draft_template_has_structured_sections(tmp_path: Path) -> None:
+async def test_draft_template_has_structured_sections(tmp_path: Path) -> None:
     """The initial draft template must have structured fillable sections.
 
     Verifies fix for: draft has no clear sections to progressively fill in.
     """
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-draft-sections")
-    controller = PlanController()
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
 
-    state = controller.handle_plan_start(adapter, "Test description")
+    state = await controller.handle_plan_start(adapter, "Test description")
     draft_content = (adapter.plan_dir / "draft.md").read_text(encoding="utf-8")
 
     # Must have dedicated sections that the LLM can fill in via edit_file
@@ -2774,12 +2840,13 @@ def test_draft_template_has_structured_sections(tmp_path: Path) -> None:
     _ = state  # used
 
 
-def test_draft_template_has_placeholder_content(tmp_path: Path) -> None:
+async def test_draft_template_has_placeholder_content(tmp_path: Path) -> None:
     """Draft sections should have placeholder content (not empty) so edit_file can target them."""
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-draft-placeholders")
-    controller = PlanController()
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
 
-    controller.handle_plan_start(adapter, "Some description")
+    await controller.handle_plan_start(adapter, "Some description")
     draft_content = (adapter.plan_dir / "draft.md").read_text(encoding="utf-8")
 
     # Each section should have placeholder text the LLM can replace
@@ -2827,7 +2894,7 @@ def test_slug_from_description_special_chars_stripped() -> None:
     assert "#" not in slug
 
 
-def test_plan_start_handler_sets_workflow_id_from_description(
+async def test_plan_start_handler_sets_workflow_id_from_description(
     tmp_path: Path,
 ) -> None:
     from ecs_agent.providers.fake_model import FakeModel
@@ -2837,14 +2904,14 @@ def test_plan_start_handler_sets_workflow_id_from_description(
     )
 
     model = FakeModel(responses=["ok"])
-    world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
+    world, agent_id, adapter_ref, runtime_state = await build_plan_task_world(
         model=model,
         base_dir=tmp_path,
     )
 
-    controller = PlanController()
+    controller = PlanController(world, agent_id)
     adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id="initial-id")
-    state = controller.handle_plan_start(adapter, "Build a task management app")
+    state = await controller.handle_plan_start(adapter, "Build a task management app")
     assert state.workflow_id == "initial-id"
     assert (adapter.plan_dir / "draft.md").exists()
     draft = (adapter.plan_dir / "draft.md").read_text(encoding="utf-8")
@@ -3017,7 +3084,7 @@ def test_plan_interview_system_prompt_gates_qa_on_advisor_approval_duplicate() -
     )
 
 
-def test_controller_advisor_revise_state_stays_in_advisor_review_duplicate(
+async def test_controller_advisor_revise_state_stays_in_advisor_review_duplicate(
     tmp_path: Path,
 ) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
@@ -3026,9 +3093,10 @@ def test_controller_advisor_revise_state_stays_in_advisor_review_duplicate(
     )
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="revise-test")
-    controller = PlanController()
-    state = controller.handle_plan_start(adapter, "revise test workflow")
-    state = controller.handle_advisor_review(
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "revise test workflow")
+    state = await controller.handle_advisor_review(
         state, adapter, "revise", notes="Needs more detail"
     )
 
@@ -3038,7 +3106,7 @@ def test_controller_advisor_revise_state_stays_in_advisor_review_duplicate(
     assert state.phase != "DRAFT_QA_REVIEW"
 
 
-def test_controller_advisor_revise_followed_by_approved_allows_qa_duplicate(
+async def test_controller_advisor_revise_followed_by_approved_allows_qa_duplicate(
     tmp_path: Path,
 ) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
@@ -3047,15 +3115,16 @@ def test_controller_advisor_revise_followed_by_approved_allows_qa_duplicate(
     )
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="revise-then-approve-test")
-    controller = PlanController()
-    state = controller.handle_plan_start(adapter, "revise then approve workflow")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "revise then approve workflow")
 
-    state = controller.handle_advisor_review(
+    state = await controller.handle_advisor_review(
         state, adapter, "revise", notes="Needs scope"
     )
     assert state.phase == "DRAFT_ADVISOR_REVIEW"
 
-    state = controller.handle_advisor_review(state, adapter, "approved", notes="LGTM")
+    state = await controller.handle_advisor_review(state, adapter, "approved", notes="LGTM")
     assert state.phase == "DRAFT_ADVISOR_REVIEW"
 
     missing = controller._missing_approved_reviews(state.review_verdicts)
@@ -3064,7 +3133,7 @@ def test_controller_advisor_revise_followed_by_approved_allows_qa_duplicate(
     )
 
 
-def test_controller_advisor_multiple_verdicts_upsert_keeps_latest(
+async def test_controller_advisor_multiple_verdicts_upsert_keeps_latest(
     tmp_path: Path,
 ) -> None:
     """Same-phase verdicts are upserted: only the latest (approved) is kept per phase."""
@@ -3074,12 +3143,13 @@ def test_controller_advisor_multiple_verdicts_upsert_keeps_latest(
     )
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="multi-verdict-test")
-    controller = PlanController()
-    state = controller.handle_plan_start(adapter, "multi-verdict workflow")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "multi-verdict workflow")
 
-    state = controller.handle_advisor_review(state, adapter, "revise")
-    state = controller.handle_advisor_review(state, adapter, "blocked")
-    state = controller.handle_advisor_review(state, adapter, "approved")
+    state = await controller.handle_advisor_review(state, adapter, "revise")
+    state = await controller.handle_advisor_review(state, adapter, "blocked")
+    state = await controller.handle_advisor_review(state, adapter, "approved")
 
     advisor_verdicts = [
         v for v in state.review_verdicts if v.phase == "DRAFT_ADVISOR_REVIEW"
@@ -3090,7 +3160,7 @@ def test_controller_advisor_multiple_verdicts_upsert_keeps_latest(
     assert advisor_verdicts[0].verdict == "approved"
 
 
-def test_controller_missing_approved_reviews_uses_last_verdict_duplicate(
+async def test_controller_missing_approved_reviews_uses_last_verdict_duplicate(
     tmp_path: Path,
 ) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
@@ -3100,11 +3170,12 @@ def test_controller_missing_approved_reviews_uses_last_verdict_duplicate(
     )
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="last-verdict-test")
-    controller = PlanController()
-    state = controller.handle_plan_start(adapter, "last verdict test workflow")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "last verdict test workflow")
 
-    state = controller.handle_advisor_review(state, adapter, "revise")
-    state = controller.handle_advisor_review(state, adapter, "approved")
+    state = await controller.handle_advisor_review(state, adapter, "revise")
+    state = await controller.handle_advisor_review(state, adapter, "approved")
 
     missing = controller._missing_approved_reviews(state.review_verdicts)
     prompt_lower = PLAN_INTERVIEW_SYSTEM_PROMPT.lower()
@@ -3144,7 +3215,7 @@ def test_plan_interview_system_prompt_gates_qa_on_advisor_approval() -> None:
     )
 
 
-def test_controller_advisor_revise_state_stays_in_advisor_review(
+async def test_controller_advisor_revise_state_stays_in_advisor_review(
     tmp_path: Path,
 ) -> None:
     """After a 'revise' verdict, phase must remain PLAN_ADVISOR_REVIEW (not advance to QA)."""
@@ -3154,11 +3225,12 @@ def test_controller_advisor_revise_state_stays_in_advisor_review(
     )
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="revise-test")
-    controller = PlanController()
-    state = controller.handle_plan_start(adapter, "revise test workflow")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "revise test workflow")
 
     # First advisor call → state transitions to PLAN_ADVISOR_REVIEW
-    state = controller.handle_advisor_review(
+    state = await controller.handle_advisor_review(
         state, adapter, "revise", notes="Needs more detail"
     )
 
@@ -3169,7 +3241,7 @@ def test_controller_advisor_revise_state_stays_in_advisor_review(
     assert state.phase != "DRAFT_QA_REVIEW"
 
 
-def test_controller_advisor_revise_followed_by_approved_allows_qa(
+async def test_controller_advisor_revise_followed_by_approved_allows_qa(
     tmp_path: Path,
 ) -> None:
     """After revise then approved, the advisor verdict is approved and QA can be called."""
@@ -3179,17 +3251,18 @@ def test_controller_advisor_revise_followed_by_approved_allows_qa(
     )
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="revise-then-approve-test")
-    controller = PlanController()
-    state = controller.handle_plan_start(adapter, "revise then approve workflow")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "revise then approve workflow")
 
     # Round 1: revise
-    state = controller.handle_advisor_review(
+    state = await controller.handle_advisor_review(
         state, adapter, "revise", notes="Needs scope"
     )
     assert state.phase == "DRAFT_ADVISOR_REVIEW"
 
     # Round 2: approved (LLM revised draft and re-called advisor)
-    state = controller.handle_advisor_review(state, adapter, "approved", notes="LGTM")
+    state = await controller.handle_advisor_review(state, adapter, "approved", notes="LGTM")
     assert state.phase == "DRAFT_ADVISOR_REVIEW"
 
     # Now the latest advisor verdict is "approved" — _missing_approved_reviews should pass advisor
@@ -3199,7 +3272,7 @@ def test_controller_advisor_revise_followed_by_approved_allows_qa(
     )
 
 
-def test_controller_advisor_multiple_verdicts_upsert_keeps_latest_2(
+async def test_controller_advisor_multiple_verdicts_upsert_keeps_latest_2(
     tmp_path: Path,
 ) -> None:
     """All advisor verdict calls upsert: final state has only 1 entry per phase (the latest)."""
@@ -3209,12 +3282,13 @@ def test_controller_advisor_multiple_verdicts_upsert_keeps_latest_2(
     )
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="multi-verdict-test")
-    controller = PlanController()
-    state = controller.handle_plan_start(adapter, "multi-verdict workflow")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "multi-verdict workflow")
 
-    state = controller.handle_advisor_review(state, adapter, "revise")
-    state = controller.handle_advisor_review(state, adapter, "blocked")
-    state = controller.handle_advisor_review(state, adapter, "approved")
+    state = await controller.handle_advisor_review(state, adapter, "revise")
+    state = await controller.handle_advisor_review(state, adapter, "blocked")
+    state = await controller.handle_advisor_review(state, adapter, "approved")
 
     advisor_verdicts = [
         v for v in state.review_verdicts if v.phase == "DRAFT_ADVISOR_REVIEW"
@@ -3225,7 +3299,7 @@ def test_controller_advisor_multiple_verdicts_upsert_keeps_latest_2(
     assert advisor_verdicts[0].verdict == "approved"
 
 
-def test_controller_missing_approved_reviews_uses_last_verdict(
+async def test_controller_missing_approved_reviews_uses_last_verdict(
     tmp_path: Path,
 ) -> None:
     """_missing_approved_reviews must check the LAST verdict per phase, not the first."""
@@ -3235,12 +3309,13 @@ def test_controller_missing_approved_reviews_uses_last_verdict(
     )
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="last-verdict-test")
-    controller = PlanController()
-    state = controller.handle_plan_start(adapter, "last verdict test workflow")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "last verdict test workflow")
 
     # revise followed by approved — only last (approved) should count
-    state = controller.handle_advisor_review(state, adapter, "revise")
-    state = controller.handle_advisor_review(state, adapter, "approved")
+    state = await controller.handle_advisor_review(state, adapter, "revise")
+    state = await controller.handle_advisor_review(state, adapter, "approved")
 
     missing = controller._missing_approved_reviews(state.review_verdicts)
     assert "DRAFT_ADVISOR_REVIEW" not in missing, (
@@ -3272,10 +3347,10 @@ def test_parse_command_plan_resume_without_args_parses_cleanly() -> None:
     assert cmd.args == []
 
 
-def test_main_world_registers_plan_resume_trigger(tmp_path: Path) -> None:
+async def test_main_world_registers_plan_resume_trigger(tmp_path: Path) -> None:
     from ecs_agent.components import UserPromptConfigComponent
 
-    world, agent_id, _, _ = _build_test_world(tmp_path)
+    world, agent_id, _, _ = await _build_test_world(tmp_path)
     config = world.get_component(agent_id, UserPromptConfigComponent)
     assert config is not None
 
@@ -3298,7 +3373,7 @@ async def test_plan_resume_handler_restores_state_from_disk(tmp_path: Path) -> N
         PlanTaskScratchbookAdapter,
     )
 
-    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, _, runtime_state = await _build_test_world(tmp_path)
 
     workflow_id = "resume-test-workflow"
     adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
@@ -3345,7 +3420,7 @@ async def test_plan_resume_handler_missing_workflow_id_returns_error(
     """Handler must return an error string when no workflow_id argument is given."""
     from ecs_agent.components import UserPromptConfigComponent
 
-    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, _, runtime_state = await _build_test_world(tmp_path)
 
     config = world.get_component(agent_id, UserPromptConfigComponent)
     assert config is not None
@@ -3368,7 +3443,7 @@ async def test_plan_resume_handler_unknown_workflow_id_returns_error(
     """Handler must return an error string when the scratchbook directory does not exist."""
     from ecs_agent.components import UserPromptConfigComponent
 
-    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, _, runtime_state = await _build_test_world(tmp_path)
 
     config = world.get_component(agent_id, UserPromptConfigComponent)
     assert config is not None
@@ -3395,7 +3470,7 @@ async def test_plan_resume_handler_marks_stale_subagents(tmp_path: Path) -> None
     )
     from examples.e2e.plan_and_task.state_models import SubagentRecord
 
-    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, _, runtime_state = await _build_test_world(tmp_path)
 
     workflow_id = "stale-subagent-workflow"
     adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
@@ -3462,7 +3537,7 @@ async def test_plan_resume_handler_updates_scratchbook_prompt_config(
         ScratchbookPromptConfig,
     )
 
-    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, _, runtime_state = await _build_test_world(tmp_path)
 
     workflow_id = "scratchbook-config-workflow"
     adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
@@ -3589,7 +3664,7 @@ async def test_plan_resume_handler_restores_planning_phase(tmp_path: Path) -> No
     from ecs_agent.components import UserPromptConfigComponent
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
-    world, agent_id, _, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, _, runtime_state = await _build_test_world(tmp_path)
 
     workflow_id = "resume-planning-phase-workflow"
     adapter = PlanTaskScratchbookAdapter(base_dir=tmp_path, workflow_id=workflow_id)
@@ -3630,13 +3705,14 @@ async def test_plan_resume_handler_restores_planning_phase(tmp_path: Path) -> No
     assert runtime_state[0].phase == "DRAFT_ADVISOR_REVIEW"
 
 
-def test_require_plan_artifact_skipped_for_planning_phases(tmp_path: Path) -> None:
+async def test_require_plan_artifact_skipped_for_planning_phases(tmp_path: Path) -> None:
     """_require_plan_artifact must not raise for planning phases even without workflow_plan.md."""
     import datetime
 
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
-    controller = PlanController()
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
 
     for phase in ("DRAFT_INTERVIEW", "DRAFT_ADVISOR_REVIEW", "DRAFT_QA_REVIEW", "WRITE_PLAN", "PLAN_QA_REVIEW"):
         workflow_id = f"require-artifact-{phase.lower().replace('_', '-')}"
@@ -3666,124 +3742,132 @@ def test_require_plan_artifact_skipped_for_planning_phases(tmp_path: Path) -> No
         controller._require_plan_artifact(adapter, state)  # type: ignore[attr-defined]
 
 
-def test_handle_write_plan_transitions_to_write_plan(tmp_path: Path) -> None:
+async def test_handle_write_plan_transitions_to_write_plan(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
 
-    ctrl = PlanController()
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "DRAFT_QA_REVIEW"
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    result = ctrl.handle_write_plan(state, adapter)
+    result = await ctrl.handle_write_plan(state, adapter)
 
     assert result.phase == "WRITE_PLAN"
 
 
-def test_handle_write_plan_rejects_wrong_phase(tmp_path: Path) -> None:
+async def test_handle_write_plan_rejects_wrong_phase(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
 
-    ctrl = PlanController()
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "DRAFT_INTERVIEW"
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
     with pytest.raises(ValueError, match="DRAFT_QA_REVIEW"):
-        ctrl.handle_write_plan(state, adapter)
+        await ctrl.handle_write_plan(state, adapter)
 
 
-def test_handle_write_plan_persists_state(tmp_path: Path) -> None:
+async def test_handle_write_plan_persists_state(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
 
-    ctrl = PlanController()
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "DRAFT_QA_REVIEW"
     adapter.write_state(state)
     adapter.plan_dir.mkdir(parents=True, exist_ok=True)
     (adapter.plan_dir / "draft.md").write_text("# Draft\n", encoding="utf-8")
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    ctrl.handle_write_plan(state, adapter)
+    await ctrl.handle_write_plan(state, adapter)
 
     reloaded = adapter.read_state()
     assert reloaded.phase == "WRITE_PLAN"
 
 
-def test_handle_plan_qa_review_revise_stays_in_write_plan(tmp_path: Path) -> None:
+async def test_handle_plan_qa_review_revise_stays_in_write_plan(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
 
-    ctrl = PlanController()
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "WRITE_PLAN"
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    result = ctrl.handle_plan_qa_review(state, adapter, "revise", notes="needs more detail")
+    result = await ctrl.handle_plan_qa_review(state, adapter, "revise", notes="needs more detail")
 
     assert any(v.phase == "PLAN_QA_REVIEW" and v.verdict == "revise" for v in result.review_verdicts)
 
 
-def test_handle_plan_qa_review_creates_verdict_artifact(tmp_path: Path) -> None:
+async def test_handle_plan_qa_review_creates_verdict_artifact(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
 
-    ctrl = PlanController()
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "WRITE_PLAN"
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    ctrl.handle_plan_qa_review(state, adapter, "approved")
+    await ctrl.handle_plan_qa_review(state, adapter, "approved")
 
     assert (adapter.review_dir / "plan_qa_review_verdict.json").is_file()
 
 
-def test_handle_plan_qa_review_invalid_verdict_raises(tmp_path: Path) -> None:
+async def test_handle_plan_qa_review_invalid_verdict_raises(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
 
-    ctrl = PlanController()
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "WRITE_PLAN"
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
     with pytest.raises(ValueError, match="Invalid verdict"):
-        ctrl.handle_plan_qa_review(state, adapter, "maybe")
+        await ctrl.handle_plan_qa_review(state, adapter, "maybe")
 
 
-def test_full_plan_flow_all_three_reviews(tmp_path: Path) -> None:
+async def test_full_plan_flow_all_three_reviews(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
 
-    ctrl = PlanController()
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     adapter.write_plan("# draft")
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    ctrl.handle_advisor_review(state, adapter, "approved")
-    ctrl.handle_qa_review(state, adapter, "approved")
-    ctrl.handle_plan_qa_review(state, adapter, "approved")
+    await ctrl.handle_advisor_review(state, adapter, "approved")
+    await ctrl.handle_qa_review(state, adapter, "approved")
+    await ctrl.handle_plan_qa_review(state, adapter, "approved")
 
-    result = ctrl.handle_plan_finalize(state, adapter)
+    result = await ctrl.handle_plan_finalize(state, adapter)
 
     assert result.phase == "TASK_READY"
     assert result.status == "ready"
 
 
-def test_finalize_blocked_without_plan_qa_review(tmp_path: Path) -> None:
+async def test_finalize_blocked_without_plan_qa_review(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
 
-    ctrl = PlanController()
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     adapter.write_plan("# draft")
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    ctrl.handle_advisor_review(state, adapter, "approved")
-    ctrl.handle_qa_review(state, adapter, "approved")
+    await ctrl.handle_advisor_review(state, adapter, "approved")
+    await ctrl.handle_qa_review(state, adapter, "approved")
 
     with pytest.raises(ValueError, match="PLAN_QA_REVIEW"):
-        ctrl.handle_plan_finalize(state, adapter)
+        await ctrl.handle_plan_finalize(state, adapter)
 
 
 @pytest.mark.asyncio
@@ -3794,7 +3878,7 @@ async def test_plan_write_command_transitions_phase(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
     model = FakeModel(responses=["ok"])
-    world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
+    world, agent_id, adapter_ref, runtime_state = await build_plan_task_world(
         model=model, base_dir=tmp_path
     )
 
@@ -3807,6 +3891,7 @@ async def test_plan_write_command_transitions_phase(tmp_path: Path) -> None:
     state.phase = "DRAFT_QA_REVIEW"
     adapter.write_state(state)
     runtime_state[0] = state
+    await force(world, agent_id, state.phase, reason="test setup")
 
     config = world.get_component(agent_id, UserPromptConfigComponent)
     assert config is not None
@@ -3829,7 +3914,7 @@ async def test_plan_qa_review_command_approved(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
     model = FakeModel(responses=["ok"])
-    world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
+    world, agent_id, adapter_ref, runtime_state = await build_plan_task_world(
         model=model, base_dir=tmp_path
     )
 
@@ -3842,6 +3927,7 @@ async def test_plan_qa_review_command_approved(tmp_path: Path) -> None:
     state.phase = "WRITE_PLAN"
     adapter.write_state(state)
     runtime_state[0] = state
+    await force(world, agent_id, state.phase, reason="test setup")
 
     config = world.get_component(agent_id, UserPromptConfigComponent)
     assert config is not None
@@ -3864,7 +3950,7 @@ async def test_plan_qa_review_command_invalid_verdict(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
     model = FakeModel(responses=["ok"])
-    world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
+    world, agent_id, adapter_ref, runtime_state = await build_plan_task_world(
         model=model, base_dir=tmp_path
     )
 
@@ -3877,6 +3963,7 @@ async def test_plan_qa_review_command_invalid_verdict(tmp_path: Path) -> None:
     state.phase = "WRITE_PLAN"
     adapter.write_state(state)
     runtime_state[0] = state
+    await force(world, agent_id, state.phase, reason="test setup")
 
     config = world.get_component(agent_id, UserPromptConfigComponent)
     assert config is not None
@@ -3893,53 +3980,56 @@ async def test_plan_qa_review_command_invalid_verdict(tmp_path: Path) -> None:
 # handle_write_plan_completed tests
 # ---------------------------------------------------------------------------
 
-def test_handle_write_plan_completed_transitions_to_plan_qa_review(tmp_path: Path) -> None:
-    ctrl = PlanController()
+async def test_handle_write_plan_completed_transitions_to_plan_qa_review(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "WRITE_PLAN"
     adapter.write_state(state)
     adapter.plan_dir.mkdir(parents=True, exist_ok=True)
     (adapter.plan_dir / "draft.md").write_text("# Draft\n", encoding="utf-8")
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    result = ctrl.handle_write_plan_completed(state, adapter)
+    result = await ctrl.handle_write_plan_completed(state, adapter)
 
     assert result.phase == "PLAN_QA_REVIEW"
 
 
-def test_handle_write_plan_completed_persists_state(tmp_path: Path) -> None:
-    ctrl = PlanController()
+async def test_handle_write_plan_completed_persists_state(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "WRITE_PLAN"
     adapter.write_state(state)
     adapter.plan_dir.mkdir(parents=True, exist_ok=True)
     (adapter.plan_dir / "draft.md").write_text("# Draft\n", encoding="utf-8")
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    ctrl.handle_write_plan_completed(state, adapter)
+    await ctrl.handle_write_plan_completed(state, adapter)
 
     reloaded = adapter.read_state()
     assert reloaded.phase == "PLAN_QA_REVIEW"
 
 
-def test_handle_write_plan_completed_rejects_wrong_phase(tmp_path: Path) -> None:
-    ctrl = PlanController()
+async def test_handle_write_plan_completed_rejects_wrong_phase(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "DRAFT_QA_REVIEW"
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
     with pytest.raises(ValueError, match="WRITE_PLAN"):
-        ctrl.handle_write_plan_completed(state, adapter)
+        await ctrl.handle_write_plan_completed(state, adapter)
 
 
-def test_plan_writer_subagent_registered(tmp_path: Path) -> None:
+async def test_plan_writer_subagent_registered(tmp_path: Path) -> None:
     from ecs_agent.components.definitions import SubagentRegistryComponent
     from ecs_agent.providers.fake_model import FakeModel
     from examples.e2e.plan_and_task.main import build_plan_task_world
 
     model = FakeModel(responses=["ok"])
-    world, agent_id, _, _ = build_plan_task_world(
+    world, agent_id, _, _ = await build_plan_task_world(
         model=model, base_dir=tmp_path
     )
 
@@ -3950,13 +4040,13 @@ def test_plan_writer_subagent_registered(tmp_path: Path) -> None:
     assert "writing-plans" in cfg.skills
 
 
-def test_writing_plans_skill_registered_in_catalog(tmp_path: Path) -> None:
+async def test_writing_plans_skill_registered_in_catalog(tmp_path: Path) -> None:
     from ecs_agent.providers.fake_model import FakeModel
     from ecs_agent.skills import catalog as _catalog
     from examples.e2e.plan_and_task.main import build_plan_task_world
 
     model = FakeModel(responses=["ok"])
-    build_plan_task_world(model=model, base_dir=tmp_path)
+    await build_plan_task_world(model=model, base_dir=tmp_path)
 
     descriptor = _catalog.lookup("writing-plans")
     assert descriptor is not None
@@ -4038,7 +4128,7 @@ def test_billing_subscriber_subscribe_wires_event_bus(tmp_path: Path) -> None:
     assert LLMInvocationEvent in bus._handlers  # type: ignore[attr-defined]
 
 
-def test_billing_subscriber_wired_in_build_plan_task_world(tmp_path: Path) -> None:
+async def test_billing_subscriber_wired_in_build_plan_task_world(tmp_path: Path) -> None:
     """build_plan_task_world + wiring billing subscriber does not raise."""
     from ecs_agent.providers.fake_model import FakeModel
     from ecs_agent.accounting.models import LLMInvocationEvent
@@ -4046,7 +4136,7 @@ def test_billing_subscriber_wired_in_build_plan_task_world(tmp_path: Path) -> No
     from examples.e2e.plan_and_task.main import build_plan_task_world
 
     model = FakeModel(responses=["ok"])
-    world, _, _, _ = build_plan_task_world(model=model, base_dir=tmp_path)
+    world, _, _, _ = await build_plan_task_world(model=model, base_dir=tmp_path)
 
     sub = BillingSubscriber()
     sub.subscribe(world.event_bus)
@@ -4054,7 +4144,7 @@ def test_billing_subscriber_wired_in_build_plan_task_world(tmp_path: Path) -> No
     assert LLMInvocationEvent in world.event_bus._handlers  # type: ignore[attr-defined]
 
 
-def test_accounting_subscriber_wired_in_main(tmp_path: Path) -> None:
+async def test_accounting_subscriber_wired_in_main(tmp_path: Path) -> None:
     """AccountingSubscriber can be subscribed to the world event_bus without error."""
     from ecs_agent.providers.fake_model import FakeModel
     from ecs_agent.accounting import AccountingSubscriber
@@ -4062,7 +4152,7 @@ def test_accounting_subscriber_wired_in_main(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.main import build_plan_task_world
 
     model = FakeModel(responses=["ok"])
-    world, _, _, _ = build_plan_task_world(model=model, base_dir=tmp_path)
+    world, _, _, _ = await build_plan_task_world(model=model, base_dir=tmp_path)
 
     acc = AccountingSubscriber()
     acc.subscribe(world.event_bus)
@@ -4070,62 +4160,67 @@ def test_accounting_subscriber_wired_in_main(tmp_path: Path) -> None:
     assert LLMInvocationEvent in world.event_bus._handlers  # type: ignore[attr-defined]
 
 
-def test_qa_review_approved_auto_transitions_to_write_plan(tmp_path: Path) -> None:
-    ctrl = PlanController()
+async def test_qa_review_approved_auto_transitions_to_write_plan(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "DRAFT_QA_REVIEW"
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    result = ctrl.handle_qa_review(state, adapter, "approved")
+    result = await ctrl.handle_qa_review(state, adapter, "approved")
 
     assert result.phase == "WRITE_PLAN"
 
 
-def test_qa_review_revise_stays_in_draft_qa_review(tmp_path: Path) -> None:
-    ctrl = PlanController()
+async def test_qa_review_revise_stays_in_draft_qa_review(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "DRAFT_QA_REVIEW"
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    result = ctrl.handle_qa_review(state, adapter, "revise")
+    result = await ctrl.handle_qa_review(state, adapter, "revise")
 
     assert result.phase == "DRAFT_QA_REVIEW"
 
 
-def test_plan_qa_review_approved_auto_transitions_to_plan_finalized(tmp_path: Path) -> None:
-    ctrl = PlanController()
+async def test_plan_qa_review_approved_auto_transitions_to_plan_finalized(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "PLAN_QA_REVIEW"
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    result = ctrl.handle_plan_qa_review(state, adapter, "approved")
+    result = await ctrl.handle_plan_qa_review(state, adapter, "approved")
 
     assert result.phase == "PLAN_FINALIZED"
 
 
-def test_plan_qa_review_revise_stays_in_plan_qa_review(tmp_path: Path) -> None:
-    ctrl = PlanController()
+async def test_plan_qa_review_revise_stays_in_plan_qa_review(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "PLAN_QA_REVIEW"
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    result = ctrl.handle_plan_qa_review(state, adapter, "revise")
+    result = await ctrl.handle_plan_qa_review(state, adapter, "revise")
 
     assert result.phase == "PLAN_QA_REVIEW"
 
 
-def test_handle_write_plan_completed_transitions_write_plan_to_plan_qa_review(tmp_path: Path) -> None:
-    ctrl = PlanController()
+async def test_handle_write_plan_completed_transitions_write_plan_to_plan_qa_review(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "WRITE_PLAN"
     adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    result = ctrl.handle_write_plan_completed(state, adapter)
+    result = await ctrl.handle_write_plan_completed(state, adapter)
 
     assert result.phase == "PLAN_QA_REVIEW"
 
@@ -4160,7 +4255,8 @@ def test_provider_config_enable_store_can_be_set_true() -> None:
 def test_plan_controller_utcnow_isoformat_is_timezone_aware() -> None:
     import datetime
 
-    controller = PlanController()
+    world = World()
+    controller = PlanController(world, world.create_entity())
 
     value = controller._utcnow_isoformat()  # type: ignore[attr-defined]
     parsed = datetime.datetime.fromisoformat(value)
@@ -4176,19 +4272,6 @@ def test_task_exec_utcnow_isoformat_is_timezone_aware() -> None:
     executor = TaskExec(state=_make_runtime_state())
 
     value = executor._utcnow_isoformat()  # type: ignore[attr-defined]
-    parsed = datetime.datetime.fromisoformat(value)
-
-    assert parsed.tzinfo is not None
-    assert parsed.utcoffset() == datetime.timedelta(0)
-
-
-def test_workflow_state_machine_utcnow_isoformat_is_timezone_aware() -> None:
-    import datetime
-    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
-
-    machine = WorkflowStateMachine()
-
-    value = machine._utcnow_isoformat()  # type: ignore[attr-defined]
     parsed = datetime.datetime.fromisoformat(value)
 
     assert parsed.tzinfo is not None
@@ -4218,75 +4301,81 @@ def _make_verdict(phase: str, verdict: str) -> ReviewVerdict:
     return ReviewVerdict(phase=phase, verdict=verdict, decided_at="2026-01-01T00:00:00")
 
 
-def test_reconcile_draft_qa_approved_triggers_plan_writer(tmp_path: Path) -> None:
+async def test_reconcile_draft_qa_approved_triggers_plan_writer(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import ResumeAction
 
-    ctrl = PlanController()
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
     state = _make_state_at_phase("DRAFT_QA_REVIEW")
     state.review_verdicts.append(_make_verdict("DRAFT_QA_REVIEW", "approved"))
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    actions = ctrl.reconcile_after_resume(state, adapter)
+    actions = await ctrl.reconcile_after_resume(state, adapter)
 
     assert ResumeAction.TRIGGER_PLAN_WRITER in actions
     assert state.phase == "WRITE_PLAN"
 
 
-def test_reconcile_write_plan_triggers_plan_writer(tmp_path: Path) -> None:
+async def test_reconcile_write_plan_triggers_plan_writer(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import ResumeAction
 
-    ctrl = PlanController()
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
     state = _make_state_at_phase("WRITE_PLAN")
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    actions = ctrl.reconcile_after_resume(state, adapter)
+    actions = await ctrl.reconcile_after_resume(state, adapter)
 
     assert ResumeAction.TRIGGER_PLAN_WRITER in actions
     assert state.phase == "WRITE_PLAN"
 
 
-def test_reconcile_plan_qa_approved_advances_to_finalized(tmp_path: Path) -> None:
-    ctrl = PlanController()
+async def test_reconcile_plan_qa_approved_advances_to_finalized(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
     state = _make_state_at_phase("PLAN_QA_REVIEW")
     state.review_verdicts.append(_make_verdict("PLAN_QA_REVIEW", "approved"))
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    actions = ctrl.reconcile_after_resume(state, adapter)
+    actions = await ctrl.reconcile_after_resume(state, adapter)
 
     assert actions == []
     assert state.phase == "PLAN_FINALIZED"
 
 
-def test_reconcile_draft_qa_revise_returns_no_triggers(tmp_path: Path) -> None:
-    ctrl = PlanController()
+async def test_reconcile_draft_qa_revise_returns_no_triggers(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
     state = _make_state_at_phase("DRAFT_QA_REVIEW")
     state.review_verdicts.append(_make_verdict("DRAFT_QA_REVIEW", "revise"))
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    actions = ctrl.reconcile_after_resume(state, adapter)
+    actions = await ctrl.reconcile_after_resume(state, adapter)
 
     assert actions == []
     assert state.phase == "DRAFT_QA_REVIEW"
 
 
-def test_reconcile_draft_interview_returns_no_triggers(tmp_path: Path) -> None:
-    ctrl = PlanController()
+async def test_reconcile_draft_interview_returns_no_triggers(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
     state = _make_state_at_phase("DRAFT_INTERVIEW")
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    actions = ctrl.reconcile_after_resume(state, adapter)
+    actions = await ctrl.reconcile_after_resume(state, adapter)
 
     assert actions == []
     assert state.phase == "DRAFT_INTERVIEW"
 
 
-def test_reconcile_plan_qa_revise_returns_no_triggers(tmp_path: Path) -> None:
-    ctrl = PlanController()
+async def test_reconcile_plan_qa_revise_returns_no_triggers(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
     state = _make_state_at_phase("PLAN_QA_REVIEW")
     state.review_verdicts.append(_make_verdict("PLAN_QA_REVIEW", "revise"))
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
 
-    actions = ctrl.reconcile_after_resume(state, adapter)
+    actions = await ctrl.reconcile_after_resume(state, adapter)
 
     assert actions == []
     assert state.phase == "PLAN_QA_REVIEW"
@@ -4298,15 +4387,15 @@ async def test_plan_resume_draft_qa_approved_injects_write_plan_message(
 ) -> None:
     from ecs_agent.components import (
         ConversationComponent,
+        PhaseComponent,
         UserPromptConfigComponent,
-        WorkflowRuntimeComponent,
     )
     from ecs_agent.providers.fake_model import FakeModel
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
     model = FakeModel(responses=["ok"])
-    world, agent_id, _adapter_ref, _runtime_state = build_plan_task_world(
+    world, agent_id, _adapter_ref, _runtime_state = await build_plan_task_world(
         model=model, base_dir=tmp_path
     )
 
@@ -4329,9 +4418,9 @@ async def test_plan_resume_draft_qa_approved_injects_write_plan_message(
     assert "Error" not in result
     assert _runtime_state[0] is not None
     assert _runtime_state[0].phase == "WRITE_PLAN"
-    workflow_runtime = world.get_component(agent_id, WorkflowRuntimeComponent)
-    assert workflow_runtime is not None
-    assert workflow_runtime.current_state_id == "WRITE_PLAN"
+    phase_component = world.get_component(agent_id, PhaseComponent)
+    assert phase_component is not None
+    assert phase_component.phase == "WRITE_PLAN"
     conv = world.get_component(agent_id, ConversationComponent)
     assert conv is not None
     user_messages = [m for m in conv.messages if m.role == "user"]
@@ -4348,7 +4437,7 @@ async def test_plan_resume_write_plan_phase_injects_write_plan_message(
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
     model = FakeModel(responses=["ok"])
-    world, agent_id, _adapter_ref, _runtime_state = build_plan_task_world(
+    world, agent_id, _adapter_ref, _runtime_state = await build_plan_task_world(
         model=model, base_dir=tmp_path
     )
 
@@ -4382,15 +4471,15 @@ async def test_plan_resume_plan_qa_approved_advances_to_finalized(
 ) -> None:
     from ecs_agent.components import (
         ConversationComponent,
+        PhaseComponent,
         UserPromptConfigComponent,
-        WorkflowRuntimeComponent,
     )
     from ecs_agent.providers.fake_model import FakeModel
     from examples.e2e.plan_and_task.main import build_plan_task_world
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
     model = FakeModel(responses=["ok"])
-    world, agent_id, _adapter_ref, _runtime_state = build_plan_task_world(
+    world, agent_id, _adapter_ref, _runtime_state = await build_plan_task_world(
         model=model, base_dir=tmp_path
     )
 
@@ -4413,9 +4502,9 @@ async def test_plan_resume_plan_qa_approved_advances_to_finalized(
     assert "Error" not in result
     assert _runtime_state[0] is not None
     assert _runtime_state[0].phase == "PLAN_FINALIZED"
-    workflow_runtime = world.get_component(agent_id, WorkflowRuntimeComponent)
-    assert workflow_runtime is not None
-    assert workflow_runtime.current_state_id == "PLAN_FINALIZED"
+    phase_component = world.get_component(agent_id, PhaseComponent)
+    assert phase_component is not None
+    assert phase_component.phase == "PLAN_FINALIZED"
     conv = world.get_component(agent_id, ConversationComponent)
     assert conv is not None
     assert [m.content for m in conv.messages if m.role == "user"] == [
@@ -4433,7 +4522,7 @@ async def test_plan_resume_draft_interview_no_message_injected(
     from examples.e2e.plan_and_task.scratchbook_adapter import PlanTaskScratchbookAdapter
 
     model = FakeModel(responses=["ok"])
-    world, agent_id, _adapter_ref, _runtime_state = build_plan_task_world(
+    world, agent_id, _adapter_ref, _runtime_state = await build_plan_task_world(
         model=model, base_dir=tmp_path
     )
 
@@ -4549,49 +4638,52 @@ def test_review_verdict_has_no_plan_version_field() -> None:
     assert not hasattr(v, "plan_version")
 
 
-def test_handle_advisor_review_sets_status_active_after_transition(tmp_path: Path) -> None:
+async def test_handle_advisor_review_sets_status_active_after_transition(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
     from examples.e2e.plan_and_task.scratchbook_adapter import (
         PlanTaskScratchbookAdapter as ArtifactAdapter,
     )
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="status-lifecycle-test")
-    controller = PlanController()
-    state = controller.handle_plan_start(adapter, "status lifecycle workflow")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "status lifecycle workflow")
     assert state.status == "active"
 
-    updated = controller.handle_advisor_review(state, adapter, "revise")
+    updated = await controller.handle_advisor_review(state, adapter, "revise")
     assert updated.status == "active"
 
 
-def test_handle_qa_review_approved_sets_status_active(tmp_path: Path) -> None:
+async def test_handle_qa_review_approved_sets_status_active(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
     from examples.e2e.plan_and_task.scratchbook_adapter import (
         PlanTaskScratchbookAdapter as ArtifactAdapter,
     )
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="status-qa-test")
-    controller = PlanController()
-    state = controller.handle_plan_start(adapter, "qa status workflow")
-    state = controller.handle_advisor_review(state, adapter, "approved")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "qa status workflow")
+    state = await controller.handle_advisor_review(state, adapter, "approved")
 
-    updated = controller.handle_qa_review(state, adapter, "approved")
+    updated = await controller.handle_qa_review(state, adapter, "approved")
     assert updated.status == "active"
 
 
-def test_state_machine_transition_sets_status_active(tmp_path: Path) -> None:
-    from examples.e2e.plan_and_task.state_machine import WorkflowStateMachine
+async def test_phase_mirror_transition_sets_status_active(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
 
-    sm = WorkflowStateMachine()
     state = _make_runtime_state()
     state.phase = "DRAFT_INTERVIEW"
     state.status = "complete"
+    world, eid = await _bound_world_at(state.phase)
+    controller = PlanController(world, eid)
 
-    updated = sm.transition(state, "DRAFT_ADVISOR_REVIEW")
-    assert updated.status == "active"
+    await controller._advance(state, "DRAFT_ADVISOR_REVIEW", reason="test")
+    assert state.status == "active"
 
 
-def test_controller_transition_sets_complete_then_active(tmp_path: Path) -> None:
+async def test_controller_transition_sets_complete_then_active(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
     from examples.e2e.plan_and_task.scratchbook_adapter import (
         PlanTaskScratchbookAdapter as ArtifactAdapter,
@@ -4600,20 +4692,21 @@ def test_controller_transition_sets_complete_then_active(tmp_path: Path) -> None
     statuses: list[str] = []
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="complete-active-test")
-    controller = PlanController()
-    state = controller.handle_plan_start(adapter, "complete active workflow")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "complete active workflow")
     statuses.append(state.status)
 
-    state = controller.handle_advisor_review(state, adapter, "approved")
+    state = await controller.handle_advisor_review(state, adapter, "approved")
     statuses.append(state.status)
 
-    state = controller.handle_qa_review(state, adapter, "approved")
+    state = await controller.handle_qa_review(state, adapter, "approved")
     statuses.append(state.status)
 
     assert "active" in statuses, f"Expected 'active' status at some point, got {statuses}"
 
 
-def test_advisor_qa_subagents_inherit_readonly_tools_only(tmp_path: Path) -> None:
+async def test_advisor_qa_subagents_inherit_readonly_tools_only(tmp_path: Path) -> None:
     from ecs_agent.components import SubagentRegistryComponent
     from ecs_agent.providers import FakeModel
     from ecs_agent.types import CompletionResult, Message
@@ -4622,7 +4715,7 @@ def test_advisor_qa_subagents_inherit_readonly_tools_only(tmp_path: Path) -> Non
     model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
-    world, agent_id, _, _ = build_plan_task_world(
+    world, agent_id, _, _ = await build_plan_task_world(
         model=model, base_dir=tmp_path
     )
     registry = world.get_component(agent_id, SubagentRegistryComponent)
@@ -4685,7 +4778,7 @@ def test_plan_qa_prompt_contains_read_file_path_not_content() -> None:
     assert "## Plan Content" not in prompt
 
 
-def test_plan_qa_subagent_registered_with_plan_qa_system_prompt(tmp_path: Path) -> None:
+async def test_plan_qa_subagent_registered_with_plan_qa_system_prompt(tmp_path: Path) -> None:
     from ecs_agent.components import SubagentRegistryComponent
     from ecs_agent.providers import FakeModel
     from ecs_agent.types import CompletionResult, Message
@@ -4695,7 +4788,7 @@ def test_plan_qa_subagent_registered_with_plan_qa_system_prompt(tmp_path: Path) 
     model = FakeModel(
         responses=[CompletionResult(message=Message(role="assistant", content="ok"))]
     )
-    world, agent_id, _, _ = build_plan_task_world(
+    world, agent_id, _, _ = await build_plan_task_world(
         model=model, base_dir=tmp_path
     )
     registry = world.get_component(agent_id, SubagentRegistryComponent)
@@ -4759,19 +4852,19 @@ def test_plan_and_task_prompts_embed_scratchbook_context() -> None:
         assert "${_scratchbook_artifacts}" in prompt
 
 
-def test_build_plan_task_world_uses_plan_main_agent_system_prompt(tmp_path: Path) -> None:
+async def test_build_plan_task_world_uses_plan_main_agent_system_prompt(tmp_path: Path) -> None:
     from ecs_agent.prompts.contracts import SystemPromptConfigSpec
     from ecs_agent.providers.fake_model import FakeModel
     from examples.e2e.plan_and_task.main import build_plan_task_world
 
     model = FakeModel(responses=["ok"])
-    world, agent_id, _, _ = build_plan_task_world(
+    world, agent_id, _, _ = await build_plan_task_world(
         model=model, base_dir=tmp_path
     )
 
     spec = world.get_component(agent_id, SystemPromptConfigSpec)
     assert spec is not None
-    assert spec.template_source.inline == "${_workflow_state_prompt}"
+    assert spec.template_source.inline == "${_phase_prompt}"
 
 
 def test_workflow_spec_compiles_successfully() -> None:
@@ -4787,55 +4880,30 @@ def test_workflow_spec_compiles_successfully() -> None:
     assert "TASK_RUNNING" in compiled.state_ids
 
 
-def test_workflow_planning_states_bind_plan_main_profile() -> None:
-    """Active planning states bind plan_main after scratchbook config exists."""
-    from ecs_agent.workflows.compiler import compile_workflow
-    from examples.e2e.plan_and_task.workflow_spec import PLAN_TASK_WORKFLOW_SPEC
+async def test_phase_graph_bound_in_world(tmp_path: Path) -> None:
+    """build_plan_task_world binds the phase graph; WorkflowStateSystem is gone."""
+    from ecs_agent.components import PhaseComponent
+    from ecs_agent.systems import WorkflowStateSystem
 
-    compiled = compile_workflow(PLAN_TASK_WORKFLOW_SPEC)
-    idle_bindings = compiled.bindings_by_state.get("IDLE", {})
-    assert idle_bindings.get("main") == "idle_main"
-    planning_states = [
-        "DRAFT_INTERVIEW",
-        "DRAFT_ADVISOR_REVIEW",
-        "DRAFT_QA_REVIEW",
-        "WRITE_PLAN",
-        "PLAN_QA_REVIEW",
-        "PLAN_FINALIZED",
-        "TASK_READY",
-    ]
+    world, agent_id, _, _ = await _build_test_world(tmp_path)
 
-    for state_id in planning_states:
-        bindings = compiled.bindings_by_state.get(state_id, {})
-        assert bindings.get("main") == "plan_main", (
-            f"{state_id} must bind to plan_main"
-        )
+    component = world.get_component(agent_id, PhaseComponent)
+    assert component is not None
+    assert component.phase == "IDLE"
+    assert component.agent_key == "main"
 
-
-def test_workflow_state_system_installed_in_world(tmp_path: Path) -> None:
-    """build_plan_task_world installs workflow component + WorkflowStateSystem."""
-    from ecs_agent.components import WorkflowBindingComponent, WorkflowRuntimeComponent
-    from ecs_agent.providers.fake_model import FakeModel
-    from examples.e2e.plan_and_task.main import build_plan_task_world
-
-    model = FakeModel(responses=["ok"])
-    world, agent_id, _, _ = build_plan_task_world(model=model, base_dir=tmp_path)
-
-    runtime = world.get_component(agent_id, WorkflowRuntimeComponent)
-    assert runtime is not None
-    assert runtime.current_state_id == "IDLE"
-
-    binding = world.get_component(agent_id, WorkflowBindingComponent)
-    assert binding is not None
-    assert binding.agent_key == "main"
+    assert not any(
+        isinstance(entry.system, WorkflowStateSystem)
+        for entry in world._systems._systems
+    ), "WorkflowStateSystem must no longer be registered"
 
 
 @pytest.mark.asyncio
 async def test_task_start_swaps_system_prompt(tmp_path: Path) -> None:
     from ecs_agent.components import (
         ConversationComponent,
+        PhaseComponent,
         RenderedSystemPromptComponent,
-        WorkflowRuntimeComponent,
     )
     from ecs_agent.prompts.contracts import SystemPromptConfigSpec
     from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
@@ -4844,13 +4912,14 @@ async def test_task_start_swaps_system_prompt(tmp_path: Path) -> None:
     )
     from ecs_agent.types import Message
 
-    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
     state = _make_runtime_state()
     state.phase = "TASK_READY"
     state.review_verdicts = _make_approved_verdicts()
     adapter.write_state(state)
     runtime_state[0] = state
+    await force(world, agent_id, state.phase, reason="test setup")
     world.add_component(agent_id, build_scratchbook_prompt_config(state.workflow_id))
     world.add_component(agent_id, RenderedSystemPromptComponent(text="stale"))
 
@@ -4863,10 +4932,10 @@ async def test_task_start_swaps_system_prompt(tmp_path: Path) -> None:
 
     spec = world.get_component(agent_id, SystemPromptConfigSpec)
     assert spec is not None
-    assert spec.template_source.inline == "${_workflow_state_prompt}"
-    workflow_runtime = world.get_component(agent_id, WorkflowRuntimeComponent)
-    assert workflow_runtime is not None
-    assert workflow_runtime.current_state_id == "TASK_RUNNING"
+    assert spec.template_source.inline == "${_phase_prompt}"
+    phase_component = world.get_component(agent_id, PhaseComponent)
+    assert phase_component is not None
+    assert phase_component.phase == "TASK_RUNNING"
     rendered = world.get_component(agent_id, RenderedSystemPromptComponent)
     assert rendered is not None
     assert "task execution main agent" in rendered.text
@@ -4882,8 +4951,8 @@ async def test_task_start_swaps_system_prompt(tmp_path: Path) -> None:
 async def test_task_resume_swaps_system_prompt(tmp_path: Path) -> None:
     from ecs_agent.components import (
         ConversationComponent,
+        PhaseComponent,
         RenderedSystemPromptComponent,
-        WorkflowRuntimeComponent,
     )
     from ecs_agent.prompts.contracts import SystemPromptConfigSpec
     from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
@@ -4892,7 +4961,7 @@ async def test_task_resume_swaps_system_prompt(tmp_path: Path) -> None:
     )
     from ecs_agent.types import Message
 
-    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
     state = _make_runtime_state()
     state.phase = "TASK_BLOCKED"
@@ -4909,6 +4978,7 @@ async def test_task_resume_swaps_system_prompt(tmp_path: Path) -> None:
     ]
     adapter.write_state(state)
     runtime_state[0] = state
+    await force(world, agent_id, state.phase, reason="test setup")
     world.add_component(agent_id, build_scratchbook_prompt_config(state.workflow_id))
     world.add_component(agent_id, RenderedSystemPromptComponent(text="stale"))
 
@@ -4921,10 +4991,10 @@ async def test_task_resume_swaps_system_prompt(tmp_path: Path) -> None:
 
     spec = world.get_component(agent_id, SystemPromptConfigSpec)
     assert spec is not None
-    assert spec.template_source.inline == "${_workflow_state_prompt}"
-    workflow_runtime = world.get_component(agent_id, WorkflowRuntimeComponent)
-    assert workflow_runtime is not None
-    assert workflow_runtime.current_state_id == "TASK_RUNNING"
+    assert spec.template_source.inline == "${_phase_prompt}"
+    phase_component = world.get_component(agent_id, PhaseComponent)
+    assert phase_component is not None
+    assert phase_component.phase == "TASK_RUNNING"
     rendered = world.get_component(agent_id, RenderedSystemPromptComponent)
     assert rendered is not None
     assert "task execution main agent" in rendered.text
@@ -4966,7 +5036,7 @@ async def test_task_resume_renders_task_prompt_before_reasoning_same_tick(
             return CompletionResult(message=Message(role="assistant", content="ready"))
 
     model = CapturingModel()
-    world, agent_id, adapter_ref, runtime_state = build_plan_task_world(
+    world, agent_id, adapter_ref, runtime_state = await build_plan_task_world(
         model=model,
         base_dir=tmp_path,
     )
@@ -4988,6 +5058,7 @@ async def test_task_resume_renders_task_prompt_before_reasoning_same_tick(
     adapter.write_state(state)
     adapter_ref[0] = adapter
     runtime_state[0] = state
+    await force(world, agent_id, state.phase, reason="test setup")
     world.add_component(agent_id, build_scratchbook_prompt_config(state.workflow_id))
 
     conversation = world.get_component(agent_id, ConversationComponent)
@@ -5013,7 +5084,7 @@ async def test_task_start_auto_loads_state_from_workflow_id(tmp_path: Path) -> N
     )
     from ecs_agent.types import Message
 
-    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
     state = _make_runtime_state()
     state.phase = "PLAN_FINALIZED"
@@ -5043,7 +5114,7 @@ async def test_task_resume_auto_loads_blocked_state_from_workflow_id(
     )
     from ecs_agent.types import Message
 
-    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
     state = _make_runtime_state()
     state.phase = "TASK_BLOCKED"
@@ -5084,7 +5155,7 @@ async def test_task_resume_auto_loads_running_state_from_workflow_id(
     )
     from ecs_agent.types import Message
 
-    world, agent_id, adapter, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
     state = _make_runtime_state()
     state.phase = "TASK_RUNNING"
@@ -5129,7 +5200,7 @@ async def test_task_resume_without_state_and_no_workflow_id_returns_error(
     )
     from ecs_agent.types import Message
 
-    world, agent_id, _adapter, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, _adapter, runtime_state = await _build_test_world(tmp_path)
     assert runtime_state[0] is None
 
     conversation = world.get_component(agent_id, ConversationComponent)
@@ -5154,7 +5225,7 @@ async def test_task_start_without_state_and_no_workflow_id_returns_error(
     )
     from ecs_agent.types import Message
 
-    world, agent_id, _adapter, runtime_state = _build_test_world(tmp_path)
+    world, agent_id, _adapter, runtime_state = await _build_test_world(tmp_path)
     assert runtime_state[0] is None
 
     conversation = world.get_component(agent_id, ConversationComponent)

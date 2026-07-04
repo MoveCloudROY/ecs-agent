@@ -6,12 +6,16 @@ import datetime
 import json
 import os
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from ecs_agent.core import World
 from ecs_agent.logging import get_logger
+from ecs_agent.phases import advance
+from ecs_agent.types import EntityId
 
+from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
 )
@@ -26,10 +30,6 @@ from examples.e2e.plan_and_task.state_models import (
     SubagentRecord,
     TaskRecord,
 )
-from examples.e2e.plan_and_task.state_machine import (
-    WorkflowStateMachine,
-    _COMPILED_WORKFLOW,
-)
 
 logger = get_logger(__name__)
 
@@ -38,11 +38,26 @@ _TASK_QUEUE_FILE_NAME = "task_queue.json"
 _MEMORY_FILE_NAME = "knowledge.jsonl"
 
 
-@dataclass(slots=True)
 class TaskExec:
     """Manages task queue building, subagent dispatch tracking, and task completion."""
 
-    state: RuntimeState
+    def __init__(
+        self,
+        state: RuntimeState,
+        world: World | None = None,
+        entity_id: EntityId | None = None,
+    ) -> None:
+        self.state = state
+        self._world = world
+        self._entity_id = entity_id
+
+    def _require_phase_context(self) -> tuple[World, EntityId]:
+        if self._world is None or self._entity_id is None:
+            raise ValueError(
+                "TaskExec needs world and entity_id for phase transitions; "
+                "construct with TaskExec(state=..., world=..., entity_id=...)"
+            )
+        return self._world, self._entity_id
 
     def load_plan(self, adapter: ArtifactAdapter) -> WorkflowPlan:
         """Load and validate the finalized workflow plan from the artifact adapter."""
@@ -121,7 +136,7 @@ class TaskExec:
             status="pending",
         )
 
-    def initialize_task_queue(
+    async def initialize_task_queue(
         self, state: RuntimeState, adapter: ArtifactAdapter
     ) -> RuntimeState:
         """Load the plan and build the todo queue, then update state to TASK_RUNNING."""
@@ -137,7 +152,7 @@ class TaskExec:
 
         state.tasks = queue
         state.current_task_id = current_task_id
-        state = self._transition_to_running(state)
+        state = await self._transition_to_running(state)
         state.status = "active"
         adapter.write_state(state)
         self._write_task_queue_artifact(
@@ -191,7 +206,6 @@ class TaskExec:
         task.status = "running"
         task.last_error = None
         state.current_task_id = task_id
-        state = self._transition_to_running(state)
         state.status = "active"
         state.active_subagents.append(
             SubagentRecord(
@@ -212,7 +226,7 @@ class TaskExec:
         )
         return state
 
-    def record_task_completion(
+    async def record_task_completion(
         self,
         state: RuntimeState,
         adapter: ArtifactAdapter,
@@ -263,10 +277,12 @@ class TaskExec:
         next_task_id = self._next_pending_task_id(state)
         state.current_task_id = next_task_id
         if next_task_id is None:
-            state = WorkflowStateMachine().transition(state, "TASK_COMPLETED")
+            world, entity_id = self._require_phase_context()
+            await advance(world, entity_id, "TASK_COMPLETED", reason="task:all_done")
+            state.phase = "TASK_COMPLETED"
             state.status = "completed"
         else:
-            state = self._transition_to_running(state)
+            state = await self._transition_to_running(state)
             state.status = "active"
 
         state.updated_at = timestamp
@@ -370,20 +386,22 @@ class TaskExec:
                 return task.task_id
         return None
 
-    def _transition_to_running(self, state: RuntimeState) -> RuntimeState:
-        state_machine = WorkflowStateMachine()
+    async def _transition_to_running(self, state: RuntimeState) -> RuntimeState:
+        world, entity_id = self._require_phase_context()
         if state.phase == "PLAN_FINALIZED":
-            state = state_machine.transition(state, "TASK_READY")
+            await advance(world, entity_id, "TASK_READY", reason="task:init")
+            state.phase = "TASK_READY"
         if state.phase == "TASK_READY":
-            return state_machine.transition(state, "TASK_RUNNING")
+            await advance(world, entity_id, "TASK_RUNNING", reason="task:init")
+            state.phase = "TASK_RUNNING"
+            return state
         if state.phase == "TASK_RUNNING":
             return state
-        if "TASK_RUNNING" in self._allowed_transitions(state):
-            return state_machine.transition(state, "TASK_RUNNING")
+        allowed = PLAN_TASK_PHASE_GRAPH.phases_by_id[state.phase].to
+        if "TASK_RUNNING" in allowed:
+            await advance(world, entity_id, "TASK_RUNNING", reason="task:resume")
+            state.phase = "TASK_RUNNING"
         return state
-
-    def _allowed_transitions(self, state: RuntimeState) -> set[str]:
-        return {t.target_state_id for t in _COMPILED_WORKFLOW.transitions_by_state.get(state.phase, ())}
 
     def _utcnow_isoformat(self) -> str:
         return datetime.datetime.now(datetime.UTC).isoformat()

@@ -6,18 +6,28 @@ import datetime
 from enum import Enum
 from typing import Any
 
+from ecs_agent.components import PhaseComponent
+from ecs_agent.core import World
 from ecs_agent.logging import get_logger
+from ecs_agent.phases import advance, force, record_approval
+from ecs_agent.types import EntityId
 
+from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
 )
 from examples.e2e.plan_and_task.state_models import RuntimeState, ReviewVerdict
-from examples.e2e.plan_and_task.state_machine import (
-    WorkflowStateMachine,
-    _COMPILED_WORKFLOW,
-)
 
 logger = get_logger(__name__)
+
+_FINALIZE_HOPS: dict[str, str] = {
+    "DRAFT_INTERVIEW": "DRAFT_ADVISOR_REVIEW",
+    "DRAFT_ADVISOR_REVIEW": "DRAFT_QA_REVIEW",
+    "DRAFT_QA_REVIEW": "WRITE_PLAN",
+    "WRITE_PLAN": "PLAN_QA_REVIEW",
+    "PLAN_QA_REVIEW": "PLAN_FINALIZED",
+    "PLAN_FINALIZED": "TASK_READY",
+}
 
 
 class ResumeAction(Enum):
@@ -25,15 +35,40 @@ class ResumeAction(Enum):
 
 
 class PlanController:
-    """Manage draft creation, review gating, and plan finalization."""
+    """Manage draft creation, review gating, and plan finalization.
 
-    def __init__(self) -> None:
-        self._state_machine = WorkflowStateMachine()
+    Transitions run through ecs_agent.phases; RuntimeState.phase is a persisted
+    mirror written only by _mirror_phase().
+    """
 
-    def handle_plan_start(
+    def __init__(self, world: World, entity_id: EntityId) -> None:
+        self._world = world
+        self._entity_id = entity_id
+
+    # -- phase plumbing ------------------------------------------------------
+
+    def _mirror_phase(self, state: RuntimeState) -> None:
+        component = self._world.get_component(self._entity_id, PhaseComponent)
+        if component is None:
+            raise ValueError("phase graph is not bound; build the world first")
+        state.phase = component.phase
+        spec = PLAN_TASK_PHASE_GRAPH.phases_by_id[component.phase]
+        state.status = "completed" if spec.terminal else "active"
+
+    async def _advance(self, state: RuntimeState, to_phase: str, *, reason: str) -> None:
+        await advance(self._world, self._entity_id, to_phase, reason=reason)
+        self._mirror_phase(state)
+
+    def current_phase(self) -> str:
+        component = self._world.get_component(self._entity_id, PhaseComponent)
+        return component.phase if component is not None else "IDLE"
+
+    # -- handlers ------------------------------------------------------------
+
+    async def handle_plan_start(
         self, adapter: ArtifactAdapter, description: str
     ) -> RuntimeState:
-        """Create workflow namespace, write draft.md, return DRAFT_INTERVIEW state."""
+        """Create workflow namespace, write draft.md, enter DRAFT_INTERVIEW."""
         timestamp = self._utcnow_isoformat()
         draft_content = self._build_draft_markdown(
             description=description,
@@ -41,6 +76,9 @@ class PlanController:
             timestamp=timestamp,
         )
         adapter.write_draft(draft_content)
+        # force(): a new workflow may start from any prior phase, including
+        # terminal ones left by a previous workflow in this process.
+        await force(self._world, self._entity_id, "DRAFT_INTERVIEW", reason="plan:start")
         state = RuntimeState(
             workflow_id=adapter.workflow_id,
             phase="DRAFT_INTERVIEW",
@@ -67,10 +105,10 @@ class PlanController:
         )
         return state
 
-    def handle_plan_finalize(
+    async def handle_plan_finalize(
         self, state: RuntimeState, adapter: ArtifactAdapter
     ) -> RuntimeState:
-        """Validate both advisor+qa verdicts=approved, write workflow_plan.md, transition to TASK_READY."""
+        """Validate advisor+qa+plan-qa approvals, write plan, walk to TASK_READY."""
         missing_phases = self._missing_approved_reviews(state.review_verdicts)
         if missing_phases:
             formatted = ", ".join(missing_phases)
@@ -93,18 +131,10 @@ class PlanController:
         )
         adapter.write_plan(plan_content)
 
-        if state.phase == "DRAFT_INTERVIEW":
-            state = self._state_machine.transition(state, "DRAFT_ADVISOR_REVIEW")
-        if state.phase == "DRAFT_ADVISOR_REVIEW":
-            state = self._state_machine.transition(state, "DRAFT_QA_REVIEW")
-        if state.phase == "DRAFT_QA_REVIEW":
-            state = self._state_machine.transition(state, "WRITE_PLAN")
-        if state.phase == "WRITE_PLAN":
-            state = self._state_machine.transition(state, "PLAN_QA_REVIEW")
-        if state.phase == "PLAN_QA_REVIEW":
-            state = self._state_machine.transition(state, "PLAN_FINALIZED")
-        if state.phase == "PLAN_FINALIZED":
-            state = self._state_machine.transition(state, "TASK_READY")
+        while state.phase in _FINALIZE_HOPS:
+            await self._advance(
+                state, _FINALIZE_HOPS[state.phase], reason="plan:finalize"
+            )
         state.status = "ready"
         state.updated_at = timestamp
         adapter.write_state(state)
@@ -140,7 +170,7 @@ class PlanController:
             "updated_at": state.updated_at,
         }
 
-    def handle_advisor_review(
+    async def handle_advisor_review(
         self,
         state: RuntimeState,
         adapter: ArtifactAdapter,
@@ -149,32 +179,18 @@ class PlanController:
         citations: list[str] | None = None,
         evidence_refs: list[str] | None = None,
     ) -> RuntimeState:
-        """Record advisor review verdict, persist artifact, update state phase and review_verdicts."""
-        if verdict_str not in {"approved", "revise", "blocked"}:
-            raise ValueError(f"Invalid verdict: {verdict_str!r}")
-        timestamp = self._utcnow_isoformat()
-        verdict = ReviewVerdict(
-            phase="DRAFT_ADVISOR_REVIEW",
-            verdict=verdict_str,
-            decided_at=timestamp,
+        return await self._handle_review(
+            state,
+            adapter,
+            review_phase="DRAFT_ADVISOR_REVIEW",
+            verdict_str=verdict_str,
             notes=notes,
-            citations=citations or [],
-            evidence_refs=evidence_refs or [],
+            citations=citations,
+            evidence_refs=evidence_refs,
+            log_event="plan_task_advisor_review_recorded",
         )
-        adapter.write_review_verdict("DRAFT_ADVISOR_REVIEW", verdict)
-        state.upsert_verdict(verdict)
-        if "DRAFT_ADVISOR_REVIEW" in self._allowed_transitions(state):
-            state = self._state_machine.transition(state, "DRAFT_ADVISOR_REVIEW")
-        state.updated_at = timestamp
-        adapter.write_state(state)
-        logger.info(
-            "plan_task_advisor_review_recorded",
-            workflow_id=state.workflow_id,
-            verdict=verdict_str,
-        )
-        return state
 
-    def handle_qa_review(
+    async def handle_qa_review(
         self,
         state: RuntimeState,
         adapter: ArtifactAdapter,
@@ -183,149 +199,145 @@ class PlanController:
         citations: list[str] | None = None,
         evidence_refs: list[str] | None = None,
     ) -> RuntimeState:
-        """Record QA review verdict, persist artifact, update state phase and review_verdicts."""
+        return await self._handle_review(
+            state,
+            adapter,
+            review_phase="DRAFT_QA_REVIEW",
+            verdict_str=verdict_str,
+            notes=notes,
+            citations=citations,
+            evidence_refs=evidence_refs,
+            log_event="plan_task_qa_review_recorded",
+        )
+
+    async def handle_plan_qa_review(
+        self,
+        state: RuntimeState,
+        adapter: ArtifactAdapter,
+        verdict_str: str,
+        notes: str | None = None,
+        citations: list[str] | None = None,
+        evidence_refs: list[str] | None = None,
+    ) -> RuntimeState:
+        return await self._handle_review(
+            state,
+            adapter,
+            review_phase="PLAN_QA_REVIEW",
+            verdict_str=verdict_str,
+            notes=notes,
+            citations=citations,
+            evidence_refs=evidence_refs,
+            log_event="plan_task_plan_qa_review_recorded",
+        )
+
+    async def _handle_review(
+        self,
+        state: RuntimeState,
+        adapter: ArtifactAdapter,
+        *,
+        review_phase: str,
+        verdict_str: str,
+        notes: str | None,
+        citations: list[str] | None,
+        evidence_refs: list[str] | None,
+        log_event: str,
+    ) -> RuntimeState:
+        """Shared review flow: persist verdict artifact, enter the review phase
+        when the graph allows it from the current phase (exactly the legacy
+        `_allowed_transitions` entry behavior), and route via the phase's gate."""
         if verdict_str not in {"approved", "revise", "blocked"}:
             raise ValueError(f"Invalid verdict: {verdict_str!r}")
         timestamp = self._utcnow_isoformat()
         verdict = ReviewVerdict(
-            phase="DRAFT_QA_REVIEW",
+            phase=review_phase,
             verdict=verdict_str,
             decided_at=timestamp,
             notes=notes,
             citations=citations or [],
             evidence_refs=evidence_refs or [],
         )
-        adapter.write_review_verdict("DRAFT_QA_REVIEW", verdict)
+        adapter.write_review_verdict(review_phase, verdict)
         state.upsert_verdict(verdict)
-        if "DRAFT_QA_REVIEW" in self._allowed_transitions(state):
-            state = self._state_machine.transition(state, "DRAFT_QA_REVIEW")
-        if verdict_str == "approved" and "WRITE_PLAN" in self._allowed_transitions(state):
-            state = self._state_machine.transition(state, "WRITE_PLAN")
-            logger.info(
-                "plan_task_auto_transition_write_plan",
-                workflow_id=state.workflow_id,
+
+        allowed = PLAN_TASK_PHASE_GRAPH.phases_by_id[state.phase].to
+        if state.phase != review_phase and review_phase in allowed:
+            await self._advance(state, review_phase, reason=f"verdict:{review_phase}")
+        if state.phase == review_phase:
+            await record_approval(
+                self._world,
+                self._entity_id,
+                verdict_str,
+                notes=notes,
+                decided_at=timestamp,
             )
+            self._mirror_phase(state)
+
         state.updated_at = timestamp
         adapter.write_state(state)
-        logger.info(
-            "plan_task_qa_review_recorded",
-            workflow_id=state.workflow_id,
-            verdict=verdict_str,
-        )
+        logger.info(log_event, workflow_id=state.workflow_id, verdict=verdict_str)
         return state
 
-    def handle_write_plan(
-        self,
-        state: RuntimeState,
-        adapter: ArtifactAdapter,
+    async def handle_write_plan(
+        self, state: RuntimeState, adapter: ArtifactAdapter
     ) -> RuntimeState:
-        """Transition to WRITE_PLAN phase so the planner can produce workflow_plan.md."""
+        """Transition to WRITE_PLAN so the planner can produce workflow_plan.md."""
         if state.phase != "DRAFT_QA_REVIEW":
             raise ValueError(
                 f"handle_write_plan requires DRAFT_QA_REVIEW phase, got {state.phase}"
             )
         timestamp = self._utcnow_isoformat()
-        state = self._state_machine.transition(state, "WRITE_PLAN")
+        await self._advance(state, "WRITE_PLAN", reason="plan:write")
         state.updated_at = timestamp
         adapter.write_state(state)
-        logger.info(
-            "plan_task_write_plan_started",
-            workflow_id=state.workflow_id,
-        )
+        logger.info("plan_task_write_plan_started", workflow_id=state.workflow_id)
         return state
 
-    def handle_write_plan_completed(
-        self,
-        state: RuntimeState,
-        adapter: ArtifactAdapter,
+    async def handle_write_plan_completed(
+        self, state: RuntimeState, adapter: ArtifactAdapter
     ) -> RuntimeState:
         if state.phase != "WRITE_PLAN":
             raise ValueError(
                 f"handle_write_plan_completed requires WRITE_PLAN phase, got {state.phase}"
             )
         timestamp = self._utcnow_isoformat()
-        state = self._state_machine.transition(state, "PLAN_QA_REVIEW")
+        await self._advance(state, "PLAN_QA_REVIEW", reason="plan_writer:completed")
         state.updated_at = timestamp
         adapter.write_state(state)
-        logger.info(
-            "plan_task_write_plan_completed",
-            workflow_id=state.workflow_id,
-        )
+        logger.info("plan_task_write_plan_completed", workflow_id=state.workflow_id)
         return state
 
-    def handle_plan_qa_review(
-        self,
-        state: RuntimeState,
-        adapter: ArtifactAdapter,
-        verdict_str: str,
-        notes: str | None = None,
-        citations: list[str] | None = None,
-        evidence_refs: list[str] | None = None,
-    ) -> RuntimeState:
-        """Record plan QA review verdict on the final workflow_plan.md, persist, update state."""
-        if verdict_str not in {"approved", "revise", "blocked"}:
-            raise ValueError(f"Invalid verdict: {verdict_str!r}")
-        timestamp = self._utcnow_isoformat()
-        verdict = ReviewVerdict(
-            phase="PLAN_QA_REVIEW",
-            verdict=verdict_str,
-            decided_at=timestamp,
-            notes=notes,
-            citations=citations or [],
-            evidence_refs=evidence_refs or [],
-        )
-        adapter.write_review_verdict("PLAN_QA_REVIEW", verdict)
-        state.upsert_verdict(verdict)
-        if "PLAN_QA_REVIEW" in self._allowed_transitions(state):
-            state = self._state_machine.transition(state, "PLAN_QA_REVIEW")
-        if verdict_str == "approved" and "PLAN_FINALIZED" in self._allowed_transitions(state):
-            state = self._state_machine.transition(state, "PLAN_FINALIZED")
-            logger.info(
-                "plan_task_auto_transition_plan_finalized",
-                workflow_id=state.workflow_id,
-            )
-        state.updated_at = timestamp
-        adapter.write_state(state)
-        logger.info(
-            "plan_task_plan_qa_review_recorded",
-            workflow_id=state.workflow_id,
-            verdict=verdict_str,
-        )
-        return state
-
-    def reconcile_after_resume(
+    async def reconcile_after_resume(
         self, state: RuntimeState, adapter: ArtifactAdapter
     ) -> list[ResumeAction]:
-        verdicts_by_phase = {v.phase: v.verdict for v in state.review_verdicts}
+        """Replay the current phase's gate mapping against persisted verdicts.
+
+        The routing rule lives in the graph's ApprovalGate — no duplication with
+        the live review handlers. record_approval is NOT called (the verdict is
+        already in the artifact ledger)."""
         actions: list[ResumeAction] = []
-
-        if state.phase == "DRAFT_QA_REVIEW":
-            if verdicts_by_phase.get("DRAFT_QA_REVIEW") == "approved":
-                state = self._state_machine.transition(state, "WRITE_PLAN")
+        spec = PLAN_TASK_PHASE_GRAPH.phases_by_id[state.phase]
+        if spec.approval is not None:
+            verdicts_by_phase = {v.phase: v.verdict for v in state.review_verdicts}
+            verdict = verdicts_by_phase.get(state.phase)
+            target = spec.approval.verdicts.get(verdict) if verdict else None
+            if target is not None:
+                await self._advance(state, target, reason=f"reconcile:{verdict}")
                 adapter.write_state(state)
                 logger.info(
-                    "plan_task_auto_transition_write_plan",
+                    "plan_task_reconcile_advanced",
                     workflow_id=state.workflow_id,
+                    to_phase=target,
                     source="reconcile_after_resume",
                 )
-                actions.append(ResumeAction.TRIGGER_PLAN_WRITER)
+                if target == "WRITE_PLAN":
+                    actions.append(ResumeAction.TRIGGER_PLAN_WRITER)
+                return actions
 
-        elif state.phase == "WRITE_PLAN":
+        if state.phase == "WRITE_PLAN":
             actions.append(ResumeAction.TRIGGER_PLAN_WRITER)
-
-        elif state.phase == "PLAN_QA_REVIEW":
-            if verdicts_by_phase.get("PLAN_QA_REVIEW") == "approved":
-                state = self._state_machine.transition(state, "PLAN_FINALIZED")
-                adapter.write_state(state)
-                logger.info(
-                    "plan_task_auto_transition_plan_finalized",
-                    workflow_id=state.workflow_id,
-                    source="reconcile_after_resume",
-                )
-
         return actions
 
-    def handle_task_abort(
+    async def handle_task_abort(
         self, state: RuntimeState, adapter: ArtifactAdapter, reason: str
     ) -> RuntimeState:
         """Abort the current task and transition to TASK_ABORTED terminal state."""
@@ -333,77 +345,73 @@ class PlanController:
         self._require_plan_artifact(adapter, state)
 
         timestamp = self._utcnow_isoformat()
-        updated_state = self._state_machine.transition(state, "TASK_ABORTED")
-        updated_state.status = "aborted"
-        updated_state.abort_reason = reason
-        updated_state.last_checkpoint = reason
-        updated_state.updated_at = timestamp
+        await self._advance(state, "TASK_ABORTED", reason=f"task:abort:{reason[:80]}")
+        state.status = "aborted"
+        state.abort_reason = reason
+        state.last_checkpoint = reason
+        state.updated_at = timestamp
         self._append_task_event(
             adapter,
             event_type="task_aborted",
-            state=updated_state,
+            state=state,
             reason=reason,
             scope_changed=False,
         )
-        adapter.write_state(updated_state)
+        adapter.write_state(state)
         logger.info(
             "plan_task_aborted",
             workflow_id=state.workflow_id,
             task_id=state.current_task_id,
             reason=reason,
         )
-        return updated_state
+        return state
 
-    def handle_task_replan(
+    async def handle_task_replan(
         self,
         state: RuntimeState,
         adapter: ArtifactAdapter,
         reason: str,
         scope_changed: bool = False,
     ) -> RuntimeState:
-        """Request a replan and optionally trigger advisor/QA review if scope changed."""
+        """Request a replan and optionally force advisor/QA re-review on scope change."""
         self._require_reason(reason)
         self._require_plan_artifact(adapter, state)
 
         timestamp = self._utcnow_isoformat()
-        updated_state = self._state_machine.transition(state, "TASK_REPLAN")
-        updated_state.last_checkpoint = reason
-        updated_state.abort_reason = None
+        await self._advance(state, "TASK_REPLAN", reason=f"task:replan:{reason[:80]}")
+        state.last_checkpoint = reason
+        state.abort_reason = None
         self._append_task_event(
             adapter,
             event_type="task_replan_requested",
-            state=updated_state,
+            state=state,
             reason=reason,
             scope_changed=scope_changed,
         )
 
         if scope_changed:
-            updated_state.review_verdicts = []
-            updated_state = self._state_machine.transition(
-                updated_state, "DRAFT_ADVISOR_REVIEW"
-            )
-            updated_state.status = "needs_review"
+            state.review_verdicts = []
+            await self._advance(state, "DRAFT_ADVISOR_REVIEW", reason="replan:scope_changed")
+            state.status = "needs_review"
         else:
-            updated_state = self._state_machine.transition(
-                updated_state, "TASK_RUNNING"
-            )
-            updated_state.status = "active"
+            await self._advance(state, "TASK_RUNNING", reason="replan:same_scope")
+            state.status = "active"
 
-        updated_state.updated_at = timestamp
-        adapter.write_state(updated_state)
+        state.updated_at = timestamp
+        adapter.write_state(state)
         logger.info(
             "plan_task_replan_handled",
             workflow_id=state.workflow_id,
             task_id=state.current_task_id,
             scope_changed=scope_changed,
         )
-        return updated_state
+        return state
 
-    def handle_task_resume(
+    async def handle_task_resume(
         self, state: RuntimeState, adapter: ArtifactAdapter
     ) -> RuntimeState:
         """Resume a blocked or replanned task by transitioning back to TASK_RUNNING."""
-        if self._state_machine.is_terminal(state.phase):
+        if PLAN_TASK_PHASE_GRAPH.phases_by_id[state.phase].terminal:
             raise ValueError(f"Cannot resume terminal workflow phase: {state.phase}")
         if state.phase not in {"TASK_BLOCKED", "TASK_REPLAN"}:
             raise ValueError(
@@ -412,25 +420,25 @@ class PlanController:
 
         self._require_plan_artifact(adapter, state)
         timestamp = self._utcnow_isoformat()
-        updated_state = self._state_machine.transition(state, "TASK_RUNNING")
-        updated_state.status = "active"
-        updated_state.abort_reason = None
-        updated_state.updated_at = timestamp
+        await self._advance(state, "TASK_RUNNING", reason="task:resume")
+        state.status = "active"
+        state.abort_reason = None
+        state.updated_at = timestamp
         self._append_task_event(
             adapter,
             event_type="task_resumed",
-            state=updated_state,
-            reason=updated_state.last_checkpoint,
+            state=state,
+            reason=state.last_checkpoint,
             scope_changed=False,
         )
-        adapter.write_state(updated_state)
+        adapter.write_state(state)
         logger.info(
             "plan_task_resumed",
             workflow_id=state.workflow_id,
             task_id=state.current_task_id,
             phase=state.phase,
         )
-        return updated_state
+        return state
 
     def _missing_approved_reviews(self, verdicts: list[ReviewVerdict]) -> list[str]:
         verdicts_by_phase = {verdict.phase: verdict.verdict for verdict in verdicts}
@@ -536,9 +544,6 @@ execution_hints: []
                 "timestamp": self._utcnow_isoformat(),
             }
         )
-
-    def _allowed_transitions(self, state: RuntimeState) -> set[str]:
-        return {t.target_state_id for t in _COMPILED_WORKFLOW.transitions_by_state.get(state.phase, ())}
 
     def _utcnow_isoformat(self) -> str:
         return datetime.datetime.now(datetime.UTC).isoformat()
