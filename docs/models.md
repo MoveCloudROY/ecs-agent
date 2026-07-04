@@ -93,6 +93,24 @@ The component is absent until the first call and is not created when the provide
 
 **Compaction calibration.** Once this component exists, `CompactionSystem` calibrates its threshold check against ground truth: it uses the real `last_prompt_tokens` (the exact size of the last input — system, tools and history) plus a local estimate of only the messages appended since that call (`last_prompt_message_count` anchors the boundary). Before the first call — or after compaction shrinks the conversation below the anchor — it falls back to a pure local estimate (`ecs_agent.token_counting`).
 
+### Context trimming → compaction pipeline
+
+When an entity has a `ContextTrimConfig`, `CompactionSystem` runs a failover pipeline before summarizing: **estimate → trim → (still over) summarize**.
+
+- **Budget** = `ContextTrimConfig.max_tokens`, or — when `None` — derived from the model's context window via `ecs_agent.context_windows.resolve_context_budget(model_id)` (window minus an output reserve).
+- **Trim** permanently drops the oldest tool spans (atomic assistant-tool-call + results), then optionally strips replayed reasoning (`trim_reasoning`), until the estimate is under budget. It's cheap (no LLM) and rewrites history in place.
+- If trimming frees enough space → **no summary is produced** this turn. If essential content still exceeds budget → it **falls back to compaction summarization**. There is no "raise on overflow" — `overflow_behavior` defaults to a non-raising `"warn"`.
+
+```python
+from ecs_agent.components import ContextTrimConfig
+
+# Trim oldest tool results to fit the model's window before compacting.
+world.add_component(agent_id, ContextTrimConfig())            # budget from model window
+world.add_component(agent_id, ContextTrimConfig(max_tokens=100_000))  # explicit budget
+```
+
+Without a `ContextTrimConfig`, compaction behaves exactly as before (summarize at `threshold_tokens`). Model windows are catalogued in `ecs_agent/context_windows.py` (extend `CONTEXT_WINDOWS` as needed).
+
 ### Selection Rules
 
 - **`api_format` only**: infers `model_type` (`OPENAI_CHAT_COMPLETIONS` / `OPENAI_RESPONSES` → `openai`; `ANTHROPIC_MESSAGES` → `claude`).

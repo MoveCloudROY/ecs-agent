@@ -277,12 +277,22 @@ class CheckpointComponent:
 
 
 @dataclass(slots=True)
-class ContextBudgetConfig:
-    max_tokens: int
-    prune_tool_results: bool = True
-    prune_reasoning: bool = False
+class ContextTrimConfig:
+    """Context-window trimming policy (ISSUE-5).
+
+    Enables permanent pre-compaction trimming of droppable content (oldest tool
+    spans, then reasoning) to fit a token budget. ``max_tokens`` is the budget;
+    ``None`` means "derive from the model's context window"
+    (``ecs_agent.context_windows.resolve_context_budget``). When trimming cannot
+    get under budget, ``CompactionSystem`` falls back to summarization — so the
+    default ``overflow_behavior`` is a non-raising ``"warn"`` (never "error").
+    """
+
+    max_tokens: int | None = None
+    trim_tool_results: bool = True
+    trim_reasoning: bool = False
     token_estimation_chars_per_token: float = 4.0
-    overflow_behavior: str = "error"
+    overflow_behavior: str = "warn"
 
 
 @dataclass(slots=True)

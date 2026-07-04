@@ -974,7 +974,7 @@ async def test_runtime_control_metrics_increment_from_representative_offline_pat
     from ecs_agent.components import (
         CheckpointComponent,
         CompactionConfigComponent,
-        ContextBudgetConfig,
+        ContextTrimConfig,
         ConversationComponent,
         LLMComponent,
         PendingToolCallsComponent,
@@ -1073,7 +1073,7 @@ async def test_runtime_control_metrics_increment_from_representative_offline_pat
     )
     world.add_component(
         tool_entity,
-        ContextBudgetConfig(max_tokens=1, token_estimation_chars_per_token=1.0),
+        ContextTrimConfig(max_tokens=1, token_estimation_chars_per_token=1.0),
     )
     await ToolExecutionSystem(registry=ArtifactRegistry(tmp_path / "scratchbook")).process(world)
 

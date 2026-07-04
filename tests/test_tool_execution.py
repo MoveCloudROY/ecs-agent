@@ -2,7 +2,7 @@ import pytest
 
 from ecs_agent.components import (
     ConversationComponent,
-    ContextBudgetConfig,
+    ContextTrimConfig,
     ContextCacheComponent,
     PendingToolCallsComponent,
     ToolRegistryComponent,
@@ -330,7 +330,7 @@ async def test_tool_execution_caches_result_on_overflow(tmp_path) -> None:
     )
     world.add_component(
         entity_id,
-        ContextBudgetConfig(
+        ContextTrimConfig(
             max_tokens=5,
             token_estimation_chars_per_token=1.0,
             overflow_behavior="warn",

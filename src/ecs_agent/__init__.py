@@ -117,7 +117,7 @@ from ecs_agent.metrics import (
 from ecs_agent.components.definitions import (
     CheckpointComponent,
     CompactionConfigComponent,
-    ContextBudgetConfig,
+    ContextTrimConfig,
     ContextCacheComponent,
     ConversationArchiveComponent,
     ConversationTreeComponent,
@@ -209,7 +209,7 @@ __all__ = [
     "compile_agent_specs",
     "CompactionCompleteEvent",
     "CompactionConfigComponent",
-    "ContextBudgetConfig",
+    "ContextTrimConfig",
     "ContextCacheComponent",
     "CompactionSystem",
     "CompletionResult",

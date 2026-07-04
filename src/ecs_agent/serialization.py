@@ -10,7 +10,7 @@ from typing import Any
 from ecs_agent.components import (
     CheckpointComponent,
     CompactionConfigComponent,
-    ContextBudgetConfig,
+    ContextTrimConfig,
     ContextCacheComponent,
     ContextEntry,
     CurrentCompactionSummaryComponent,
@@ -108,7 +108,7 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     SubagentSessionTableComponent.__name__: SubagentSessionTableComponent,
     SubagentWaitComponent.__name__: SubagentWaitComponent,
     CheckpointComponent.__name__: CheckpointComponent,
-    ContextBudgetConfig.__name__: ContextBudgetConfig,
+    ContextTrimConfig.__name__: ContextTrimConfig,
     CompactionConfigComponent.__name__: CompactionConfigComponent,
     ContextCacheComponent.__name__: ContextCacheComponent,
     CurrentCompactionSummaryComponent.__name__: CurrentCompactionSummaryComponent,

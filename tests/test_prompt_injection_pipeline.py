@@ -2,7 +2,7 @@ import pytest
 
 from ecs_agent.components import (
     ConversationComponent,
-    ContextBudgetConfig,
+    ContextTrimConfig,
     ContextEntry,
     LLMComponent,
     PromptContextQueueComponent,
@@ -15,7 +15,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import World
 from ecs_agent.prompts.message_assembly import (
-    apply_outbound_budget,
+    trim_context_to_fit,
     assemble_messages,
     commit_prompt_context_reservation,
     prepare_outbound_messages,
@@ -99,10 +99,10 @@ def test_budget_reducer_non_mutating() -> None:
     world.add_component(entity_id, conversation)
     world.add_component(
         entity_id,
-        ContextBudgetConfig(
+        ContextTrimConfig(
             max_tokens=25,
-            prune_tool_results=True,
-            prune_reasoning=False,
+            trim_tool_results=True,
+            trim_reasoning=False,
             token_estimation_chars_per_token=1.0,
             overflow_behavior="error",
         ),
@@ -125,7 +125,7 @@ def test_budget_reducer_non_mutating() -> None:
 
 
 def test_budget_reducer_prunes_tool_spans_atomically() -> None:
-    reduced = apply_outbound_budget(
+    reduced = trim_context_to_fit(
         messages=[
             Message(role="user", content="start"),
             Message(
@@ -138,10 +138,10 @@ def test_budget_reducer_prunes_tool_spans_atomically() -> None:
         ],
         system_prompt="",
         context_entries=[],
-        config=ContextBudgetConfig(
+        config=ContextTrimConfig(
             max_tokens=30,
-            prune_tool_results=True,
-            prune_reasoning=False,
+            trim_tool_results=True,
+            trim_reasoning=False,
             token_estimation_chars_per_token=1.0,
             overflow_behavior="error",
         ),
@@ -154,7 +154,7 @@ def test_budget_reducer_prunes_tool_spans_atomically() -> None:
 
 
 def test_tool_span_atomic_removal_from_conversation() -> None:
-    reduced = apply_outbound_budget(
+    reduced = trim_context_to_fit(
         messages=[
             Message(role="user", content="start"),
             Message(
@@ -174,10 +174,10 @@ def test_tool_span_atomic_removal_from_conversation() -> None:
         ],
         system_prompt="",
         context_entries=[],
-        config=ContextBudgetConfig(
+        config=ContextTrimConfig(
             max_tokens=55,
-            prune_tool_results=True,
-            prune_reasoning=False,
+            trim_tool_results=True,
+            trim_reasoning=False,
             token_estimation_chars_per_token=1.0,
             overflow_behavior="error",
         ),
@@ -234,7 +234,7 @@ def test_budget_prunes_tool_result_context_entries() -> None:
         droppable_kind="reasoning",
     )
 
-    reduced = apply_outbound_budget(
+    reduced = trim_context_to_fit(
         messages=assemble_messages(
             conversation_messages=[Message(role="user", content="Need answer")],
             enable_context_pool=True,
@@ -242,10 +242,10 @@ def test_budget_prunes_tool_result_context_entries() -> None:
         ),
         system_prompt="",
         context_entries=[tool_context, reasoning_context],
-        config=ContextBudgetConfig(
+        config=ContextTrimConfig(
             max_tokens=140,
-            prune_tool_results=True,
-            prune_reasoning=False,
+            trim_tool_results=True,
+            trim_reasoning=False,
             token_estimation_chars_per_token=1.0,
             overflow_behavior="error",
         ),
@@ -294,10 +294,10 @@ def test_budget_reducer_prune_order_tool_before_reasoning() -> None:
     )
     world.add_component(
         entity_id,
-        ContextBudgetConfig(
+        ContextTrimConfig(
             max_tokens=90,
-            prune_tool_results=True,
-            prune_reasoning=True,
+            trim_tool_results=True,
+            trim_reasoning=True,
             token_estimation_chars_per_token=1.0,
             overflow_behavior="error",
         ),
@@ -328,10 +328,10 @@ def test_budget_protected_overflow_raises_error() -> None:
     )
     world.add_component(
         entity_id,
-        ContextBudgetConfig(
+        ContextTrimConfig(
             max_tokens=5,
-            prune_tool_results=True,
-            prune_reasoning=True,
+            trim_tool_results=True,
+            trim_reasoning=True,
             token_estimation_chars_per_token=1.0,
             overflow_behavior="error",
         ),
@@ -360,10 +360,10 @@ def test_budget_protected_overflow_warn_returns_oversized() -> None:
     )
     world.add_component(
         entity_id,
-        ContextBudgetConfig(
+        ContextTrimConfig(
             max_tokens=5,
-            prune_tool_results=True,
-            prune_reasoning=True,
+            trim_tool_results=True,
+            trim_reasoning=True,
             token_estimation_chars_per_token=1.0,
             overflow_behavior="warn",
         ),

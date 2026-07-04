@@ -6,7 +6,7 @@ import pytest
 
 from ecs_agent.components import (
     CompactionConfigComponent,
-    ContextBudgetConfig,
+    ContextTrimConfig,
     CurrentCompactionSummaryComponent,
     ConversationArchiveComponent,
     ConversationComponent,
@@ -32,7 +32,7 @@ from ecs_agent.prompts.contracts import (
     PromptTemplateSource,
     SystemPromptConfigSpec,
 )
-from ecs_agent.prompts.message_assembly import apply_outbound_budget
+from ecs_agent.prompts.message_assembly import trim_context_to_fit
 from ecs_agent.types import (
     CompactionCompleteEvent,
     CompletionResult,
@@ -40,6 +40,7 @@ from ecs_agent.types import (
     Message,
     SubagentNotificationRecord,
     SubagentSessionRecord,
+    ToolCall,
     ToolSchema,
 )
 from ecs_agent.components.definitions import ContextEntry
@@ -316,11 +317,11 @@ async def test_compaction_predrop_then_compact_uses_budgeted_view_without_mutati
 
     seen: dict[str, object] = {}
 
-    def fake_apply_outbound_budget(
+    def fake_trim_context_to_fit(
         messages: list[Message],
         system_prompt: str,
         context_entries: list[object],
-        config: ContextBudgetConfig,
+        config: ContextTrimConfig,
     ) -> list[Message]:
         seen["messages"] = list(messages)
         seen["system_prompt"] = system_prompt
@@ -330,8 +331,8 @@ async def test_compaction_predrop_then_compact_uses_budgeted_view_without_mutati
 
     monkeypatch.setattr(
         compaction_module,
-        "apply_outbound_budget",
-        fake_apply_outbound_budget,
+        "trim_context_to_fit",
+        fake_trim_context_to_fit,
     )
 
     await CompactionSystem().process(world)
@@ -339,8 +340,8 @@ async def test_compaction_predrop_then_compact_uses_budgeted_view_without_mutati
     assert seen["system_prompt"] == ""
     assert seen["context_entries"] == []
     budget_config = seen["config"]
-    assert isinstance(budget_config, ContextBudgetConfig)
-    assert budget_config.prune_tool_results is True
+    assert isinstance(budget_config, ContextTrimConfig)
+    assert budget_config.trim_tool_results is True
 
     summarized_input = model.calls[0][0][1].content
     assert "assistant: tool call" not in summarized_input
@@ -1109,11 +1110,11 @@ def test_overflow_pruning_logs_observable_event(
         ),
     ]
 
-    reduced = apply_outbound_budget(
+    reduced = trim_context_to_fit(
         messages,
         system_prompt="",
         context_entries=context_entries,
-        config=ContextBudgetConfig(
+        config=ContextTrimConfig(
             max_tokens=40,
             token_estimation_chars_per_token=1.0,
             overflow_behavior="warn",
@@ -1342,3 +1343,107 @@ async def test_compaction_falls_back_when_anchor_exceeds_conversation() -> None:
     # Fell back to the local estimate (small) -> no compaction.
     assert world.get_component(entity_id, CurrentCompactionSummaryComponent) is None
     assert model.calls == []
+
+
+@pytest.mark.asyncio
+async def test_trim_frees_space_and_skips_summary() -> None:
+    """ISSUE-5: when trimming old tool spans gets under budget, history is
+    permanently reduced and no LLM summary is produced."""
+    world = World()
+    model = RecordingFakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content="brief"))]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[
+                _message("u" * 40),
+                Message(
+                    role="assistant",
+                    content="a" * 40,
+                    tool_calls=[ToolCall(id="c1", name="search", arguments={})],
+                ),
+                Message(role="tool", content="t" * 400, tool_call_id="c1"),
+                _message("b" * 40, role="assistant"),
+                _message("c" * 40),
+            ]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        CompactionConfigComponent(threshold_tokens=1000, summary_model="summary-model"),
+    )
+    world.add_component(entity_id, ContextTrimConfig(max_tokens=60))
+
+    await CompactionSystem().process(world)
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    # Tool span dropped; no summary.
+    assert [m.role for m in conversation.messages] == ["user", "assistant", "user"]
+    assert all("t" * 400 not in (m.content or "") for m in conversation.messages)
+    assert world.get_component(entity_id, CurrentCompactionSummaryComponent) is None
+    assert model.calls == []
+
+
+@pytest.mark.asyncio
+async def test_trim_insufficient_falls_back_to_summary() -> None:
+    """ISSUE-5: when trimming cannot get under budget (essential content too
+    large), it falls back to compaction summarization."""
+    world = World()
+    model = RecordingFakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content="brief"))]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[
+                _message("x" * 400),
+                Message(
+                    role="assistant",
+                    content="a" * 20,
+                    tool_calls=[ToolCall(id="c1", name="search", arguments={})],
+                ),
+                Message(role="tool", content="t" * 20, tool_call_id="c1"),
+                _message("y" * 400, role="assistant"),
+                _message("z" * 400),
+            ]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        CompactionConfigComponent(threshold_tokens=1000, summary_model="summary-model"),
+    )
+    world.add_component(entity_id, ContextTrimConfig(max_tokens=60))
+
+    await CompactionSystem().process(world)
+
+    # Trim ran (tool span gone) but was not enough -> summary produced.
+    summary = world.get_component(entity_id, CurrentCompactionSummaryComponent)
+    assert summary == CurrentCompactionSummaryComponent(summary="brief")
+    assert len(model.calls) == 1
+
+
+def test_resolve_trim_budget_from_model_window() -> None:
+    from ecs_agent.providers import FakeModel
+
+    system = CompactionSystem()
+    claude_llm = LLMComponent(model=FakeModel(responses=[], model_id="claude-opus-4-8"))
+    # Explicit max_tokens wins.
+    assert (
+        system._resolve_trim_budget(ContextTrimConfig(max_tokens=500), claude_llm) == 500
+    )
+    # None -> derived from model window (200000 - 8192 reserve).
+    assert (
+        system._resolve_trim_budget(ContextTrimConfig(max_tokens=None), claude_llm)
+        == 200_000 - 8_192
+    )
+    # Unknown model + None -> no budget.
+    unknown_llm = LLMComponent(model=FakeModel(responses=[], model_id="fake"))
+    assert system._resolve_trim_budget(ContextTrimConfig(max_tokens=None), unknown_llm) is None
+    # No trim config -> no budget.
+    assert system._resolve_trim_budget(None, claude_llm) is None

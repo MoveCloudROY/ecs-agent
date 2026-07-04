@@ -16,6 +16,21 @@ def reset_ecs_logging() -> None:
 
 
 @pytest.fixture(autouse=True)
+def deterministic_token_counting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force the CJK-aware character fallback in ``token_counting``.
+
+    Unit tests assert exact token estimates (often via ``chars_per_token``), which
+    must be deterministic regardless of whether tiktoken's BPE ranks happen to be
+    cached on the machine. The real BPE path is validated by the env-gated
+    real-LLM tests instead.
+    """
+    import ecs_agent.token_counting as token_counting
+
+    monkeypatch.setattr(token_counting, "_encoder", None, raising=False)
+    monkeypatch.setattr(token_counting, "_encoder_loaded", True, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def reset_subagent_scheduler() -> None:
     """Reset the global subagent scheduler singleton between tests to prevent state leakage."""
     from ecs_agent.systems.subagent_runtime import reset_global_scheduler

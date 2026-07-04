@@ -8,7 +8,7 @@ from typing import Awaitable, Callable
 
 from ecs_agent.components import (
     ConversationComponent,
-    ContextBudgetConfig,
+    ContextTrimConfig,
     ContextCacheComponent,
     PendingToolCallsComponent,
     PlanComponent,
@@ -232,8 +232,10 @@ class ToolExecutionSystem:
         result: str,
         artifact_path: str | None,
     ) -> None:
-        budget = world.get_component(entity_id, ContextBudgetConfig)
-        if budget is None or artifact_path is None:
+        budget = world.get_component(entity_id, ContextTrimConfig)
+        if budget is None or artifact_path is None or budget.max_tokens is None:
+            # Model-window-derived budgets (max_tokens=None) do not drive this
+            # transient overflow cache; the CompactionSystem trim step handles them.
             return
 
         estimated_tokens = self._estimate_conversation_tokens(

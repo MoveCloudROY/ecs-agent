@@ -9,7 +9,7 @@ import uuid
 from typing import Any
 
 from ecs_agent.accounting.models import LLMRetryEvent
-from ecs_agent.components import ConversationComponent, ContextBudgetConfig
+from ecs_agent.components import ConversationComponent, ContextTrimConfig
 from ecs_agent.observability.context import current_run_id, current_trace_id
 from ecs_agent.observability.events import (
     LLMObservationCompletedEvent,
@@ -1312,16 +1312,16 @@ class ObservabilitySubscriber:
             ),
         }
         if self.world is not None:
-            budget = self.world.get_component(int(event.entity_id), ContextBudgetConfig)
+            budget = self.world.get_component(int(event.entity_id), ContextTrimConfig)
             if budget is not None:
                 metadata["context_budget"] = self._context_budget_payload(budget)
         return metadata
 
-    def _context_budget_payload(self, budget: ContextBudgetConfig) -> dict[str, Any]:
+    def _context_budget_payload(self, budget: ContextTrimConfig) -> dict[str, Any]:
         return {
             "max_tokens": budget.max_tokens,
-            "prune_tool_results": budget.prune_tool_results,
-            "prune_reasoning": budget.prune_reasoning,
+            "trim_tool_results": budget.trim_tool_results,
+            "trim_reasoning": budget.trim_reasoning,
             "token_estimation_chars_per_token": budget.token_estimation_chars_per_token,
             "overflow_behavior": budget.overflow_behavior,
         }
@@ -1334,7 +1334,7 @@ class ObservabilitySubscriber:
         for entity_id, components in self.world.query(ConversationComponent):
             conversation = components[0]
             assert isinstance(conversation, ConversationComponent)
-            budget = self.world.get_component(entity_id, ContextBudgetConfig)
+            budget = self.world.get_component(entity_id, ContextTrimConfig)
             if budget is None or budget.max_tokens <= 0:
                 continue
             prompt_char_count = sum(

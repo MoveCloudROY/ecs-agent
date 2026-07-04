@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from typing import cast
 
 from ecs_agent.accounting.instrumentation import complete_with_llm_invocation_event
+from ecs_agent.context_windows import resolve_context_budget
 from ecs_agent.components import (
     CompactionConfigComponent,
-    ContextBudgetConfig,
+    ContextTrimConfig,
     CurrentCompactionSummaryComponent,
     ConversationArchiveComponent,
     ConversationComponent,
@@ -23,7 +25,10 @@ from ecs_agent.components import (
 from ecs_agent.core import World
 from ecs_agent.logging import get_logger
 from ecs_agent.token_counting import count_tokens
-from ecs_agent.prompts.message_assembly import apply_outbound_budget
+from ecs_agent.prompts.message_assembly import (
+    _drop_oldest_tool_span,
+    trim_context_to_fit,
+)
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.providers.registry import ProviderRegistry, get_model
 from ecs_agent.systems.subagent_wait import build_subagent_compaction_state
@@ -54,9 +59,47 @@ class CompactionSystem:
             if llm_component is None:
                 continue
 
+            # ISSUE-5 pipeline: estimate -> trim -> (still over) summarize.
+            trim_config = world.get_component(entity_id, ContextTrimConfig)
+            budget = self._resolve_trim_budget(trim_config, llm_component)
+            # When a trim budget is known it also acts as the summary trigger;
+            # otherwise fall back to the compaction threshold (legacy behaviour).
+            trigger = budget if budget is not None else config.threshold_tokens
+
             original_tokens = self._current_context_tokens(world, entity_id, conversation)
-            if original_tokens <= config.threshold_tokens:
+            if original_tokens <= trigger:
                 continue
+
+            # Trim step: permanently drop droppable content to try to fit under
+            # budget before paying for an LLM summary.
+            if trim_config is not None and budget is not None:
+                trimmed, changed = self._trim_history(
+                    conversation.messages, budget, trim_config
+                )
+                if changed:
+                    dropped = len(conversation.messages) - len(trimmed)
+                    conversation.messages = trimmed
+                    self._invalidate_usage_anchor(world, entity_id)
+                    if (
+                        world.get_component(entity_id, RenderedSystemPromptComponent)
+                        is not None
+                    ):
+                        world.remove_component(
+                            entity_id, RenderedSystemPromptComponent
+                        )
+                    original_tokens = self._current_context_tokens(
+                        world, entity_id, conversation
+                    )
+                    logger.info(
+                        "context_trimmed",
+                        entity_id=int(entity_id),
+                        dropped_messages=dropped,
+                        tokens_after=original_tokens,
+                        budget=budget,
+                    )
+                if original_tokens <= budget:
+                    # Trimming freed enough space; no summary needed this turn.
+                    continue
 
             system_message: Message | None = None
             working_messages = conversation.messages
@@ -186,6 +229,75 @@ class CompactionSystem:
         text = "".join(message.content or "" for message in messages)
         return count_tokens(text)
 
+    @staticmethod
+    def _resolve_trim_budget(
+        trim_config: ContextTrimConfig | None, llm_component: LLMComponent
+    ) -> int | None:
+        """Budget for the trim step: explicit ``max_tokens`` or model-derived."""
+        if trim_config is None:
+            return None
+        if trim_config.max_tokens is not None:
+            return trim_config.max_tokens
+        model = getattr(llm_component, "model", None)
+        model_id = getattr(model, "model_id", "") if model is not None else ""
+        return resolve_context_budget(model_id)
+
+    def _estimate_local_tokens(self, messages: list[Message]) -> int:
+        """Local estimate that also counts replayed ``reasoning_content`` (which
+        is sent to the model), so trimming reasoning actually reduces the count."""
+        parts: list[str] = []
+        for message in messages:
+            if message.content:
+                parts.append(message.content)
+            if message.reasoning_content:
+                parts.append(message.reasoning_content)
+        return count_tokens("".join(parts))
+
+    def _trim_history(
+        self,
+        messages: list[Message],
+        budget: int,
+        trim_config: ContextTrimConfig,
+    ) -> tuple[list[Message], bool]:
+        """Permanently drop droppable content toward ``budget``.
+
+        Oldest tool spans first (atomic assistant-tool-call + results), then
+        (optionally) strip replayed reasoning from the oldest assistant messages.
+        Returns ``(trimmed_messages, changed)``.
+        """
+        result = list(messages)
+        changed = False
+
+        if trim_config.trim_tool_results:
+            while self._estimate_local_tokens(result) > budget:
+                nxt = _drop_oldest_tool_span(result)
+                if len(nxt) == len(result):
+                    break
+                result = nxt
+                changed = True
+
+        if trim_config.trim_reasoning:
+            for index, message in enumerate(result):
+                if self._estimate_local_tokens(result) <= budget:
+                    break
+                if message.role == "assistant" and (
+                    message.reasoning_content or message.reasoning_signature
+                ):
+                    result[index] = replace(
+                        message, reasoning_content=None, reasoning_signature=None
+                    )
+                    changed = True
+
+        return result, changed
+
+    @staticmethod
+    def _invalidate_usage_anchor(world: World, entity_id: EntityId) -> None:
+        """Drop the compaction calibration anchor after trimming rewrites history
+        (the recorded ``last_prompt_tokens`` no longer matches the message list)."""
+        usage = world.get_component(entity_id, TokenUsageComponent)
+        if usage is not None:
+            usage.last_prompt_message_count = -1
+
     def _build_continuation_anchor(
         self,
         *,
@@ -250,14 +362,14 @@ class CompactionSystem:
             return list(messages), []
 
         if config.compaction_method == "predrop_then_compact":
-            pruned_messages = apply_outbound_budget(
+            pruned_messages = trim_context_to_fit(
                 list(messages),
                 system_prompt="",
                 context_entries=[],
-                config=ContextBudgetConfig(
+                config=ContextTrimConfig(
                     max_tokens=config.threshold_tokens,
-                    prune_tool_results=True,
-                    prune_reasoning=False,
+                    trim_tool_results=True,
+                    trim_reasoning=False,
                     overflow_behavior="truncate",
                 ),
             )

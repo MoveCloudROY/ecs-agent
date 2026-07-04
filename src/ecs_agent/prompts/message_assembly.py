@@ -24,7 +24,7 @@ CONTEXT_POOL_MARKER = "[PROMPT_CONTEXT_POOL]"
 
 if TYPE_CHECKING:
     from ecs_agent.components.definitions import (
-        ContextBudgetConfig,
+        ContextTrimConfig,
         ContextCacheComponent,
         ContextEntry,
     )
@@ -50,16 +50,23 @@ class ContextEntryProtocol(Protocol):
 ContextEntryT = TypeVar("ContextEntryT", bound=ContextEntryProtocol)
 
 
-def apply_outbound_budget(
+def trim_context_to_fit(
     messages: list[Message],
     system_prompt: str,
     context_entries: list[ContextEntry],
-    config: ContextBudgetConfig,
+    config: ContextTrimConfig,
     *,
     cache_component: ContextCacheComponent | None = None,
 ) -> list[Message]:
     reduced_messages = list(messages)
     reduced_context_entries = list(context_entries)
+
+    # No explicit budget on this (transient outbound) path -> nothing to trim
+    # here. Model-window-derived budgeting is handled by the CompactionSystem
+    # trim step, which has the model id.
+    budget = config.max_tokens
+    if budget is None:
+        return reduced_messages
 
     if (
         _estimate_total_tokens(
@@ -68,11 +75,11 @@ def apply_outbound_budget(
             context_entries=reduced_context_entries,
             chars_per_token=config.token_estimation_chars_per_token,
         )
-        <= config.max_tokens
+        <= budget
     ):
         return reduced_messages
 
-    if config.prune_tool_results:
+    if config.trim_tool_results:
         while True:
             if (
                 _estimate_total_tokens(
@@ -81,7 +88,7 @@ def apply_outbound_budget(
                     context_entries=reduced_context_entries,
                     chars_per_token=config.token_estimation_chars_per_token,
                 )
-                <= config.max_tokens
+                <= budget
             ):
                 return reduced_messages
             next_messages = _drop_oldest_tool_span(reduced_messages)
@@ -97,7 +104,7 @@ def apply_outbound_budget(
                     context_entries=reduced_context_entries,
                     chars_per_token=config.token_estimation_chars_per_token,
                 )
-                <= config.max_tokens
+                <= budget
             ):
                 return reduced_messages
 
@@ -125,7 +132,7 @@ def apply_outbound_budget(
                 cache_component=cache_component,
             )
 
-    if config.prune_reasoning:
+    if config.trim_reasoning:
         reasoning_entries = [
             entry
             for entry in reduced_context_entries
@@ -150,7 +157,7 @@ def apply_outbound_budget(
                     context_entries=reduced_context_entries,
                     chars_per_token=config.token_estimation_chars_per_token,
                 )
-                <= config.max_tokens
+                <= budget
             ):
                 return reduced_messages
 
@@ -166,7 +173,7 @@ def apply_outbound_budget(
     logger.warning(
         "outbound_budget_exceeded",
         estimated_tokens=estimated_tokens,
-        max_tokens=config.max_tokens,
+        max_tokens=budget,
     )
     return reduced_messages
 
@@ -343,7 +350,7 @@ def prepare_outbound_messages(
     from ecs_agent.components.definitions import (
         ConversationComponent,
         ConversationTreeComponent,
-        ContextBudgetConfig,
+        ContextTrimConfig,
         PromptContextQueueComponent,
         PromptContextReservationComponent,
         RenderedUserPromptComponent,
@@ -352,7 +359,7 @@ def prepare_outbound_messages(
     from ecs_agent.conversation_tree import get_active_leaf, linearize
 
     prompt_config = world.get_component(entity_id, UserPromptConfigComponent)
-    budget_config = world.get_component(entity_id, ContextBudgetConfig)
+    budget_config = world.get_component(entity_id, ContextTrimConfig)
     context_queue = world.get_component(entity_id, PromptContextQueueComponent)
     context_reservation = world.get_component(
         entity_id, PromptContextReservationComponent
@@ -461,7 +468,7 @@ def prepare_outbound_messages(
     if budget_config is not None and tree is None:
         from ecs_agent.components.definitions import ContextCacheComponent
 
-        messages = apply_outbound_budget(
+        messages = trim_context_to_fit(
             messages,
             system_prompt=(system_prompt or "") + (system_volatile_suffix or ""),
             context_entries=list(context_pool_items_for_assembly or []),
@@ -835,7 +842,7 @@ def _inject_context_block(
 
 
 __all__ = [
-    "apply_outbound_budget",
+    "trim_context_to_fit",
     "assemble_messages",
     "build_keyword_registry",
     "build_trigger_specs",

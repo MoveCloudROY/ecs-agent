@@ -3,7 +3,7 @@
 from ecs_agent.components.definitions import (
     CheckpointComponent,
     CompactionConfigComponent,
-    ContextBudgetConfig,
+    ContextTrimConfig,
     ContextCacheComponent,
     CurrentCompactionSummaryComponent,
     ConversationArchiveComponent,
@@ -64,7 +64,7 @@ from ecs_agent.components.definitions import (
 __all__ = [
     "CheckpointComponent",
     "CompactionConfigComponent",
-    "ContextBudgetConfig",
+    "ContextTrimConfig",
     "ContextCacheComponent",
     "CurrentCompactionSummaryComponent",
     "ConversationArchiveComponent",

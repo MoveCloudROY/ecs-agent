@@ -5,7 +5,7 @@ from typing import Any
 from ecs_agent.components import (
     CheckpointComponent,
     CompactionConfigComponent,
-    ContextBudgetConfig,
+    ContextTrimConfig,
     ContextCacheComponent,
     ConversationArchiveComponent,
     ConversationComponent,
@@ -452,10 +452,10 @@ def test_serialization_roundtrip_with_context_budget_config_component() -> None:
     entity = world.create_entity()
     world.add_component(
         entity,
-        ContextBudgetConfig(
+        ContextTrimConfig(
             max_tokens=2048,
-            prune_tool_results=False,
-            prune_reasoning=True,
+            trim_tool_results=False,
+            trim_reasoning=True,
             token_estimation_chars_per_token=3.5,
             overflow_behavior="warn",
         ),
@@ -464,19 +464,19 @@ def test_serialization_roundtrip_with_context_budget_config_component() -> None:
     serialized = WorldSerializer.to_dict(world)
     restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
 
-    assert serialized["entities"]["1"]["ContextBudgetConfig"] == {
+    assert serialized["entities"]["1"]["ContextTrimConfig"] == {
         "max_tokens": 2048,
-        "prune_tool_results": False,
-        "prune_reasoning": True,
+        "trim_tool_results": False,
+        "trim_reasoning": True,
         "token_estimation_chars_per_token": 3.5,
         "overflow_behavior": "warn",
     }
 
-    restored_component = restored.get_component(entity, ContextBudgetConfig)
+    restored_component = restored.get_component(entity, ContextTrimConfig)
     assert restored_component is not None
     assert restored_component.max_tokens == 2048
-    assert restored_component.prune_tool_results is False
-    assert restored_component.prune_reasoning is True
+    assert restored_component.trim_tool_results is False
+    assert restored_component.trim_reasoning is True
     assert restored_component.token_estimation_chars_per_token == 3.5
     assert restored_component.overflow_behavior == "warn"
 

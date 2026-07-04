@@ -24,14 +24,14 @@ import os
 
 from ecs_agent.components import (
     CompactionConfigComponent,
-    ContextBudgetConfig,
+    ContextTrimConfig,
     ConversationArchiveComponent,
     ConversationComponent,
     LLMComponent,
 )
 from ecs_agent.components.definitions import CurrentCompactionSummaryComponent
 from ecs_agent.core import World
-from ecs_agent.prompts.message_assembly import apply_outbound_budget
+from ecs_agent.prompts.message_assembly import trim_context_to_fit
 from ecs_agent.providers import FakeModel, Model
 from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
@@ -351,14 +351,14 @@ async def part_2_predrop_then_compact() -> None:
     )
     agent_id = world.create_entity()
     messages = _build_predrop_messages()
-    budgeted_view = apply_outbound_budget(
+    budgeted_view = trim_context_to_fit(
         list(messages),
         system_prompt="",
         context_entries=[],
-        config=ContextBudgetConfig(
+        config=ContextTrimConfig(
             max_tokens=50,
-            prune_tool_results=True,
-            prune_reasoning=False,
+            trim_tool_results=True,
+            trim_reasoning=False,
             overflow_behavior="truncate",
         ),
     )

@@ -5,7 +5,7 @@ from dataclasses import fields
 from ecs_agent.components import (
     CheckpointComponent,
     CompactionConfigComponent,
-    ContextBudgetConfig,
+    ContextTrimConfig,
     ContextCacheComponent,
     ConversationArchiveComponent,
     RunnerStateComponent,
@@ -225,30 +225,30 @@ def test_runner_state_large_tick_count() -> None:
 
 
 def test_context_budget_config_component_defaults() -> None:
-    component = ContextBudgetConfig(max_tokens=4096)
+    component = ContextTrimConfig(max_tokens=4096)
 
     assert component.max_tokens == 4096
-    assert component.prune_tool_results is True
-    assert component.prune_reasoning is False
+    assert component.trim_tool_results is True
+    assert component.trim_reasoning is False
     assert component.token_estimation_chars_per_token == 4.0
-    assert component.overflow_behavior == "error"
+    assert component.overflow_behavior == "warn"
 
 
 def test_context_budget_config_component_is_dataclass_with_slots() -> None:
-    component = ContextBudgetConfig(max_tokens=1024)
+    component = ContextTrimConfig(max_tokens=1024)
 
     assert hasattr(component, "__slots__")
 
 
 def test_context_budget_config_component_field_types() -> None:
     field_map = {
-        field_info.name: field_info.type for field_info in fields(ContextBudgetConfig)
+        field_info.name: field_info.type for field_info in fields(ContextTrimConfig)
     }
 
     assert field_map == {
-        "max_tokens": int,
-        "prune_tool_results": bool,
-        "prune_reasoning": bool,
+        "max_tokens": int | None,
+        "trim_tool_results": bool,
+        "trim_reasoning": bool,
         "token_estimation_chars_per_token": float,
         "overflow_behavior": str,
     }

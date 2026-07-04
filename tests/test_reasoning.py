@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator
 import pytest
 
 from ecs_agent.components import (
-    ContextBudgetConfig,
+    ContextTrimConfig,
     ContextEntry,
     ConversationComponent,
     ErrorComponent,
@@ -709,7 +709,7 @@ async def test_reasoning_content_becomes_droppable_context_entry_when_enabled() 
     world.add_component(entity_id, PromptContextQueueComponent())
     world.add_component(
         entity_id,
-        ContextBudgetConfig(max_tokens=1024, prune_reasoning=True),
+        ContextTrimConfig(max_tokens=1024, trim_reasoning=True),
     )
 
     await ReasoningSystem().process(world)
@@ -740,7 +740,7 @@ async def test_reasoning_context_is_noop_when_disabled() -> None:
     world.add_component(entity_id, PromptContextQueueComponent())
     world.add_component(
         entity_id,
-        ContextBudgetConfig(max_tokens=1024, prune_reasoning=False),
+        ContextTrimConfig(max_tokens=1024, trim_reasoning=False),
     )
 
     await ReasoningSystem().process(world)
@@ -770,7 +770,7 @@ async def test_reasoning_context_is_noop_when_disabled() -> None:
     )
     no_reasoning_world.add_component(
         no_reasoning_entity,
-        ContextBudgetConfig(max_tokens=1024, prune_reasoning=True),
+        ContextTrimConfig(max_tokens=1024, trim_reasoning=True),
     )
 
     await ReasoningSystem().process(no_reasoning_world)
@@ -800,7 +800,7 @@ async def test_reasoning_context_capture_does_not_mutate_conversation() -> None:
     world.add_component(entity_id, PromptContextQueueComponent())
     world.add_component(
         entity_id,
-        ContextBudgetConfig(max_tokens=1024, prune_reasoning=True),
+        ContextTrimConfig(max_tokens=1024, trim_reasoning=True),
     )
 
     await ReasoningSystem().process(world)

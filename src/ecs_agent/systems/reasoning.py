@@ -25,7 +25,7 @@ from ecs_agent.components import (
     ChildStubComponent,
     ConversationComponent,
     ConversationTreeComponent,
-    ContextBudgetConfig,
+    ContextTrimConfig,
     ContextEntry,
     ErrorComponent,
     InterruptionComponent,
@@ -834,8 +834,8 @@ class ReasoningSystem:
         if not reasoning_content:
             return
 
-        budget_config = world.get_component(entity_id, ContextBudgetConfig)
-        if budget_config is None or not budget_config.prune_reasoning:
+        budget_config = world.get_component(entity_id, ContextTrimConfig)
+        if budget_config is None or not budget_config.trim_reasoning:
             return
 
         conversation = world.get_component(entity_id, ConversationComponent)

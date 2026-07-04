@@ -10,7 +10,7 @@ import pytest
 
 from ecs_agent.components import (
     ConversationComponent,
-    ContextBudgetConfig,
+    ContextTrimConfig,
     ErrorComponent,
     LLMComponent,
     PendingToolCallsComponent,
@@ -577,10 +577,10 @@ async def test_llm_generation_records_context_pressure_without_provider_usage() 
     world.add_component(entity_id, LLMComponent(model=model))
     world.add_component(
         entity_id,
-        ContextBudgetConfig(
+        ContextTrimConfig(
             max_tokens=128,
-            prune_tool_results=False,
-            prune_reasoning=True,
+            trim_tool_results=False,
+            trim_reasoning=True,
             token_estimation_chars_per_token=2.0,
             overflow_behavior="warn",
         ),
@@ -608,8 +608,8 @@ async def test_llm_generation_records_context_pressure_without_provider_usage() 
     assert metadata["provider_prompt_tokens"] is None
     assert metadata["context_budget"] == {
         "max_tokens": 128,
-        "prune_tool_results": False,
-        "prune_reasoning": True,
+        "trim_tool_results": False,
+        "trim_reasoning": True,
         "token_estimation_chars_per_token": 2.0,
         "overflow_behavior": "warn",
     }
@@ -981,7 +981,7 @@ async def test_cached_tool_result_records_artifact_observation(tmp_path) -> None
     )
     world.add_component(
         entity_id,
-        ContextBudgetConfig(
+        ContextTrimConfig(
             max_tokens=5,
             token_estimation_chars_per_token=1.0,
             overflow_behavior="warn",
@@ -1054,7 +1054,7 @@ async def test_cached_tool_result_nests_under_calling_generation(tmp_path) -> No
     )
     world.add_component(
         entity_id,
-        ContextBudgetConfig(
+        ContextTrimConfig(
             max_tokens=5,
             token_estimation_chars_per_token=1.0,
             overflow_behavior="warn",
