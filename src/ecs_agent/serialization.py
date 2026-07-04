@@ -26,6 +26,9 @@ from ecs_agent.components import (
     MessageBusSubscriptionComponent,
     OwnerComponent,
     PendingToolCallsComponent,
+    PhaseApprovalsComponent,
+    PhaseComponent,
+    PhaseDefinitionComponent,
     PlanComponent,
     PlanSearchComponent,
     UserPromptConfigComponent,
@@ -130,6 +133,8 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     WorkflowBindingComponent.__name__: WorkflowBindingComponent,
     WorkflowGateSnapshotComponent.__name__: WorkflowGateSnapshotComponent,
     WorkflowLastTransitionComponent.__name__: WorkflowLastTransitionComponent,
+    PhaseComponent.__name__: PhaseComponent,
+    PhaseApprovalsComponent.__name__: PhaseApprovalsComponent,
 }
 
 
@@ -151,8 +156,11 @@ class WorldSerializer:
                     continue
                 if isinstance(component, EPHEMERAL_COMPONENT_TYPES):
                     continue
-                if isinstance(component, WorkflowDefinitionComponent):
-                    # WorkflowDefinitionComponent is skipped: re-installed at resume time
+                if isinstance(
+                    component, (WorkflowDefinitionComponent, PhaseDefinitionComponent)
+                ):
+                    # Definitions are skipped: re-bound at resume time
+                    # (install_workflow / bind_phase_graph).
                     continue
                 serialized_components[component_type.__name__] = (
                     WorldSerializer._serialize_component(component)

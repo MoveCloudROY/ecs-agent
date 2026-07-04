@@ -29,6 +29,7 @@ from ecs_agent.types import (
 
 if TYPE_CHECKING:
     from ecs_agent.core.world import World
+    from ecs_agent.phases.contracts import PhaseGraph
     from ecs_agent.workflows.compiler import CompiledWorkflow
 
 ScriptHandler = Callable[["World", EntityId, str], Awaitable[str | None]]
@@ -377,6 +378,32 @@ class WorkflowLastTransitionComponent:
     to_state_id: str
     transition_id: str
     tick: int
+
+
+@dataclass(slots=True)
+class PhaseComponent:
+    """Single source of truth for an entity's position in a phase graph (serialized)."""
+
+    graph_id: str
+    phase: str
+    graph_hash: str
+    agent_key: str = "main"
+    entered_at_tick: int = 0
+    history: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class PhaseDefinitionComponent:
+    """Holds the bound PhaseGraph (never serialized; re-bound via bind_phase_graph)."""
+
+    graph: "PhaseGraph"
+
+
+@dataclass(slots=True)
+class PhaseApprovalsComponent:
+    """Audit ledger of verdicts recorded through record_approval (serialized)."""
+
+    records: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
