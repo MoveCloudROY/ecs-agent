@@ -5167,3 +5167,65 @@ async def test_task_start_without_state_and_no_workflow_id_returns_error(
     rendered = world.get_component(agent_id, RenderedUserPromptComponent)
     assert rendered is not None
     assert "workflow_id" in rendered.text.lower() or "Error" in rendered.text
+
+
+# ---------------------------------------------------------------------------
+# Phase graph definition (Stage-2 migration)
+# ---------------------------------------------------------------------------
+
+
+def test_phase_graph_matches_legacy_workflow_spec_adjacency() -> None:
+    from ecs_agent.workflows.compiler import compile_workflow
+
+    from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
+    from examples.e2e.plan_and_task.workflow_spec import PLAN_TASK_WORKFLOW_SPEC
+
+    legacy = compile_workflow(PLAN_TASK_WORKFLOW_SPEC)
+    assert set(PLAN_TASK_PHASE_GRAPH.phases_by_id) == set(legacy.state_ids)
+    for phase_id, spec in PLAN_TASK_PHASE_GRAPH.phases_by_id.items():
+        legacy_targets = {
+            t.target_state_id for t in legacy.transitions_by_state.get(phase_id, ())
+        }
+        assert set(spec.to) == legacy_targets, f"adjacency mismatch in {phase_id}"
+
+
+def test_phase_graph_terminal_and_resume_policy() -> None:
+    from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
+
+    phases = PLAN_TASK_PHASE_GRAPH.phases_by_id
+    assert phases["TASK_COMPLETED"].terminal and phases["TASK_ABORTED"].terminal
+    assert phases["TASK_RUNNING"].on_resume == "TASK_BLOCKED"
+    assert PLAN_TASK_PHASE_GRAPH.initial == "IDLE"
+
+
+def test_phase_graph_approval_gates_encode_current_routing() -> None:
+    from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
+
+    phases = PLAN_TASK_PHASE_GRAPH.phases_by_id
+    advisor = phases["DRAFT_ADVISOR_REVIEW"].approval
+    assert advisor is not None
+    assert advisor.verdicts == {"approved": None, "revise": None, "blocked": None}
+    qa = phases["DRAFT_QA_REVIEW"].approval
+    assert qa is not None
+    assert qa.verdicts == {"approved": "WRITE_PLAN", "revise": None, "blocked": None}
+    plan_qa = phases["PLAN_QA_REVIEW"].approval
+    assert plan_qa is not None
+    assert plan_qa.verdicts == {"approved": "PLAN_FINALIZED", "revise": None, "blocked": None}
+
+
+def test_phase_graph_prompt_bindings_match_legacy_profiles() -> None:
+    from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
+    from examples.e2e.plan_and_task.prompts import (
+        IDLE_MAIN_AGENT_SYSTEM_PROMPT,
+        PLAN_MAIN_AGENT_SYSTEM_PROMPT,
+        TASK_MAIN_AGENT_SYSTEM_PROMPT,
+    )
+
+    phases = PLAN_TASK_PHASE_GRAPH.phases_by_id
+    assert phases["IDLE"].prompts["main"] == IDLE_MAIN_AGENT_SYSTEM_PROMPT
+    for pid in ("DRAFT_INTERVIEW", "DRAFT_ADVISOR_REVIEW", "DRAFT_QA_REVIEW",
+                "WRITE_PLAN", "PLAN_QA_REVIEW", "PLAN_FINALIZED", "TASK_READY"):
+        assert phases[pid].prompts["main"] == PLAN_MAIN_AGENT_SYSTEM_PROMPT, pid
+    for pid in ("TASK_RUNNING", "TASK_BLOCKED", "TASK_REPLAN",
+                "TASK_COMPLETED", "TASK_ABORTED"):
+        assert phases[pid].prompts["main"] == TASK_MAIN_AGENT_SYSTEM_PROMPT, pid
