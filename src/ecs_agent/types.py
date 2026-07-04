@@ -247,6 +247,19 @@ class WorkflowStateEvaluatedEvent:
 
 
 @dataclass(slots=True)
+class PhaseChangedEvent:
+    """Event emitted after a committed phase-graph transition."""
+
+    entity_id: EntityId
+    graph_id: str
+    from_phase: str
+    to_phase: str
+    reason: str
+    forced: bool
+    tick: int
+
+
+@dataclass(slots=True)
 class CompletionResult:
     """Result from LLM completion."""
 
@@ -1012,6 +1025,7 @@ __all__ = [
     "MessageBusPublishedEvent",
     "MessageBusResponseEvent",
     "MessageBusTimeoutEvent",
+    "PhaseChangedEvent",
     "PlanRevisedEvent",
     "PlanStepCompletedEvent",
     "PromptReplacementEvent",
