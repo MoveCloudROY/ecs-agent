@@ -40,7 +40,7 @@ from ecs_agent.types import (
     SubagentConfig,
     Usage,
     UserInputReceivedEvent,
-    WorkflowStateEvaluatedEvent,
+    PhaseChangedEvent,
 )
 from ecs_agent.providers.fake_model import FakeModel
 from ecs_agent.systems.subagent import SubagentSystem
@@ -521,7 +521,7 @@ async def test_user_inputs_create_separate_turn_traces_with_child_generations() 
 
 
 @pytest.mark.asyncio
-async def test_user_turn_root_is_emitted_before_workflow_children() -> None:
+async def test_user_turn_root_is_emitted_before_phase_children() -> None:
     """Interactive turn roots are visible before child observations are emitted."""
     world = World()
     sink = RecordingTelemetrySink()
@@ -541,18 +541,14 @@ async def test_user_turn_root_is_emitted_before_workflow_children() -> None:
             )
         )
         await world.event_bus.publish(
-            WorkflowStateEvaluatedEvent(
+            PhaseChangedEvent(
                 entity_id=entity_id,
-                workflow_id="plan_flow",
-                state_id="draft",
-                current_state_id="review",
+                graph_id="plan_flow",
+                from_phase="draft",
+                to_phase="review",
+                reason="test transition",
+                forced=False,
                 tick=0,
-                matched_transition_ids=["draft_to_review"],
-                committed_transition_id="draft_to_review",
-                from_state_id="draft",
-                to_state_id="review",
-                transition_history=["draft_to_review"],
-                status="transition",
             )
         )
         await world.event_bus.publish(
@@ -568,16 +564,16 @@ async def test_user_turn_root_is_emitted_before_workflow_children() -> None:
         reset_run_context(token)
 
     user_turn = next(record for record in sink.records if record.name == "user.turn")
-    workflow_state = next(record for record in sink.records if record.name == "workflow.state")
+    phase_record = next(record for record in sink.records if record.name == "phase.transition")
 
-    assert sink.records.index(user_turn) < sink.records.index(workflow_state)
-    assert workflow_state.trace_id == user_turn.trace_id
-    assert workflow_state.parent_observation_id == user_turn.observation_id
+    assert sink.records.index(user_turn) < sink.records.index(phase_record)
+    assert phase_record.trace_id == user_turn.trace_id
+    assert phase_record.parent_observation_id == user_turn.observation_id
 
 
 @pytest.mark.asyncio
-async def test_pre_turn_workflow_state_is_reparented_to_user_turn() -> None:
-    """Workflow telemetry before input waits for the interactive turn root."""
+async def test_pre_turn_phase_transition_is_reparented_to_user_turn() -> None:
+    """Phase telemetry before input waits for the interactive turn root."""
     world = World()
     sink = RecordingTelemetrySink()
     install_observability(world, sink)
@@ -589,18 +585,17 @@ async def test_pre_turn_workflow_state_is_reparented_to_user_turn() -> None:
         )
         entity_id = world.create_entity()
         await world.event_bus.publish(
-            WorkflowStateEvaluatedEvent(
+            PhaseChangedEvent(
                 entity_id=entity_id,
-                workflow_id="plan_flow",
-                state_id="draft",
-                current_state_id="draft",
+                graph_id="plan_flow",
+                from_phase="draft",
+                to_phase="review",
+                reason="pre-turn transition",
+                forced=False,
                 tick=0,
-                matched_transition_ids=[],
-                transition_history=[],
-                status="no_match",
             )
         )
-        assert not any(record.name == "workflow.state" for record in sink.records)
+        assert not any(record.name == "phase.transition" for record in sink.records)
 
         await world.event_bus.publish(
             UserInputReceivedEvent(
@@ -613,11 +608,11 @@ async def test_pre_turn_workflow_state_is_reparented_to_user_turn() -> None:
         reset_run_context(token)
 
     user_turn = next(record for record in sink.records if record.name == "user.turn")
-    workflow_state = next(record for record in sink.records if record.name == "workflow.state")
+    phase_record = next(record for record in sink.records if record.name == "phase.transition")
 
-    assert sink.records.index(user_turn) < sink.records.index(workflow_state)
-    assert workflow_state.trace_id == user_turn.trace_id
-    assert workflow_state.parent_observation_id == user_turn.observation_id
+    assert sink.records.index(user_turn) < sink.records.index(phase_record)
+    assert phase_record.trace_id == user_turn.trace_id
+    assert phase_record.parent_observation_id == user_turn.observation_id
 
 
 @pytest.mark.asyncio

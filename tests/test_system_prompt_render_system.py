@@ -2134,12 +2134,12 @@ def test_split_stable_volatile_relocates_volatile_to_tail() -> None:
     template = (
         "Base instructions\n"
         "${_installed_tools}\n"
-        "${_workflow_state_prompt}\n"
+        "${_phase_prompt}\n"
         "${_chat_history_summary_xml}"
     )
     snapshot = {
         "_installed_tools": "- toolA",
-        "_workflow_state_prompt": "WF-STATE-BODY",
+        "_phase_prompt": "WF-STATE-BODY",
         "_chat_history_summary_xml": "<chat_history_summary>S</chat_history_summary>",
     }
 
@@ -2162,17 +2162,17 @@ def test_split_stable_volatile_is_byte_stable_across_volatile_changes() -> None:
     template = (
         "Base instructions\n"
         "${_installed_tools}\n"
-        "${_workflow_state_prompt}\n"
+        "${_phase_prompt}\n"
         "${_chat_history_summary_xml}"
     )
     base_snapshot = {
         "_installed_tools": "- toolA",
-        "_workflow_state_prompt": "state-1",
+        "_phase_prompt": "state-1",
         "_chat_history_summary_xml": "<chat_history_summary>first</chat_history_summary>",
     }
     changed_snapshot = {
         "_installed_tools": "- toolA",
-        "_workflow_state_prompt": "state-2-different-length",
+        "_phase_prompt": "state-2-different-length",
         "_chat_history_summary_xml": (
             "<chat_history_summary>second summary text</chat_history_summary>"
         ),
@@ -2190,9 +2190,9 @@ def test_split_stable_volatile_expands_nested_placeholder_in_volatile_value() ->
 
     # Whole prompt body comes from a volatile placeholder whose value itself
     # references a non-volatile placeholder (the workflow-prompt scenario).
-    template = "${_workflow_state_prompt}\n${_chat_history_summary_xml}"
+    template = "${_phase_prompt}\n${_chat_history_summary_xml}"
     snapshot = {
-        "_workflow_state_prompt": "You are agent.\n${_installed_tools}",
+        "_phase_prompt": "You are agent.\n${_installed_tools}",
         "_installed_tools": "- toolA",
         "_chat_history_summary_xml": "<chat_history_summary></chat_history_summary>",
     }
