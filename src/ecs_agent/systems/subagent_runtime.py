@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from ecs_agent.logging import get_logger
 from ecs_agent.types import (
+    COMPLETED_SUBAGENT_STATUSES,
     SubagentLifecycleStatus,
     SubagentSessionRecord,
     render_subagent_session_reminder_table,
@@ -137,9 +138,7 @@ def get_global_scheduler(max_background_concurrency: int = 5) -> BackgroundSched
     return _GLOBAL_SCHEDULER
 
 
-_TERMINAL_STATUSES: frozenset[SubagentLifecycleStatus] = frozenset(
-    {"succeeded", "failed", "timed_out", "cancelled"}
-)
+_TERMINAL_STATUSES: frozenset[SubagentLifecycleStatus] = COMPLETED_SUBAGENT_STATUSES
 
 
 class SubagentRuntimeManager:

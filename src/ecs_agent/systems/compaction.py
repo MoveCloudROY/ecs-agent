@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import cast
 
@@ -17,9 +18,6 @@ from ecs_agent.components import (
     EntityRegistryComponent,
     LLMComponent,
     RenderedUserPromptComponent,
-    RenderedSystemPromptComponent,
-    SubagentNotificationQueueComponent,
-    SubagentSessionTableComponent,
     TokenUsageComponent,
 )
 from ecs_agent.core import World
@@ -31,8 +29,12 @@ from ecs_agent.prompts.message_assembly import (
 )
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.providers.registry import ProviderRegistry, get_model
-from ecs_agent.systems.subagent_wait import build_subagent_compaction_state
-from ecs_agent.systems.system_prompt_render_system import render_compaction_prompt
+from ecs_agent.prompts.compaction_context import (
+    CompactionContextProvider,
+    DEFAULT_COMPACTION_CONTEXT_PROVIDERS,
+    render_compaction_context_blocks,
+)
+from ecs_agent.prompts.template_render import render_compaction_prompt
 from ecs_agent.types import (
     CompactionCompleteEvent,
     CompletionResult,
@@ -51,6 +53,16 @@ DEFAULT_COMPACTION_PROMPT = (
 
 
 class CompactionSystem:
+    def __init__(
+        self,
+        context_providers: Sequence[CompactionContextProvider] | None = None,
+    ) -> None:
+        self._context_providers: tuple[CompactionContextProvider, ...] = (
+            tuple(context_providers)
+            if context_providers is not None
+            else DEFAULT_COMPACTION_CONTEXT_PROVIDERS
+        )
+
     async def process(self, world: World) -> None:
         for entity_id, (config, conversation) in world.query(
             CompactionConfigComponent, ConversationComponent
@@ -87,13 +99,6 @@ class CompactionSystem:
                     dropped = len(conversation.messages) - len(trimmed)
                     conversation.messages = trimmed
                     self._invalidate_usage_anchor(world, entity_id)
-                    if (
-                        world.get_component(entity_id, RenderedSystemPromptComponent)
-                        is not None
-                    ):
-                        world.remove_component(
-                            entity_id, RenderedSystemPromptComponent
-                        )
                     logger.info(
                         "context_trimmed",
                         entity_id=int(entity_id),
@@ -154,7 +159,9 @@ class CompactionSystem:
                     messages_to_summarize=messages_to_summarize,
                 ),
                 system_prompt=summary_prompt,
-                subagent_state=self._render_subagent_summary_state(world, entity_id),
+                context_state=render_compaction_context_blocks(
+                    world, entity_id, self._context_providers
+                ),
             )
 
             archive = world.get_component(entity_id, ConversationArchiveComponent)
@@ -163,15 +170,13 @@ class CompactionSystem:
                 world.add_component(entity_id, archive)
             archive.archived_summaries.append(summary)
 
+            # RenderedSystemPromptComponent is deliberately NOT invalidated here:
+            # the render system re-renders when the summary fingerprint in its
+            # cache key changes. Only the render system may delete that component.
             world.add_component(
                 entity_id,
                 CurrentCompactionSummaryComponent(summary=summary),
             )
-            if (
-                world.get_component(entity_id, RenderedSystemPromptComponent)
-                is not None
-            ):
-                world.remove_component(entity_id, RenderedSystemPromptComponent)
 
             new_messages: list[Message] = []
             if system_message is not None:
@@ -437,25 +442,6 @@ class CompactionSystem:
             *messages_to_summarize,
         ]
 
-    def _render_subagent_summary_state(
-        self,
-        world: World,
-        entity_id: EntityId,
-    ) -> str | None:
-        table = world.get_component(entity_id, SubagentSessionTableComponent)
-        queue = world.get_component(entity_id, SubagentNotificationQueueComponent)
-        state = build_subagent_compaction_state(table, queue)
-        if not state.pending and not state.completed and not state.notifications:
-            return None
-
-        lines = ["Subagent session state:"]
-        for session_id in state.pending:
-            lines.append(f"Pending: {session_id}")
-        for session_id, status in state.completed:
-            lines.append(f"Completed ({status}): {session_id}")
-        lines.extend(state.notifications)
-        return "\n".join(lines)
-
     def _resolve_summary_target(
         self,
         *,
@@ -531,13 +517,13 @@ class CompactionSystem:
         model: LLMModel,
         messages: list[Message],
         system_prompt: str,
-        subagent_state: str | None,
+        context_state: str | None,
     ) -> str:
         formatted_messages = "\n".join(
             f"{message.role}: {message.content}" for message in messages
         )
-        if subagent_state is not None:
-            formatted_messages = f"{formatted_messages}\n\n{subagent_state}"
+        if context_state is not None:
+            formatted_messages = f"{formatted_messages}\n\n{context_state}"
         result = await complete_with_llm_invocation_event(
             event_bus=world.event_bus,
             entity_id=entity_id,

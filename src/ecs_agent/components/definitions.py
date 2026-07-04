@@ -568,6 +568,15 @@ class TokenUsageComponent:
 
 @dataclass(slots=True)
 class RenderedSystemPromptComponent:
+    """Rendered system prompt cache, owned by ``SystemPromptRenderSystem``.
+
+    Invalidation is pull-based: the render system compares the ``_cache_key``
+    entry in ``placeholder_snapshot`` (built from placeholder-provider
+    fingerprints, e.g. the compaction-summary hash) against its inputs each
+    pass and re-renders on mismatch. No other system may delete or mutate this
+    component; producers refresh a render input (their own component) and let
+    the fingerprint mismatch trigger the re-render."""
+
     text: str
     placeholder_snapshot: dict[str, str] = field(default_factory=dict)
     stable_text: str = ""

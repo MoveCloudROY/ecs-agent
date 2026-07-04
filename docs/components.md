@@ -94,11 +94,14 @@ world.add_component(entity, SystemPromptConfigSpec(
 ---
 
 ### RenderedSystemPromptComponent
-cached/frozen rendered system prompt produced by `SystemPromptRenderSystem` on the first successful render-system pass. Reused on subsequent ticks; consumed by `ReasoningSystem`, `PlanningSystem`, `ReplanningSystem`.
+Rendered system prompt cache owned by `SystemPromptRenderSystem`; consumed by `ReasoningSystem`, `PlanningSystem`, `ReplanningSystem`. Reused while the cache-key fingerprint of its render inputs is unchanged; the render system re-renders on mismatch (e.g. after compaction writes a new summary). No other system may delete or mutate it.
 
 | Name | Type | Description |
 | :--- | :--- | :--- |
 | `text` | `str` | Fully rendered system prompt with all `${name}` placeholders resolved |
+| `placeholder_snapshot` | `dict[str, str]` | Resolved placeholder values plus the `_cache_key` fingerprint used for invalidation |
+| `stable_text` | `str` | Cache-stable prefix (volatile placeholders emptied) usable as an Anthropic prompt-cache prefix |
+| `volatile_text` | `str` | Volatile tail (compaction summary, workflow state) rendered after the cache breakpoint |
 
 ---
 

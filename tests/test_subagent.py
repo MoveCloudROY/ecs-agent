@@ -52,10 +52,7 @@ from ecs_agent.types import (
 from ecs_agent.systems.message_bus import MessageBusSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.subagent import SubagentSystem
-from ecs_agent.systems.subagent_wait import (
-    SubagentWaitSystem,
-    build_subagent_compaction_state,
-)
+from ecs_agent.systems.subagent_wait import SubagentWaitSystem
 
 
 class ReasoningAndContentStreamingFakeModel(FakeModel):
@@ -392,67 +389,6 @@ def test_subagent_notification_queue_component_starts_empty() -> None:
     component = SubagentNotificationQueueComponent()
 
     assert component.notifications == []
-
-
-def test_build_subagent_compaction_state_classifies_pending_and_completed_sessions() -> (
-    None
-):
-    table = SubagentSessionTableComponent(
-        sessions={
-            "sess-running": SubagentSessionRecord(
-                session_id="sess-running",
-                category="research",
-                prompt="Investigate",
-                parent_entity_id=EntityId(1),
-                created_at="2026-04-01T10:00:00Z",
-                updated_at="2026-04-01T10:05:00Z",
-                status="running",
-            ),
-            "sess-succeeded": SubagentSessionRecord(
-                session_id="sess-succeeded",
-                category="research",
-                prompt="Summarize",
-                parent_entity_id=EntityId(1),
-                created_at="2026-04-01T10:00:00Z",
-                updated_at="2026-04-01T10:05:00Z",
-                status="succeeded",
-            ),
-            "sess-cancelled": SubagentSessionRecord(
-                session_id="sess-cancelled",
-                category="research",
-                prompt="Abort",
-                parent_entity_id=EntityId(1),
-                created_at="2026-04-01T10:00:00Z",
-                updated_at="2026-04-01T10:05:00Z",
-                status="cancelled",
-            ),
-        }
-    )
-    queue = SubagentNotificationQueueComponent(
-        notifications=[
-            SubagentNotificationRecord(
-                notification_id="sess-succeeded:succeeded",
-                session_id="sess-succeeded",
-                parent_entity_id=1,
-                terminal_status="succeeded",
-                summary="cached summary",
-                error=None,
-                created_at="2026-04-01T10:06:00Z",
-                delivered_at=None,
-            )
-        ]
-    )
-
-    state = build_subagent_compaction_state(table, queue)
-
-    assert state.pending == ["sess-running"]
-    assert state.completed == [
-        ("sess-cancelled", "cancelled"),
-        ("sess-succeeded", "succeeded"),
-    ]
-    assert state.notifications == [
-        'sess-succeeded: notification status=succeeded delivered=no summary="cached summary"'
-    ]
 
 
 def test_subagent_stream_start_event_dataclass_fields() -> None:

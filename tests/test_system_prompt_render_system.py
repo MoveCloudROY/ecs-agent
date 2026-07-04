@@ -33,6 +33,7 @@ from ecs_agent.scratchbook import (
     ScratchbookPromptConfig,
 )
 import ecs_agent.systems.system_prompt_render_system as render_module
+import ecs_agent.prompts.template_render as template_render_module
 from ecs_agent.systems.system_prompt_render_system import (
     SystemPromptRenderSystem,
     render_compaction_prompt,
@@ -1509,7 +1510,7 @@ class _ContractProvider:
 
 
 def _require_provider_seam_contract_surface() -> None:
-    assert hasattr(render_module, "_BUILTIN_PLACEHOLDER_PROVIDERS"), (
+    assert hasattr(template_render_module, "_BUILTIN_PLACEHOLDER_PROVIDERS"), (
         "expected model seam registry: _BUILTIN_PLACEHOLDER_PROVIDERS"
     )
 
@@ -1534,7 +1535,7 @@ async def test_builtin_provider_registration_requires_provider_id(
             return {"_installed_tools": "- from-model"}
 
     monkeypatch.setattr(
-        render_module,
+        template_render_module,
         "_BUILTIN_PLACEHOLDER_PROVIDERS",
         [_ProviderWithoutId()],
         raising=False,
@@ -1558,7 +1559,7 @@ async def test_duplicate_provider_keys_raise_with_provider_id(
     )
 
     monkeypatch.setattr(
-        render_module,
+        template_render_module,
         "_BUILTIN_PLACEHOLDER_PROVIDERS",
         [
             _ContractProvider("alpha_provider", {"_foo": "a"}),
@@ -1593,7 +1594,7 @@ async def test_user_placeholder_collision_with_builtin_provider_key_raises(
         ),
     )
     monkeypatch.setattr(
-        render_module,
+        template_render_module,
         "_BUILTIN_PLACEHOLDER_PROVIDERS",
         [
             _ContractProvider(
@@ -1635,7 +1636,7 @@ async def test_provider_exception_propagates_from_aggregate(
             return "v1"
 
     monkeypatch.setattr(
-        render_module,
+        template_render_module,
         "_BUILTIN_PLACEHOLDER_PROVIDERS",
         [_ExplodingProvider()],
         raising=False,
@@ -1661,7 +1662,7 @@ async def test_builtin_provider_merge_order_is_deterministic(
     )
 
     monkeypatch.setattr(
-        render_module,
+        template_render_module,
         "_BUILTIN_PLACEHOLDER_PROVIDERS",
         [
             _ContractProvider("provider_a", {"_first": "first"}),
@@ -1694,7 +1695,7 @@ async def test_provider_fingerprint_changes_force_rerender(
 
     model = _ContractProvider("inventory_provider", {"_installed_tools": "- none"})
     monkeypatch.setattr(
-        render_module,
+        template_render_module,
         "_BUILTIN_PLACEHOLDER_PROVIDERS",
         [model],
         raising=False,
@@ -1763,7 +1764,7 @@ async def test_scratchbook_placeholder_names_are_approved_builtin_surface(
         ),
     )
     monkeypatch.setattr(
-        render_module,
+        template_render_module,
         "_BUILTIN_PLACEHOLDER_PROVIDERS",
         [_ScratchbookProvider("scratchbook", {})],
         raising=False,
@@ -1805,7 +1806,7 @@ async def test_inventory_builtins_render_through_provider_aggregation(
         ),
     )
     monkeypatch.setattr(
-        render_module,
+        template_render_module,
         "_BUILTIN_PLACEHOLDER_PROVIDERS",
         [
             _ContractProvider(
@@ -1848,7 +1849,7 @@ async def test_missing_builtin_placeholder_still_raises_after_provider_refactor(
         ),
     )
     monkeypatch.setattr(
-        render_module,
+        template_render_module,
         "_BUILTIN_PLACEHOLDER_PROVIDERS",
         [],
         raising=False,
@@ -1875,7 +1876,7 @@ async def test_rendered_system_prompt_bridges_to_llm_and_legacy_components_after
     world.add_component(entity_id, LLMComponent(model=object()))
     world.add_component(entity_id, SystemPromptComponent())
     monkeypatch.setattr(
-        render_module,
+        template_render_module,
         "_BUILTIN_PLACEHOLDER_PROVIDERS",
         [_ContractProvider("provider_bridge", {"_provider_text": "bridge me"})],
         raising=False,
@@ -2099,7 +2100,7 @@ async def test_provider_resolution_preserves_existing_installed_placeholder_outp
         ),
     )
     monkeypatch.setattr(
-        render_module,
+        template_render_module,
         "_BUILTIN_PLACEHOLDER_PROVIDERS",
         [
             _ContractProvider(

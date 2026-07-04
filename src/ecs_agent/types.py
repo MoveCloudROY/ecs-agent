@@ -698,6 +698,20 @@ SubagentLifecycleStatus = Literal[
     "cancelled",
 ]
 
+# Canonical status classification. Single source of truth: every
+# SubagentLifecycleStatus value must be pending or completed (guarded by
+# tests), so consumers (wait logic, compaction context) cannot drift when a
+# status is added.
+PENDING_SUBAGENT_STATUSES: frozenset[SubagentLifecycleStatus] = frozenset(
+    {"queued", "running"}
+)
+COMPLETED_SUBAGENT_STATUSES: frozenset[SubagentLifecycleStatus] = frozenset(
+    {"succeeded", "failed", "timed_out", "cancelled"}
+)
+FAILED_SUBAGENT_STATUSES: frozenset[SubagentLifecycleStatus] = frozenset(
+    {"failed", "timed_out", "cancelled"}
+)
+
 
 def is_wake_worthy(status: SubagentLifecycleStatus) -> bool:
     return status in {"succeeded", "failed", "timed_out"}

@@ -4,33 +4,26 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from string import Template
 
 from ecs_agent.components import (
     CompactionConfigComponent,
     LLMComponent,
     RenderedSystemPromptComponent,
     SystemPromptComponent,
-    WorkflowBindingComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.prompts.contracts import SystemPromptConfigSpec, PromptTemplateSource
-from ecs_agent.prompts.provider import (
-    BuiltinPlaceholderProvider,
-    CompactionSummaryPlaceholderProvider,
-    InventoryPlaceholderProvider,
+from ecs_agent.prompts.template_render import (
+    PLACEHOLDER_NAME_RE,
+    PlaceholderProviderRegistry,
+    iter_placeholder_providers,
+    placeholder_provider_id,
+    render_compaction_prompt,
+    render_prompt_template,
+    substitute_prompt_template,
 )
-from ecs_agent.prompts.registry import resolve_placeholder_values
-from ecs_agent.scratchbook.prompt_definition import ScratchbookPromptConfig
-from ecs_agent.scratchbook.prompt_provider import ScratchbookPromptPlaceholderProvider
 from ecs_agent.types import EntityId, PromptReplacementEvent
-from ecs_agent.workflows.prompt_provider import WorkflowPromptPlaceholderProvider
-
-_BUILTIN_PLACEHOLDER_PROVIDERS: list[BuiltinPlaceholderProvider] = [
-    InventoryPlaceholderProvider(),
-    CompactionSummaryPlaceholderProvider(),
-]
 
 logger = get_logger(__name__)
 
@@ -44,12 +37,6 @@ _VOLATILE_PLACEHOLDER_KEYS: tuple[str, ...] = (
     "_chat_history_summary_xml",
 )
 VOLATILE_PLACEHOLDER_KEYS = frozenset(_VOLATILE_PLACEHOLDER_KEYS)
-
-PlaceholderProviderRegistry = list[BuiltinPlaceholderProvider]
-_PLACEHOLDER_NAME_RE = re.compile(
-    r"\$(?:\{(?P<braced>[_a-zA-Z][_a-zA-Z0-9]*)\}|(?P<named>[_a-zA-Z][_a-zA-Z0-9]*))"
-)
-_ESCAPED_DOLLAR_SENTINEL = "\u0000ecs_agent_escaped_template_dollar\u0000"
 
 
 class SystemPromptRenderSystem:
@@ -177,7 +164,7 @@ def _split_stable_volatile(
         key: ("" if key in VOLATILE_PLACEHOLDER_KEYS else value)
         for key, value in snapshot.items()
     }
-    stable_text = _substitute_prompt_template(template_text, stable_snapshot).rstrip()
+    stable_text = substitute_prompt_template(template_text, stable_snapshot).rstrip()
 
     volatile_parts: list[str] = []
     for key in _VOLATILE_PLACEHOLDER_KEYS:
@@ -187,7 +174,7 @@ def _split_stable_volatile(
         # Expand nested placeholders using the volatile-emptied snapshot so a
         # volatile value that references other volatile keys cannot re-inject them.
         volatile_parts.append(
-            _substitute_prompt_template(raw_value, stable_snapshot)
+            substitute_prompt_template(raw_value, stable_snapshot)
         )
     volatile_text = "\n\n".join(volatile_parts)
 
@@ -208,7 +195,7 @@ def _prompt_replacements(
     snapshot: dict[str, str],
 ) -> dict[str, str]:
     replacements: dict[str, str] = {}
-    for match in _PLACEHOLDER_NAME_RE.finditer(template_text):
+    for match in PLACEHOLDER_NAME_RE.finditer(template_text):
         if match.start() > 0 and template_text[match.start() - 1] == "$":
             continue
         name = match.group("braced") or match.group("named")
@@ -217,33 +204,6 @@ def _prompt_replacements(
         if name in snapshot:
             replacements[name] = snapshot[name]
     return replacements
-
-
-def render_prompt_template(
-    template: str,
-    world: World,
-    entity: EntityId,
-    placeholder_registry: PlaceholderProviderRegistry | None = None,
-    user_values: dict[str, str] | None = None,
-) -> tuple[str, dict[str, str]]:
-    resolved_user_values = (
-        dict(user_values)
-        if user_values is not None
-        else _resolve_entity_user_placeholders(world, entity)
-    )
-    builtins = _aggregate_provider_placeholders(
-        world,
-        entity,
-        resolved_user_values,
-        placeholder_registry=placeholder_registry,
-    )
-    snapshot = {**resolved_user_values, **builtins}
-    return _substitute_prompt_template(template, snapshot), snapshot
-
-
-def render_compaction_prompt(template: str, world: World, entity: EntityId) -> str:
-    rendered, _ = render_prompt_template(template=template, world=world, entity=entity)
-    return rendered
 
 
 def _read_template(template_source: PromptTemplateSource) -> str:
@@ -351,139 +311,15 @@ def _normalize_compaction_summary_template(
     return f"{template_text}\n{placeholder}"
 
 
-def _resolve_user_placeholders(prompt_config: SystemPromptConfigSpec) -> dict[str, str]:
-    return resolve_placeholder_values(prompt_config.placeholders)
-
-
-def _resolve_entity_user_placeholders(
-    world: World, entity_id: EntityId
-) -> dict[str, str]:
-    prompt_config = world.get_component(entity_id, SystemPromptConfigSpec)
-    if prompt_config is None:
-        return {}
-    return _resolve_user_placeholders(prompt_config)
-
-
-def _substitute_prompt_template(template_text: str, snapshot: dict[str, str]) -> str:
-    current = _mask_escaped_template_dollars(template_text)
-    for _ in range(5):
-        template = Template(current)
-        try:
-            rendered = _mask_escaped_template_dollars(template.substitute(snapshot))
-        except KeyError as exc:
-            missing = str(exc).strip("'\"")
-            raise ValueError(f"unknown placeholders in template: {missing}") from exc
-        if rendered == current:
-            if _PLACEHOLDER_NAME_RE.search(rendered) is not None:
-                raise ValueError(
-                    "recursive placeholder expansion did not converge; "
-                    "unresolved placeholders remain"
-                )
-            return _unmask_escaped_template_dollars(rendered)
-        current = rendered
-    if _PLACEHOLDER_NAME_RE.search(current) is not None:
-        raise ValueError(
-            "recursive placeholder expansion exceeded limit; "
-            "unresolved placeholders remain"
-        )
-    return _unmask_escaped_template_dollars(current)
-
-
-def _mask_escaped_template_dollars(template_text: str) -> str:
-    return template_text.replace("$$", _ESCAPED_DOLLAR_SENTINEL)
-
-
-def _unmask_escaped_template_dollars(template_text: str) -> str:
-    return template_text.replace(_ESCAPED_DOLLAR_SENTINEL, "$")
-
-
-def _provider_id(provider: BuiltinPlaceholderProvider) -> str:
-    provider_id = getattr(provider, "provider_id", None)
-    if not isinstance(provider_id, str):
-        raise ValueError("provider missing provider_id")
-    return provider_id
-
-
-def _aggregate_provider_placeholders(
-    world: World,
-    entity_id: EntityId,
-    user_values: dict[str, str],
-    placeholder_registry: PlaceholderProviderRegistry | None = None,
-) -> dict[str, str]:
-    aggregated: dict[str, str] = {}
-    key_to_provider_id: dict[str, str] = {}
-
-    providers = (
-        list(placeholder_registry)
-        if placeholder_registry is not None
-        else _iter_placeholder_providers(world, entity_id)
-    )
-
-    for provider in providers:
-        provider_id = _provider_id(provider)
-        values = provider.resolve_placeholders(world, entity_id)
-        for key, value in values.items():
-            first_provider_id = key_to_provider_id.get(key)
-            if first_provider_id is not None:
-                raise ValueError(
-                    f"duplicate built-in key '{key}': emitted by both "
-                    f"'{first_provider_id}' and '{provider_id}'"
-                )
-            key_to_provider_id[key] = provider_id
-            aggregated[key] = value
-
-    for key in aggregated:
-        if key in user_values:
-            raise ValueError(
-                f"built-in placeholder key '{key}' collides with user placeholder"
-            )
-
-    return aggregated
-
-
 def _render_cache_key(world: World, entity_id: EntityId) -> str:
     fingerprints: list[str] = []
-    for provider in _iter_placeholder_providers(world, entity_id):
-        provider_id = _provider_id(provider)
+    for provider in iter_placeholder_providers(world, entity_id):
+        provider_id = placeholder_provider_id(provider)
         if not provider.resolve_placeholders(world, entity_id):
             continue
         fingerprint = provider.provider_fingerprint(world, entity_id)
         fingerprints.append(f"{provider_id}:{fingerprint}")
     return "|".join(fingerprints)
-
-
-def _iter_placeholder_providers(
-    world: World,
-    entity_id: EntityId,
-) -> list[BuiltinPlaceholderProvider]:
-    providers = list(_BUILTIN_PLACEHOLDER_PROVIDERS)
-    scratchbook_provider = _resolve_entity_scratchbook_provider(world, entity_id)
-    if scratchbook_provider is not None:
-        providers.append(scratchbook_provider)
-    workflow_provider = _resolve_entity_workflow_provider(world, entity_id)
-    if workflow_provider is not None:
-        providers.append(workflow_provider)
-    return providers
-
-
-def _resolve_entity_scratchbook_provider(
-    world: World,
-    entity_id: EntityId,
-) -> BuiltinPlaceholderProvider | None:
-    config = world.get_component(entity_id, ScratchbookPromptConfig)
-    if config is None:
-        return None
-    return ScratchbookPromptPlaceholderProvider(config)
-
-
-def _resolve_entity_workflow_provider(
-    world: World,
-    entity_id: EntityId,
-) -> BuiltinPlaceholderProvider | None:
-    binding = world.get_component(entity_id, WorkflowBindingComponent)
-    if binding is None:
-        return None
-    return WorkflowPromptPlaceholderProvider()
 
 
 def _bridge_rendered_prompt(world: World, entity_id: EntityId, rendered: str) -> None:

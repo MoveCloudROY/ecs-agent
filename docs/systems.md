@@ -85,7 +85,7 @@ This ensures deterministic system execution and prevents mid-tick mutations.
 ---
 ## 1. SystemPromptRenderSystem
 
-The `SystemPromptRenderSystem` resolves all `${name}` placeholders from a `SystemPromptConfigSpec` component and writes a cached `RenderedSystemPromptComponent` for LLM callers on the first successful render-system pass. Subsequent ticks reuse this frozen component and skip re-rendering. It replaces the legacy `SystemPromptAssemblySystem`.
+The `SystemPromptRenderSystem` resolves all `${name}` placeholders from a `SystemPromptConfigSpec` component and writes a cached `RenderedSystemPromptComponent` for LLM callers. The cache is keyed by a fingerprint of every placeholder provider's inputs (e.g. a hash of the compaction summary): each pass recomputes the key and re-renders only on mismatch, so ticks with unchanged inputs skip re-rendering. It replaces the legacy `SystemPromptAssemblySystem`.
 
 - **Constructor**: `__init__(self)`
 - **Queries**: `SystemPromptConfigSpec`
@@ -93,7 +93,7 @@ The `SystemPromptRenderSystem` resolves all `${name}` placeholders from a `Syste
 - **Recommended Priority**: -20 (must run before reasoning)
 
 ### Behavior
-The system reads the `SystemPromptConfigSpec.template_source` (inline string or file path) and substitutes all `${name}` occurrences. Built-in placeholders `${_installed_tools}`, `${_installed_skills}`, `${_installed_mcps}`, and `${_installed_subagents}` are populated from entity metadata automatically. Callable placeholder resolvers are called once during the first successful render-system pass. The resulting prompt is frozen (freeze semantics) and reused on subsequent ticks. Missing or failing placeholders raise `ValueError` immediately — no silent fallback.
+The system reads the `SystemPromptConfigSpec.template_source` (inline string or file path) and substitutes all `${name}` occurrences. Built-in placeholders `${_installed_tools}`, `${_installed_skills}`, `${_installed_mcps}`, and `${_installed_subagents}` are populated from entity metadata automatically. The rendered prompt is cached and reused while its cache key (built from placeholder-provider fingerprints) stays unchanged; when a render input changes — e.g. `CompactionSystem` writes a new `CurrentCompactionSummaryComponent` — the fingerprint mismatch triggers a re-render on the next pass. Invalidation is exclusively pull-based: **no other system may delete `RenderedSystemPromptComponent`**; producers just update their own components. Missing or failing placeholders raise `ValueError` immediately — no silent fallback. The placeholder rendering helpers live in the neutral `ecs_agent.prompts.template_render` module so other systems (e.g. compaction prompt templates) can render without importing this system's module.
 
 ### Usage Example
 ```python
@@ -413,14 +413,17 @@ world.register_system(CheckpointSystem(), priority=15)
 
 Compresses conversation history by summarizing older messages using the entity's LLM provider.
 
-- **Constructor**: `__init__(self)` (no parameters)
+- **Constructor**: `__init__(self, context_providers=None)` — optional `Sequence[CompactionContextProvider]`; defaults to `DEFAULT_COMPACTION_CONTEXT_PROVIDERS` (subagent session state).
 - **Queries**: `CompactionConfigComponent`, `LLMComponent`, `ConversationComponent`
 - **Optional Components**: `ConversationArchiveComponent`
 - **Modifies**: `ConversationComponent.messages` (replaces summarized history with `[system_msg?] + [last_user_anchor?]` after compaction), `ConversationArchiveComponent.archived_summaries`.
 - **Events Published**: `CompactionCompleteEvent`.
 
 ### Behavior
-The system estimates token count using `word_count * 1.3`. When the estimate exceeds `CompactionConfigComponent.threshold_tokens`, the configured `compaction_method` selects which messages to summarize. `full_history` summarizes all non-system messages; `predrop_then_compact` first applies outbound-budget pruning to the summary input. After summarization, live conversation history is rebuilt from the original system message (if present) plus a minimal last-user continuation anchor (if present). If a matching `RenderedUserPromptComponent` exists for that last raw user message, its rendered text is used as the anchor so script-trigger prompts do not re-run after compaction. The summary is archived in `ConversationArchiveComponent` and stored in `CurrentCompactionSummaryComponent` for injection into the system prompt via `SystemPromptRenderSystem`.
+The system estimates token count using `word_count * 1.3`. When the estimate exceeds `CompactionConfigComponent.threshold_tokens`, the configured `compaction_method` selects which messages to summarize. `full_history` summarizes all non-system messages; `predrop_then_compact` first applies outbound-budget pruning to the summary input. After summarization, live conversation history is rebuilt from the original system message (if present) plus a minimal last-user continuation anchor (if present). If a matching `RenderedUserPromptComponent` exists for that last raw user message, its rendered text is used as the anchor so script-trigger prompts do not re-run after compaction. The summary is archived in `ConversationArchiveComponent` and stored in `CurrentCompactionSummaryComponent` for injection into the system prompt via `SystemPromptRenderSystem`. Compaction does **not** touch `RenderedSystemPromptComponent`: the render system detects the new summary through its cache-key fingerprint and re-renders on its next pass.
+
+### Context providers
+State that must survive compaction (e.g. pending subagent sessions) is contributed to the summarization request through the `CompactionContextProvider` protocol (`ecs_agent.prompts.compaction_context`): each provider returns a text block or `None`, and non-empty blocks are appended to the summary input in provider order. CompactionSystem has no knowledge of any contributor's domain — the built-in `SubagentCompactionContextProvider` owns the subagent digest, classifying sessions with the canonical status sets from `ecs_agent.types` (`PENDING_SUBAGENT_STATUSES` / `COMPLETED_SUBAGENT_STATUSES`, exhaustiveness-guarded by tests). To add a contributor, implement the protocol and construct the system with `CompactionSystem(context_providers=[*DEFAULT_COMPACTION_CONTEXT_PROVIDERS, MyProvider()])`.
 
 ### Usage Example
 ```python

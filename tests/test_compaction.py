@@ -26,7 +26,8 @@ from ecs_agent.providers import FakeModel
 from ecs_agent.providers.registry import ProviderRegistry
 from ecs_agent.systems.compaction import DEFAULT_COMPACTION_PROMPT, CompactionSystem
 import ecs_agent.systems.compaction as compaction_module
-from ecs_agent.systems.system_prompt_render_system import render_compaction_prompt
+from ecs_agent.prompts.template_render import render_compaction_prompt
+from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.prompts.contracts import (
     PlaceholderSpec,
     PromptTemplateSource,
@@ -798,9 +799,10 @@ async def test_system_message_is_preserved_during_compaction() -> None:
 
 
 @pytest.mark.asyncio
-async def test_compaction_updates_current_summary_and_clears_rendered_prompt_cache() -> (
-    None
-):
+async def test_compaction_keeps_rendered_prompt_cache_after_summary_update() -> None:
+    """Compaction must not touch RenderedSystemPromptComponent: invalidation is
+    pull-based — the render system re-renders when the summary fingerprint in
+    its cache key changes."""
     world = World()
     model = RecordingFakeModel(
         responses=[
@@ -821,13 +823,11 @@ async def test_compaction_updates_current_summary_and_clears_rendered_prompt_cac
         entity_id,
         CompactionConfigComponent(threshold_tokens=1, summary_model="summary-model"),
     )
-    world.add_component(
-        entity_id,
-        RenderedSystemPromptComponent(
-            text="cached runtime prompt",
-            placeholder_snapshot={"_cache_key": "runtime-cache"},
-        ),
+    cached = RenderedSystemPromptComponent(
+        text="cached runtime prompt",
+        placeholder_snapshot={"_cache_key": "runtime-cache"},
     )
+    world.add_component(entity_id, cached)
 
     await CompactionSystem().process(world)
 
@@ -839,7 +839,165 @@ async def test_compaction_updates_current_summary_and_clears_rendered_prompt_cac
     assert current_summary == CurrentCompactionSummaryComponent(
         summary="state-backed summary"
     )
-    assert world.get_component(entity_id, RenderedSystemPromptComponent) is None
+    survivor = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert survivor is cached
+    assert survivor.text == "cached runtime prompt"
+    assert survivor.placeholder_snapshot == {"_cache_key": "runtime-cache"}
+
+
+@pytest.mark.asyncio
+async def test_compaction_injected_context_provider_appears_in_summary_input() -> None:
+    """Context contributors are constructor-injected: a custom provider's block
+    must land at the tail of the summary request without compaction knowing
+    the provider's domain."""
+
+    class _StaticContextProvider:
+        provider_id = "custom_state"
+
+        def render_compaction_context(
+            self, world: World, entity_id: EntityId
+        ) -> str | None:
+            return "Custom state:\nkey=value"
+
+    world = World()
+    model = RecordingFakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content="summary"))]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[_message("first"), _message("second"), _message("third")]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        CompactionConfigComponent(threshold_tokens=1, summary_model="summary-model"),
+    )
+
+    await CompactionSystem(
+        context_providers=[_StaticContextProvider()]
+    ).process(world)
+
+    summary_input = model.calls[0][0][1].content
+    assert summary_input.endswith("\n\nCustom state:\nkey=value")
+
+
+@pytest.mark.asyncio
+async def test_render_rerenders_after_compaction_via_fingerprint() -> None:
+    """Full pull-model pipeline: render -> compact -> render. The second render
+    pass must pick up the new summary purely via cache-key fingerprint
+    mismatch, with no deletion by the compaction system."""
+    world = World()
+    model = RecordingFakeModel(
+        responses=[
+            CompletionResult(
+                message=Message(role="assistant", content="fresh compaction summary")
+            )
+        ]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="You are helpful.")
+        ),
+    )
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[_message("first"), _message("second"), _message("third")]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        CompactionConfigComponent(threshold_tokens=1, summary_model="summary-model"),
+    )
+
+    render_system = SystemPromptRenderSystem()
+    await render_system.process(world)
+    rendered_v1 = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered_v1 is not None
+    assert "fresh compaction summary" not in rendered_v1.text
+
+    await CompactionSystem().process(world)
+
+    stale = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert stale is rendered_v1  # untouched by compaction (stale until next render)
+
+    await render_system.process(world)
+
+    rendered_v2 = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered_v2 is not None
+    assert rendered_v2 is not rendered_v1
+    assert "fresh compaction summary" in rendered_v2.text
+    # ISSUE-6 split stays intact: the summary lands in the volatile tail while
+    # the cache-stable prefix is unchanged.
+    assert "fresh compaction summary" in rendered_v2.volatile_text
+    assert rendered_v2.stable_text == rendered_v1.stable_text
+
+
+@pytest.mark.asyncio
+async def test_trim_keeps_rendered_prompt_cache_and_render_skips_rerender() -> None:
+    """Trimming changes only conversation messages, which no placeholder
+    provider reads: the rendered prompt cache must survive and the next render
+    pass must be a cache hit (same component object)."""
+    world = World()
+    model = RecordingFakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content="brief"))]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline="You are helpful.")
+        ),
+    )
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[
+                _message("u" * 40),
+                Message(
+                    role="assistant",
+                    content="a" * 40,
+                    tool_calls=[ToolCall(id="c1", name="search", arguments={})],
+                ),
+                Message(role="tool", content="t" * 400, tool_call_id="c1"),
+                _message("b" * 40, role="assistant"),
+                _message("c" * 40),
+            ]
+        ),
+    )
+    world.add_component(
+        entity_id,
+        CompactionConfigComponent(threshold_tokens=1000, summary_model="summary-model"),
+    )
+    world.add_component(
+        entity_id, ContextTrimConfig(max_tokens=60, protect_recent_turns=0)
+    )
+
+    render_system = SystemPromptRenderSystem()
+    await render_system.process(world)
+    rendered_v1 = world.get_component(entity_id, RenderedSystemPromptComponent)
+    assert rendered_v1 is not None
+
+    await CompactionSystem().process(world)
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert [m.role for m in conversation.messages] == ["user", "assistant", "user"]
+    assert world.get_component(entity_id, CurrentCompactionSummaryComponent) is None
+    assert world.get_component(entity_id, RenderedSystemPromptComponent) is rendered_v1
+
+    await render_system.process(world)
+
+    # Cache key unchanged (trim does not affect any placeholder fingerprint),
+    # so the render pass reuses the existing component instead of re-rendering.
+    assert world.get_component(entity_id, RenderedSystemPromptComponent) is rendered_v1
 
 
 @pytest.mark.asyncio
@@ -1236,7 +1394,10 @@ async def test_compaction_renders_custom_prompt_template() -> None:
     assert sent_messages[0].content == "Summary for compaction"
     assert llm is not None
     assert llm.system_prompt == "runtime llm prompt"
-    assert runtime_cache is None
+    # Compaction leaves the rendered prompt cache untouched; the render system
+    # invalidates it via its cache-key fingerprint on the next pass.
+    assert runtime_cache is not None
+    assert runtime_cache.text == "cached runtime prompt"
     assert legacy_prompt is not None
     assert legacy_prompt.content == "runtime legacy prompt"
 
