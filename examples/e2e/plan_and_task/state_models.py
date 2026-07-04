@@ -6,23 +6,11 @@ from typing import Any
 
 from ecs_agent.logging import get_logger
 
+from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
+
 logger = get_logger(__name__)
 
-_PHASE_VALUES = {
-    "IDLE",
-    "DRAFT_INTERVIEW",
-    "DRAFT_ADVISOR_REVIEW",
-    "DRAFT_QA_REVIEW",
-    "WRITE_PLAN",
-    "PLAN_QA_REVIEW",
-    "PLAN_FINALIZED",
-    "TASK_READY",
-    "TASK_RUNNING",
-    "TASK_BLOCKED",
-    "TASK_REPLAN",
-    "TASK_COMPLETED",
-    "TASK_ABORTED",
-}
+_PHASE_VALUES = frozenset(PLAN_TASK_PHASE_GRAPH.phases_by_id)
 _SUBAGENT_STATUS_VALUES = {"queued", "running", "succeeded", "failed", "stale"}
 _REVIEW_VERDICT_VALUES = {"approved", "revise", "blocked"}
 

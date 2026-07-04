@@ -48,6 +48,14 @@ _TASK_EXECUTION_PHASES = frozenset(
     }
 )
 
+from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH  # noqa: E402
+
+# The three artifact-validation groups must exactly tile the graph (minus IDLE);
+# drift here means read_state() would skip artifact checks for a new phase.
+assert _PLANNING_PHASES | _TASK_EXECUTION_PHASES == (
+    frozenset(PLAN_TASK_PHASE_GRAPH.phases_by_id) - {"IDLE"}
+), "scratchbook phase groups drifted from PLAN_TASK_PHASE_GRAPH"
+
 
 def _write_text_atomic(path: Path, content: str) -> None:
     """Write content to path using a temp-file + os.replace for atomicity."""

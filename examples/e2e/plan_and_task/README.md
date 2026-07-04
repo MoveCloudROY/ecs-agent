@@ -1,21 +1,23 @@
 # Plan and Task E2E Example
 
-This example demonstrates an interactive plan→review→execute workflow using the ECS-based LLM Agent framework. It features a robust state machine, review-gated planning, artifact persistence, recovery semantics, and framework-native auto compaction for both the main agent and spawned subagents.
+This example demonstrates an interactive plan→review→execute workflow using the ECS-based LLM Agent framework. It features a recoverable phase graph (`ecs_agent.phases`), review-gated planning, artifact persistence, recovery semantics, and framework-native auto compaction for both the main agent and spawned subagents.
 
 ## Overview
 
 The workflow follows a structured lifecycle:
 1. **Draft Interview**: The agent interviews the user to build a draft plan (`DRAFT_INTERVIEW`).
 2. **Draft Reviews**: The draft must be approved by both an Advisor (`DRAFT_ADVISOR_REVIEW`) and a QA subagent (`DRAFT_QA_REVIEW`).
-3. **Write Plan**: Once QA approves the draft, the system **automatically** transitions to `WRITE_PLAN` and triggers a dedicated `plan_writer` subagent (equipped with the `writing-plans` skill) to convert the approved draft into a structured `workflow_plan.md`. No manual command is needed.
-4. **Plan QA Review**: When the plan writer finishes, the system **automatically** transitions to `PLAN_QA_REVIEW` where QA reviews the final plan document.
+3. **Write Plan**: Once QA approves the draft, the `DRAFT_QA_REVIEW` phase's `ApprovalGate` **automatically** routes the workflow to `WRITE_PLAN` and triggers a dedicated `plan_writer` subagent (equipped with the `writing-plans` skill) to convert the approved draft into a structured `workflow_plan.md`. No manual command is needed.
+4. **Plan QA Review**: When the plan writer finishes, the system **automatically** advances to `PLAN_QA_REVIEW` where QA reviews the final plan document.
 5. **Execution**: Once finalized, the plan is decomposed into a task queue and executed.
+
+The lifecycle is declared once as a phase graph (`PLAN_TASK_PHASE_GRAPH` in `phase_graph.py`, built on `ecs_agent.phases`). The current phase lives in a `PhaseComponent` on the agent entity — the runtime source of truth — and every transition goes through `advance()` (validated against the graph's edges) or `force()` (used only by `/plan:start`, which may begin a new workflow from any phase, including terminal ones). Review verdicts are routed declaratively by each review phase's `ApprovalGate`, and the persisted `RuntimeState.phase` is a mirror of `PhaseComponent` written by the controller.
 
 ## Architecture
 
 - **Built-in Tools** — The main agent has `read_file`, `write_file`, `edit_file`, `bash`, and `glob` tools pre-installed via `BuiltinToolsSkill`, workspace-bound to the example directory. `read_file` returns clean content, while `edit_file` keeps its original `op`/`pos`/`end`/`content` signature with `pos`/`end` as 1-based file line numbers validated against framework-managed internal snapshots. The main agent has unrestricted access to all these tools.
 - **Subagent Tool Permissions** — `advisor`, `qa`, and `plan_qa` review subagents inherit only `read_file` and `glob` (read-only) via `InheritancePolicy(inherit_tools=["read_file", "glob"], inherit_permissions=True)`. They cannot write files or run shell commands. `plan_writer` inherits `read_file`, `write_file`, `edit_file`, and `glob` since it must produce the final plan document.
-- **Two Distinct QA Subagents** — Draft QA (`qa`) and Plan QA (`plan_qa`) are registered as separate subagents with separate system prompts and separate state machine transition paths:
+- **Two Distinct QA Subagents** — Draft QA (`qa`) and Plan QA (`plan_qa`) are registered as separate subagents with separate system prompts and separate transition paths in the phase graph:
   - `qa` uses `QA_SYSTEM_PROMPT` (draft review lens) and routes `DelegationCompletedEvent` → `controller.handle_qa_review()` → `DRAFT_QA_REVIEW` verdict.
   - `plan_qa` uses `PLAN_QA_REVIEW_SYSTEM_PROMPT` (final plan review lens) and routes `DelegationCompletedEvent` → `controller.handle_plan_qa_review()` → `PLAN_QA_REVIEW` verdict.
   - The planner system prompt calls `subagent(category="qa", ...)` for draft review and `subagent(category="plan_qa", ...)` for plan review.
@@ -26,8 +28,8 @@ The workflow follows a structured lifecycle:
 - **Log Truncation** — Structured log fields `last_user_prompt` and user-normalization `prompt_text` are truncated to 200 characters to keep logs readable without losing signal. System-prompt render logs still report `prompt_length`, but the rendered prompt text itself is not truncated in this example.
 - **ECS Core**: Uses `SystemPromptRenderSystem`, `UserPromptNormalizationSystem`, `ReasoningSystem`, and `ToolExecutionSystem`.
 - **Prompt Configuration**: The planner entity declares `SystemPromptConfigSpec` with `DRAFT_INTERVIEW_SYSTEM_PROMPT`, and `SystemPromptRenderSystem` bridges the rendered value into `LLMComponent.system_prompt` before reasoning.
-- **Workflow DSL**: Uses `install_workflow` and `WorkflowStateSystem` (priority -25) to manage the phase graph and automatic prompt-profile selection via `${_workflow_state_prompt}`.
-- **State Machine**: Explicit phase transitions managed by `WorkflowStateMachine`.
+- **Phase Graph**: `build_plan_task_world(...)` binds `PLAN_TASK_PHASE_GRAPH` via `await bind_phase_graph(world, agent_id, ..., agent_key="main")`. Per-phase system prompts are selected automatically through the `${_phase_prompt}` placeholder — no polling system is registered; prompt changes take effect on the transition itself.
+- **Phase Transitions**: Explicit transitions via `ecs_agent.phases` — `advance()` for graph-validated moves, `force()` for `/plan:start`, `record_approval()` for review-verdict routing through each review phase's `ApprovalGate`. Every transition is recorded in `PhaseComponent.history` with a reason.
 - **Artifacts**: Durable persistence of plans, state, and execution evidence via `PlanTaskScratchbookAdapter`. Main-agent tool results are currently kept inline in ECS conversation/tool-result state rather than being written through `ToolResultsSink`.
 - **Controller**: `PlanController` manages the high-level workflow logic and review gates.
 - **Subagent Reviews**: Advisor, QA, and Plan QA review steps are wired as ECS subagents via `SubagentRegistryComponent`. The planner invokes them with `subagent(category="advisor", ...)`, `subagent(category="qa", ...)`, and `subagent(category="plan_qa", ...)` respectively. Verdicts are automatically extracted from subagent results via `DelegationCompletedEvent` subscription, routed to the correct controller method based on the subagent name.
@@ -41,12 +43,12 @@ The workflow follows a structured lifecycle:
 The interactive runtime supports eleven slash commands:
 
 - `/plan:start <description>`: Initialize a new workflow with a draft description.
-- `/plan:resume <workflow_id>`: Restore a previously-started workflow from disk by its workflow ID (e.g. `creative-writing-assistant-with-llm-workflow`). Marks any in-flight subagents as stale and resumes from the persisted phase.
+- `/plan:resume <workflow_id>`: Restore a previously-started workflow from disk by its workflow ID (e.g. `creative-writing-assistant-with-llm-workflow`). Marks any in-flight subagents as stale and resumes from the persisted phase; if that phase is `TASK_RUNNING`, the graph's `on_resume` policy demotes it to `TASK_BLOCKED` at load.
 - `/plan:status`: Show the current workflow phase, status, and review verdicts.
 - `/plan:finalize`: Finalize the plan and transition to task execution (requires all three approved reviews).
-- `/plan:write`: Transition from `DRAFT_QA_REVIEW` to `WRITE_PLAN` phase to produce `workflow_plan.md`. **Optional** — this transition now happens automatically when QA approves the draft, but can still be invoked manually.
+- `/plan:write`: Transition from `DRAFT_QA_REVIEW` to `WRITE_PLAN` phase to produce `workflow_plan.md`. **Optional** — the `DRAFT_QA_REVIEW` `ApprovalGate` performs this transition automatically when QA approves the draft, but it can still be invoked manually.
 - `/plan:qa_review <approved|revise|blocked> [notes]`: Record a QA verdict on the final plan document.
-- `/task:start <workflow_id>`: Start execution of a specific task. If no workflow is active in the current session, providing a `workflow_id` auto-loads the persisted state from scratchbook (equivalent to `/plan:resume <workflow_id>` followed by starting task execution). Accepts phases `PLAN_FINALIZED`, `TASK_READY`, `TASK_RUNNING`, and `TASK_BLOCKED`. If the active session is still in `PLAN_QA_REVIEW` but already has an `approved` `PLAN_QA_REVIEW` verdict, `/task:start` first reconciles that phase to `PLAN_FINALIZED` before initializing the task queue; non-approved `PLAN_QA_REVIEW` remains blocked.
+- `/task:start <workflow_id>`: Start execution of a specific task. If no workflow is active in the current session, providing a `workflow_id` auto-loads the persisted state from scratchbook (equivalent to `/plan:resume <workflow_id>` followed by starting task execution). Accepts phases `PLAN_FINALIZED`, `TASK_READY`, `TASK_RUNNING`, and `TASK_BLOCKED`. If the active session is still in `PLAN_QA_REVIEW` but already has an `approved` `PLAN_QA_REVIEW` verdict, `/task:start` first replays that phase's `ApprovalGate` (advancing to `PLAN_FINALIZED`) before initializing the task queue; non-approved `PLAN_QA_REVIEW` remains blocked.
 - `/task:status`: Show the status of the current task and subagent sessions.
 - `/task:resume`: Resume a blocked or replanned task.
 - `/task:replan <reason>`: Request a replan for the current task.
@@ -108,7 +110,7 @@ printf '/plan:start Build demo\n\n/plan:status\n\nexit\n\n' | uv run python exam
 The workflow can be restarted at any time. On startup, no workflow ID is resolved and no scratchbook folder is created. Instead:
 1. Call `/plan:start <original description>` — the LLM re-derives the same slug from the same description (or uses `slug_from_description()` as fallback).
 2. State is restored from `scratchbook/<workflow_id>/state/runtime_state.json`.
-3. Any in-flight subagents are marked `stale` and the machine transitions to `TASK_BLOCKED` for safe resumption.
+3. Any in-flight subagents are marked `stale`. The load flow overwrites the runtime `PhaseComponent` with the persisted phase and re-binds the phase graph; the graph's `on_resume` policy then demotes a persisted `TASK_RUNNING` to `TASK_BLOCKED` for safe resumption (the demotion is recorded in the phase audit history).
 
 Framework checkpoint restore may also mark a previously running background subagent as `failed` with `restored_without_live_task_handle` when its live task handle no longer exists. That lifecycle marker remains available through explicit subagent status/result inspection, but is not surfaced as a fresh review notification.
 
@@ -116,7 +118,7 @@ Framework checkpoint restore may also mark a previously running background subag
 
 ### Mid-flight State Reconciliation
 
-When `/plan:resume <workflow_id>` is called, the system reads the persisted state and automatically reconciles any in-progress phases so the workflow can continue without manual intervention:
+When `/plan:resume <workflow_id>` is called, the system reads the persisted state and automatically reconciles any in-progress phases so the workflow can continue without manual intervention. Reconciliation replays the resumed phase's declarative `ApprovalGate` mapping (the same one used for live verdict routing) against the latest persisted verdict — the routing rule lives only in `phase_graph.py`, and no duplicate entry is written to the approval ledger:
 
 | Resumed phase | Condition | Automatic action |
 |---|---|---|
@@ -131,7 +133,7 @@ This means after a process restart you can call `/plan:resume <workflow_id>` and
 
 ### Integration tests
 
-Run the integration suite to verify command parsing, state machine logic, artifact persistence, and credential-gated CLI coverage:
+Run the integration suite to verify command parsing, phase-transition logic, artifact persistence, and credential-gated CLI coverage:
 
 ```bash
 uv run pytest tests/integration/test_plan_and_task_flow.py -v
@@ -285,5 +287,5 @@ This example explicitly enables logging in `main.py` when `DEBUG=1`; the base `e
 - **Plan Template**: `templates/workflow_plan_template.md` is an annotated reference showing the exact `workflow_plan.md` format: YAML frontmatter, `## Overview` with `### Dependency Graph`, `## Tasks` section, per-task `### Task: <task_id>` + ` ```yaml ``` ` blocks, and an optional `## Appendix` AC cross-reference table. The format spec is also embedded verbatim into `WRITE_PLAN_SYSTEM_PROMPT` and `build_write_plan_prompt()` as `_WORKFLOW_PLAN_FORMAT` so the `plan_writer` subagent has an unambiguous reference without reading a file.
 - **Dependency Resolution**: Tasks are executed in topological order based on their `dependencies` list.
 - **Review Verdict Lifecycle**: Each phase holds at most one verdict in `review_verdicts`. Upsert semantics: non-approved verdicts replace earlier non-approved verdicts for the same phase; `approved` is terminal and cannot be overwritten. `approved` verdicts always have `notes=None`. The `plan_version` field has been removed from `ReviewVerdict`.
-- **Status Lifecycle**: Whenever the state machine transitions to a new phase, `status` is set to `"active"`. Terminal handlers (`handle_task_abort` → `"aborted"`, `handle_plan_finalize` → `"ready"`, `handle_task_replan` with scope change → `"needs_review"`) override `status` after the transition.
+- **Status Lifecycle**: Whenever the controller mirrors a phase transition into `RuntimeState` (`PlanController._mirror_phase`), `status` is set to `"active"` (`"completed"` for terminal phases). Handler-specific overrides (`handle_task_abort` → `"aborted"`, `handle_plan_finalize` → `"ready"`, `handle_task_replan` with scope change → `"needs_review"`) are applied after the mirror.
 - **Token Prefix Caching**: This example uses `ApiFormat.OPENAI_RESPONSES` with `enable_store=True` (default config). The DashScope Responses API endpoint (`/api/v2/apps/protocols/compatible-mode/v1`) returns `usage.input_tokens_details.cached_tokens`, which `normalize_openai_usage()` maps to `cached_input_tokens`. On warm calls where the system prompt prefix is cached, `cached_input_tokens > 0` and `plan_task_llm_cache_stats` will be emitted with a non-zero `cache_hit_rate`. The DashScope Chat Completions API (`/compatible-mode/v1`) does not return cached token counts and does not support the Responses protocol — switching back to it would make cache observability unavailable.
