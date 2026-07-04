@@ -96,3 +96,34 @@ def test_dsl_symbols_importable_from_ecs_agent() -> None:
     assert load_markdown_agent is not None
     assert resolve_agent_specs is not None
     assert validate_agent_spec is not None
+
+
+def test_phase_symbols_importable() -> None:
+    """Phase-graph surface: components/event at top level, verbs from ecs_agent.phases."""
+    from ecs_agent import (
+        PhaseApprovalsComponent,
+        PhaseChangedEvent,
+        PhaseComponent,
+        PhaseDefinitionComponent,
+    )
+    from ecs_agent.phases import (
+        ApprovalGate,
+        InvalidPhaseTransitionError,
+        PhaseError,
+        PhaseGraph,
+        PhaseGraphMismatchError,
+        PhaseIntegrityError,
+        PhasePromptPlaceholderProvider,
+        PhaseSpec,
+        advance,
+        allowed_targets,
+        bind_phase_graph,
+        build_graph,
+        force,
+        is_terminal,
+        latest_verdicts,
+        record_approval,
+    )
+
+    assert PhaseComponent is not None
+    assert callable(advance) and callable(bind_phase_graph)
