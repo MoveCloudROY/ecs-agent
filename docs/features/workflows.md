@@ -1,3 +1,8 @@
+> **DEPRECATED (2026-07):** superseded by [Phase Graphs](phases.md)
+> (`ecs_agent.phases`). This module is scheduled for removal after the examples
+> migrate (see `docs/plans/2026-07-04-phase-graph-redesign.md`). Do not build
+> new agents on the gate DSL.
+
 # Workflow DSL
 
 The ECS-based LLM Agent framework provides a declarative Domain Specific Language (DSL) for building stateful agents. Workflows allow you to define a graph of states, prompt profiles, and transition gates that drive an agent's behavior over multiple ticks.

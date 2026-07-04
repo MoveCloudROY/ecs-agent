@@ -123,6 +123,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **`SystemPromptRenderSystem`** — ECS system (recommended priority -20) that resolves all `${name}` placeholders and writes a `RenderedSystemPromptComponent` for LLM callers.
 - **`UserPromptNormalizationSystem`** — ECS system (recommended priority -10) that injects trigger templates into outbound user messages and writes a `RenderedUserPromptComponent`. Slash-command skill context and ContextPool entries are injected later at call-time by `prepare_outbound_messages()`.
 - **Workflow State & Gates** — Declarative state machine DSL for building stateful agents. Define states, prompt profiles, and transition gates (`has`, `field`, `all_of`, etc.) that drive behavior over multiple ticks.
+- **Phase Graphs** — Explicit command-driven phase machine: pure-data graphs (`build_graph`), async `advance()/force()/record_approval()` transitions with bounded audit history, first-class approval gates, per-phase tool allowlists and resume policy, loud checkpoint-restore validation. Supersedes Workflow State & Gates.
 - **Built-in Placeholders** — `${_installed_tools}`, `${_installed_skills}`, `${_installed_mcps}`, `${_installed_subagents}` automatically expand to the current inventory, including a free-form subagent hint when unregistered subagent names are enabled.
 - **Provider Extension Seam** — A synchronous, narrow provider protocol (`BuiltinPlaceholderProvider`) for injecting domain-specific context into system prompts. Used by the scratchbook prompt provider.
 - **Callable Placeholders** — Pass a `() -> str` callable as a placeholder resolver for dynamic content; must be side-effect-free and return a string.
@@ -442,6 +443,7 @@ See [`docs/`](docs/) for detailed guides:
 - [Logging](docs/features/logging.md), structlog integration
 - [Retry](docs/features/retry.md), RetryModel configuration
 - [Workflow DSL](docs/features/workflows.md), Declarative state machine and transition gates
+- [Phase Graphs](docs/features/phases.md), Explicit command-driven phase transitions (supersedes the Workflow DSL)
 
 ### Agent Capabilities
 - [Context Management](docs/features/context-management.md), Checkpoint, undo, and compaction
