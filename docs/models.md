@@ -99,6 +99,9 @@ When an entity has a `ContextTrimConfig`, `CompactionSystem` runs a failover pip
 
 - **Budget** = `ContextTrimConfig.max_tokens`, or — when `None` — derived from the model's context window via `ecs_agent.context_windows.resolve_context_budget(model_id)` (window minus an output reserve).
 - **Trim** permanently drops the oldest tool spans (atomic assistant-tool-call + results), then optionally strips replayed reasoning (`trim_reasoning`), until the estimate is under budget. It's cheap (no LLM) and rewrites history in place.
+  - `protect_recent_turns: int` keeps the most recent N messages untouched (tool spans reaching into them are kept whole; their reasoning is not stripped).
+  - Reasoning stripping never touches a tool-calling assistant message (its thinking + signature is load-bearing for extended-thinking tool-use replay) and always keeps the newest reasoning-bearing message.
+  - `token_estimation_chars_per_token` controls the fallback estimate when tiktoken is unavailable (used consistently across the trim path).
 - If trimming frees enough space → **no summary is produced** this turn. If essential content still exceeds budget → it **falls back to compaction summarization**. There is no "raise on overflow" — `overflow_behavior` defaults to a non-raising `"warn"`.
 
 ```python

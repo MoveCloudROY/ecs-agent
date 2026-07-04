@@ -691,7 +691,14 @@ def _estimate_total_tokens(
     return count_tokens("".join(parts), fallback_chars_per_token=chars_per_token)
 
 
-def _drop_oldest_tool_span(messages: list[Message]) -> list[Message]:
+def _drop_oldest_tool_span(
+    messages: list[Message], *, protect_from: int | None = None
+) -> list[Message]:
+    """Drop the oldest complete tool span (assistant tool-call + its results).
+
+    When ``protect_from`` is given, only spans that end at or before that index
+    are eligible, so the most recent messages are never dropped.
+    """
     for index, message in enumerate(messages):
         if message.role != "assistant" or not message.tool_calls:
             continue
@@ -713,6 +720,10 @@ def _drop_oldest_tool_span(messages: list[Message]) -> list[Message]:
             break
 
         if not matched_tool_result:
+            continue
+
+        if protect_from is not None and end_index > protect_from:
+            # Span reaches into the protected recent window; keep it whole.
             continue
 
         return [*messages[:index], *messages[end_index:]]

@@ -293,6 +293,9 @@ class ContextTrimConfig:
     trim_reasoning: bool = False
     token_estimation_chars_per_token: float = 4.0
     overflow_behavior: str = "warn"
+    protect_recent_turns: int = 0
+    """Most recent N messages never trimmed (tool spans reaching into them are
+    kept whole; their reasoning is not stripped). 0 = protect nothing."""
 
 
 @dataclass(slots=True)

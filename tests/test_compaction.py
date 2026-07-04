@@ -1447,3 +1447,82 @@ def test_resolve_trim_budget_from_model_window() -> None:
     assert system._resolve_trim_budget(ContextTrimConfig(max_tokens=None), unknown_llm) is None
     # No trim config -> no budget.
     assert system._resolve_trim_budget(None, claude_llm) is None
+
+
+def test_trim_protects_recent_turns() -> None:
+    """A: protect_recent_turns keeps the most recent messages (and any tool span
+    reaching into them) from being trimmed."""
+    system = CompactionSystem()
+    messages = [
+        _message("u" * 40),
+        Message(
+            role="assistant",
+            content="a" * 40,
+            tool_calls=[ToolCall(id="c1", name="s", arguments={})],
+        ),
+        Message(role="tool", content="t" * 400, tool_call_id="c1"),
+        Message(
+            role="assistant",
+            content="b" * 40,
+            tool_calls=[ToolCall(id="c2", name="s", arguments={})],
+        ),
+        Message(role="tool", content="s" * 400, tool_call_id="c2"),
+        _message("z" * 40),
+    ]
+    config = ContextTrimConfig(
+        max_tokens=60, trim_tool_results=True, protect_recent_turns=3
+    )
+
+    result, changed = system._trim_history(messages, 60, config)
+
+    assert changed is True
+    contents = [m.content for m in result]
+    # Old tool span dropped; recent (protected) tool span kept intact.
+    assert "t" * 400 not in contents
+    assert "s" * 400 in contents
+    assert "z" * 40 in contents
+
+
+def test_estimate_local_tokens_honors_chars_per_token() -> None:
+    """B: the trim estimator uses the configured chars_per_token (fallback path,
+    forced deterministic by the conftest fixture)."""
+    system = CompactionSystem()
+    msg = Message(role="user", content="a" * 40)
+    assert system._estimate_local_tokens([msg], 4.0) == 10
+    assert system._estimate_local_tokens([msg], 8.0) == 5
+    # reasoning_content is counted too.
+    msg_r = Message(role="assistant", content="a" * 8, reasoning_content="b" * 8)
+    assert system._estimate_local_tokens([msg_r], 4.0) == 4
+
+
+def test_trim_reasoning_preserves_signature_continuity_and_latest() -> None:
+    """C: reasoning stripping skips tool-calling messages (signature is
+    load-bearing for extended-thinking tool replay) and keeps the newest
+    reasoning-bearing assistant message."""
+    system = CompactionSystem()
+    messages = [
+        Message(role="assistant", content="x" * 40, reasoning_content="r1" * 100),
+        Message(
+            role="assistant",
+            content="y" * 40,
+            reasoning_content="r2" * 100,
+            reasoning_signature="sig2",
+            tool_calls=[ToolCall(id="c1", name="s", arguments={})],
+        ),
+        Message(role="tool", content="t", tool_call_id="c1"),
+        Message(role="assistant", content="z" * 40, reasoning_content="r3" * 100),
+    ]
+    config = ContextTrimConfig(
+        max_tokens=1, trim_tool_results=False, trim_reasoning=True
+    )
+
+    result, changed = system._trim_history(messages, 1, config)
+
+    assert changed is True
+    # Old plain assistant: reasoning stripped.
+    assert result[0].reasoning_content is None
+    # Tool-calling assistant: reasoning + signature preserved (continuity).
+    assert result[1].reasoning_content == "r2" * 100
+    assert result[1].reasoning_signature == "sig2"
+    # Newest reasoning-bearing assistant: kept.
+    assert result[3].reasoning_content == "r3" * 100

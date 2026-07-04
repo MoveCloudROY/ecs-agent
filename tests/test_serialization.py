@@ -470,6 +470,7 @@ def test_serialization_roundtrip_with_context_budget_config_component() -> None:
         "trim_reasoning": True,
         "token_estimation_chars_per_token": 3.5,
         "overflow_behavior": "warn",
+        "protect_recent_turns": 0,
     }
 
     restored_component = restored.get_component(entity, ContextTrimConfig)

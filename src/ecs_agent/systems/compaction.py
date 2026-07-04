@@ -62,11 +62,18 @@ class CompactionSystem:
             # ISSUE-5 pipeline: estimate -> trim -> (still over) summarize.
             trim_config = world.get_component(entity_id, ContextTrimConfig)
             budget = self._resolve_trim_budget(trim_config, llm_component)
+            chars_per_token = (
+                trim_config.token_estimation_chars_per_token
+                if trim_config is not None
+                else 4.0
+            )
             # When a trim budget is known it also acts as the summary trigger;
             # otherwise fall back to the compaction threshold (legacy behaviour).
             trigger = budget if budget is not None else config.threshold_tokens
 
-            original_tokens = self._current_context_tokens(world, entity_id, conversation)
+            original_tokens = self._current_context_tokens(
+                world, entity_id, conversation, chars_per_token
+            )
             if original_tokens <= trigger:
                 continue
 
@@ -87,17 +94,18 @@ class CompactionSystem:
                         world.remove_component(
                             entity_id, RenderedSystemPromptComponent
                         )
-                    original_tokens = self._current_context_tokens(
-                        world, entity_id, conversation
-                    )
                     logger.info(
                         "context_trimmed",
                         entity_id=int(entity_id),
                         dropped_messages=dropped,
-                        tokens_after=original_tokens,
                         budget=budget,
                     )
-                if original_tokens <= budget:
+                # Use the same estimator the trim loop targeted (counts replayed
+                # reasoning) to decide whether trimming freed enough space.
+                if (
+                    self._estimate_local_tokens(conversation.messages, chars_per_token)
+                    <= budget
+                ):
                     # Trimming freed enough space; no summary needed this turn.
                     continue
 
@@ -202,6 +210,7 @@ class CompactionSystem:
         world: World,
         entity_id: EntityId,
         conversation: ConversationComponent,
+        chars_per_token: float = 4.0,
     ) -> int:
         """Best estimate of the next call's input token count.
 
@@ -220,14 +229,18 @@ class CompactionSystem:
             and 0 <= usage.last_prompt_message_count <= len(messages)
         ):
             appended = messages[usage.last_prompt_message_count :]
-            return usage.last_prompt_tokens + self._estimate_tokens(appended)
-        return self._estimate_tokens(messages)
+            return usage.last_prompt_tokens + self._estimate_tokens(
+                appended, chars_per_token
+            )
+        return self._estimate_tokens(messages, chars_per_token)
 
-    def _estimate_tokens(self, messages: list[Message]) -> int:
+    def _estimate_tokens(
+        self, messages: list[Message], chars_per_token: float = 4.0
+    ) -> int:
         # Real BPE count when tiktoken is available; CJK-aware fallback otherwise.
         # (A word count catastrophically under-counts CJK/code — ISSUE-8.)
         text = "".join(message.content or "" for message in messages)
-        return count_tokens(text)
+        return count_tokens(text, fallback_chars_per_token=chars_per_token)
 
     @staticmethod
     def _resolve_trim_budget(
@@ -242,7 +255,9 @@ class CompactionSystem:
         model_id = getattr(model, "model_id", "") if model is not None else ""
         return resolve_context_budget(model_id)
 
-    def _estimate_local_tokens(self, messages: list[Message]) -> int:
+    def _estimate_local_tokens(
+        self, messages: list[Message], chars_per_token: float = 4.0
+    ) -> int:
         """Local estimate that also counts replayed ``reasoning_content`` (which
         is sent to the model), so trimming reasoning actually reduces the count."""
         parts: list[str] = []
@@ -251,7 +266,7 @@ class CompactionSystem:
                 parts.append(message.content)
             if message.reasoning_content:
                 parts.append(message.reasoning_content)
-        return count_tokens("".join(parts))
+        return count_tokens("".join(parts), fallback_chars_per_token=chars_per_token)
 
     def _trim_history(
         self,
@@ -263,30 +278,54 @@ class CompactionSystem:
 
         Oldest tool spans first (atomic assistant-tool-call + results), then
         (optionally) strip replayed reasoning from the oldest assistant messages.
+        The most recent ``protect_recent_turns`` messages are never touched.
         Returns ``(trimmed_messages, changed)``.
         """
         result = list(messages)
         changed = False
+        protect = max(0, trim_config.protect_recent_turns)
+        cpt = trim_config.token_estimation_chars_per_token
 
         if trim_config.trim_tool_results:
-            while self._estimate_local_tokens(result) > budget:
-                nxt = _drop_oldest_tool_span(result)
+            while self._estimate_local_tokens(result, cpt) > budget:
+                # Recompute the protected boundary each round (result shrinks).
+                protect_from = max(0, len(result) - protect)
+                nxt = _drop_oldest_tool_span(result, protect_from=protect_from)
                 if len(nxt) == len(result):
                     break
                 result = nxt
                 changed = True
 
         if trim_config.trim_reasoning:
+            # Keep the newest reasoning-bearing assistant message (latest
+            # thinking), and never strip reasoning from a tool-calling message —
+            # its thinking + signature is load-bearing for extended-thinking
+            # tool-use replay (C).
+            last_reasoning_idx = max(
+                (
+                    index
+                    for index, message in enumerate(result)
+                    if message.role == "assistant"
+                    and (message.reasoning_content or message.reasoning_signature)
+                ),
+                default=-1,
+            )
+            protect_from = max(0, len(result) - protect)
             for index, message in enumerate(result):
-                if self._estimate_local_tokens(result) <= budget:
+                if index >= protect_from:
                     break
-                if message.role == "assistant" and (
-                    message.reasoning_content or message.reasoning_signature
-                ):
-                    result[index] = replace(
-                        message, reasoning_content=None, reasoning_signature=None
-                    )
-                    changed = True
+                if self._estimate_local_tokens(result, cpt) <= budget:
+                    break
+                if index == last_reasoning_idx:
+                    continue
+                if message.role != "assistant" or message.tool_calls:
+                    continue
+                if not (message.reasoning_content or message.reasoning_signature):
+                    continue
+                result[index] = replace(
+                    message, reasoning_content=None, reasoning_signature=None
+                )
+                changed = True
 
         return result, changed
 

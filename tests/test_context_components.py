@@ -251,6 +251,7 @@ def test_context_budget_config_component_field_types() -> None:
         "trim_reasoning": bool,
         "token_estimation_chars_per_token": float,
         "overflow_behavior": str,
+        "protect_recent_turns": int,
     }
 
 
