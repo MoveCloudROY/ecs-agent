@@ -377,6 +377,20 @@ LLM_API_KEY="$LLM_API_KEY" \
   uv run pytest tests/live/test_prometheus_metrics_live.py -v
 ```
 
+`tests/live/test_compaction_live.py` additionally honors `LLM_BASE_URL`,
+`LLM_RESPONSES_BASE_URL` (falls back to `LLM_BASE_URL`), and `LLM_MODEL` to
+target any OpenAI-compatible endpoint.
+
+Anthropic-protocol tests (`tests/test_real_llm_prompt_caching.py`,
+`tests/test_real_llm_context_trim.py`) gate on their own variables:
+
+```bash
+ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+  ANTHROPIC_BASE_URL=https://api.anthropic.com \
+  ANTHROPIC_MODEL=claude-3-5-haiku-20241022 \
+  uv run pytest tests/test_real_llm_prompt_caching.py tests/test_real_llm_context_trim.py -v
+```
+
 See `tests/live/` for the available live suites.
 
 ### Type Checking

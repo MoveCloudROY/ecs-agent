@@ -3,9 +3,16 @@
 Run:
     LLM_API_KEY=your-api-key \\
         uv run pytest tests/live/test_compaction_live.py -v
+
+Optional overrides (default: Aliyun DashScope + qwen3.5-flash):
+    LLM_BASE_URL            chat-completions base URL
+    LLM_RESPONSES_BASE_URL  Responses API base URL (falls back to LLM_BASE_URL)
+    LLM_MODEL               model identifier
 """
 
 from __future__ import annotations
+
+import os
 
 import pytest
 
@@ -30,11 +37,17 @@ _registry_module = pytest.importorskip("ecs_agent.providers.registry")
 ProviderRegistry = _registry_module.ProviderRegistry
 get_model = _registry_module.get_model
 
-COMPLETIONS_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-RESPONSES_URL = (
-    "https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1"
+COMPLETIONS_URL = os.getenv(
+    "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
 )
-MODEL = "qwen3.5-flash"
+RESPONSES_URL = os.getenv(
+    "LLM_RESPONSES_BASE_URL",
+    os.getenv(
+        "LLM_BASE_URL",
+        "https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
+    ),
+)
+MODEL = os.getenv("LLM_MODEL", "qwen3.5-flash")
 
 
 def _live_registry() -> ProviderRegistry:
@@ -126,7 +139,7 @@ async def test_live_compaction_xml_summary_visible_chat_completions(
     live_api_key: str,
 ) -> None:
     model = get_model(
-        "aliyun/qwen3.5-flash",
+        f"aliyun/{MODEL}",
         registry=_live_registry(),
         api_key=live_api_key,
     )
@@ -181,7 +194,7 @@ async def test_live_compaction_xml_summary_visible_responses_api(
     live_api_key: str,
 ) -> None:
     model = get_model(
-        "aliyun-responses/qwen3.5-flash",
+        f"aliyun-responses/{MODEL}",
         registry=_live_registry(),
         api_key=live_api_key,
     )
@@ -234,7 +247,7 @@ async def test_live_compaction_system_triggers_and_summarizes_chat(
     live_api_key: str,
 ) -> None:
     model = get_model(
-        "aliyun/qwen3.5-flash",
+        f"aliyun/{MODEL}",
         registry=_live_registry(),
         api_key=live_api_key,
     )
@@ -268,7 +281,7 @@ async def test_live_compaction_system_triggers_and_summarizes_responses(
     live_api_key: str,
 ) -> None:
     model = get_model(
-        "aliyun-responses/qwen3.5-flash",
+        f"aliyun-responses/{MODEL}",
         registry=_live_registry(),
         api_key=live_api_key,
     )
@@ -300,7 +313,7 @@ async def test_live_compaction_system_triggers_and_summarizes_responses(
 @pytest.mark.asyncio
 async def test_live_compaction_full_history_method(live_api_key: str) -> None:
     model = get_model(
-        "aliyun/qwen3.5-flash",
+        f"aliyun/{MODEL}",
         registry=_live_registry(),
         api_key=live_api_key,
     )
@@ -322,14 +335,16 @@ async def test_live_compaction_full_history_method(live_api_key: str) -> None:
     assert conv is not None
     assert current_summary is not None
     assert len(current_summary.summary) > 0
-    assert len(conv.messages) <= 1
+    # full_history retains the system message plus the last-user continuation
+    # anchor (869269b) — nothing else survives.
+    assert [message.role for message in conv.messages] == ["system", "user"]
     assert all(message.role != "compaction" for message in conv.messages)
 
 
 @pytest.mark.asyncio
 async def test_live_compaction_custom_prompt_template(live_api_key: str) -> None:
     model = get_model(
-        "aliyun/qwen3.5-flash",
+        f"aliyun/{MODEL}",
         registry=_live_registry(),
         api_key=live_api_key,
     )
@@ -365,7 +380,7 @@ async def test_live_compaction_summary_model_id_routing(live_api_key: str) -> No
         entity_id,
         CompactionConfigComponent(
             threshold_tokens=30,
-            summary_model_id="aliyun/qwen3.5-flash",
+            summary_model_id=f"aliyun/{MODEL}",
         ),
     )
     world.add_component(

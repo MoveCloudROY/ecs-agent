@@ -1082,7 +1082,8 @@ async def test_real_llm_agent_reads_and_reports_file_content(tmp_path: Any) -> N
     assert conv is not None
     tool_messages = [msg for msg in conv.messages if msg.role == "tool"]
     assert len(tool_messages) >= 1
-    assert any("1#" in msg.content for msg in tool_messages)
+    # read_file returns raw content since 8248aaa (legacy N#hash format removed).
+    assert any("Hello, World!" in msg.content for msg in tool_messages)
     assert conv.messages[-1].role == "assistant"
     assert len(conv.messages[-1].content.strip()) > 0
 
