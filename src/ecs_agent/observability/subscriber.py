@@ -30,6 +30,7 @@ from ecs_agent.types import (
     DelegationStartedEvent,
     ErrorOccurredEvent,
     MessageDeliveredEvent,
+    PhaseChangedEvent,
     PlanRevisedEvent,
     PlanStepCompletedEvent,
     RAGRetrievalCompletedEvent,
@@ -128,6 +129,7 @@ class ObservabilitySubscriber:
             (SystemExecutionCompletedEvent, self.handle_system_execution_completed),
             (PromptReplacementEvent, self.handle_prompt_replacement),
             (WorkflowStateEvaluatedEvent, self.handle_workflow_state_evaluated),
+            (PhaseChangedEvent, self.handle_phase_changed),
             (ErrorOccurredEvent, self.handle_error_occurred),
             (PlanStepCompletedEvent, self.handle_plan_step_completed),
             (PlanRevisedEvent, self.handle_plan_revised),
@@ -935,6 +937,34 @@ class ObservabilitySubscriber:
             },
             metadata={"status": event.status},
             error=event.error,
+        )
+        if not state.has_user_turn:
+            state.pending_turn_records.append(record)
+            return
+        await self.sink.emit(record)
+
+    async def handle_phase_changed(self, event: PhaseChangedEvent) -> None:
+        """Emit a committed phase-graph transition."""
+        state = self._state_for_current_run()
+        if state is None:
+            return
+
+        record = self._event_record(
+            state,
+            name="phase.transition",
+            kind="event",
+            status="success",
+            entity_id=int(event.entity_id),
+            tick=event.tick,
+            input={
+                "graph_id": event.graph_id,
+                "from_phase": event.from_phase,
+            },
+            output={
+                "to_phase": event.to_phase,
+                "reason": event.reason,
+                "forced": event.forced,
+            },
         )
         if not state.has_user_turn:
             state.pending_turn_records.append(record)
