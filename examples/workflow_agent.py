@@ -1,19 +1,19 @@
-"""Workflow DSL example: stateful agent with gate-driven state transitions.
+"""Phase graph example: stateful agent with explicit, tool-driven phase transitions.
 
-This example demonstrates the built-in Workflow DSL, which lets you define a
-graph of states, prompt profiles, and pure transition gates, compiled onto the
-existing ECS runtime.
+This example demonstrates `ecs_agent.phases`: declare a graph of phases with
+per-phase system prompts and allowed transitions, bind it to an entity, and
+move between phases by calling `advance()` — here directly from tool handlers.
 
 Scenario: a two-phase writing assistant.
 
-    DRAFT  ──(has DraftReadyMarker)──►  REVIEW  ──(has ApprovedMarker)──►  DONE
+    DRAFT  ──(tool: mark_draft_ready)──►  REVIEW  ──(tool: approve_draft)──►  DONE
 
-- DRAFT and REVIEW use different prompt profiles so the LLM "persona" changes
-  when the workflow transitions.
-- REVIEW re-uses a shared profile to show that transitions within the same
-  profile cluster do NOT invalidate the rendered system prompt cache.
-- Gate components are plain dataclasses attached to the entity by tool calls or
-  trigger script handlers.  WorkflowStateSystem observes them once per tick.
+- DRAFT and REVIEW carry different prompts, so the LLM "persona" changes when
+  the phase changes.  DONE reuses the REVIEW prompt to show that hops between
+  phases sharing a prompt keep the rendered system prompt cache stable.
+- There are no gate conditions, marker components, or polling system: tools
+  call `await advance(...)` themselves.  Each transition is validated against
+  the graph and recorded in PhaseComponent.history.
 
 Dual-mode:
   - Without LLM_API_KEY → FakeModel (deterministic, works offline)
@@ -24,16 +24,16 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import dataclass
 
 from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
-    TerminalComponent,
+    PhaseComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import configure_logging, get_logger
+from ecs_agent.phases import PhaseSpec, advance, bind_phase_graph, build_graph
 from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
 from ecs_agent.providers import FakeModel, Model
 from ecs_agent.providers.config import ApiFormat
@@ -42,78 +42,37 @@ from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
-from ecs_agent.systems.workflow_state import WorkflowStateSystem
 from ecs_agent.tools import tool
 from ecs_agent.types import CompletionResult, EntityId, Message, ToolCall, ToolSchema
-from ecs_agent.workflows import PromptProfileSpec, has, install_workflow, workflow
 
 logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
-# Gate marker components
-# These are plain dataclasses.  The workflow gates observe their presence via
-# has(DraftReadyMarker) / has(ApprovedMarker).
+# Phase graph
 # ---------------------------------------------------------------------------
 
+DRAFTER_PROMPT = (
+    "You are a creative writing assistant in DRAFT mode.\n"
+    "Help the user write and refine their draft.\n"
+    "When the draft is ready, call the `mark_draft_ready` tool."
+)
+REVIEWER_PROMPT = (
+    "You are a critical reviewer in REVIEW mode.\n"
+    "Evaluate the draft for clarity, accuracy, and completeness.\n"
+    "When you approve it, call the `approve_draft` tool.\n"
+    "If you need revisions, just say so."
+)
 
-@dataclass(slots=True)
-class DraftReadyMarker:
-    """Attached by the agent when the draft is ready for review."""
-
-
-@dataclass(slots=True)
-class ApprovedMarker:
-    """Attached by the agent when the review is approved."""
-
-
-# ---------------------------------------------------------------------------
-# Workflow spec
-# ---------------------------------------------------------------------------
-
-WRITING_WORKFLOW = workflow(
-    workflow_id="writing-flow",
+# DONE shares REVIEWER_PROMPT: transitions between phases with the same prompt
+# leave the rendered system prompt cache intact.
+WRITING_GRAPH = build_graph(
+    "writing-flow",
     initial="DRAFT",
-    profiles={
-        "assistant": {
-            "drafter": PromptProfileSpec(
-                profile_id="drafter",
-                prompt=(
-                    "You are a creative writing assistant in DRAFT mode.\n"
-                    "Help the user write and refine their draft.\n"
-                    "When the draft is ready, call the `mark_draft_ready` tool."
-                ),
-            ),
-            "reviewer": PromptProfileSpec(
-                profile_id="reviewer",
-                prompt=(
-                    "You are a critical reviewer in REVIEW mode.\n"
-                    "Evaluate the draft for clarity, accuracy, and completeness.\n"
-                    "When you approve it, call the `approve_draft` tool.\n"
-                    "If you need revisions, just say so."
-                ),
-            ),
-        }
-    },
-    states={
-        "DRAFT": {
-            "bind": {"assistant": "drafter"},
-            "go": {
-                # Transition fires when DraftReadyMarker is present
-                "REVIEW": has(DraftReadyMarker),
-            },
-        },
-        "REVIEW": {
-            "bind": {"assistant": "reviewer"},
-            "go": {
-                # Transition fires when ApprovedMarker is present
-                "DONE": has(ApprovedMarker),
-            },
-        },
-        "DONE": {
-            "bind": {"assistant": "reviewer"},  # terminal state — no outgoing transitions
-            "go": {},
-        },
-    },
+    phases=[
+        PhaseSpec(phase_id="DRAFT", prompts={"assistant": DRAFTER_PROMPT}, to=("REVIEW",)),
+        PhaseSpec(phase_id="REVIEW", prompts={"assistant": REVIEWER_PROMPT}, to=("DONE",)),
+        PhaseSpec(phase_id="DONE", prompts={"assistant": REVIEWER_PROMPT}, terminal=True),
+    ],
 )
 
 # ---------------------------------------------------------------------------
@@ -123,14 +82,14 @@ WRITING_WORKFLOW = workflow(
 
 def make_tool_registry(world: World, entity_id: EntityId) -> ToolRegistryComponent:
     @tool(name="mark_draft_ready", description="Signal that the draft is complete and ready for review.")
-    def mark_draft_ready() -> str:
-        world.add_component(entity_id, DraftReadyMarker())
+    async def mark_draft_ready() -> str:
+        await advance(world, entity_id, "REVIEW", reason="tool:mark_draft_ready")
         logger.info("workflow_tool_called", tool="mark_draft_ready", entity_id=entity_id)
         return "Draft marked as ready. Moving to REVIEW state."
 
     @tool(name="approve_draft", description="Approve the draft and complete the workflow.")
-    def approve_draft() -> str:
-        world.add_component(entity_id, ApprovedMarker())
+    async def approve_draft() -> str:
+        await advance(world, entity_id, "DONE", reason="tool:approve_draft")
         logger.info("workflow_tool_called", tool="approve_draft", entity_id=entity_id)
         return "Draft approved. Workflow complete."
 
@@ -219,25 +178,22 @@ async def main() -> None:
         ),
     )
 
-    # System prompt: the ${_workflow_state_prompt} placeholder is resolved by
-    # WorkflowPromptPlaceholderProvider, which injects the active profile's text.
+    # System prompt: the ${_phase_prompt} placeholder resolves to the current
+    # phase's prompt for this entity's bound agent key.
     world.add_component(
         agent,
         SystemPromptConfigSpec(
-            template_source=PromptTemplateSource(inline="${_workflow_state_prompt}"),
+            template_source=PromptTemplateSource(inline="${_phase_prompt}"),
         ),
     )
 
     # Register tools
     world.add_component(agent, make_tool_registry(world, agent))
 
-    # Install the workflow (attaches WorkflowDefinitionComponent + WorkflowRuntimeComponent)
-    install_workflow(world, agent, WRITING_WORKFLOW, agent_key="assistant")
+    # Bind the phase graph (attaches PhaseComponent + PhaseDefinitionComponent)
+    await bind_phase_graph(world, agent, WRITING_GRAPH, agent_key="assistant")
 
     # --- Systems (order matters) ---
-    # WorkflowStateSystem MUST run before SystemPromptRenderSystem so the
-    # active profile is committed before the prompt is rendered.
-    world.register_system(WorkflowStateSystem(priority=-25), priority=-25)
     world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
@@ -248,15 +204,14 @@ async def main() -> None:
     await runner.run(world, max_ticks=20)
 
     # --- Print results ---
-    from ecs_agent.workflows._components import WorkflowRuntimeComponent
-
-    runtime = world.get_component(agent, WorkflowRuntimeComponent)
+    component = world.get_component(agent, PhaseComponent)
     conv = world.get_component(agent, ConversationComponent)
 
     print("\n" + "=" * 60)
-    print(f"Final workflow state : {runtime.current_state_id if runtime else 'unknown'}")
-    if runtime:
-        print(f"Transition history  : {' → '.join(runtime.transition_history)}")
+    print(f"Final workflow state : {component.phase if component else 'unknown'}")
+    if component:
+        history = " → ".join(f"{h['from']}→{h['to']}" for h in component.history)
+        print(f"Transition history  : {history}")
     print("=" * 60)
 
     if conv:
