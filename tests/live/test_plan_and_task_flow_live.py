@@ -13,16 +13,19 @@ from pathlib import Path
 
 import pytest
 
+from ecs_agent.core import World
+from ecs_agent.phases import bind_phase_graph
 from ecs_agent.providers import OpenAIModel
 from ecs_agent.providers.claude_model import ClaudeModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.protocol import LLMModel
-from ecs_agent.types import CompletionResult, Message
+from ecs_agent.types import CompletionResult, EntityId, Message
 from ecs_agent.systems.compaction import CompactionSystem
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
 )
 from examples.e2e.plan_and_task.controller import PlanController
+from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
 from examples.e2e.plan_and_task.runtime import derive_workflow_id_from_llm
 from examples.e2e.plan_and_task.task_exec import TaskExec
 
@@ -70,6 +73,18 @@ def live_model(live_api_key: str) -> OpenAIModel:
     return OpenAIModel(config=config, model=model)
 
 
+async def _bound_world() -> tuple[World, EntityId]:
+    """Minimal world with the plan-task phase graph bound at IDLE.
+
+    PlanController transitions run through ecs_agent.phases, so tests driving
+    the controller directly need a world with a bound PhaseComponent.
+    """
+    world = World()
+    entity_id = world.create_entity()
+    await bind_phase_graph(world, entity_id, PLAN_TASK_PHASE_GRAPH, agent_key="main")
+    return world, entity_id
+
+
 @pytest.mark.asyncio
 async def test_live_plan_controller_starts_plan_interview(
     live_model: OpenAIModel, tmp_path: Path
@@ -77,9 +92,10 @@ async def test_live_plan_controller_starts_plan_interview(
     """Verify handle_plan_start creates artifacts and transitions to DRAFT_INTERVIEW."""
     workflow_id = "live-test-workflow-start"
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id=workflow_id)
-    controller = PlanController()
+    world, entity_id = await _bound_world()
+    controller = PlanController(world, entity_id)
 
-    state = controller.handle_plan_start(adapter, _WRITING_SOFTWARE_DESCRIPTION)
+    state = await controller.handle_plan_start(adapter, _WRITING_SOFTWARE_DESCRIPTION)
 
     assert state.phase == "DRAFT_INTERVIEW"
     assert state.workflow_id == workflow_id
@@ -97,20 +113,21 @@ async def test_live_plan_controller_completes_review_cycle(
     """Verify review verdicts allow transition to finalized state."""
     workflow_id = "live-test-workflow-review"
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id=workflow_id)
-    controller = PlanController()
+    world, entity_id = await _bound_world()
+    controller = PlanController(world, entity_id)
 
-    state = controller.handle_plan_start(adapter, "Review cycle test")
+    state = await controller.handle_plan_start(adapter, "Review cycle test")
 
     # Full review cycle: advisor → qa → write_plan_completed → plan_qa
-    state = controller.handle_advisor_review(
+    state = await controller.handle_advisor_review(
         state, adapter, "approved", notes="Advisor approved"
     )
-    state = controller.handle_qa_review(state, adapter, "approved", notes="QA approved")
+    state = await controller.handle_qa_review(state, adapter, "approved", notes="QA approved")
     # handle_qa_review auto-transitions to WRITE_PLAN when approved
-    state = controller.handle_write_plan_completed(state, adapter)
-    state = controller.handle_plan_qa_review(state, adapter, "approved", notes="Plan QA approved")
+    state = await controller.handle_write_plan_completed(state, adapter)
+    state = await controller.handle_plan_qa_review(state, adapter, "approved", notes="Plan QA approved")
 
-    state = controller.handle_plan_finalize(state, adapter)
+    state = await controller.handle_plan_finalize(state, adapter)
 
     assert state.phase == "TASK_READY"
     assert (adapter.plan_dir / "workflow_plan.md").exists()
@@ -123,16 +140,17 @@ async def test_live_task_exec_loads_finalized_plan(
     """Verify TaskExec can load a finalized plan and populate TaskRecord list."""
     workflow_id = "live-test-workflow-exec"
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id=workflow_id)
-    controller = PlanController()
+    world, entity_id = await _bound_world()
+    controller = PlanController(world, entity_id)
 
-    state = controller.handle_plan_start(adapter, "Task exec test")
-    state = controller.handle_advisor_review(state, adapter, "approved")
-    state = controller.handle_qa_review(state, adapter, "approved")
-    state = controller.handle_write_plan_completed(state, adapter)
-    state = controller.handle_plan_qa_review(state, adapter, "approved")
-    state = controller.handle_plan_finalize(state, adapter)
+    state = await controller.handle_plan_start(adapter, "Task exec test")
+    state = await controller.handle_advisor_review(state, adapter, "approved")
+    state = await controller.handle_qa_review(state, adapter, "approved")
+    state = await controller.handle_write_plan_completed(state, adapter)
+    state = await controller.handle_plan_qa_review(state, adapter, "approved")
+    state = await controller.handle_plan_finalize(state, adapter)
 
-    task_exec = TaskExec(state=state)
+    task_exec = TaskExec(state=state, world=world, entity_id=entity_id)
     plan = task_exec.load_plan(adapter)
     tasks = task_exec.build_todo_queue(plan)
 
@@ -141,7 +159,7 @@ async def test_live_task_exec_loads_finalized_plan(
     assert tasks[0].status == "pending"
 
     # Verify /task:start path: initialize_task_queue transitions state and persists queue
-    next_state = task_exec.initialize_task_queue(state, adapter)
+    next_state = await task_exec.initialize_task_queue(state, adapter)
     assert next_state.phase == "TASK_RUNNING"
     assert next_state.current_task_id == "task-001"
     assert (adapter.state_dir / "task_queue.json").exists()
@@ -159,7 +177,7 @@ async def test_live_task_exec_loads_finalized_plan(
     )
     assert dispatched_state.phase == "TASK_RUNNING"
 
-    completed_state = task_exec.record_task_completion(
+    completed_state = await task_exec.record_task_completion(
         dispatched_state,
         adapter,
         "task-001",
@@ -191,17 +209,18 @@ async def test_live_controller_advisor_retry_loop_revise_then_approved(
 ) -> None:
     workflow_id = "live-test-advisor-retry"
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id=workflow_id)
-    controller = PlanController()
+    world, entity_id = await _bound_world()
+    controller = PlanController(world, entity_id)
 
-    state = controller.handle_plan_start(adapter, "Advisor retry loop test")
+    state = await controller.handle_plan_start(adapter, "Advisor retry loop test")
 
-    state = controller.handle_advisor_review(
+    state = await controller.handle_advisor_review(
         state, adapter, "revise", notes="Draft needs more detail in scope section."
     )
     assert state.phase == "DRAFT_ADVISOR_REVIEW"
     assert state.phase != "DRAFT_QA_REVIEW"
 
-    state = controller.handle_advisor_review(
+    state = await controller.handle_advisor_review(
         state, adapter, "approved", notes="Looks good now."
     )
     assert state.phase == "DRAFT_ADVISOR_REVIEW"
@@ -272,7 +291,7 @@ async def test_anthropic_plan_task_auto_compaction_summarizes_context(
     )
     from examples.e2e.plan_and_task.main import build_plan_task_world
 
-    world, agent_id, _, _ = build_plan_task_world(
+    world, agent_id, _, _ = await build_plan_task_world(
         model=anthropic_model,
         base_dir=tmp_path,
         compaction_threshold_tokens=1,
@@ -331,9 +350,10 @@ async def test_anthropic_plan_controller_starts_plan_interview(
 ) -> None:
     workflow_id = "live-anthropic-test-start"
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id=workflow_id)
-    controller = PlanController()
+    world, entity_id = await _bound_world()
+    controller = PlanController(world, entity_id)
 
-    state = controller.handle_plan_start(adapter, "Build a simple todo list app")
+    state = await controller.handle_plan_start(adapter, "Build a simple todo list app")
 
     assert state.phase == "DRAFT_INTERVIEW"
     assert state.workflow_id == workflow_id
