@@ -342,7 +342,7 @@ State persisted outside the world serializer (e.g. plan-and-task's
 `runtime_state.json`) can reuse the same machinery: write a `PhaseComponent`
 with the persisted phase, then `bind_phase_graph()` — validation and
 `on_resume` apply exactly as above (`examples/e2e/plan_and_task/main.py::
-_load_workflow`).
+resume_workflow`).
 
 ## Transition History
 

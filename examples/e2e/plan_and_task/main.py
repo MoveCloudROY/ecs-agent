@@ -213,6 +213,55 @@ def _reset_workflow_boundary_state(
             )
 
 
+async def resume_workflow(
+    world: World,
+    entity_id: EntityId,
+    controller: PlanController,
+    workflow_id: str,
+    *,
+    base_dir: Path,
+    preserve_user_text: str | None = None,
+) -> tuple[RuntimeState, ArtifactAdapter, list[ResumeAction]]:
+    """Single restore path shared by /plan:resume, task-command auto-load, and tests.
+
+    Steps, in order: read persisted state, mark stale subagents, jump the
+    runtime phase to the persisted one, re-bind the graph (drift detection +
+    the on_resume TASK_RUNNING→TASK_BLOCKED demotion), persist the snapshot,
+    reset the conversation boundary, then replay the current phase's
+    approval gate against the persisted verdicts.
+    """
+    adapter = ArtifactAdapter(base_dir=base_dir, workflow_id=workflow_id)
+    state = adapter.read_state()
+    stale_task_ids = adapter.mark_stale_subagents(state)
+    # The persisted graph_hash (current hash for pre-field states) lets
+    # bind_phase_graph detect structural drift since the state was written.
+    world.add_component(
+        entity_id,
+        PhaseComponent(
+            graph_id=PLAN_TASK_PHASE_GRAPH.graph_id,
+            phase=state.phase,
+            graph_hash=state.graph_hash or PLAN_TASK_PHASE_GRAPH.structure_hash,
+        ),
+    )
+    await bind_phase_graph(world, entity_id, PLAN_TASK_PHASE_GRAPH, agent_key="main")
+    component = world.get_component(entity_id, PhaseComponent)
+    if component is not None and component.phase != state.phase:
+        logger.info(
+            "plan_task_restart_blocked",
+            workflow_id=state.workflow_id,
+            stale_task_ids=stale_task_ids,
+        )
+    state.updated_at = datetime.datetime.now(datetime.UTC).isoformat()
+    # Persist-time snapshot: stamps phase, graph hash, and derived status.
+    save_state(world, entity_id, state, adapter)
+    _reset_workflow_boundary_state(
+        world, entity_id, preserve_user_text=preserve_user_text
+    )
+    world.add_component(entity_id, build_scratchbook_prompt_config(workflow_id))
+    actions = await controller.reconcile_after_resume(state, adapter)
+    return state, adapter, actions
+
+
 def _require_state(state: RuntimeState | None) -> RuntimeState:
     if state is None:
         raise ValueError(
@@ -344,39 +393,18 @@ async def build_plan_task_world(
         workflow_id: str,
         *,
         preserve_user_text: str | None = None,
-    ) -> RuntimeState:
-        new_adapter = ArtifactAdapter(base_dir=_base_dir, workflow_id=workflow_id)
-        state = new_adapter.read_state()
-        stale_task_ids = new_adapter.mark_stale_subagents(state)
-        # Jump the runtime phase to the persisted one, then re-bind: bind applies
-        # the graph's on_resume policy (TASK_RUNNING demotes to TASK_BLOCKED).
-        # The persisted graph_hash (current hash for pre-field states) lets
-        # bind_phase_graph detect structural drift since the state was written.
-        w.add_component(
+    ) -> tuple[RuntimeState, list[ResumeAction]]:
+        state, new_adapter, actions = await resume_workflow(
+            w,
             eid,
-            PhaseComponent(
-                graph_id=PLAN_TASK_PHASE_GRAPH.graph_id,
-                phase=state.phase,
-                graph_hash=state.graph_hash or PLAN_TASK_PHASE_GRAPH.structure_hash,
-            ),
+            controller,
+            workflow_id,
+            base_dir=_base_dir,
+            preserve_user_text=preserve_user_text,
         )
-        await bind_phase_graph(w, eid, PLAN_TASK_PHASE_GRAPH, agent_key="main")
-        component = w.get_component(eid, PhaseComponent)
-        demoted = component is not None and component.phase != state.phase
-        if demoted:
-            logger.info(
-                "plan_task_restart_blocked",
-                workflow_id=state.workflow_id,
-                stale_task_ids=stale_task_ids,
-            )
-        state.updated_at = datetime.datetime.now(datetime.UTC).isoformat()
-        # Persist-time snapshot: stamps phase, graph hash, and derived status.
-        save_state(w, eid, state, new_adapter)
         adapter_ref[0] = new_adapter
         runtime_state[0] = state
-        _reset_workflow_boundary_state(w, eid, preserve_user_text=preserve_user_text)
-        w.add_component(eid, build_scratchbook_prompt_config(workflow_id))
-        return state
+        return state, actions
 
     def _workflow_id_from_command(user_text: str) -> str:
         parts = user_text.strip().split(None, 1)
@@ -399,19 +427,16 @@ async def build_plan_task_world(
                 f"Provide a workflow_id: {command_name} <workflow_id>, "
                 "or start a new workflow with /plan:start <description>."
             )
-        state = await _load_workflow(
+        # resume_workflow replays pending approval gates exactly like
+        # /plan:resume (e.g. an approved PLAN_QA_REVIEW advances to
+        # PLAN_FINALIZED before task init). Returned actions are discarded:
+        # TRIGGER_PLAN_WRITER is a planning-flow concern; a workflow still in
+        # WRITE_PLAN proceeds to initialize_task_queue's existing clear error.
+        state, _actions = await _load_workflow(
             w,
             eid,
             workflow_id,
             preserve_user_text=user_text,
-        )
-        # Replay pending approval gates exactly like /plan:resume does (e.g. an
-        # approved PLAN_QA_REVIEW advances to PLAN_FINALIZED before task init).
-        # Returned actions are discarded: TRIGGER_PLAN_WRITER is a planning-flow
-        # concern; a workflow still in WRITE_PLAN proceeds to
-        # initialize_task_queue's existing clear error.
-        await controller.reconcile_after_resume(
-            state, _require_adapter(adapter_ref[0])
         )
         logger.info(
             "plan_task_task_command_auto_loaded_state",
@@ -724,14 +749,11 @@ async def build_plan_task_world(
         if not workflow_id:
             return "Error: /plan:resume requires a non-empty workflow_id."
         try:
-            state = await _load_workflow(
+            state, actions = await _load_workflow(
                 _world,
                 _entity_id,
                 workflow_id,
                 preserve_user_text=user_text,
-            )
-            actions = await controller.reconcile_after_resume(
-                state, _require_adapter(adapter_ref[0])
             )
             for action in actions:
                 if action == ResumeAction.TRIGGER_PLAN_WRITER:

@@ -1283,34 +1283,17 @@ def test_retry_budget_exhausted_blocks_task() -> None:
 
 
 async def _run_restart_flow(state: RuntimeState, adapter: ArtifactAdapter) -> RuntimeState:
-    """Drive the restart/load flow at the unit level (mirrors main._load_workflow).
+    """Drive the restart/load flow through the production resume_workflow()."""
+    from examples.e2e.plan_and_task.main import resume_workflow
 
-    Steps: mark stale subagents, overwrite PhaseComponent with the persisted
-    phase, re-bind the graph (applies the on_resume TASK_RUNNING→TASK_BLOCKED
-    demotion), mirror the demotion back into the state, persist.
-    """
-    from ecs_agent.components import PhaseComponent
-    from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
-
+    adapter.write_state(state)
     world = World()
     eid = world.create_entity()
-    adapter.mark_stale_subagents(state)
-    world.add_component(
-        eid,
-        PhaseComponent(
-            graph_id=PLAN_TASK_PHASE_GRAPH.graph_id,
-            phase=state.phase,
-            graph_hash=PLAN_TASK_PHASE_GRAPH.structure_hash,
-        ),
+    controller = PlanController(world, eid)
+    loaded, _adapter, _actions = await resume_workflow(
+        world, eid, controller, adapter.workflow_id, base_dir=adapter.base_dir
     )
-    await bind_phase_graph(world, eid, PLAN_TASK_PHASE_GRAPH, agent_key="main")
-    component = world.get_component(eid, PhaseComponent)
-    assert component is not None
-    if component.phase != state.phase:
-        state.phase = component.phase
-        state.status = "blocked"
-    adapter.write_state(state)
-    return state
+    return loaded
 
 
 async def test_stale_subagent_on_restart_increments_retry(tmp_path: Path) -> None:
@@ -5834,3 +5817,74 @@ async def test_save_state_snapshots_phase_and_derives_status(
     assert state.phase == "DRAFT_ADVISOR_REVIEW"
     assert state.status == "needs_review"
     assert adapter.read_state().status == "needs_review"
+
+
+# --- Single restore entrypoint (state-simplification Task 6) ----------------
+
+
+async def test_resume_workflow_is_the_single_restore_entrypoint(
+    tmp_path: Path,
+) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.main import resume_workflow
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_RUNNING"
+    state.status = "active"
+    adapter.write_plan("# plan")
+    adapter.write_state(state)
+
+    world = World()
+    eid = world.create_entity()
+    controller = PlanController(world, eid)
+    loaded, loaded_adapter, actions = await resume_workflow(
+        world, eid, controller, adapter.workflow_id, base_dir=tmp_path
+    )
+
+    # on_resume demotion + persist-time snapshot + gate replay, in one path.
+    assert loaded.phase == "TASK_BLOCKED"
+    assert loaded.status == "blocked"
+    assert actions == []
+    assert loaded_adapter.workflow_id == adapter.workflow_id
+    assert adapter.read_state().phase == "TASK_BLOCKED"
+
+
+async def test_resume_and_task_start_share_one_restore_path(tmp_path: Path) -> None:
+    from ecs_agent.components import ConversationComponent, UserPromptConfigComponent
+    from ecs_agent.types import Message
+
+    async def _drive(command_pattern: str, tmp: Path) -> RuntimeState:
+        world, agent_id, adapter, runtime_state = await _build_test_world(tmp)
+        state = _make_state_at_phase("PLAN_QA_REVIEW")
+        state.workflow_id = adapter.workflow_id
+        state.review_verdicts = [
+            ReviewVerdict(phase="PLAN_QA_REVIEW", verdict="approved", decided_at="t")
+        ]
+        (adapter.plan_dir / "workflow_plan.md").write_text("# Plan\n", encoding="utf-8")
+        adapter.write_draft("# Draft\n")
+        adapter.write_state(state)
+        config = world.get_component(agent_id, UserPromptConfigComponent)
+        assert config is not None
+        handler_key = next(
+            t.content for t in config.triggers if t.pattern == command_pattern
+        )
+        handler = config.script_handlers[handler_key]
+        conv = world.get_component(agent_id, ConversationComponent)
+        assert conv is not None
+        user_text = f"{command_pattern} {state.workflow_id}"
+        conv.messages.append(Message(role="user", content=user_text))
+        await handler(world, agent_id, user_text)
+        loaded = runtime_state[0]
+        assert loaded is not None
+        return loaded
+
+    via_resume = await _drive("/plan:resume", tmp_path / "a")
+    via_task_start = await _drive("/task:start", tmp_path / "b")
+
+    # Same persisted input, same post-restore state through either command.
+    assert via_resume.phase == via_task_start.phase == "PLAN_FINALIZED"
+    assert via_resume.status == via_task_start.status
+    assert [v.verdict for v in via_resume.review_verdicts] == [
+        v.verdict for v in via_task_start.review_verdicts
+    ]

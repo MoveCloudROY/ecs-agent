@@ -365,7 +365,6 @@ class PlanController:
         The routing rule lives in the graph's ApprovalGate — no duplication with
         the live review handlers. record_approval is NOT called (the verdict is
         already in the artifact ledger)."""
-        actions: list[ResumeAction] = []
         current = self.current_phase()
         spec = PLAN_TASK_PHASE_GRAPH.phases_by_id[current]
         if spec.approval is not None:
@@ -381,13 +380,11 @@ class PlanController:
                     to_phase=target,
                     source="reconcile_after_resume",
                 )
-                if target == "WRITE_PLAN":
-                    actions.append(ResumeAction.TRIGGER_PLAN_WRITER)
-                return actions
-
-        if current == "WRITE_PLAN":
-            actions.append(ResumeAction.TRIGGER_PLAN_WRITER)
-        return actions
+        # Gate targets are graph-validated, so "replayed into WRITE_PLAN" and
+        # "resumed already in WRITE_PLAN" collapse into one final-phase check.
+        if self.current_phase() == "WRITE_PLAN":
+            return [ResumeAction.TRIGGER_PLAN_WRITER]
+        return []
 
     async def handle_task_abort(
         self, state: RuntimeState, adapter: ArtifactAdapter, reason: str
