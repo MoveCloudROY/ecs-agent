@@ -1659,15 +1659,14 @@ def test_phase_graph_can_resume_non_terminal() -> None:
 
     phases = PLAN_TASK_PHASE_GRAPH.phases_by_id
 
-    def can_resume(phase: str) -> bool:
-        return not phases[phase].terminal and phase != "IDLE"
-
-    assert can_resume("DRAFT_INTERVIEW") is True
-    assert can_resume("TASK_RUNNING") is True
-    assert can_resume("TASK_BLOCKED") is True
-    assert can_resume("TASK_COMPLETED") is False
-    assert can_resume("TASK_ABORTED") is False
-    assert can_resume("IDLE") is False
+    assert phases["DRAFT_INTERVIEW"].terminal is False
+    assert phases["TASK_RUNNING"].terminal is False
+    assert phases["TASK_BLOCKED"].terminal is False
+    assert phases["TASK_COMPLETED"].terminal is True
+    assert phases["TASK_ABORTED"].terminal is True
+    # IDLE is non-terminal but is the graph's pre-workflow initial phase.
+    assert phases["IDLE"].terminal is False
+    assert PLAN_TASK_PHASE_GRAPH.initial == "IDLE"
 
 
 def test_phase_graph_requires_continuation_for_active_workflows() -> None:
@@ -1675,23 +1674,22 @@ def test_phase_graph_requires_continuation_for_active_workflows() -> None:
 
     phases = PLAN_TASK_PHASE_GRAPH.phases_by_id
 
-    def requires_continuation(phase: str) -> bool:
-        return not phases[phase].terminal and phase != "IDLE"
-
     for active_phase in (
         "DRAFT_INTERVIEW",
         "TASK_RUNNING",
         "TASK_BLOCKED",
         "PLAN_FINALIZED",
     ):
-        assert requires_continuation(active_phase) is True, (
-            f"Expected True for {active_phase}"
+        assert phases[active_phase].terminal is False, (
+            f"Expected non-terminal phase for {active_phase}"
         )
 
-    for done_phase in ("TASK_COMPLETED", "TASK_ABORTED", "IDLE"):
-        assert requires_continuation(done_phase) is False, (
-            f"Expected False for {done_phase}"
+    for terminal_phase in ("TASK_COMPLETED", "TASK_ABORTED"):
+        assert phases[terminal_phase].terminal is True, (
+            f"Expected terminal phase for {terminal_phase}"
         )
+    # IDLE needs no continuation because it is the initial, pre-workflow phase.
+    assert PLAN_TASK_PHASE_GRAPH.initial == "IDLE"
 
 
 async def test_restart_flow_marks_stale_subagents_and_updates_phase(

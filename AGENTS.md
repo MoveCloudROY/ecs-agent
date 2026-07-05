@@ -137,7 +137,10 @@ Returns:
 
 ### Error Handling
 
-- **No custom exception classes** — use stdlib and library exceptions
+- **Exceptions**: prefer stdlib exceptions. Typed subclasses of stdlib exceptions are
+  permitted only as public-API contract errors (e.g. the `ValueError` hierarchy in
+  `ecs_agent.phases.api`, `ToolTimeoutError`, `CorruptedIndexEntryError`) — never for
+  internal control flow. New ones need a docstring stating when they are raised.
 - Systems catch `Exception`, attach `ErrorComponent` + `TerminalComponent` to the entity
 - Providers catch specific `httpx.HTTPStatusError` / `httpx.RequestError`
 - Always log before re-raising: `logger.error("event_name", key=value, exception=str(exc))`

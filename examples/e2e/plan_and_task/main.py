@@ -641,7 +641,15 @@ async def build_plan_task_world(
         _world: World, _entity_id: EntityId, _user_text: str
     ) -> str | None:
         try:
-            if runtime_state[0] is not None and runtime_state[0].phase == "TASK_RUNNING":
+            # Same re-trigger guard as _handle_task_start: consult the runtime
+            # authority (PhaseComponent) and skip only when task execution is
+            # already active. An unloaded workflow leaves the component at IDLE,
+            # so the load path below still runs.
+            phase_component = _world.get_component(_entity_id, PhaseComponent)
+            if (
+                phase_component is not None
+                and phase_component.phase == "TASK_RUNNING"
+            ):
                 return None
             await _ensure_task_workflow_loaded(
                 _world,
