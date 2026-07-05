@@ -16,6 +16,7 @@ from ecs_agent.phases import advance
 from ecs_agent.types import EntityId
 
 from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
+from examples.e2e.plan_and_task.phase_sync import mirror_phase
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
 )
@@ -153,7 +154,6 @@ class TaskExec:
         state.tasks = queue
         state.current_task_id = current_task_id
         state = await self._transition_to_running(state)
-        state.status = "active"
         adapter.write_state(state)
         self._write_task_queue_artifact(
             adapter.state_dir / _TASK_QUEUE_FILE_NAME, queue
@@ -279,11 +279,9 @@ class TaskExec:
         if next_task_id is None:
             world, entity_id = self._require_phase_context()
             await advance(world, entity_id, "TASK_COMPLETED", reason="task:all_done")
-            state.phase = "TASK_COMPLETED"
-            state.status = "completed"
+            mirror_phase(world, entity_id, state)
         else:
             state = await self._transition_to_running(state)
-            state.status = "active"
 
         state.updated_at = timestamp
         adapter.write_state(state)
@@ -390,17 +388,17 @@ class TaskExec:
         world, entity_id = self._require_phase_context()
         if state.phase == "PLAN_FINALIZED":
             await advance(world, entity_id, "TASK_READY", reason="task:init")
-            state.phase = "TASK_READY"
+            mirror_phase(world, entity_id, state)
         if state.phase == "TASK_READY":
             await advance(world, entity_id, "TASK_RUNNING", reason="task:init")
-            state.phase = "TASK_RUNNING"
+            mirror_phase(world, entity_id, state)
             return state
         if state.phase == "TASK_RUNNING":
             return state
         allowed = PLAN_TASK_PHASE_GRAPH.phases_by_id[state.phase].to
         if "TASK_RUNNING" in allowed:
             await advance(world, entity_id, "TASK_RUNNING", reason="task:resume")
-            state.phase = "TASK_RUNNING"
+            mirror_phase(world, entity_id, state)
         return state
 
     def _utcnow_isoformat(self) -> str:

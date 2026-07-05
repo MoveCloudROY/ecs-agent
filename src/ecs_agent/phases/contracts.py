@@ -140,7 +140,7 @@ def _structure_hash(graph_id: str, initial: str, specs: tuple[PhaseSpec, ...]) -
                 }
                 for spec in specs
             ),
-            key=lambda entry: str(entry["id"]),
+            key=lambda entry: str(entry["id"]),  # str() narrows the heterogeneous dict-value union for mypy's sort-key check
         ),
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))

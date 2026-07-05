@@ -13,6 +13,7 @@ from ecs_agent.phases import advance, force, record_approval
 from ecs_agent.types import EntityId
 
 from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
+from examples.e2e.plan_and_task.phase_sync import mirror_phase
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
 )
@@ -28,6 +29,12 @@ _FINALIZE_HOPS: dict[str, str] = {
     "PLAN_QA_REVIEW": "PLAN_FINALIZED",
     "PLAN_FINALIZED": "TASK_READY",
 }
+
+for _hop_from, _hop_to in _FINALIZE_HOPS.items():
+    if _hop_to not in PLAN_TASK_PHASE_GRAPH.phases_by_id[_hop_from].to:
+        raise AssertionError(
+            f"_FINALIZE_HOPS drifted from PLAN_TASK_PHASE_GRAPH: {_hop_from} -> {_hop_to}"
+        )
 
 
 class ResumeAction(Enum):
@@ -48,12 +55,7 @@ class PlanController:
     # -- phase plumbing ------------------------------------------------------
 
     def _mirror_phase(self, state: RuntimeState) -> None:
-        component = self._world.get_component(self._entity_id, PhaseComponent)
-        if component is None:
-            raise ValueError("phase graph is not bound; build the world first")
-        state.phase = component.phase
-        spec = PLAN_TASK_PHASE_GRAPH.phases_by_id[component.phase]
-        state.status = "completed" if spec.terminal else "active"
+        mirror_phase(self._world, self._entity_id, state)
 
     async def _advance(self, state: RuntimeState, to_phase: str, *, reason: str) -> None:
         await advance(self._world, self._entity_id, to_phase, reason=reason)

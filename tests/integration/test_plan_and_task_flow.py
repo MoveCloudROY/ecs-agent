@@ -5266,3 +5266,17 @@ def test_phase_graph_prompt_bindings_match_legacy_profiles() -> None:
     for pid in ("TASK_RUNNING", "TASK_BLOCKED", "TASK_REPLAN",
                 "TASK_COMPLETED", "TASK_ABORTED"):
         assert phases[pid].prompts["main"] == TASK_MAIN_AGENT_SYSTEM_PROMPT, pid
+
+
+async def test_task_exec_transition_mirrors_status_active() -> None:
+    """Entering TASK_RUNNING through TaskExec restores status="active"."""
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    state = _make_runtime_state()
+    state.phase = "PLAN_FINALIZED"
+    state.status = "ready"
+    world, eid = await _bound_world_at("PLAN_FINALIZED")
+    task_exec = TaskExec(state=state, world=world, entity_id=eid)
+    updated = await task_exec._transition_to_running(state)
+    assert updated.phase == "TASK_RUNNING"
+    assert updated.status == "active"

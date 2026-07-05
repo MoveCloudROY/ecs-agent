@@ -71,6 +71,7 @@ from examples.e2e.plan_and_task.scratchbook_adapter import (
 )
 from examples.e2e.plan_and_task.controller import PlanController, ResumeAction
 from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
+from examples.e2e.plan_and_task.phase_sync import mirror_phase
 from examples.e2e.plan_and_task.prompts import (
     ADVISOR_SYSTEM_PROMPT,
     PLAN_QA_REVIEW_SYSTEM_PROMPT,
@@ -355,7 +356,7 @@ async def build_plan_task_world(
         await bind_phase_graph(w, eid, PLAN_TASK_PHASE_GRAPH, agent_key="main")
         component = w.get_component(eid, PhaseComponent)
         if component is not None and component.phase != state.phase:
-            state.phase = component.phase
+            mirror_phase(w, eid, state)
             state.status = "blocked"
             logger.info(
                 "plan_task_restart_blocked",
