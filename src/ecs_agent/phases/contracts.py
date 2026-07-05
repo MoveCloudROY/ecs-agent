@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 
 
 @dataclass(frozen=True, slots=True)
 class ApprovalGate:
     """Maps review verdicts recorded in a phase to target phases (None = stay)."""
 
-    verdicts: dict[str, str | None]
+    verdicts: Mapping[str, str | None]
 
     def __post_init__(self) -> None:
         if not self.verdicts:
@@ -20,6 +22,7 @@ class ApprovalGate:
         for verdict in self.verdicts:
             if not verdict:
                 raise ValueError("ApprovalGate verdict keys must be non-empty strings")
+        object.__setattr__(self, "verdicts", MappingProxyType(dict(self.verdicts)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +30,7 @@ class PhaseSpec:
     """Declares one phase: prompts per agent key, adjacency, and entry effects."""
 
     phase_id: str
-    prompts: dict[str, str | Path] = field(default_factory=dict)
+    prompts: Mapping[str, str | Path] = field(default_factory=dict)
     to: tuple[str, ...] = ()
     tools: tuple[str, ...] | None = None
     approval: ApprovalGate | None = None
@@ -51,15 +54,21 @@ class PhaseSpec:
             )
         if len(self.to) != len(set(self.to)):
             raise ValueError(f"phase {self.phase_id!r} declares duplicate targets")
+        object.__setattr__(self, "prompts", MappingProxyType(dict(self.prompts)))
 
 
 @dataclass(frozen=True, slots=True)
 class PhaseGraph:
-    """Validated phase graph. Build via build_graph(); do not construct directly."""
+    """Validated phase graph. Build via build_graph(); do not construct directly.
+
+    All mapping fields are read-only views (MappingProxyType) over private
+    copies: post-build mutation raises TypeError, and mutating the caller's
+    original inputs after build_graph() cannot affect the graph.
+    """
 
     graph_id: str
     initial: str
-    phases_by_id: dict[str, PhaseSpec]
+    phases_by_id: Mapping[str, PhaseSpec]
     structure_hash: str
     manages_tools: bool = False
 
@@ -107,7 +116,7 @@ def build_graph(
     return PhaseGraph(
         graph_id=graph_id,
         initial=initial,
-        phases_by_id=phases_by_id,
+        phases_by_id=MappingProxyType(dict(phases_by_id)),
         structure_hash=_structure_hash(graph_id, initial, specs),
         manages_tools=any(spec.tools is not None for spec in specs),
     )

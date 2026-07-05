@@ -107,3 +107,40 @@ def test_structure_hash_changes_on_adjacency_change() -> None:
         phases=[_spec("A", to=("B",)), _spec("B", to=("A",))],
     )
     assert a.structure_hash != b.structure_hash
+
+
+def test_graph_mappings_are_immutable() -> None:
+    graph = _two_phase_graph()
+    with pytest.raises(TypeError):
+        graph.phases_by_id["C"] = _spec("C", terminal=True)  # type: ignore[index]
+    spec = graph.phases_by_id["A"]
+    with pytest.raises(TypeError):
+        spec.prompts["main"] = "mutated"  # type: ignore[index]
+
+
+def test_approval_gate_verdicts_are_immutable() -> None:
+    gate = ApprovalGate(verdicts={"approved": None})
+    with pytest.raises(TypeError):
+        gate.verdicts["approved"] = "SOMEWHERE"  # type: ignore[index]
+
+
+def test_build_graph_copies_caller_inputs() -> None:
+    prompts = {"main": "original"}
+    verdicts: dict[str, str | None] = {"approved": None}
+    spec_a = PhaseSpec(
+        phase_id="A",
+        prompts=prompts,
+        to=("B",),
+        approval=ApprovalGate(verdicts=verdicts),
+    )
+    graph = build_graph(
+        "copy-check",
+        initial="A",
+        phases=[spec_a, _spec("B", terminal=True)],
+    )
+    prompts["main"] = "mutated after build"
+    verdicts["approved"] = "B"
+    frozen_spec = graph.phases_by_id["A"]
+    assert frozen_spec.prompts["main"] == "original"
+    assert frozen_spec.approval is not None
+    assert frozen_spec.approval.verdicts["approved"] is None
