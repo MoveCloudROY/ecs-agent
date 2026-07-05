@@ -5476,3 +5476,115 @@ async def test_task_start_auto_load_unapproved_plan_qa_stays_blocked(
     rendered = world.get_component(agent_id, RenderedUserPromptComponent)
     assert rendered is not None
     assert "Cannot initialize task queue" in rendered.text
+
+
+# ── Persisted graph structure hash for restore drift detection (P2-1) ──────────
+
+
+async def test_plan_start_state_carries_current_graph_hash_and_round_trips(
+    tmp_path: Path,
+) -> None:
+    """A fresh workflow is stamped with the graph's structure hash.
+
+    handle_plan_start writes the hash into RuntimeState and it survives the
+    adapter write/read round trip.
+    """
+    from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="graph-hash-fresh")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+
+    state = await controller.handle_plan_start(adapter, "graph hash workflow")
+
+    assert state.graph_hash == PLAN_TASK_PHASE_GRAPH.structure_hash
+    loaded = adapter.read_state()
+    assert loaded.graph_hash == PLAN_TASK_PHASE_GRAPH.structure_hash
+
+
+async def test_load_without_graph_hash_key_is_backward_compatible(
+    tmp_path: Path,
+) -> None:
+    """Persisted JSON written before the graph_hash field still loads.
+
+    The key is absent from the payload; the load flow succeeds and leaves the
+    state stamped with the current structure hash.
+    """
+    from ecs_agent.components import ConversationComponent
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+    from ecs_agent.types import Message
+    from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
+
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
+    adapter.write_draft("# Draft\n\nLegacy state without graph_hash.\n")
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    state = _make_runtime_state()
+    state.phase = "PLAN_QA_REVIEW"
+    state.status = "needs_review"
+    adapter.write_state(state)
+
+    state_path = adapter.state_dir / "runtime_state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload.pop("graph_hash", None)
+    state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    assert "graph_hash" not in json.loads(state_path.read_text(encoding="utf-8"))
+
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.append(
+        Message(role="user", content=f"/task:start {state.workflow_id}")
+    )
+
+    await UserPromptNormalizationSystem().process(world)
+
+    assert runtime_state[0] is not None
+    assert runtime_state[0].phase == "PLAN_QA_REVIEW"
+    assert runtime_state[0].graph_hash == PLAN_TASK_PHASE_GRAPH.structure_hash
+    persisted = adapter.read_state()
+    assert persisted.graph_hash == PLAN_TASK_PHASE_GRAPH.structure_hash
+
+
+async def test_load_with_stale_graph_hash_updates_state_to_current_hash(
+    tmp_path: Path,
+) -> None:
+    """A stale persisted hash with a surviving phase loads successfully.
+
+    bind_phase_graph detects the structural drift (logs
+    phase_graph_structure_changed) and the load flow re-stamps the state with
+    the current structure hash.
+    """
+    from ecs_agent.components import ConversationComponent
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+    from ecs_agent.types import Message
+    from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
+
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
+    adapter.write_draft("# Draft\n\nState persisted under an older graph.\n")
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    state = _make_runtime_state()
+    state.phase = "PLAN_QA_REVIEW"
+    state.status = "needs_review"
+    state.graph_hash = "stale-structure-hash"
+    adapter.write_state(state)
+    stale_payload = json.loads(
+        (adapter.state_dir / "runtime_state.json").read_text(encoding="utf-8")
+    )
+    assert stale_payload["graph_hash"] == "stale-structure-hash"
+
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.append(
+        Message(role="user", content=f"/task:start {state.workflow_id}")
+    )
+
+    await UserPromptNormalizationSystem().process(world)
+
+    assert runtime_state[0] is not None
+    assert runtime_state[0].phase == "PLAN_QA_REVIEW"
+    assert runtime_state[0].graph_hash == PLAN_TASK_PHASE_GRAPH.structure_hash
+    persisted = adapter.read_state()
+    assert persisted.graph_hash == PLAN_TASK_PHASE_GRAPH.structure_hash

@@ -345,18 +345,23 @@ async def build_plan_task_world(
         stale_task_ids = new_adapter.mark_stale_subagents(state)
         # Jump the runtime phase to the persisted one, then re-bind: bind applies
         # the graph's on_resume policy (TASK_RUNNING demotes to TASK_BLOCKED).
+        # The persisted graph_hash (current hash for pre-field states) lets
+        # bind_phase_graph detect structural drift since the state was written.
         w.add_component(
             eid,
             PhaseComponent(
                 graph_id=PLAN_TASK_PHASE_GRAPH.graph_id,
                 phase=state.phase,
-                graph_hash=PLAN_TASK_PHASE_GRAPH.structure_hash,
+                graph_hash=state.graph_hash or PLAN_TASK_PHASE_GRAPH.structure_hash,
             ),
         )
         await bind_phase_graph(w, eid, PLAN_TASK_PHASE_GRAPH, agent_key="main")
         component = w.get_component(eid, PhaseComponent)
-        if component is not None and component.phase != state.phase:
-            mirror_phase(w, eid, state)
+        demoted = component is not None and component.phase != state.phase
+        # Mirror unconditionally: re-stamps the current phase and graph hash
+        # into the state before it is persisted below.
+        mirror_phase(w, eid, state)
+        if demoted:
             state.status = "blocked"
             logger.info(
                 "plan_task_restart_blocked",

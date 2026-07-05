@@ -96,6 +96,7 @@ class RuntimeState:
     created_at: str
     updated_at: str
     abort_reason: str | None = None
+    graph_hash: str | None = None
     tasks: list[TaskRecord] = field(default_factory=list)
     open_questions: list[str] = field(default_factory=list)
     confirmed_requirements: list[str] = field(default_factory=list)
@@ -166,6 +167,7 @@ class RuntimeState:
                 memory_refs=list(payload["memory_refs"]),
                 last_checkpoint=payload["last_checkpoint"],
                 abort_reason=payload.get("abort_reason"),
+                graph_hash=payload.get("graph_hash"),
                 created_at=payload["created_at"],
                 updated_at=payload["updated_at"],
                 tasks=tasks,

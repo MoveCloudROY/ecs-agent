@@ -11,16 +11,17 @@ from examples.e2e.plan_and_task.state_models import RuntimeState
 
 
 def mirror_phase(world: World, entity_id: EntityId, state: RuntimeState) -> None:
-    """Copy the runtime phase into the persisted state and derive status.
+    """Copy the runtime phase and graph hash into the persisted state.
 
-    This is the ONLY place RuntimeState.phase may be written after a
-    transition. Status defaults to "active" ("completed" for terminal
-    phases); handler-specific overrides ("aborted"/"ready"/"blocked"/
-    "needs_review") are applied by callers AFTER mirroring.
+    This is the ONLY place RuntimeState.phase and RuntimeState.graph_hash may
+    be written after a transition. Status defaults to "active" ("completed"
+    for terminal phases); handler-specific overrides ("aborted"/"ready"/
+    "blocked"/"needs_review") are applied by callers AFTER mirroring.
     """
     component = world.get_component(entity_id, PhaseComponent)
     if component is None:
         raise ValueError("phase graph is not bound; build the world first")
     state.phase = component.phase
+    state.graph_hash = component.graph_hash
     spec = PLAN_TASK_PHASE_GRAPH.phases_by_id[component.phase]
     state.status = "completed" if spec.terminal else "active"

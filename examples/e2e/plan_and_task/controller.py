@@ -95,6 +95,7 @@ class PlanController:
             last_checkpoint=None,
             created_at=timestamp,
             updated_at=timestamp,
+            graph_hash=PLAN_TASK_PHASE_GRAPH.structure_hash,
             tasks=[],
             open_questions=[],
             confirmed_requirements=[],
