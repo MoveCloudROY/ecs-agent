@@ -9,13 +9,14 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from ecs_agent.components import PhaseComponent
 from ecs_agent.core import World
 from ecs_agent.logging import get_logger
 from ecs_agent.phases import advance
 from ecs_agent.types import EntityId
 
 from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
-from examples.e2e.plan_and_task.phase_sync import mirror_phase
+from examples.e2e.plan_and_task.phase_sync import save_state
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
 )
@@ -58,6 +59,13 @@ class TaskExec:
                 "construct with TaskExec(state=..., world=..., entity_id=...)"
             )
         return self._world, self._entity_id
+
+    def _current_phase(self) -> str:
+        world, entity_id = self._require_phase_context()
+        component = world.get_component(entity_id, PhaseComponent)
+        if component is None:
+            raise ValueError("phase graph is not bound; build the world first")
+        return component.phase
 
     def load_plan(self, adapter: ArtifactAdapter) -> WorkflowPlan:
         """Load and validate the finalized workflow plan from the artifact adapter."""
@@ -141,9 +149,10 @@ class TaskExec:
     ) -> RuntimeState:
         """Load the plan and build the todo queue, then update state to TASK_RUNNING."""
         _ALLOWED_PHASES = {"PLAN_FINALIZED", "TASK_READY", "TASK_RUNNING", "TASK_BLOCKED"}
-        if state.phase not in _ALLOWED_PHASES:
+        current = self._current_phase()
+        if current not in _ALLOWED_PHASES:
             raise ValueError(
-                f"Cannot initialize task queue from phase {state.phase!r}; "
+                f"Cannot initialize task queue from phase {current!r}; "
                 f"workflow must be in one of: {sorted(_ALLOWED_PHASES)}"
             )
         plan = self.load_plan(adapter)
@@ -153,7 +162,8 @@ class TaskExec:
         state.tasks = queue
         state.current_task_id = current_task_id
         state = await self._transition_to_running(state)
-        adapter.write_state(state)
+        world, entity_id = self._require_phase_context()
+        save_state(world, entity_id, state, adapter)
         logger.info(
             "plan_task_task_queue_initialized",
             workflow_id=state.workflow_id,
@@ -274,12 +284,12 @@ class TaskExec:
         if next_task_id is None:
             world, entity_id = self._require_phase_context()
             await advance(world, entity_id, "TASK_COMPLETED", reason="task:all_done")
-            mirror_phase(world, entity_id, state)
         else:
             state = await self._transition_to_running(state)
 
         state.updated_at = timestamp
-        adapter.write_state(state)
+        world, entity_id = self._require_phase_context()
+        save_state(world, entity_id, state, adapter)
         logger.info(
             "plan_task_task_completed",
             workflow_id=state.workflow_id,
@@ -367,19 +377,18 @@ class TaskExec:
 
     async def _transition_to_running(self, state: RuntimeState) -> RuntimeState:
         world, entity_id = self._require_phase_context()
-        if state.phase == "PLAN_FINALIZED":
+        phase = self._current_phase()
+        if phase == "PLAN_FINALIZED":
             await advance(world, entity_id, "TASK_READY", reason="task:init")
-            mirror_phase(world, entity_id, state)
-        if state.phase == "TASK_READY":
+            phase = self._current_phase()
+        if phase == "TASK_READY":
             await advance(world, entity_id, "TASK_RUNNING", reason="task:init")
-            mirror_phase(world, entity_id, state)
             return state
-        if state.phase == "TASK_RUNNING":
+        if phase == "TASK_RUNNING":
             return state
-        allowed = PLAN_TASK_PHASE_GRAPH.phases_by_id[state.phase].to
+        allowed = PLAN_TASK_PHASE_GRAPH.phases_by_id[phase].to
         if "TASK_RUNNING" in allowed:
             await advance(world, entity_id, "TASK_RUNNING", reason="task:resume")
-            mirror_phase(world, entity_id, state)
         return state
 
     def _utcnow_isoformat(self) -> str:

@@ -16,7 +16,7 @@ from examples.e2e.plan_and_task.phase_graph import (
     PLAN_TASK_PHASE_GRAPH,
     REVIEW_VERDICTS,
 )
-from examples.e2e.plan_and_task.phase_sync import derive_status, mirror_phase
+from examples.e2e.plan_and_task.phase_sync import derive_status, save_state
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
 )
@@ -65,8 +65,9 @@ class ResumeAction(Enum):
 class PlanController:
     """Manage draft creation, review gating, and plan finalization.
 
-    Transitions run through ecs_agent.phases; RuntimeState.phase is a persisted
-    mirror written only by _mirror_phase().
+    Transitions run through ecs_agent.phases; PhaseComponent is the in-memory
+    authority (read via current_phase()), and RuntimeState.phase/graph_hash/
+    status are stamped from it at persist time by phase_sync.save_state().
     """
 
     def __init__(self, world: World, entity_id: EntityId) -> None:
@@ -75,12 +76,11 @@ class PlanController:
 
     # -- phase plumbing ------------------------------------------------------
 
-    def _mirror_phase(self, state: RuntimeState) -> None:
-        mirror_phase(self._world, self._entity_id, state)
+    def _save(self, state: RuntimeState, adapter: ArtifactAdapter) -> None:
+        save_state(self._world, self._entity_id, state, adapter)
 
-    async def _advance(self, state: RuntimeState, to_phase: str, *, reason: str) -> None:
+    async def _advance(self, to_phase: str, *, reason: str) -> None:
         await advance(self._world, self._entity_id, to_phase, reason=reason)
-        self._mirror_phase(state)
 
     def current_phase(self) -> str:
         component = self._world.get_component(self._entity_id, PhaseComponent)
@@ -127,7 +127,7 @@ class PlanController:
             open_questions=[],
             confirmed_requirements=[],
         )
-        adapter.write_state(state)
+        self._save(state, adapter)
         logger.info(
             "plan_task_plan_started",
             workflow_id=adapter.workflow_id,
@@ -161,12 +161,10 @@ class PlanController:
         )
         adapter.write_plan(plan_content)
 
-        while state.phase in _FINALIZE_HOPS:
-            await self._advance(
-                state, _FINALIZE_HOPS[state.phase], reason="plan:finalize"
-            )
+        while (phase := self.current_phase()) in _FINALIZE_HOPS:
+            await self._advance(_FINALIZE_HOPS[phase], reason="plan:finalize")
         state.updated_at = timestamp
-        adapter.write_state(state)
+        self._save(state, adapter)
         logger.info(
             "plan_task_plan_finalized",
             workflow_id=state.workflow_id,
@@ -286,10 +284,11 @@ class PlanController:
         """
         if verdict_str not in REVIEW_VERDICTS:
             raise ValueError(f"Invalid verdict: {verdict_str!r}")
-        allowed = PLAN_TASK_PHASE_GRAPH.phases_by_id[state.phase].to
-        if state.phase != review_phase and review_phase not in allowed:
+        current = self.current_phase()
+        allowed = PLAN_TASK_PHASE_GRAPH.phases_by_id[current].to
+        if current != review_phase and review_phase not in allowed:
             raise ValueError(
-                f"Cannot record {review_phase} verdict while in phase {state.phase!r}"
+                f"Cannot record {review_phase} verdict while in phase {current!r}"
             )
         timestamp = self._utcnow_isoformat()
         verdict = ReviewVerdict(
@@ -311,9 +310,9 @@ class PlanController:
             return state
         adapter.write_review_verdict(review_phase, verdict)
 
-        if state.phase != review_phase and review_phase in allowed:
-            await self._advance(state, review_phase, reason=f"verdict:{review_phase}")
-        if state.phase == review_phase:
+        if current != review_phase and review_phase in allowed:
+            await self._advance(review_phase, reason=f"verdict:{review_phase}")
+        if self.current_phase() == review_phase:
             await record_approval(
                 self._world,
                 self._entity_id,
@@ -321,10 +320,9 @@ class PlanController:
                 notes=notes,
                 decided_at=timestamp,
             )
-            self._mirror_phase(state)
 
         state.updated_at = timestamp
-        adapter.write_state(state)
+        self._save(state, adapter)
         logger.info(log_event, workflow_id=state.workflow_id, verdict=verdict_str)
         return state
 
@@ -332,28 +330,30 @@ class PlanController:
         self, state: RuntimeState, adapter: ArtifactAdapter
     ) -> RuntimeState:
         """Transition to WRITE_PLAN so the planner can produce workflow_plan.md."""
-        if state.phase != "DRAFT_QA_REVIEW":
+        current = self.current_phase()
+        if current != "DRAFT_QA_REVIEW":
             raise ValueError(
-                f"handle_write_plan requires DRAFT_QA_REVIEW phase, got {state.phase}"
+                f"handle_write_plan requires DRAFT_QA_REVIEW phase, got {current}"
             )
         timestamp = self._utcnow_isoformat()
-        await self._advance(state, "WRITE_PLAN", reason="plan:write")
+        await self._advance("WRITE_PLAN", reason="plan:write")
         state.updated_at = timestamp
-        adapter.write_state(state)
+        self._save(state, adapter)
         logger.info("plan_task_write_plan_started", workflow_id=state.workflow_id)
         return state
 
     async def handle_write_plan_completed(
         self, state: RuntimeState, adapter: ArtifactAdapter
     ) -> RuntimeState:
-        if state.phase != "WRITE_PLAN":
+        current = self.current_phase()
+        if current != "WRITE_PLAN":
             raise ValueError(
-                f"handle_write_plan_completed requires WRITE_PLAN phase, got {state.phase}"
+                f"handle_write_plan_completed requires WRITE_PLAN phase, got {current}"
             )
         timestamp = self._utcnow_isoformat()
-        await self._advance(state, "PLAN_QA_REVIEW", reason="plan_writer:completed")
+        await self._advance("PLAN_QA_REVIEW", reason="plan_writer:completed")
         state.updated_at = timestamp
-        adapter.write_state(state)
+        self._save(state, adapter)
         logger.info("plan_task_write_plan_completed", workflow_id=state.workflow_id)
         return state
 
@@ -366,14 +366,15 @@ class PlanController:
         the live review handlers. record_approval is NOT called (the verdict is
         already in the artifact ledger)."""
         actions: list[ResumeAction] = []
-        spec = PLAN_TASK_PHASE_GRAPH.phases_by_id[state.phase]
+        current = self.current_phase()
+        spec = PLAN_TASK_PHASE_GRAPH.phases_by_id[current]
         if spec.approval is not None:
             verdicts_by_phase = {v.phase: v.verdict for v in state.review_verdicts}
-            verdict = verdicts_by_phase.get(state.phase)
+            verdict = verdicts_by_phase.get(current)
             target = spec.approval.verdicts.get(verdict) if verdict else None
             if target is not None:
-                await self._advance(state, target, reason=f"reconcile:{verdict}")
-                adapter.write_state(state)
+                await self._advance(target, reason=f"reconcile:{verdict}")
+                self._save(state, adapter)
                 logger.info(
                     "plan_task_reconcile_advanced",
                     workflow_id=state.workflow_id,
@@ -384,7 +385,7 @@ class PlanController:
                     actions.append(ResumeAction.TRIGGER_PLAN_WRITER)
                 return actions
 
-        if state.phase == "WRITE_PLAN":
+        if current == "WRITE_PLAN":
             actions.append(ResumeAction.TRIGGER_PLAN_WRITER)
         return actions
 
@@ -396,10 +397,10 @@ class PlanController:
         self._require_plan_artifact(adapter, state)
 
         timestamp = self._utcnow_isoformat()
-        # abort_reason must be set BEFORE the transition: the mirror inside
-        # _advance derives status, and "aborted" requires the reason present.
+        # abort_reason must be set before the save below: the persist-time
+        # snapshot derives status, and "aborted" requires the reason present.
         state.abort_reason = reason
-        await self._advance(state, "TASK_ABORTED", reason=f"task:abort:{reason[:80]}")
+        await self._advance("TASK_ABORTED", reason=f"task:abort:{reason[:80]}")
         state.last_checkpoint = reason
         state.updated_at = timestamp
         self._append_task_event(
@@ -409,7 +410,7 @@ class PlanController:
             reason=reason,
             scope_changed=False,
         )
-        adapter.write_state(state)
+        self._save(state, adapter)
         logger.info(
             "plan_task_aborted",
             workflow_id=state.workflow_id,
@@ -430,7 +431,7 @@ class PlanController:
         self._require_plan_artifact(adapter, state)
 
         timestamp = self._utcnow_isoformat()
-        await self._advance(state, "TASK_REPLAN", reason=f"task:replan:{reason[:80]}")
+        await self._advance("TASK_REPLAN", reason=f"task:replan:{reason[:80]}")
         state.last_checkpoint = reason
         state.abort_reason = None
         self._append_task_event(
@@ -443,12 +444,12 @@ class PlanController:
 
         if scope_changed:
             state.review_verdicts = []
-            await self._advance(state, "DRAFT_ADVISOR_REVIEW", reason="replan:scope_changed")
+            await self._advance("DRAFT_ADVISOR_REVIEW", reason="replan:scope_changed")
         else:
-            await self._advance(state, "TASK_RUNNING", reason="replan:same_scope")
+            await self._advance("TASK_RUNNING", reason="replan:same_scope")
 
         state.updated_at = timestamp
-        adapter.write_state(state)
+        self._save(state, adapter)
         logger.info(
             "plan_task_replan_handled",
             workflow_id=state.workflow_id,
@@ -461,16 +462,17 @@ class PlanController:
         self, state: RuntimeState, adapter: ArtifactAdapter
     ) -> RuntimeState:
         """Resume a blocked or replanned task by transitioning back to TASK_RUNNING."""
-        if PLAN_TASK_PHASE_GRAPH.phases_by_id[state.phase].terminal:
-            raise ValueError(f"Cannot resume terminal workflow phase: {state.phase}")
-        if state.phase not in {"TASK_BLOCKED", "TASK_REPLAN"}:
+        current = self.current_phase()
+        if PLAN_TASK_PHASE_GRAPH.phases_by_id[current].terminal:
+            raise ValueError(f"Cannot resume terminal workflow phase: {current}")
+        if current not in {"TASK_BLOCKED", "TASK_REPLAN"}:
             raise ValueError(
-                f"Workflow phase is not resumable via /task:resume: {state.phase}"
+                f"Workflow phase is not resumable via /task:resume: {current}"
             )
 
         self._require_plan_artifact(adapter, state)
         timestamp = self._utcnow_isoformat()
-        await self._advance(state, "TASK_RUNNING", reason="task:resume")
+        await self._advance("TASK_RUNNING", reason="task:resume")
         state.abort_reason = None
         state.updated_at = timestamp
         self._append_task_event(
@@ -480,7 +482,7 @@ class PlanController:
             reason=state.last_checkpoint,
             scope_changed=False,
         )
-        adapter.write_state(state)
+        self._save(state, adapter)
         logger.info(
             "plan_task_resumed",
             workflow_id=state.workflow_id,
@@ -551,7 +553,7 @@ execution_hints: []
     def _require_plan_artifact(
         self, adapter: ArtifactAdapter, state: RuntimeState
     ) -> None:
-        if state.phase in self._PLANNING_PHASES:
+        if self.current_phase() in self._PLANNING_PHASES:
             return
         plan_path = adapter.workflow_root / state.active_plan_file
         if not plan_path.exists():
@@ -580,7 +582,7 @@ execution_hints: []
                 "type": event_type,
                 "workflow_id": state.workflow_id,
                 "task_id": state.current_task_id,
-                "phase": state.phase,
+                "phase": self.current_phase(),
                 "reason": reason,
                 "scope_changed": scope_changed,
                 "evidence_refs": list(state.memory_refs),

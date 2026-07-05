@@ -74,7 +74,7 @@ from examples.e2e.plan_and_task.phase_graph import (
     PLAN_TASK_PHASE_GRAPH,
     REVIEW_VERDICTS,
 )
-from examples.e2e.plan_and_task.phase_sync import mirror_phase
+from examples.e2e.plan_and_task.phase_sync import save_state
 from examples.e2e.plan_and_task.prompts import (
     ADVISOR_SYSTEM_PROMPT,
     PLAN_QA_REVIEW_SYSTEM_PROMPT,
@@ -363,9 +363,6 @@ async def build_plan_task_world(
         await bind_phase_graph(w, eid, PLAN_TASK_PHASE_GRAPH, agent_key="main")
         component = w.get_component(eid, PhaseComponent)
         demoted = component is not None and component.phase != state.phase
-        # Mirror unconditionally: re-stamps the current phase, graph hash, and
-        # derived status into the state before it is persisted below.
-        mirror_phase(w, eid, state)
         if demoted:
             logger.info(
                 "plan_task_restart_blocked",
@@ -373,7 +370,8 @@ async def build_plan_task_world(
                 stale_task_ids=stale_task_ids,
             )
         state.updated_at = datetime.datetime.now(datetime.UTC).isoformat()
-        new_adapter.write_state(state)
+        # Persist-time snapshot: stamps phase, graph hash, and derived status.
+        save_state(w, eid, state, new_adapter)
         adapter_ref[0] = new_adapter
         runtime_state[0] = state
         _reset_workflow_boundary_state(w, eid, preserve_user_text=preserve_user_text)

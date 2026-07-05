@@ -11,7 +11,7 @@ The workflow follows a structured lifecycle:
 4. **Plan QA Review**: When the plan writer finishes, the system **automatically** advances to `PLAN_QA_REVIEW` where QA reviews the final plan document.
 5. **Execution**: Once finalized, the plan is decomposed into a task queue and executed.
 
-The lifecycle is declared once as a phase graph (`PLAN_TASK_PHASE_GRAPH` in `phase_graph.py`, built on `ecs_agent.phases`). The current phase lives in a `PhaseComponent` on the agent entity — the runtime source of truth — and every transition goes through `advance()` (validated against the graph's edges) or `force()` (used only by `/plan:start`, which may begin a new workflow from any phase, including terminal ones). Review verdicts are routed declaratively by each review phase's `ApprovalGate`, and the persisted `RuntimeState.phase` is a mirror of `PhaseComponent` written by the controller.
+The lifecycle is declared once as a phase graph (`PLAN_TASK_PHASE_GRAPH` in `phase_graph.py`, built on `ecs_agent.phases`). The current phase lives in a `PhaseComponent` on the agent entity — the runtime source of truth — and every transition goes through `advance()` (validated against the graph's edges) or `force()` (used only by `/plan:start`, which may begin a new workflow from any phase, including terminal ones). Review verdicts are routed declaratively by each review phase's `ApprovalGate`, and the persisted `RuntimeState` (`phase`/`graph_hash`/`status`) is a snapshot of `PhaseComponent` stamped at persist time by `phase_sync.save_state()` — the single state-write path.
 
 ## Architecture
 

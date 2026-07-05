@@ -3749,7 +3749,9 @@ async def test_require_plan_artifact_skipped_for_planning_phases(tmp_path: Path)
             updated_at=now,
         )
 
-        # Should NOT raise — planning phases don't require workflow_plan.md
+        # Should NOT raise — planning phases don't require workflow_plan.md.
+        # The guard reads PhaseComponent, so move the runtime phase there.
+        await force(world, eid, phase, reason="test")
         controller._require_plan_artifact(adapter, state)  # type: ignore[attr-defined]
 
 
@@ -4685,23 +4687,27 @@ async def test_handle_qa_review_approved_sets_status_active(tmp_path: Path) -> N
     assert updated.status == "active"
 
 
-async def test_phase_mirror_transition_derives_status(tmp_path: Path) -> None:
+async def test_persisted_snapshot_derives_status(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.phase_sync import save_state
 
     state = _make_runtime_state()
     state.phase = "DRAFT_INTERVIEW"
     state.status = "complete"
     world, eid = await _bound_world_at(state.phase)
     controller = PlanController(world, eid)
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id=state.workflow_id)
 
-    # A gate phase entered with an empty ledger is awaiting its review.
-    await controller._advance(state, "DRAFT_ADVISOR_REVIEW", reason="test")
+    # A gate phase persisted with an empty ledger is awaiting its review.
+    await controller._advance("DRAFT_ADVISOR_REVIEW", reason="test")
+    save_state(world, eid, state, adapter)
     assert state.status == "needs_review"
 
     state.review_verdicts = [
         ReviewVerdict(phase="DRAFT_ADVISOR_REVIEW", verdict="revise", decided_at="t")
     ]
-    await controller._advance(state, "DRAFT_INTERVIEW", reason="test")
+    await controller._advance("DRAFT_INTERVIEW", reason="test")
+    save_state(world, eid, state, adapter)
     assert state.status == "active"
 
 
@@ -5290,16 +5296,19 @@ def test_phase_graph_prompt_bindings_match_legacy_profiles() -> None:
         assert phases[pid].prompts["main"] == TASK_MAIN_AGENT_SYSTEM_PROMPT, pid
 
 
-async def test_task_exec_transition_mirrors_status_active() -> None:
-    """Entering TASK_RUNNING through TaskExec restores status="active"."""
+async def test_task_exec_transition_persists_running_status(tmp_path: Path) -> None:
+    """Entering TASK_RUNNING through TaskExec persists status="active"."""
+    from examples.e2e.plan_and_task.phase_sync import save_state
     from examples.e2e.plan_and_task.task_exec import TaskExec
 
     state = _make_runtime_state()
     state.phase = "PLAN_FINALIZED"
     state.status = "ready"
     world, eid = await _bound_world_at("PLAN_FINALIZED")
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id=state.workflow_id)
     task_exec = TaskExec(state=state, world=world, entity_id=eid)
     updated = await task_exec._transition_to_running(state)
+    save_state(world, eid, updated, adapter)
     assert updated.phase == "TASK_RUNNING"
     assert updated.status == "active"
 
@@ -5797,3 +5806,31 @@ async def test_second_resume_of_blocked_workflow_stays_blocked(
     live, persisted = await _resume_and_read_status(tmp_path, state)
     assert live == "blocked"
     assert persisted == "blocked"
+
+
+# --- Persist-time snapshot (state-simplification Task 5) --------------------
+
+
+async def test_save_state_snapshots_phase_and_derives_status(
+    tmp_path: Path,
+) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.phase_sync import save_state
+
+    state = _make_runtime_state()
+    state.phase = "DRAFT_INTERVIEW"
+    state.status = "complete"
+    world, eid = await _bound_world_at("DRAFT_INTERVIEW")
+    controller = PlanController(world, eid)
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id=state.workflow_id)
+    adapter.write_draft("# Draft\n")
+
+    # advance alone leaves the persisted mirror untouched...
+    await controller._advance("DRAFT_ADVISOR_REVIEW", reason="test")
+    assert state.phase == "DRAFT_INTERVIEW"
+
+    # ...save_state stamps phase + derived status at persist time.
+    save_state(world, eid, state, adapter)
+    assert state.phase == "DRAFT_ADVISOR_REVIEW"
+    assert state.status == "needs_review"
+    assert adapter.read_state().status == "needs_review"

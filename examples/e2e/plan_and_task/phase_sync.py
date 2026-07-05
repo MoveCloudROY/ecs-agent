@@ -1,4 +1,4 @@
-"""Single write path for mirroring PhaseComponent into RuntimeState."""
+"""Persist-time snapshot of PhaseComponent into the persisted RuntimeState."""
 
 from __future__ import annotations
 
@@ -7,6 +7,9 @@ from ecs_agent.core import World
 from ecs_agent.types import EntityId
 
 from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
+from examples.e2e.plan_and_task.scratchbook_adapter import (
+    PlanTaskScratchbookAdapter as ArtifactAdapter,
+)
 from examples.e2e.plan_and_task.state_models import ReviewVerdict, RuntimeState
 
 
@@ -31,12 +34,15 @@ def derive_status(
     return "active"
 
 
-def mirror_phase(world: World, entity_id: EntityId, state: RuntimeState) -> None:
-    """Copy the runtime phase and graph hash into the persisted state.
+def save_state(
+    world: World, entity_id: EntityId, state: RuntimeState, adapter: ArtifactAdapter
+) -> None:
+    """Single state-write path: snapshot PhaseComponent into state, then persist.
 
-    This is the ONLY place RuntimeState.phase, RuntimeState.graph_hash, and
-    RuntimeState.status may be written after a transition. Status is derived
-    by derive_status() — handlers never assign it.
+    RuntimeState.phase, RuntimeState.graph_hash, and RuntimeState.status are
+    stamped here at persist time — no transition site mirrors by hand, so a
+    stale phase can never reach disk. In-memory phase guards read
+    PhaseComponent (the runtime source of truth), not RuntimeState.
     """
     component = world.get_component(entity_id, PhaseComponent)
     if component is None:
@@ -48,3 +54,4 @@ def mirror_phase(world: World, entity_id: EntityId, state: RuntimeState) -> None
         abort_reason=state.abort_reason,
         review_verdicts=state.review_verdicts,
     )
+    adapter.write_state(state)
