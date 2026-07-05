@@ -398,6 +398,14 @@ async def build_plan_task_world(
             workflow_id,
             preserve_user_text=user_text,
         )
+        # Replay pending approval gates exactly like /plan:resume does (e.g. an
+        # approved PLAN_QA_REVIEW advances to PLAN_FINALIZED before task init).
+        # Returned actions are discarded: TRIGGER_PLAN_WRITER is a planning-flow
+        # concern; a workflow still in WRITE_PLAN proceeds to
+        # initialize_task_queue's existing clear error.
+        await controller.reconcile_after_resume(
+            state, _require_adapter(adapter_ref[0])
+        )
         logger.info(
             "plan_task_task_command_auto_loaded_state",
             command=command_name,

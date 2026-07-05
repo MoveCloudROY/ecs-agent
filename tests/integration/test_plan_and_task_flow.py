@@ -5389,3 +5389,90 @@ async def test_replan_scope_change_advisor_review_still_accepted(
         v.phase == "DRAFT_ADVISOR_REVIEW" and v.verdict == "revise"
         for v in result.review_verdicts
     )
+
+
+async def test_task_start_auto_load_replays_approved_plan_qa_gate(
+    tmp_path: Path,
+) -> None:
+    """Probe P1-1: /task:start auto-load replays an approved PLAN_QA_REVIEW gate.
+
+    Persisted state at PLAN_QA_REVIEW with an approved PLAN_QA_REVIEW verdict
+    reconciles to PLAN_FINALIZED on auto-load, then task init proceeds
+    PLAN_FINALIZED -> TASK_READY -> TASK_RUNNING with the queue initialized.
+    """
+    from ecs_agent.components import ConversationComponent
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+    from ecs_agent.types import Message
+
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
+    adapter.write_draft("# Draft\n\nApproved draft content.\n")
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    state = _make_runtime_state()
+    state.phase = "PLAN_QA_REVIEW"
+    state.status = "needs_review"
+    state.review_verdicts = _make_approved_verdicts()
+    adapter.write_state(state)
+
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.append(
+        Message(role="user", content=f"/task:start {state.workflow_id}")
+    )
+
+    await UserPromptNormalizationSystem().process(world)
+
+    assert runtime_state[0] is not None
+    assert runtime_state[0].workflow_id == state.workflow_id
+    assert runtime_state[0].phase == "TASK_RUNNING"
+    assert runtime_state[0].current_task_id == "task-001"
+    assert len(runtime_state[0].tasks) == 2
+
+
+async def test_task_start_auto_load_unapproved_plan_qa_stays_blocked(
+    tmp_path: Path,
+) -> None:
+    """Auto-load at PLAN_QA_REVIEW with a "revise" verdict must not advance.
+
+    The gate maps "revise" to no target, so reconcile is a no-op and
+    /task:start surfaces the existing "Cannot initialize task queue" error
+    with the phase unchanged.
+    """
+    from ecs_agent.components import (
+        ConversationComponent,
+        RenderedUserPromptComponent,
+    )
+    from ecs_agent.systems.user_prompt_normalization_system import (
+        UserPromptNormalizationSystem,
+    )
+    from ecs_agent.types import Message
+
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
+    adapter.write_draft("# Draft\n\nDraft pending plan revision.\n")
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    state = _make_runtime_state()
+    state.phase = "PLAN_QA_REVIEW"
+    state.status = "needs_review"
+    state.review_verdicts = [
+        ReviewVerdict(
+            phase="PLAN_QA_REVIEW",
+            verdict="revise",
+            decided_at="2026-01-01T00:00:00",
+        )
+    ]
+    adapter.write_state(state)
+
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    conversation.messages.append(
+        Message(role="user", content=f"/task:start {state.workflow_id}")
+    )
+
+    await UserPromptNormalizationSystem().process(world)
+
+    assert runtime_state[0] is not None
+    assert runtime_state[0].phase == "PLAN_QA_REVIEW"
+    rendered = world.get_component(agent_id, RenderedUserPromptComponent)
+    assert rendered is not None
+    assert "Cannot initialize task queue" in rendered.text
