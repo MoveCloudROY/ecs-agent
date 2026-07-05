@@ -86,7 +86,11 @@ After restoring, call `bind_phase_graph()` again with the same graph:
 
 ## Tool allowlists
 
-When a phase declares `tools=(...)`, entering it sets
+When ANY phase in the graph declares `tools`, the graph owns
 `PermissionComponent.allowed_tools` (enforced by the existing
-`PermissionSystem`); `denied_tools` is never touched. If any phase declares
-`tools`, treat `allowed_tools` as owned by the phase graph.
+`PermissionSystem`): entering a phase that declares `tools=(...)` sets
+`allowed_tools` to that list, and entering a phase with no declaration
+clears it to `[]` (an empty allowlist means unrestricted under
+`PermissionSystem` semantics). Graphs where no phase declares `tools`
+never touch permissions at all. `denied_tools` is never touched in any
+case.

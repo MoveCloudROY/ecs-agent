@@ -69,7 +69,7 @@ async def bind_phase_graph(
         )
         world.add_component(entity_id, component)
         world.add_component(entity_id, PhaseDefinitionComponent(graph=graph))
-        _apply_phase_effects(world, entity_id, graph.phases_by_id[graph.initial])
+        _apply_phase_effects(world, entity_id, graph, graph.phases_by_id[graph.initial])
         logger.info(
             "phase_graph_bound",
             entity_id=int(entity_id),
@@ -98,7 +98,7 @@ async def bind_phase_graph(
         existing.graph_hash = graph.structure_hash
     existing.agent_key = agent_key
     world.add_component(entity_id, PhaseDefinitionComponent(graph=graph))
-    _apply_phase_effects(world, entity_id, graph.phases_by_id[existing.phase])
+    _apply_phase_effects(world, entity_id, graph, graph.phases_by_id[existing.phase])
 
     spec = graph.phases_by_id[existing.phase]
     if spec.on_resume is not None and spec.on_resume != existing.phase:
@@ -256,7 +256,7 @@ async def _commit(
         {"from": from_phase, "to": to_phase, "reason": reason, "forced": forced, "tick": tick}
     )
     del component.history[:-HISTORY_LIMIT]
-    _apply_phase_effects(world, entity_id, graph.phases_by_id[to_phase])
+    _apply_phase_effects(world, entity_id, graph, graph.phases_by_id[to_phase])
     logger.info(
         "phase_transition",
         entity_id=int(entity_id),
@@ -279,10 +279,18 @@ async def _commit(
     )
 
 
-def _apply_phase_effects(world: World, entity_id: EntityId, spec: PhaseSpec) -> None:
-    if spec.tools is None:
+def _apply_phase_effects(
+    world: World, entity_id: EntityId, graph: PhaseGraph, spec: PhaseSpec
+) -> None:
+    if not graph.manages_tools:
         return
     permissions = world.get_component(entity_id, PermissionComponent)
+    if spec.tools is None:
+        # The graph owns allowed_tools: a phase with no declaration is
+        # unrestricted (empty allowlist == allow-all under PermissionSystem).
+        if permissions is not None:
+            permissions.allowed_tools = []
+        return
     if permissions is None:
         permissions = PermissionComponent()
         world.add_component(entity_id, permissions)

@@ -157,3 +157,79 @@ async def test_read_helpers() -> None:
     assert is_terminal(world, eid) is False
     await force(world, eid, "DONE", reason="admin")
     assert is_terminal(world, eid) is True
+
+
+def _tool_graph():
+    return build_graph(
+        "tooling",
+        initial="RESTRICTED",
+        phases=[
+            PhaseSpec(
+                phase_id="RESTRICTED",
+                prompts={"main": "restricted"},
+                to=("OPEN",),
+                tools=("submit_draft",),
+            ),
+            PhaseSpec(phase_id="OPEN", prompts={"main": "open"}, terminal=True),
+        ],
+    )
+
+
+async def test_phase_without_tools_clears_allowlist_when_graph_manages_tools() -> None:
+    world = World()
+    eid = world.create_entity()
+    await bind_phase_graph(world, eid, _tool_graph())
+    permissions = world.get_component(eid, PermissionComponent)
+    assert permissions is not None
+    assert permissions.allowed_tools == ["submit_draft"]
+
+    await advance(world, eid, "OPEN", reason="release restriction")
+    permissions = world.get_component(eid, PermissionComponent)
+    assert permissions is not None
+    # OPEN declares no tools: the managing graph clears the restriction
+    # (empty allowed_tools == unrestricted under PermissionSystem semantics).
+    assert permissions.allowed_tools == []
+
+
+async def test_denied_tools_never_touched_by_phase_effects() -> None:
+    world = World()
+    eid = world.create_entity()
+    world.add_component(
+        eid, PermissionComponent(allowed_tools=[], denied_tools=["rm_rf"])
+    )
+    await bind_phase_graph(world, eid, _tool_graph())
+    await advance(world, eid, "OPEN", reason="r")
+    permissions = world.get_component(eid, PermissionComponent)
+    assert permissions is not None
+    assert permissions.denied_tools == ["rm_rf"]
+
+
+async def test_non_managing_graph_never_touches_permissions() -> None:
+    world = World()
+    eid = world.create_entity()
+    world.add_component(
+        eid, PermissionComponent(allowed_tools=["user_tool"], denied_tools=[])
+    )
+    graph = build_graph(
+        "no-tools",
+        initial="A",
+        phases=[
+            PhaseSpec(phase_id="A", prompts={"main": "a"}, to=("B",)),
+            PhaseSpec(phase_id="B", prompts={"main": "b"}, terminal=True),
+        ],
+    )
+    await bind_phase_graph(world, eid, graph)
+    await advance(world, eid, "B", reason="r")
+    permissions = world.get_component(eid, PermissionComponent)
+    assert permissions is not None
+    assert permissions.allowed_tools == ["user_tool"]
+
+
+def test_manages_tools_flag() -> None:
+    assert _tool_graph().manages_tools is True
+    plain = build_graph(
+        "plain",
+        initial="A",
+        phases=[PhaseSpec(phase_id="A", prompts={"main": "a"}, terminal=True)],
+    )
+    assert plain.manages_tools is False

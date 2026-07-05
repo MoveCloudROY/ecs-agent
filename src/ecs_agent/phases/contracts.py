@@ -61,6 +61,7 @@ class PhaseGraph:
     initial: str
     phases_by_id: dict[str, PhaseSpec]
     structure_hash: str
+    manages_tools: bool = False
 
 
 def build_graph(
@@ -108,6 +109,7 @@ def build_graph(
         initial=initial,
         phases_by_id=phases_by_id,
         structure_hash=_structure_hash(graph_id, initial, specs),
+        manages_tools=any(spec.tools is not None for spec in specs),
     )
 
 
