@@ -73,9 +73,9 @@ When `enable_prompt_caching=True` (default), `ClaudeModel` places `cache_control
 To keep the cached prefix byte-stable, the rendered system prompt is split by `SystemPromptRenderSystem` into:
 
 - **stable prefix** — base instructions + tool/skill/MCP inventory + scratchbook metadata (byte-stable across turns), emitted as the first `system` block with the cache breakpoint;
-- **volatile tail** — compaction summary (`_chat_history_summary_xml`) and workflow state (`_workflow_state_prompt`), emitted as a second, un-cached `system` block.
+- **volatile tail** — compaction summary (`_chat_history_summary_xml`) and phase prompt (`_phase_prompt`), emitted as a second, un-cached `system` block.
 
-When the entire prompt body is volatile (e.g. a workflow-driven prompt where the whole system prompt is `${_workflow_state_prompt}`), the stable prefix is empty and the volatile content is sent as the sole system message — nothing is cached, which is correct since such prompts change per state. Verify cache hits via `usage.cache_read_tokens` (populated from the response's `cache_read_input_tokens`).
+When the entire prompt body is volatile (e.g. a phase-driven prompt where the whole system prompt is `${_phase_prompt}`), the stable prefix is empty and the volatile content is sent as the sole system message — nothing is cached, which is correct since such prompts change per phase. Verify cache hits via `usage.cache_read_tokens` (populated from the response's `cache_read_input_tokens`).
 
 ### Actual token usage per entity
 

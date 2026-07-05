@@ -739,55 +739,38 @@ world.add_component(agent, WorkspaceBindingComponent(workspace_root=Path("/works
 # When a subagent is spawned, it inherits this binding by default (InheritancePolicy).
 ```
 
-## Workflow Components
+## Phase Components
 
-### WorkflowDefinitionComponent
-Holds the compiled workflow definition for an entity. This component is NOT serialized by design.
+Components backing the phase-graph feature (`ecs_agent.phases`). See [`features/phases.md`](./features/phases.md) for the full model.
 
-| Name | Type | Description |
-| :--- | :--- | :--- |
-| `compiled` | `CompiledWorkflow` | The frozen, validated workflow model |
-
-**Used by:** `WorkflowStateSystem`, `WorkflowPromptPlaceholderProvider`
-
-### WorkflowRuntimeComponent
-Holds the mutable runtime workflow state for an entity. This component IS serialized.
+### PhaseComponent
+Single source of truth for an entity's position in a phase graph. This component IS serialized.
 
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `current_state_id` | `str` | (required) | The ID of the active workflow state |
-| `transition_history` | `list[str]` | `[]` | History of committed transition IDs |
+| `graph_id` | `str` | (required) | Identifier of the bound phase graph |
+| `phase` | `str` | (required) | The current phase ID |
+| `graph_hash` | `str` | (required) | Structure hash of the bound graph, verified on re-bind |
+| `agent_key` | `str` | `"main"` | Key used to resolve per-phase prompts |
+| `entered_at_tick` | `int` | `0` | Tick at which the current phase was entered |
+| `history` | `list[dict[str, Any]]` | `[]` | Bounded transition history (last 100 transitions) |
 
-**Used by:** `WorkflowStateSystem`, `WorkflowPromptPlaceholderProvider`
+**Used by:** `ecs_agent.phases` API (`bind_phase_graph`, `advance`, `force`, `record_approval`), `PhasePromptPlaceholderProvider`
 
-### WorkflowBindingComponent
-Binds an agent key to the workflow for this entity. This component IS serialized.
-
-| Name | Type | Description |
-| :--- | :--- | :--- |
-| `agent_key` | `str` | The key used to look up prompt profiles |
-
-**Used by:** `WorkflowPromptPlaceholderProvider`
-
-### WorkflowGateSnapshotComponent
-Records the last evaluated gate snapshot for debugging and logging. This component IS serialized.
+### PhaseDefinitionComponent
+Holds the bound `PhaseGraph` at runtime. This component is NOT serialized by design — after restoring a checkpoint, re-bind via `bind_phase_graph()`.
 
 | Name | Type | Description |
 | :--- | :--- | :--- |
-| `state_id` | `str` | The state ID being evaluated |
-| `evaluated_at_tick` | `int` | The tick number of evaluation |
-| `matched_transition_id` | `str | None` | The ID of the matched transition, if any |
+| `graph` | `PhaseGraph` | The validated phase graph built by `build_graph()` |
 
-**Added by:** `WorkflowStateSystem`
+**Used by:** `ecs_agent.phases` API, `PhasePromptPlaceholderProvider`
 
-### WorkflowLastTransitionComponent
-Records the most recent committed transition for history and exact-once semantics. This component IS serialized.
+### PhaseApprovalsComponent
+Audit ledger of verdicts recorded through `record_approval()`. This component IS serialized.
 
-| Name | Type | Description |
-| :--- | :--- | :--- |
-| `from_state_id` | `str` | The source state ID |
-| `to_state_id` | `str` | The target state ID |
-| `transition_id` | `str` | The ID of the committed transition |
-| `tick` | `int` | The tick number when the transition occurred |
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `records` | `list[dict[str, Any]]` | `[]` | Recorded approval verdicts |
 
-**Added by:** `WorkflowStateSystem`
+**Used by:** `ecs_agent.phases` API (`record_approval`)
