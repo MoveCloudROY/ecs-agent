@@ -1,19 +1,17 @@
 # Phase Graphs
 
-Explicit, auditable phase transitions for agents. Replaces the gate-polling
-workflow DSL (removed in 2026-07) with a command-driven model: the graph is
-pure data, transitions are function calls.
+Explicit, auditable phase transitions for agents, driven by a command-based
+model: the graph is pure data, transitions are function calls.
 
 ## Overview
 
 A phase graph gives an agent a declared set of phases, the allowed transitions
 between them, and the per-phase harness surface (system prompt, tool
 allowlist, review gates, restart policy) — all in one validated data
-structure. Unlike the old DSL there is **no polling system**: nothing
-evaluates conditions per tick. Code that knows a transition should happen
-calls `advance()` (or `force()`, or `record_approval()`), the transition is
-validated against the graph, committed atomically, audited, and published as
-an event.
+structure. There is **no polling system**: nothing evaluates conditions per
+tick. Code that knows a transition should happen calls `advance()` (or
+`force()`, or `record_approval()`), the transition is validated against the
+graph, committed atomically, audited, and published as an event.
 
 ```
 build_graph(...)  ──►  PhaseGraph (immutable, structure-hashed)
@@ -122,7 +120,7 @@ Holds the bound `PhaseGraph` at runtime. **Never serialized** — the graph may
 reference `Path` prompts and is cheap to rebuild; re-attach it after a restore
 with `bind_phase_graph()`. Using a restored entity before re-binding raises
 `PhaseIntegrityError` from every API call and from prompt rendering — loudly,
-by design (the old DSL silently froze in this state).
+by design.
 
 ### PhaseApprovalsComponent
 
@@ -309,8 +307,7 @@ Transitions that fire before the first user turn are buffered and re-parented
 under the interactive turn root, like all other pre-turn telemetry (see
 [langfuse.md](langfuse.md)).
 
-Only committed transitions emit events — there is no per-tick noise (the old
-DSL emitted an evaluation event every tick including no-ops).
+Only committed transitions emit events — there is no per-tick noise.
 
 ## Checkpoint & Resume
 
@@ -326,9 +323,8 @@ await bind_phase_graph(world, eid, GRAPH, agent_key="main")   # idempotent
 The re-bind contract:
 
 - **Progress is never reset.** The restored phase is preserved; `bind` only
-  re-attaches the definition and re-applies the current phase's effects.
-  (The old DSL's documented resume path silently reset progress; the
-  regression test for this lives in `tests/test_phase_checkpoint.py`.)
+  re-attaches the definition and re-applies the current phase's effects
+  (regression-tested in `tests/test_phase_checkpoint.py`).
 - **Structural drift is detected.** If the graph's structure hash changed but
   the restored phase still exists, the stored hash is updated with a warning
   and execution continues. If the restored phase was removed from the graph,
@@ -413,19 +409,3 @@ owner must migrate persisted phases or `force()` past the rename.
 | `tests/test_phase_observability.py` | Langfuse `phase.transition` mapping |
 | `tests/integration/test_phase_agent_flow.py` | Trigger script → advance → same-tick render |
 | `tests/live/test_phases_live.py` | Real-LLM prompt swap (env-gated on `LLM_API_KEY`) |
-
-## Migration from the Workflow DSL
-
-For code written against the removed `ecs_agent.workflows`:
-
-| Old | New |
-|---|---|
-| `workflow(...)` spec + `install_workflow()` | `build_graph(...)` + `await bind_phase_graph()` |
-| Gate expressions (`has`/`absent`/`field ==`) + marker components | plain code at the call site invoking `await advance()` |
-| `WorkflowStateSystem` at priority −25 + ordering contract | *(nothing — no system, no ordering)* |
-| Profile table + per-state `bind` | `PhaseSpec.prompts` (share text via Python variables) |
-| `${_workflow_state_prompt}` | `${_phase_prompt}` |
-| `WorkflowRuntimeComponent.current_state_id` | `PhaseComponent.phase` |
-| Ambiguous-match → `TerminalComponent` kill | *(impossible — one validated transition per call)* |
-| Re-install on resume (reset bug) | idempotent `bind_phase_graph` (progress preserved) |
-| `WorkflowStateEvaluatedEvent` (every tick) | `PhaseChangedEvent` (committed transitions only) |
