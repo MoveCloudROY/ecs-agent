@@ -102,7 +102,6 @@ class RuntimeState:
     active_plan_file: str
     current_task_id: str | None
     completed_task_ids: list[str]
-    retry_budget: dict[str, int]
     review_verdicts: list[ReviewVerdict]
     active_subagents: list[SubagentRecord]
     memory_refs: list[str]
@@ -112,8 +111,6 @@ class RuntimeState:
     abort_reason: str | None = None
     graph_hash: str | None = None
     tasks: list[TaskRecord] = field(default_factory=list)
-    open_questions: list[str] = field(default_factory=list)
-    confirmed_requirements: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         _require_non_empty(self.workflow_id, field_name="workflow_id")
@@ -123,10 +120,6 @@ class RuntimeState:
         _require_non_empty(self.active_plan_file, field_name="active_plan_file")
         _require_non_empty(self.created_at, field_name="created_at")
         _require_non_empty(self.updated_at, field_name="updated_at")
-        for task_id, budget in self.retry_budget.items():
-            _require_non_empty(task_id, field_name="retry_budget task_id")
-            if budget < 0:
-                raise ValueError("retry_budget values must be >= 0")
 
     def upsert_verdict(self, verdict: "ReviewVerdict") -> bool:
         """Insert or replace the verdict for its phase; approvals are sticky.
@@ -175,7 +168,6 @@ class RuntimeState:
                 active_plan_file=payload["active_plan_file"],
                 current_task_id=payload["current_task_id"],
                 completed_task_ids=list(payload["completed_task_ids"]),
-                retry_budget=dict(payload["retry_budget"]),
                 review_verdicts=review_verdicts,
                 active_subagents=active_subagents,
                 memory_refs=list(payload["memory_refs"]),
@@ -185,8 +177,6 @@ class RuntimeState:
                 created_at=payload["created_at"],
                 updated_at=payload["updated_at"],
                 tasks=tasks,
-                open_questions=list(payload.get("open_questions", [])),
-                confirmed_requirements=list(payload.get("confirmed_requirements", [])),
             )
         except KeyError as exc:
             logger.error("plan_task_runtime_state_missing_field", field=str(exc))

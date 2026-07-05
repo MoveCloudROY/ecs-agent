@@ -305,14 +305,16 @@ class TaskExec:
         task_id: str,
         max_retries: int = 3,
     ) -> bool:
-        """Return True if the task's retry budget has reached the maximum retries limit."""
-        triggered = state.retry_budget.get(task_id, 0) >= max_retries
+        """Return True if the task's retry count has reached the maximum retries limit."""
+        task = self._get_task_record(state, task_id)
+        retry_count = task.retry_count if task is not None else 0
+        triggered = retry_count >= max_retries
         if triggered:
             logger.warning(
                 "plan_task_circuit_breaker_triggered",
                 workflow_id=state.workflow_id,
                 task_id=task_id,
-                retry_count=state.retry_budget.get(task_id, 0),
+                retry_count=retry_count,
                 max_retries=max_retries,
             )
         return triggered

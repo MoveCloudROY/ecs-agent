@@ -115,7 +115,6 @@ class PlanController:
             active_plan_file="plan/workflow_plan.md",
             current_task_id=None,
             completed_task_ids=[],
-            retry_budget={},
             review_verdicts=[],
             active_subagents=[],
             memory_refs=[],
@@ -124,8 +123,6 @@ class PlanController:
             updated_at=timestamp,
             graph_hash=PLAN_TASK_PHASE_GRAPH.structure_hash,
             tasks=[],
-            open_questions=[],
-            confirmed_requirements=[],
         )
         self._save(state, adapter)
         logger.info(

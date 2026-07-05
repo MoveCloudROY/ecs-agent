@@ -244,7 +244,7 @@ This example explicitly enables logging in `main.py` when `DEBUG=1`; the base `e
 | `plan_task_task_queue_initialized` | info | `task_exec.py` | Task queue built and state updated; `task_count=`, `current_task_id=`, `phase=` |
 | `plan_task_subagent_dispatched` | info | `task_exec.py` | Subagent session recorded for a task; `task_id=`, `session_id=` |
 | `plan_task_task_completed` | info | `task_exec.py` | Task completed; `next_task_id=`, `workflow_done=` |
-| `plan_task_circuit_breaker_triggered` | warning | `task_exec.py` | Task retry budget exhausted; `retry_count=`, `max_retries=` |
+| `plan_task_circuit_breaker_triggered` | warning | `task_exec.py` | Task retry count exhausted; `retry_count=`, `max_retries=` |
 | `plan_task_dependency_cycle_detected` | warning | `task_exec.py` | Cyclic dependency found before raise; `cycle_ids=` |
 | `plan_task_reviews_not_approved` | warning | `task_exec.py` | Task start blocked by missing reviews; `missing_phases=` |
 | `plan_task_finalize_blocked` | warning | `controller.py` | Plan finalization blocked by missing verdicts; `missing_phases=` |
@@ -280,7 +280,7 @@ This example explicitly enables logging in `main.py` when `DEBUG=1`; the base `e
 - **workflow_id Auto-Derivation**: `/plan:start <description>` calls `derive_workflow_id_from_llm()` to ask the LLM to generate a short, meaningful English slug from the description (e.g., `"writing-assistant-multi-agent"`). Falls back to `slug_from_description()` on provider error or invalid output. The derived ID controls the scratchbook directory for all subsequent operations in that session.
 - **Progressive Draft Editing**: The planning interview fills `draft.md` one section at a time using clean `read_file` output plus snapshot-protected `edit_file(op="replace", pos="<line-number>", content=...)` calls. The LLM reads the file first so the framework has a fresh internal snapshot, then replaces exactly the placeholder line or range. Full-file rewrites via `write_file` are explicitly prohibited by the system prompt.
 - **Atomic Writes**: All artifact updates use atomic file operations to prevent corruption.
-- **Circuit Breaker**: `TaskExec` implements a retry budget to prevent infinite loops on failing tasks.
+- **Circuit Breaker**: `TaskExec` blocks tasks whose `TaskRecord.retry_count` reaches the retry limit, preventing infinite loops on failing tasks.
 - **Review Gating**: Finalization is strictly blocked until `DRAFT_ADVISOR_REVIEW`, `DRAFT_QA_REVIEW`, and `PLAN_QA_REVIEW` all have `approved` verdicts.
 - **Advisor Retry Loop**: When the advisor returns `revise` or `blocked`, the system prompt instructs the planner LLM to apply the feedback to `draft.md` via `edit_file` and re-call the advisor. Only an `approved` advisor verdict unlocks the QA step. Non-approved verdicts for a phase replace any prior non-approved verdict (upsert semantics). Once a phase reaches `approved`, that verdict is **sticky** — any subsequent upsert attempt for the same phase is silently ignored. `approved` verdicts always have `notes=None`; non-approved verdicts retain their notes for debugging.
 - **Verdict Extraction**: Subagent results are parsed by first scanning from the bottom for a standalone verdict line (`approved`, `revise`, `blocked`, or `verdict: <value>`). If no standalone line exists, the legacy keyword fallback still scans for the first verdict word. This keeps terse historical outputs working while preventing explanatory text from overriding a final verdict line.

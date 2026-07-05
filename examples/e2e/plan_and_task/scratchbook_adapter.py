@@ -246,9 +246,6 @@ class PlanTaskScratchbookAdapter:
             if record.status not in {"queued", "running"}:
                 continue
             record.status = "stale"
-            state.retry_budget[record.task_id] = (
-                state.retry_budget.get(record.task_id, 0) + 1
-            )
             task = self._task_for(state=state, task_id=record.task_id)
             if task is not None:
                 task.retry_count += 1

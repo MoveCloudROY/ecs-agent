@@ -123,7 +123,6 @@ def _make_runtime_state() -> RuntimeState:
         active_plan_file="plan/workflow_plan.md",
         current_task_id=None,
         completed_task_ids=[],
-        retry_budget={},
         review_verdicts=[],
         active_subagents=[],
         memory_refs=[],
@@ -302,7 +301,6 @@ def test_scratchbook_adapter_write_and_read_state_roundtrip(tmp_path: Path) -> N
         active_plan_file="plan/workflow_plan.md",
         current_task_id=None,
         completed_task_ids=[],
-        retry_budget={},
         review_verdicts=[],
         active_subagents=[],
         memory_refs=[],
@@ -396,7 +394,6 @@ def test_state_schema_round_trip_and_plan_artifact(tmp_path: Path) -> None:
         active_plan_file="plan/workflow_plan.md",
         current_task_id="task-1",
         completed_task_ids=["task-0"],
-        retry_budget={"task-1": 1},
         review_verdicts=[
             ReviewVerdict(
                 phase="DRAFT_QA_REVIEW",
@@ -469,7 +466,6 @@ def test_recovery_files_mark_stale_subagents_and_requeue_tasks(tmp_path: Path) -
         active_plan_file="plan/workflow_plan.md",
         current_task_id="task-2",
         completed_task_ids=["task-1"],
-        retry_budget={"task-2": 0, "task-3": 2},
         review_verdicts=[],
         active_subagents=[
             SubagentRecord(
@@ -524,7 +520,6 @@ def test_recovery_files_mark_stale_subagents_and_requeue_tasks(tmp_path: Path) -
         "stale",
         "succeeded",
     ]
-    assert state.retry_budget == {"task-2": 1, "task-3": 3}
     assert [task.retry_count for task in state.tasks] == [1, 3]
 
 
@@ -546,7 +541,6 @@ def test_missing_plan_reference_raises_explicit_value_error(tmp_path: Path) -> N
         active_plan_file="plan/workflow_plan.md",
         current_task_id=None,
         completed_task_ids=[],
-        retry_budget={},
         review_verdicts=[],
         active_subagents=[],
         memory_refs=[],
@@ -1259,7 +1253,9 @@ def test_circuit_breaker_blocks_at_max_retries() -> None:
     from examples.e2e.plan_and_task.task_exec import TaskExec
 
     state = _make_runtime_state()
-    state.retry_budget = {"task-001": 3}
+    state.tasks = [
+        TaskRecord(task_id="task-001", title="Retry me", status="pending", retry_count=3)
+    ]
 
     assert TaskExec(state=state).check_circuit_breaker(state, "task-001") is True
 
@@ -1268,16 +1264,28 @@ def test_circuit_breaker_allows_below_max_retries() -> None:
     from examples.e2e.plan_and_task.task_exec import TaskExec
 
     state = _make_runtime_state()
-    state.retry_budget = {"task-001": 2}
+    state.tasks = [
+        TaskRecord(task_id="task-001", title="Retry me", status="pending", retry_count=2)
+    ]
 
     assert TaskExec(state=state).check_circuit_breaker(state, "task-001") is False
+
+
+def test_circuit_breaker_treats_unknown_task_as_zero_retries() -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    state = _make_runtime_state()
+
+    assert TaskExec(state=state).check_circuit_breaker(state, "task-unknown") is False
 
 
 def test_retry_budget_exhausted_blocks_task() -> None:
     from examples.e2e.plan_and_task.task_exec import TaskExec
 
     state = _make_runtime_state()
-    state.retry_budget = {"task-001": 3}
+    state.tasks = [
+        TaskRecord(task_id="task-001", title="Retry me", status="pending", retry_count=3)
+    ]
 
     assert TaskExec(state=state).check_retry_budget_exhausted(state, "task-001") is True
 
@@ -1302,7 +1310,6 @@ async def test_stale_subagent_on_restart_increments_retry(tmp_path: Path) -> Non
     state.phase = "TASK_RUNNING"
     state.status = "active"
     state.current_task_id = "task-001"
-    state.retry_budget = {"task-001": 0}
     state.tasks = [TaskRecord(task_id="task-001", title="Recover me", status="running")]
     state.active_subagents = [
         SubagentRecord(
@@ -1319,7 +1326,6 @@ async def test_stale_subagent_on_restart_increments_retry(tmp_path: Path) -> Non
     result = await _run_restart_flow(state, adapter)
 
     assert result.phase == "TASK_BLOCKED"
-    assert result.retry_budget["task-001"] == 1
     assert result.tasks[0].retry_count == 1
     assert result.tasks[0].status == "pending"
     assert result.current_task_id == "task-001"
@@ -1761,24 +1767,6 @@ def test_readme_command_examples_match_supported_commands() -> None:
         assert result.name == cmd_str.split()[0], (
             f"Unexpected parse result for {cmd_str!r}: got name={result.name!r}"
         )
-
-
-async def test_plan_start_state_has_open_questions_and_confirmed_requirements(
-    tmp_path: Path,
-) -> None:
-    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
-    world, eid = await _bound_world_at("IDLE")
-    controller = PlanController(world, eid)
-
-    state = await controller.handle_plan_start(adapter, "test description")
-
-    assert state.open_questions == []
-    assert state.confirmed_requirements == []
-    persisted_payload = json.loads(
-        (adapter.state_dir / "runtime_state.json").read_text(encoding="utf-8")
-    )
-    assert persisted_payload["open_questions"] == []
-    assert persisted_payload["confirmed_requirements"] == []
 
 
 async def test_review_verdict_artifact_has_phase_and_verdict(tmp_path: Path) -> None:
@@ -3379,7 +3367,6 @@ async def test_plan_resume_handler_restores_state_from_disk(tmp_path: Path) -> N
         active_plan_file="plan/workflow_plan.md",
         current_task_id="task-001",
         completed_task_ids=[],
-        retry_budget={},
         review_verdicts=[],
         active_subagents=[],
         memory_refs=[],
@@ -3476,7 +3463,6 @@ async def test_plan_resume_handler_marks_stale_subagents(tmp_path: Path) -> None
         active_plan_file="plan/workflow_plan.md",
         current_task_id="task-001",
         completed_task_ids=[],
-        retry_budget={},
         review_verdicts=[],
         active_subagents=[
             SubagentRecord(
@@ -3543,7 +3529,6 @@ async def test_plan_resume_handler_updates_scratchbook_prompt_config(
         active_plan_file="plan/workflow_plan.md",
         current_task_id=None,
         completed_task_ids=[],
-        retry_budget={},
         review_verdicts=[],
         active_subagents=[],
         memory_refs=[],
@@ -3597,7 +3582,6 @@ def test_read_state_planning_phase_does_not_require_workflow_plan(
             active_plan_file="plan/workflow_plan.md",
             current_task_id=None,
             completed_task_ids=[],
-            retry_budget={},
             review_verdicts=[],
             active_subagents=[],
             memory_refs=[],
@@ -3632,7 +3616,6 @@ def test_read_state_task_execution_phase_requires_active_plan_file(
         active_plan_file="plan/workflow_plan.md",
         current_task_id="task-001",
         completed_task_ids=[],
-        retry_budget={},
         review_verdicts=[],
         active_subagents=[],
         memory_refs=[],
@@ -3674,7 +3657,6 @@ async def test_plan_resume_handler_restores_planning_phase(tmp_path: Path) -> No
         active_plan_file="plan/workflow_plan.md",
         current_task_id=None,
         completed_task_ids=[],
-        retry_budget={},
         review_verdicts=[],
         active_subagents=[],
         memory_refs=[],
@@ -3723,7 +3705,6 @@ async def test_require_plan_artifact_skipped_for_planning_phases(tmp_path: Path)
             active_plan_file="plan/workflow_plan.md",
             current_task_id=None,
             completed_task_ids=[],
-            retry_budget={},
             review_verdicts=[],
             active_subagents=[],
             memory_refs=[],
@@ -4286,7 +4267,6 @@ def _make_state_at_phase(phase: str) -> RuntimeState:
         active_plan_file="plan/workflow_plan.md",
         current_task_id=None,
         completed_task_ids=[],
-        retry_budget={},
         review_verdicts=[],
         active_subagents=[],
         memory_refs=[],
