@@ -5868,3 +5868,94 @@ async def test_resume_and_task_start_share_one_restore_path(tmp_path: Path) -> N
     assert [v.verdict for v in via_resume.review_verdicts] == [
         v.verdict for v in via_task_start.review_verdicts
     ]
+
+
+# --- Completed-task carry-forward on re-init (state-simplification Task 8) --
+
+
+async def test_reinit_carries_completed_tasks_forward(tmp_path: Path) -> None:
+    """/task:start on a blocked workflow must not re-run completed tasks."""
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_BLOCKED"
+    state.completed_task_ids = ["task-001"]
+    state.review_verdicts = _make_approved_verdicts()
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    adapter.write_state(state)
+    world, eid = await _bound_world_at("TASK_BLOCKED")
+
+    updated = await TaskExec(
+        state=state, world=world, entity_id=eid
+    ).initialize_task_queue(state, adapter)
+
+    statuses = {t.task_id: t.status for t in updated.tasks}
+    assert statuses["task-001"] == "completed"
+    assert statuses["task-002"] == "pending"
+    assert updated.current_task_id == "task-002"
+    assert updated.phase == "TASK_RUNNING"
+
+
+async def test_reinit_ignores_orphaned_completed_ids(tmp_path: Path) -> None:
+    """Completed ids from a replanned-away task must not break queue building."""
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_BLOCKED"
+    state.completed_task_ids = ["task-removed-by-replan"]
+    state.review_verdicts = _make_approved_verdicts()
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    adapter.write_state(state)
+    world, eid = await _bound_world_at("TASK_BLOCKED")
+
+    updated = await TaskExec(
+        state=state, world=world, entity_id=eid
+    ).initialize_task_queue(state, adapter)
+
+    assert all(t.status == "pending" for t in updated.tasks)
+    assert updated.current_task_id == "task-001"
+
+
+async def test_reinit_with_all_tasks_completed_finishes_workflow(
+    tmp_path: Path,
+) -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_BLOCKED"
+    state.completed_task_ids = ["task-001", "task-002"]
+    state.review_verdicts = _make_approved_verdicts()
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    adapter.write_state(state)
+    world, eid = await _bound_world_at("TASK_BLOCKED")
+
+    updated = await TaskExec(
+        state=state, world=world, entity_id=eid
+    ).initialize_task_queue(state, adapter)
+
+    assert updated.current_task_id is None
+    assert updated.phase == "TASK_COMPLETED"
+    assert updated.status == "completed"
+
+
+async def test_fresh_init_still_starts_at_first_task(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.task_exec import TaskExec
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_READY"
+    state.review_verdicts = _make_approved_verdicts()
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    adapter.write_state(state)
+    world, eid = await _bound_world_at("TASK_READY")
+
+    updated = await TaskExec(
+        state=state, world=world, entity_id=eid
+    ).initialize_task_queue(state, adapter)
+
+    assert all(t.status == "pending" for t in updated.tasks)
+    assert updated.current_task_id == "task-001"
+    assert updated.phase == "TASK_RUNNING"

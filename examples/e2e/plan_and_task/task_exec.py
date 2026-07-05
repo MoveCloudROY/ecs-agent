@@ -157,18 +157,28 @@ class TaskExec:
             )
         plan = self.load_plan(adapter)
         queue = self.build_todo_queue(plan)
-        current_task_id = queue[0].task_id if queue else None
+        # Carry-forward: tasks already completed in a prior run are not re-run
+        # on re-init (e.g. /task:start from TASK_BLOCKED). Ids that no longer
+        # exist in the plan (removed by replan) simply find no record.
+        completed = set(state.completed_task_ids)
+        for task in queue:
+            if task.task_id in completed:
+                task.status = "completed"
 
         state.tasks = queue
-        state.current_task_id = current_task_id
-        state = await self._transition_to_running(state)
+        state.current_task_id = self._next_pending_task_id(state)
         world, entity_id = self._require_phase_context()
+        state = await self._transition_to_running(state)
+        if state.current_task_id is None and queue:
+            # Everything already done: finish (via the graph's RUNNING edge)
+            # instead of idling in TASK_RUNNING with nothing pending.
+            await advance(world, entity_id, "TASK_COMPLETED", reason="task:all_done")
         save_state(world, entity_id, state, adapter)
         logger.info(
             "plan_task_task_queue_initialized",
             workflow_id=state.workflow_id,
             task_count=len(queue),
-            current_task_id=current_task_id,
+            current_task_id=state.current_task_id,
             phase=state.phase,
         )
         return state
