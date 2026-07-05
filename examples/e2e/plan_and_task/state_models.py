@@ -101,7 +101,6 @@ class RuntimeState:
     status: str
     active_plan_file: str
     current_task_id: str | None
-    completed_task_ids: list[str]
     review_verdicts: list[ReviewVerdict]
     active_subagents: list[SubagentRecord]
     memory_refs: list[str]
@@ -120,6 +119,11 @@ class RuntimeState:
         _require_non_empty(self.active_plan_file, field_name="active_plan_file")
         _require_non_empty(self.created_at, field_name="created_at")
         _require_non_empty(self.updated_at, field_name="updated_at")
+
+    @property
+    def completed_task_ids(self) -> list[str]:
+        """Derived view: ids of tasks whose status is "completed", in queue order."""
+        return [task.task_id for task in self.tasks if task.status == "completed"]
 
     def upsert_verdict(self, verdict: "ReviewVerdict") -> bool:
         """Insert or replace the verdict for its phase; approvals are sticky.
@@ -143,8 +147,14 @@ class RuntimeState:
         return True
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert the runtime state to a dictionary representation."""
-        return asdict(self)
+        """Convert the runtime state to a dictionary representation.
+
+        The persisted shape keeps a completed_task_ids key (derived from
+        tasks[].status) for artifact readers and legacy compatibility.
+        """
+        data = asdict(self)
+        data["completed_task_ids"] = self.completed_task_ids
+        return data
 
     def to_json(self) -> str:
         """Convert the runtime state to a JSON string."""
@@ -161,13 +171,19 @@ class RuntimeState:
                 SubagentRecord(**item) for item in payload["active_subagents"]
             ]
             tasks = [TaskRecord(**item) for item in payload.get("tasks", [])]
+            # Migrate-on-read: files written before completed-task carry-forward
+            # could hold the completion truth only in the ledger while tasks[]
+            # had been rebuilt all-pending. Fold the ledger into the records.
+            legacy_completed = set(payload.get("completed_task_ids", []))
+            for task in tasks:
+                if task.task_id in legacy_completed:
+                    task.status = "completed"
             return cls(
                 workflow_id=payload["workflow_id"],
                 phase=payload["phase"],
                 status=payload["status"],
                 active_plan_file=payload["active_plan_file"],
                 current_task_id=payload["current_task_id"],
-                completed_task_ids=list(payload["completed_task_ids"]),
                 review_verdicts=review_verdicts,
                 active_subagents=active_subagents,
                 memory_refs=list(payload["memory_refs"]),

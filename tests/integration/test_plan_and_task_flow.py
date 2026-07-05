@@ -122,7 +122,6 @@ def _make_runtime_state() -> RuntimeState:
         status="ready",
         active_plan_file="plan/workflow_plan.md",
         current_task_id=None,
-        completed_task_ids=[],
         review_verdicts=[],
         active_subagents=[],
         memory_refs=[],
@@ -300,7 +299,6 @@ def test_scratchbook_adapter_write_and_read_state_roundtrip(tmp_path: Path) -> N
         status="active",
         active_plan_file="plan/workflow_plan.md",
         current_task_id=None,
-        completed_task_ids=[],
         review_verdicts=[],
         active_subagents=[],
         memory_refs=[],
@@ -393,7 +391,6 @@ def test_state_schema_round_trip_and_plan_artifact(tmp_path: Path) -> None:
         status="active",
         active_plan_file="plan/workflow_plan.md",
         current_task_id="task-1",
-        completed_task_ids=["task-0"],
         review_verdicts=[
             ReviewVerdict(
                 phase="DRAFT_QA_REVIEW",
@@ -465,7 +462,6 @@ def test_recovery_files_mark_stale_subagents_and_requeue_tasks(tmp_path: Path) -
         status="recovering",
         active_plan_file="plan/workflow_plan.md",
         current_task_id="task-2",
-        completed_task_ids=["task-1"],
         review_verdicts=[],
         active_subagents=[
             SubagentRecord(
@@ -540,7 +536,6 @@ def test_missing_plan_reference_raises_explicit_value_error(tmp_path: Path) -> N
         status="idle",
         active_plan_file="plan/workflow_plan.md",
         current_task_id=None,
-        completed_task_ids=[],
         review_verdicts=[],
         active_subagents=[],
         memory_refs=[],
@@ -1008,7 +1003,6 @@ def test_context_assembly_returns_bounded_packet(tmp_path: Path) -> None:
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
-    state.completed_task_ids = ["task-001"]
     state.tasks = [
         TaskRecord(
             task_id="task-001",
@@ -1048,7 +1042,6 @@ def test_context_assembly_excludes_unrelated_tasks(tmp_path: Path) -> None:
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
-    state.completed_task_ids = ["task-001"]
     unrelated_task = TaskRecord(
         task_id="task-999",
         title="Unrelated task",
@@ -3366,7 +3359,6 @@ async def test_plan_resume_handler_restores_state_from_disk(tmp_path: Path) -> N
         status="blocked",
         active_plan_file="plan/workflow_plan.md",
         current_task_id="task-001",
-        completed_task_ids=[],
         review_verdicts=[],
         active_subagents=[],
         memory_refs=[],
@@ -3462,7 +3454,6 @@ async def test_plan_resume_handler_marks_stale_subagents(tmp_path: Path) -> None
         status="active",
         active_plan_file="plan/workflow_plan.md",
         current_task_id="task-001",
-        completed_task_ids=[],
         review_verdicts=[],
         active_subagents=[
             SubagentRecord(
@@ -3528,7 +3519,6 @@ async def test_plan_resume_handler_updates_scratchbook_prompt_config(
         status="active",
         active_plan_file="plan/workflow_plan.md",
         current_task_id=None,
-        completed_task_ids=[],
         review_verdicts=[],
         active_subagents=[],
         memory_refs=[],
@@ -3581,7 +3571,6 @@ def test_read_state_planning_phase_does_not_require_workflow_plan(
             status="active",
             active_plan_file="plan/workflow_plan.md",
             current_task_id=None,
-            completed_task_ids=[],
             review_verdicts=[],
             active_subagents=[],
             memory_refs=[],
@@ -3615,7 +3604,6 @@ def test_read_state_task_execution_phase_requires_active_plan_file(
         status="blocked",
         active_plan_file="plan/workflow_plan.md",
         current_task_id="task-001",
-        completed_task_ids=[],
         review_verdicts=[],
         active_subagents=[],
         memory_refs=[],
@@ -3656,7 +3644,6 @@ async def test_plan_resume_handler_restores_planning_phase(tmp_path: Path) -> No
         status="active",
         active_plan_file="plan/workflow_plan.md",
         current_task_id=None,
-        completed_task_ids=[],
         review_verdicts=[],
         active_subagents=[],
         memory_refs=[],
@@ -3704,7 +3691,6 @@ async def test_require_plan_artifact_skipped_for_planning_phases(tmp_path: Path)
             status="active",
             active_plan_file="plan/workflow_plan.md",
             current_task_id=None,
-            completed_task_ids=[],
             review_verdicts=[],
             active_subagents=[],
             memory_refs=[],
@@ -4266,7 +4252,6 @@ def _make_state_at_phase(phase: str) -> RuntimeState:
         status="active",
         active_plan_file="plan/workflow_plan.md",
         current_task_id=None,
-        completed_task_ids=[],
         review_verdicts=[],
         active_subagents=[],
         memory_refs=[],
@@ -5880,7 +5865,9 @@ async def test_reinit_carries_completed_tasks_forward(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "TASK_BLOCKED"
-    state.completed_task_ids = ["task-001"]
+    state.tasks = [
+        TaskRecord(task_id="task-001", title="Prior run", status="completed")
+    ]
     state.review_verdicts = _make_approved_verdicts()
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
     adapter.write_state(state)
@@ -5904,7 +5891,11 @@ async def test_reinit_ignores_orphaned_completed_ids(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "TASK_BLOCKED"
-    state.completed_task_ids = ["task-removed-by-replan"]
+    state.tasks = [
+        TaskRecord(
+            task_id="task-removed-by-replan", title="Old task", status="completed"
+        )
+    ]
     state.review_verdicts = _make_approved_verdicts()
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
     adapter.write_state(state)
@@ -5926,7 +5917,10 @@ async def test_reinit_with_all_tasks_completed_finishes_workflow(
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "TASK_BLOCKED"
-    state.completed_task_ids = ["task-001", "task-002"]
+    state.tasks = [
+        TaskRecord(task_id="task-001", title="Prior run", status="completed"),
+        TaskRecord(task_id="task-002", title="Prior run", status="completed"),
+    ]
     state.review_verdicts = _make_approved_verdicts()
     adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
     adapter.write_state(state)
@@ -5959,3 +5953,29 @@ async def test_fresh_init_still_starts_at_first_task(tmp_path: Path) -> None:
     assert all(t.status == "pending" for t in updated.tasks)
     assert updated.current_task_id == "task-001"
     assert updated.phase == "TASK_RUNNING"
+
+
+# --- Derived completed_task_ids (state-simplification Task 9) ---------------
+
+
+def test_completed_task_ids_is_derived_from_task_status() -> None:
+    state = _make_runtime_state()
+    state.tasks = [
+        TaskRecord(task_id="task-001", title="Done", status="completed"),
+        TaskRecord(task_id="task-002", title="Pending", status="pending"),
+    ]
+    assert state.completed_task_ids == ["task-001"]
+    payload = state.to_dict()
+    assert payload["completed_task_ids"] == ["task-001"]
+
+
+def test_from_dict_migrates_legacy_completed_ids_onto_tasks() -> None:
+    # A pre-carry-forward runtime_state.json could hold the completion truth
+    # only in the ledger while tasks[] had been rebuilt all-pending.
+    state = _make_runtime_state()
+    state.tasks = [TaskRecord(task_id="task-001", title="Stomped", status="pending")]
+    payload = state.to_dict()
+    payload["completed_task_ids"] = ["task-001"]
+    loaded = RuntimeState.from_dict(payload)
+    assert loaded.tasks[0].status == "completed"
+    assert loaded.completed_task_ids == ["task-001"]

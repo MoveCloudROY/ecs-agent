@@ -114,7 +114,6 @@ class PlanController:
             ),
             active_plan_file="plan/workflow_plan.md",
             current_task_id=None,
-            completed_task_ids=[],
             review_verdicts=[],
             active_subagents=[],
             memory_refs=[],

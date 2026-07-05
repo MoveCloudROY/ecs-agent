@@ -257,8 +257,6 @@ class TaskExec:
         timestamp = self._utcnow_isoformat()
         task.status = "completed"
         task.last_error = None
-        if task_id not in state.completed_task_ids:
-            state.completed_task_ids.append(task_id)
 
         for record in state.active_subagents:
             if record.task_id == task_id and record.status in {"queued", "running"}:
