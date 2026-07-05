@@ -16,7 +16,7 @@ from examples.e2e.plan_and_task.phase_graph import (
     PLAN_TASK_PHASE_GRAPH,
     REVIEW_VERDICTS,
 )
-from examples.e2e.plan_and_task.phase_sync import mirror_phase
+from examples.e2e.plan_and_task.phase_sync import derive_status, mirror_phase
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
 )
@@ -109,7 +109,9 @@ class PlanController:
         state = RuntimeState(
             workflow_id=adapter.workflow_id,
             phase="DRAFT_INTERVIEW",
-            status="active",
+            status=derive_status(
+                "DRAFT_INTERVIEW", abort_reason=None, review_verdicts=[]
+            ),
             active_plan_file="plan/workflow_plan.md",
             current_task_id=None,
             completed_task_ids=[],
@@ -163,7 +165,6 @@ class PlanController:
             await self._advance(
                 state, _FINALIZE_HOPS[state.phase], reason="plan:finalize"
             )
-        state.status = "ready"
         state.updated_at = timestamp
         adapter.write_state(state)
         logger.info(
@@ -395,9 +396,10 @@ class PlanController:
         self._require_plan_artifact(adapter, state)
 
         timestamp = self._utcnow_isoformat()
-        await self._advance(state, "TASK_ABORTED", reason=f"task:abort:{reason[:80]}")
-        state.status = "aborted"
+        # abort_reason must be set BEFORE the transition: the mirror inside
+        # _advance derives status, and "aborted" requires the reason present.
         state.abort_reason = reason
+        await self._advance(state, "TASK_ABORTED", reason=f"task:abort:{reason[:80]}")
         state.last_checkpoint = reason
         state.updated_at = timestamp
         self._append_task_event(
@@ -442,10 +444,8 @@ class PlanController:
         if scope_changed:
             state.review_verdicts = []
             await self._advance(state, "DRAFT_ADVISOR_REVIEW", reason="replan:scope_changed")
-            state.status = "needs_review"
         else:
             await self._advance(state, "TASK_RUNNING", reason="replan:same_scope")
-            state.status = "active"
 
         state.updated_at = timestamp
         adapter.write_state(state)
@@ -471,7 +471,6 @@ class PlanController:
         self._require_plan_artifact(adapter, state)
         timestamp = self._utcnow_isoformat()
         await self._advance(state, "TASK_RUNNING", reason="task:resume")
-        state.status = "active"
         state.abort_reason = None
         state.updated_at = timestamp
         self._append_task_event(

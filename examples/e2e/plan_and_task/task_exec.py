@@ -202,7 +202,6 @@ class TaskExec:
         task.status = "running"
         task.last_error = None
         state.current_task_id = task_id
-        state.status = "active"
         state.active_subagents.append(
             SubagentRecord(
                 session_id=session_id,

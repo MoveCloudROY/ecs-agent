@@ -363,11 +363,10 @@ async def build_plan_task_world(
         await bind_phase_graph(w, eid, PLAN_TASK_PHASE_GRAPH, agent_key="main")
         component = w.get_component(eid, PhaseComponent)
         demoted = component is not None and component.phase != state.phase
-        # Mirror unconditionally: re-stamps the current phase and graph hash
-        # into the state before it is persisted below.
+        # Mirror unconditionally: re-stamps the current phase, graph hash, and
+        # derived status into the state before it is persisted below.
         mirror_phase(w, eid, state)
         if demoted:
-            state.status = "blocked"
             logger.info(
                 "plan_task_restart_blocked",
                 workflow_id=state.workflow_id,

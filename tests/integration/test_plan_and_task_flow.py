@@ -4685,7 +4685,7 @@ async def test_handle_qa_review_approved_sets_status_active(tmp_path: Path) -> N
     assert updated.status == "active"
 
 
-async def test_phase_mirror_transition_sets_status_active(tmp_path: Path) -> None:
+async def test_phase_mirror_transition_derives_status(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import PlanController
 
     state = _make_runtime_state()
@@ -4694,7 +4694,14 @@ async def test_phase_mirror_transition_sets_status_active(tmp_path: Path) -> Non
     world, eid = await _bound_world_at(state.phase)
     controller = PlanController(world, eid)
 
+    # A gate phase entered with an empty ledger is awaiting its review.
     await controller._advance(state, "DRAFT_ADVISOR_REVIEW", reason="test")
+    assert state.status == "needs_review"
+
+    state.review_verdicts = [
+        ReviewVerdict(phase="DRAFT_ADVISOR_REVIEW", verdict="revise", decided_at="t")
+    ]
+    await controller._advance(state, "DRAFT_INTERVIEW", reason="test")
     assert state.status == "active"
 
 
@@ -5686,3 +5693,107 @@ def test_finalize_walk_rejects_gate_off_the_happy_path() -> None:
     )
     with pytest.raises(AssertionError, match="off the finalize walk"):
         _derive_finalize_hops(variant)
+
+
+# --- Derived status (state-simplification Task 4) ---------------------------
+
+
+def test_derive_status_is_a_pure_function_of_phase_and_domain_fields() -> None:
+    from examples.e2e.plan_and_task.phase_sync import derive_status
+
+    assert derive_status("IDLE", abort_reason=None, review_verdicts=[]) == "active"
+    assert (
+        derive_status("TASK_COMPLETED", abort_reason=None, review_verdicts=[])
+        == "completed"
+    )
+    assert (
+        derive_status("TASK_ABORTED", abort_reason="user stop", review_verdicts=[])
+        == "aborted"
+    )
+    assert derive_status("TASK_READY", abort_reason=None, review_verdicts=[]) == "ready"
+    assert (
+        derive_status("TASK_BLOCKED", abort_reason=None, review_verdicts=[])
+        == "blocked"
+    )
+    assert (
+        derive_status("DRAFT_QA_REVIEW", abort_reason=None, review_verdicts=[])
+        == "needs_review"
+    )
+    verdicts = [
+        ReviewVerdict(phase="DRAFT_QA_REVIEW", verdict="revise", decided_at="t")
+    ]
+    assert (
+        derive_status("DRAFT_QA_REVIEW", abort_reason=None, review_verdicts=verdicts)
+        == "active"
+    )
+
+
+async def _resume_and_read_status(
+    tmp_path: Path, state: "RuntimeState"
+) -> tuple[str, str]:
+    """Drive /plan:resume through the production handler; return (live, persisted) status."""
+    from ecs_agent.components import ConversationComponent, UserPromptConfigComponent
+    from ecs_agent.types import Message
+
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
+    state.workflow_id = adapter.workflow_id
+    (adapter.plan_dir / "workflow_plan.md").write_text("# Plan\n", encoding="utf-8")
+    adapter.write_draft("# Draft\n")
+    adapter.write_state(state)
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+    handler_key = next(
+        t.content for t in config.triggers if t.pattern == "/plan:resume"
+    )
+    handler = config.script_handlers[handler_key]
+    conversation = world.get_component(agent_id, ConversationComponent)
+    assert conversation is not None
+    user_text = f"/plan:resume {state.workflow_id}"
+    conversation.messages.append(Message(role="user", content=user_text))
+
+    result = await handler(world, agent_id, user_text)
+    assert result is not None
+    loaded = runtime_state[0]
+    assert loaded is not None
+    return loaded.status, adapter.read_state().status
+
+
+async def test_resume_preserves_ready_status(tmp_path: Path) -> None:
+    state = _make_state_at_phase("TASK_READY")
+    state.status = "ready"
+    live, persisted = await _resume_and_read_status(tmp_path, state)
+    assert live == "ready"
+    assert persisted == "ready"
+
+
+async def test_resume_preserves_aborted_status_with_abort_reason(
+    tmp_path: Path,
+) -> None:
+    state = _make_state_at_phase("TASK_ABORTED")
+    state.status = "aborted"
+    state.abort_reason = "user requested stop"
+    live, persisted = await _resume_and_read_status(tmp_path, state)
+    assert live == "aborted"
+    assert persisted == "aborted"
+
+
+async def test_resume_preserves_needs_review_status(tmp_path: Path) -> None:
+    # Scope-changed replan lands in DRAFT_ADVISOR_REVIEW with a cleared ledger.
+    state = _make_state_at_phase("DRAFT_ADVISOR_REVIEW")
+    state.status = "needs_review"
+    live, persisted = await _resume_and_read_status(tmp_path, state)
+    assert live == "needs_review"
+    assert persisted == "needs_review"
+
+
+async def test_second_resume_of_blocked_workflow_stays_blocked(
+    tmp_path: Path,
+) -> None:
+    # A persisted TASK_BLOCKED state is NOT demoted again on re-bind, so the
+    # old demotion override never fired and the status was stomped to active.
+    state = _make_state_at_phase("TASK_BLOCKED")
+    state.status = "blocked"
+    live, persisted = await _resume_and_read_status(tmp_path, state)
+    assert live == "blocked"
+    assert persisted == "blocked"
