@@ -9,7 +9,7 @@ from typing import Any
 from ecs_agent.components import PhaseComponent
 from ecs_agent.core import World
 from ecs_agent.logging import get_logger
-from ecs_agent.phases import advance, force, record_approval
+from ecs_agent.phases import PhaseGraph, advance, force, record_approval
 from ecs_agent.types import EntityId
 
 from examples.e2e.plan_and_task.phase_graph import (
@@ -28,20 +28,34 @@ from examples.e2e.plan_and_task.state_models import (
 
 logger = get_logger(__name__)
 
-_FINALIZE_HOPS: dict[str, str] = {
-    "DRAFT_INTERVIEW": "DRAFT_ADVISOR_REVIEW",
-    "DRAFT_ADVISOR_REVIEW": "DRAFT_QA_REVIEW",
-    "DRAFT_QA_REVIEW": "WRITE_PLAN",
-    "WRITE_PLAN": "PLAN_QA_REVIEW",
-    "PLAN_QA_REVIEW": "PLAN_FINALIZED",
-    "PLAN_FINALIZED": "TASK_READY",
-}
+def _derive_finalize_hops(graph: PhaseGraph) -> dict[str, str]:
+    """Happy-path walk from the first planning phase to TASK_READY.
 
-for _hop_from, _hop_to in _FINALIZE_HOPS.items():
-    if _hop_to not in PLAN_TASK_PHASE_GRAPH.phases_by_id[_hop_from].to:
+    Each hop follows the phase's approved gate target when one exists,
+    otherwise the first entry of `to` (the graph's forward-edge convention).
+    TASK_READY is the finalize destination — a domain constant, not routing.
+    """
+    hops: dict[str, str] = {}
+    phase = graph.phases_by_id[graph.initial].to[0]
+    for _ in range(len(graph.phases_by_id)):
+        if phase == "TASK_READY":
+            break
+        spec = graph.phases_by_id[phase]
+        approved = spec.approval.verdicts.get("approved") if spec.approval else None
+        hops[phase] = approved or spec.to[0]
+        phase = hops[phase]
+    else:
+        raise AssertionError("finalize walk did not reach TASK_READY")
+    gated = {p for p, s in graph.phases_by_id.items() if s.approval is not None}
+    if not gated <= hops.keys():
         raise AssertionError(
-            f"_FINALIZE_HOPS drifted from PLAN_TASK_PHASE_GRAPH: {_hop_from} -> {_hop_to}"
+            "approval-gated phases off the finalize walk: "
+            f"{sorted(gated - hops.keys())}"
         )
+    return hops
+
+
+_FINALIZE_HOPS: dict[str, str] = _derive_finalize_hops(PLAN_TASK_PHASE_GRAPH)
 
 
 class ResumeAction(Enum):
@@ -70,7 +84,11 @@ class PlanController:
 
     def current_phase(self) -> str:
         component = self._world.get_component(self._entity_id, PhaseComponent)
-        return component.phase if component is not None else "IDLE"
+        return (
+            component.phase
+            if component is not None
+            else PLAN_TASK_PHASE_GRAPH.initial
+        )
 
     # -- handlers ------------------------------------------------------------
 

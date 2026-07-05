@@ -19,6 +19,8 @@ _TASK = {"main": TASK_MAIN_AGENT_SYSTEM_PROMPT}
 # approval advances to PLAN_FINALIZED; revise/blocked always stay put.
 _STAY: dict[str, str | None] = {"approved": None, "revise": None, "blocked": None}
 
+# Convention: the first entry of each phase's `to` tuple is its forward/happy
+# edge — the finalize walk in controller.py derives its routing from this.
 PLAN_TASK_PHASE_GRAPH = build_graph(
     "plan-task",
     initial="IDLE",

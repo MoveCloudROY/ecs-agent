@@ -5642,3 +5642,47 @@ def test_missing_approvals_fold_matches_gate_set() -> None:
     ]
     assert missing_approvals(verdicts) == ["DRAFT_QA_REVIEW", "PLAN_QA_REVIEW"]
     assert missing_approvals([]) == list(REQUIRED_REVIEW_PHASES)
+
+
+# --- Graph-derived finalize walk (state-simplification Task 2) --------------
+
+
+def test_finalize_hops_derived_from_graph_match_legacy_routing() -> None:
+    from examples.e2e.plan_and_task.controller import _FINALIZE_HOPS
+
+    assert _FINALIZE_HOPS == {
+        "DRAFT_INTERVIEW": "DRAFT_ADVISOR_REVIEW",
+        "DRAFT_ADVISOR_REVIEW": "DRAFT_QA_REVIEW",
+        "DRAFT_QA_REVIEW": "WRITE_PLAN",
+        "WRITE_PLAN": "PLAN_QA_REVIEW",
+        "PLAN_QA_REVIEW": "PLAN_FINALIZED",
+        "PLAN_FINALIZED": "TASK_READY",
+    }
+
+
+def test_finalize_walk_rejects_gate_off_the_happy_path() -> None:
+    from ecs_agent.phases import ApprovalGate, PhaseSpec, build_graph
+    from examples.e2e.plan_and_task.controller import _derive_finalize_hops
+
+    variant = build_graph(
+        "variant",
+        initial="START",
+        phases=[
+            PhaseSpec(phase_id="START", prompts={"main": "p"}, to=("A", "B")),
+            PhaseSpec(
+                phase_id="A",
+                prompts={"main": "p"},
+                to=("TASK_READY",),
+                approval=ApprovalGate(verdicts={"approved": "TASK_READY"}),
+            ),
+            PhaseSpec(
+                phase_id="B",
+                prompts={"main": "p"},
+                to=("TASK_READY",),
+                approval=ApprovalGate(verdicts={"approved": "TASK_READY"}),
+            ),
+            PhaseSpec(phase_id="TASK_READY", prompts={"main": "p"}, terminal=True),
+        ],
+    )
+    with pytest.raises(AssertionError, match="off the finalize walk"):
+        _derive_finalize_hops(variant)
