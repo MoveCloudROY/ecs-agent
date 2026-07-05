@@ -70,7 +70,10 @@ from examples.e2e.plan_and_task.scratchbook_adapter import (
     build_scratchbook_prompt_config,
 )
 from examples.e2e.plan_and_task.controller import PlanController, ResumeAction
-from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
+from examples.e2e.plan_and_task.phase_graph import (
+    PLAN_TASK_PHASE_GRAPH,
+    REVIEW_VERDICTS,
+)
 from examples.e2e.plan_and_task.phase_sync import mirror_phase
 from examples.e2e.plan_and_task.prompts import (
     ADVISOR_SYSTEM_PROMPT,
@@ -91,7 +94,9 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_VERDICT_PATTERN = _re.compile(r"\b(approved|revise|blocked)\b", _re.IGNORECASE)
+_VERDICT_PATTERN = _re.compile(
+    r"\b(" + "|".join(REVIEW_VERDICTS) + r")\b", _re.IGNORECASE
+)
 
 _WORKFLOW_BASE_DIR = Path(__file__).parent
 _SKILLS_DIR = Path(__file__).parent / ".claude" / "skills"
@@ -790,8 +795,11 @@ async def build_plan_task_world(
         parts = user_text.strip().split(None, 2)
         verdict = parts[1].strip() if len(parts) > 1 else ""
         notes = parts[2].strip() if len(parts) > 2 else None
-        if verdict not in {"approved", "revise", "blocked"}:
-            return "Error: /plan:qa_review requires verdict: approved | revise | blocked"
+        if verdict not in REVIEW_VERDICTS:
+            return (
+                "Error: /plan:qa_review requires verdict: "
+                + " | ".join(REVIEW_VERDICTS)
+            )
         try:
             runtime_state[0] = await controller.handle_plan_qa_review(
                 _require_state(runtime_state[0]),

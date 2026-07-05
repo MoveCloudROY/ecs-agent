@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ecs_agent.phases import ApprovalGate, PhaseSpec, build_graph
+from ecs_agent.phases import ApprovalGate, PhaseGraph, PhaseSpec, build_graph
 
 from examples.e2e.plan_and_task.prompts import (
     IDLE_MAIN_AGENT_SYSTEM_PROMPT,
@@ -74,3 +74,32 @@ PLAN_TASK_PHASE_GRAPH = build_graph(
         PhaseSpec(phase_id="TASK_ABORTED", prompts=_TASK, terminal=True),
     ],
 )
+
+
+def derive_required_review_phases(graph: PhaseGraph) -> tuple[str, ...]:
+    """Phases that declare an ApprovalGate, in graph declaration order."""
+    return tuple(
+        phase_id
+        for phase_id, spec in graph.phases_by_id.items()
+        if spec.approval is not None
+    )
+
+
+def derive_review_verdicts(graph: PhaseGraph) -> tuple[str, ...]:
+    """Gate verdict vocabulary in first-seen declaration order."""
+    return tuple(
+        dict.fromkeys(
+            verdict
+            for spec in graph.phases_by_id.values()
+            if spec.approval is not None
+            for verdict in spec.approval.verdicts
+        )
+    )
+
+
+# The gates are the single authority for which phases require review and which
+# verdict strings exist; every consumer derives from these instead of restating.
+REQUIRED_REVIEW_PHASES: tuple[str, ...] = derive_required_review_phases(
+    PLAN_TASK_PHASE_GRAPH
+)
+REVIEW_VERDICTS: tuple[str, ...] = derive_review_verdicts(PLAN_TASK_PHASE_GRAPH)

@@ -12,12 +12,19 @@ from ecs_agent.logging import get_logger
 from ecs_agent.phases import advance, force, record_approval
 from ecs_agent.types import EntityId
 
-from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
+from examples.e2e.plan_and_task.phase_graph import (
+    PLAN_TASK_PHASE_GRAPH,
+    REVIEW_VERDICTS,
+)
 from examples.e2e.plan_and_task.phase_sync import mirror_phase
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
 )
-from examples.e2e.plan_and_task.state_models import RuntimeState, ReviewVerdict
+from examples.e2e.plan_and_task.state_models import (
+    RuntimeState,
+    ReviewVerdict,
+    missing_approvals,
+)
 
 logger = get_logger(__name__)
 
@@ -258,7 +265,7 @@ class PlanController:
             ValueError: invalid verdict string, or review_phase unreachable
                 from the current phase.
         """
-        if verdict_str not in {"approved", "revise", "blocked"}:
+        if verdict_str not in REVIEW_VERDICTS:
             raise ValueError(f"Invalid verdict: {verdict_str!r}")
         allowed = PLAN_TASK_PHASE_GRAPH.phases_by_id[state.phase].to
         if state.phase != review_phase and review_phase not in allowed:
@@ -466,13 +473,7 @@ class PlanController:
         return state
 
     def _missing_approved_reviews(self, verdicts: list[ReviewVerdict]) -> list[str]:
-        verdicts_by_phase = {verdict.phase: verdict.verdict for verdict in verdicts}
-        required_phases = ("DRAFT_ADVISOR_REVIEW", "DRAFT_QA_REVIEW", "PLAN_QA_REVIEW")
-        return [
-            phase
-            for phase in required_phases
-            if verdicts_by_phase.get(phase) != "approved"
-        ]
+        return missing_approvals(verdicts)
 
     def _build_draft_markdown(
         self, *, description: str, workflow_id: str, timestamp: str

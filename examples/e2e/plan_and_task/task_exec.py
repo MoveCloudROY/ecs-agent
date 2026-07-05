@@ -30,6 +30,7 @@ from examples.e2e.plan_and_task.state_models import (
     RuntimeState,
     SubagentRecord,
     TaskRecord,
+    missing_approvals,
 )
 
 logger = get_logger(__name__)
@@ -322,15 +323,7 @@ class TaskExec:
         return self.check_circuit_breaker(state, task_id, max_retries=max_retries)
 
     def _require_approved_reviews(self) -> None:
-        verdicts_by_phase = {
-            verdict.phase: verdict.verdict for verdict in self.state.review_verdicts
-        }
-        required_phases = ("DRAFT_ADVISOR_REVIEW", "DRAFT_QA_REVIEW", "PLAN_QA_REVIEW")
-        missing = [
-            phase
-            for phase in required_phases
-            if verdicts_by_phase.get(phase) != "approved"
-        ]
+        missing = missing_approvals(self.state.review_verdicts)
         if missing:
             formatted = ", ".join(missing)
             logger.warning(

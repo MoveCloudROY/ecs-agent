@@ -6,13 +6,17 @@ from typing import Any
 
 from ecs_agent.logging import get_logger
 
-from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
+from examples.e2e.plan_and_task.phase_graph import (
+    PLAN_TASK_PHASE_GRAPH,
+    REQUIRED_REVIEW_PHASES,
+    REVIEW_VERDICTS,
+)
 
 logger = get_logger(__name__)
 
 _PHASE_VALUES = frozenset(PLAN_TASK_PHASE_GRAPH.phases_by_id)
 _SUBAGENT_STATUS_VALUES = {"queued", "running", "succeeded", "failed", "stale"}
-_REVIEW_VERDICT_VALUES = {"approved", "revise", "blocked"}
+_REVIEW_VERDICT_VALUES = frozenset(REVIEW_VERDICTS)
 
 
 def _require_non_empty(value: str, *, field_name: str) -> None:
@@ -54,6 +58,16 @@ class ReviewVerdict:
         if self.verdict not in _REVIEW_VERDICT_VALUES:
             raise ValueError(f"Invalid review verdict: {self.verdict}")
         _require_non_empty(self.decided_at, field_name="decided_at")
+
+
+def missing_approvals(verdicts: list["ReviewVerdict"]) -> list[str]:
+    """Required-review phases (from the graph's gates) lacking an approved verdict."""
+    by_phase = {verdict.phase: verdict.verdict for verdict in verdicts}
+    return [
+        phase
+        for phase in REQUIRED_REVIEW_PHASES
+        if by_phase.get(phase) != "approved"
+    ]
 
 
 @dataclass(slots=True)

@@ -5586,3 +5586,59 @@ async def test_load_with_stale_graph_hash_updates_state_to_current_hash(
     assert runtime_state[0].graph_hash == PLAN_TASK_PHASE_GRAPH.structure_hash
     persisted = adapter.read_state()
     assert persisted.graph_hash == PLAN_TASK_PHASE_GRAPH.structure_hash
+
+
+# --- Gate-derived review vocabulary (state-simplification Task 1) -----------
+
+
+def test_required_review_phases_and_verdicts_derived_from_gates() -> None:
+    from examples.e2e.plan_and_task.phase_graph import (
+        REQUIRED_REVIEW_PHASES,
+        REVIEW_VERDICTS,
+    )
+
+    assert REQUIRED_REVIEW_PHASES == (
+        "DRAFT_ADVISOR_REVIEW",
+        "DRAFT_QA_REVIEW",
+        "PLAN_QA_REVIEW",
+    )
+    assert REVIEW_VERDICTS == ("approved", "revise", "blocked")
+
+
+def test_gate_derivations_track_added_gates() -> None:
+    from ecs_agent.phases import ApprovalGate, PhaseSpec, build_graph
+    from examples.e2e.plan_and_task.phase_graph import (
+        derive_required_review_phases,
+        derive_review_verdicts,
+    )
+
+    variant = build_graph(
+        "variant",
+        initial="A",
+        phases=[
+            PhaseSpec(phase_id="A", prompts={"main": "p"}, to=("B",)),
+            PhaseSpec(
+                phase_id="B",
+                prompts={"main": "p"},
+                to=("C",),
+                approval=ApprovalGate(verdicts={"ship": "C", "hold": None}),
+            ),
+            PhaseSpec(phase_id="C", prompts={"main": "p"}, terminal=True),
+        ],
+    )
+    assert derive_required_review_phases(variant) == ("B",)
+    assert derive_review_verdicts(variant) == ("ship", "hold")
+
+
+def test_missing_approvals_fold_matches_gate_set() -> None:
+    from examples.e2e.plan_and_task.phase_graph import REQUIRED_REVIEW_PHASES
+    from examples.e2e.plan_and_task.state_models import missing_approvals
+
+    verdicts = [
+        ReviewVerdict(
+            phase="DRAFT_ADVISOR_REVIEW", verdict="approved", decided_at="t"
+        ),
+        ReviewVerdict(phase="DRAFT_QA_REVIEW", verdict="revise", decided_at="t"),
+    ]
+    assert missing_approvals(verdicts) == ["DRAFT_QA_REVIEW", "PLAN_QA_REVIEW"]
+    assert missing_approvals([]) == list(REQUIRED_REVIEW_PHASES)
