@@ -349,7 +349,7 @@ to decide the next concrete action. Do not jump ahead to future tasks unless a r
 
 ## Execution Rules
 
-1. Read `workflow_plan.md`, `task_queue.json` and any relevant scratchbook artifacts before taking action.
+1. Read `workflow_plan.md`, `state/runtime_state.json` (its `tasks` field is the live task queue) and any relevant scratchbook artifacts before taking action.
 2. Execute only the active task identified by the runtime state.
 3. Keep outputs concrete: commands run, files changed, evidence produced, and blockers encountered.
 4. If the task is blocked, clearly state what is blocking progress and what unblocks it.

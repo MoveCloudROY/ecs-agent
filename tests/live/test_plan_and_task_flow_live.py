@@ -162,7 +162,8 @@ async def test_live_task_exec_loads_finalized_plan(
     next_state = await task_exec.initialize_task_queue(state, adapter)
     assert next_state.phase == "TASK_RUNNING"
     assert next_state.current_task_id == "task-001"
-    assert (adapter.state_dir / "task_queue.json").exists()
+    persisted = adapter.read_state()
+    assert persisted.tasks and persisted.tasks[0].task_id == "task-001"
 
     # Use live model to generate task output — proves LLM API is reachable
     result = await live_model.complete(

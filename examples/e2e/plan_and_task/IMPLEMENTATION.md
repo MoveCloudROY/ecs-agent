@@ -44,7 +44,7 @@
 
 The system uses a canonical directory structure under `scratchbook/<workflow_id>/`:
 - `plan/`: Drafts and finalized plans.
-- `state/`: Runtime state, event logs, and task queues.
+- `state/`: Runtime state (including the task queue in its `tasks` field) and event logs.
 - `memory/`: Shared knowledge across tasks.
 - `review/`: Structured review verdicts.
 

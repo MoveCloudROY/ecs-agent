@@ -1006,7 +1006,7 @@ async def test_task_queue_persisted_to_state(tmp_path: Path) -> None:
     assert updated_state.phase == "TASK_RUNNING"
     assert persisted_state.tasks == updated_state.tasks
     assert persisted_state.current_task_id == "task-001"
-    assert task_queue_path.is_file()
+    assert not task_queue_path.exists()
 
 
 def test_context_assembly_returns_bounded_packet(tmp_path: Path) -> None:

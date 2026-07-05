@@ -6,7 +6,6 @@ import datetime
 import json
 import os
 import tempfile
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +35,6 @@ from examples.e2e.plan_and_task.state_models import (
 logger = get_logger(__name__)
 
 _PLAN_FILE_NAME = "workflow_plan.md"
-_TASK_QUEUE_FILE_NAME = "task_queue.json"
 _MEMORY_FILE_NAME = "knowledge.jsonl"
 
 
@@ -156,9 +154,6 @@ class TaskExec:
         state.current_task_id = current_task_id
         state = await self._transition_to_running(state)
         adapter.write_state(state)
-        self._write_task_queue_artifact(
-            adapter.state_dir / _TASK_QUEUE_FILE_NAME, queue
-        )
         logger.info(
             "plan_task_task_queue_initialized",
             workflow_id=state.workflow_id,
@@ -334,12 +329,6 @@ class TaskExec:
             raise ValueError(
                 f"Task start requires approved review verdicts for: {formatted}"
             )
-
-    def _write_task_queue_artifact(self, path: Path, queue: list[TaskRecord]) -> None:
-        content = json.dumps(
-            [asdict(task) for task in queue], ensure_ascii=False, indent=2
-        )
-        self._write_text_atomic(path, content + "\n")
 
     def _load_memory_entries(
         self, adapter: ArtifactAdapter, max_entries: int
