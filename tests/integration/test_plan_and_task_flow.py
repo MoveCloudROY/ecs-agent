@@ -1348,6 +1348,8 @@ async def test_advisor_review_creates_verdict_artifact(tmp_path: Path) -> None:
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
+    state.phase = "DRAFT_INTERVIEW"
+    state.status = "active"
     adapter.write_plan("# draft")
     adapter.write_state(state)
     world, eid = await _bound_world_at(state.phase)
@@ -1369,6 +1371,8 @@ async def test_advisor_review_appends_to_state_review_verdicts(tmp_path: Path) -
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
+    state.phase = "DRAFT_INTERVIEW"
+    state.status = "active"
     adapter.write_plan("# draft")
     adapter.write_state(state)
     world, eid = await _bound_world_at(state.phase)
@@ -1389,6 +1393,8 @@ async def test_qa_review_approved_allows_finalization(tmp_path: Path) -> None:
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
+    state.phase = "DRAFT_INTERVIEW"
+    state.status = "active"
     adapter.write_plan("# draft")
     adapter.write_state(state)
     world, eid = await _bound_world_at(state.phase)
@@ -1408,6 +1414,8 @@ async def test_qa_review_revise_blocks_finalization(tmp_path: Path) -> None:
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
+    state.phase = "DRAFT_INTERVIEW"
+    state.status = "active"
     adapter.write_plan("# draft")
     adapter.write_state(state)
     world, eid = await _bound_world_at(state.phase)
@@ -1424,6 +1432,8 @@ async def test_qa_review_blocked_blocks_finalization(tmp_path: Path) -> None:
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
+    state.phase = "DRAFT_INTERVIEW"
+    state.status = "active"
     adapter.write_plan("# draft")
     adapter.write_state(state)
     world, eid = await _bound_world_at(state.phase)
@@ -1440,7 +1450,10 @@ async def test_review_verdicts_persisted_in_state(tmp_path: Path) -> None:
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
+    state.phase = "DRAFT_INTERVIEW"
+    state.status = "active"
     adapter.write_plan("# draft")
+    adapter.write_draft("# draft")
     adapter.write_state(state)
     world, eid = await _bound_world_at(state.phase)
     ctrl = PlanController(world, eid)
@@ -1792,9 +1805,9 @@ async def test_review_verdict_artifact_has_phase_and_verdict(tmp_path: Path) -> 
     world, eid = await _bound_world_at("IDLE")
     controller = PlanController(world, eid)
     state = await controller.handle_plan_start(adapter, "test description")
-    await controller.handle_qa_review(state, adapter, "approved")
-
     await controller.handle_advisor_review(state, adapter, "approved")
+
+    await controller.handle_qa_review(state, adapter, "approved")
 
     verdict_payload = json.loads(
         (adapter.review_dir / "draft_advisor_review_verdict.json").read_text(
@@ -3838,6 +3851,8 @@ async def test_full_plan_flow_all_three_reviews(tmp_path: Path) -> None:
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
+    state.phase = "DRAFT_INTERVIEW"
+    state.status = "active"
     adapter.write_plan("# draft")
     adapter.write_state(state)
     world, eid = await _bound_world_at(state.phase)
@@ -3858,6 +3873,8 @@ async def test_finalize_blocked_without_plan_qa_review(tmp_path: Path) -> None:
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
+    state.phase = "DRAFT_INTERVIEW"
+    state.status = "active"
     adapter.write_plan("# draft")
     adapter.write_state(state)
     world, eid = await _bound_world_at(state.phase)
@@ -5280,3 +5297,95 @@ async def test_task_exec_transition_mirrors_status_active() -> None:
     updated = await task_exec._transition_to_running(state)
     assert updated.phase == "TASK_RUNNING"
     assert updated.status == "active"
+
+
+# ── Review hardening: sticky-before-write + reachability (P1-2, P1-3) ──────────
+
+
+async def test_late_verdict_after_sticky_approval_is_fully_ignored(
+    tmp_path: Path,
+) -> None:
+    """Probe P1-2: a late verdict after sticky approval leaves no trace anywhere.
+
+    State keeps the approved verdict, the persisted review artifact stays
+    "approved", the PhaseApprovalsComponent ledger gains no "blocked" record,
+    and the phase does not change.
+    """
+    from ecs_agent.components import PhaseApprovalsComponent
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="sticky-late-verdict")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "sticky late verdict workflow")
+
+    state = await controller.handle_advisor_review(state, adapter, "approved", notes="LGTM")
+    assert state.phase == "DRAFT_ADVISOR_REVIEW"
+
+    state = await controller.handle_advisor_review(
+        state, adapter, "blocked", notes="stale subagent completion"
+    )
+
+    advisor_verdicts = [
+        v for v in state.review_verdicts if v.phase == "DRAFT_ADVISOR_REVIEW"
+    ]
+    assert len(advisor_verdicts) == 1
+    assert advisor_verdicts[0].verdict == "approved"
+    artifact_payload = json.loads(
+        (adapter.review_dir / "draft_advisor_review_verdict.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert artifact_payload["verdict"] == "approved"
+    ledger = world.get_component(eid, PhaseApprovalsComponent)
+    assert ledger is not None
+    assert [record["verdict"] for record in ledger.records] == ["approved"]
+    assert state.phase == "DRAFT_ADVISOR_REVIEW"
+
+
+async def test_out_of_phase_verdict_is_rejected_without_writes(
+    tmp_path: Path,
+) -> None:
+    """Probe P1-3: a verdict for a non-current, non-adjacent phase is rejected.
+
+    handle_plan_qa_review("approved") while in DRAFT_INTERVIEW raises
+    ValueError and writes nothing: no review artifact, no state verdict,
+    no phase change.
+    """
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="out-of-phase-verdict")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "out of phase verdict workflow")
+    assert state.phase == "DRAFT_INTERVIEW"
+
+    with pytest.raises(ValueError, match="Cannot record PLAN_QA_REVIEW verdict"):
+        await controller.handle_plan_qa_review(state, adapter, "approved")
+
+    assert not (adapter.review_dir / "plan_qa_review_verdict.json").exists()
+    assert state.review_verdicts == []
+    assert state.phase == "DRAFT_INTERVIEW"
+
+
+async def test_replan_scope_change_advisor_review_still_accepted(
+    tmp_path: Path,
+) -> None:
+    """Legit adjacency guard: TASK_REPLAN -> DRAFT_ADVISOR_REVIEW stays accepted.
+
+    The scope-changed replan path records an advisor verdict from TASK_REPLAN
+    (adjacent in the graph) and enters DRAFT_ADVISOR_REVIEW.
+    """
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "TASK_REPLAN"
+    state.status = "active"
+    world, eid = await _bound_world_at(state.phase)
+    controller = PlanController(world, eid)
+
+    result = await controller.handle_advisor_review(
+        state, adapter, "revise", notes="scope changed"
+    )
+
+    assert result.phase == "DRAFT_ADVISOR_REVIEW"
+    assert any(
+        v.phase == "DRAFT_ADVISOR_REVIEW" and v.verdict == "revise"
+        for v in result.review_verdicts
+    )

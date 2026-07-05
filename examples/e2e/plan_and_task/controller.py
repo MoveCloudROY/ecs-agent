@@ -244,11 +244,26 @@ class PlanController:
         evidence_refs: list[str] | None,
         log_event: str,
     ) -> RuntimeState:
-        """Shared review flow: persist verdict artifact, enter the review phase
-        when the graph allows it from the current phase (exactly the legacy
-        `_allowed_transitions` entry behavior), and route via the phase's gate."""
+        """Shared review flow: gate, record, persist, and route a review verdict.
+
+        Order matters: validate the verdict string, reject review phases that
+        are neither current nor adjacent (reachability gate), upsert into the
+        state ledger (sticky approvals win), and only then write the verdict
+        artifact and route via the phase's gate. A verdict discarded by the
+        sticky-approval rule leaves no trace: no artifact write, no approval
+        ledger append, no phase change, no state persist.
+
+        Raises:
+            ValueError: invalid verdict string, or review_phase unreachable
+                from the current phase.
+        """
         if verdict_str not in {"approved", "revise", "blocked"}:
             raise ValueError(f"Invalid verdict: {verdict_str!r}")
+        allowed = PLAN_TASK_PHASE_GRAPH.phases_by_id[state.phase].to
+        if state.phase != review_phase and review_phase not in allowed:
+            raise ValueError(
+                f"Cannot record {review_phase} verdict while in phase {state.phase!r}"
+            )
         timestamp = self._utcnow_isoformat()
         verdict = ReviewVerdict(
             phase=review_phase,
@@ -258,10 +273,17 @@ class PlanController:
             citations=citations or [],
             evidence_refs=evidence_refs or [],
         )
+        applied = state.upsert_verdict(verdict)
+        if not applied:
+            logger.info(
+                "plan_task_review_verdict_ignored",
+                workflow_id=state.workflow_id,
+                phase=review_phase,
+                verdict=verdict_str,
+            )
+            return state
         adapter.write_review_verdict(review_phase, verdict)
-        state.upsert_verdict(verdict)
 
-        allowed = PLAN_TASK_PHASE_GRAPH.phases_by_id[state.phase].to
         if state.phase != review_phase and review_phase in allowed:
             await self._advance(state, review_phase, reason=f"verdict:{review_phase}")
         if state.phase == review_phase:

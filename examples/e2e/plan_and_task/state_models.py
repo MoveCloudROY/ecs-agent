@@ -113,16 +113,26 @@ class RuntimeState:
             if budget < 0:
                 raise ValueError("retry_budget values must be >= 0")
 
-    def upsert_verdict(self, verdict: "ReviewVerdict") -> None:
+    def upsert_verdict(self, verdict: "ReviewVerdict") -> bool:
+        """Insert or replace the verdict for its phase; approvals are sticky.
+
+        Approved verdicts have their notes cleared before storage.
+
+        Returns:
+            True when the verdict was appended or replaced the phase's existing
+            verdict; False when an existing approved verdict for the same phase
+            was retained (sticky) and the incoming verdict was discarded.
+        """
         if verdict.verdict == "approved":
             object.__setattr__(verdict, "notes", None)
         for i, existing in enumerate(self.review_verdicts):
             if existing.phase == verdict.phase:
                 if existing.verdict == "approved":
-                    return
+                    return False
                 self.review_verdicts[i] = verdict
-                return
+                return True
         self.review_verdicts.append(verdict)
+        return True
 
     def to_dict(self) -> dict[str, Any]:
         """Convert the runtime state to a dictionary representation."""
