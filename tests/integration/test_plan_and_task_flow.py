@@ -5963,3 +5963,118 @@ def test_from_dict_migrates_legacy_completed_ids_onto_tasks() -> None:
     loaded = RuntimeState.from_dict(payload)
     assert loaded.tasks[0].status == "completed"
     assert loaded.completed_task_ids == ["task-001"]
+
+
+# --- PhaseChangedEvent journal (framework-extensions Task B) ----------------
+
+
+def _read_journal(adapter: ArtifactAdapter) -> list[dict[str, object]]:
+    path = adapter.state_dir / "events.jsonl"
+    if not path.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+async def _resume_via_handler(world, agent_id, workflow_id: str) -> None:
+    from ecs_agent.components import ConversationComponent, UserPromptConfigComponent
+    from ecs_agent.types import Message
+
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+    handler_key = next(
+        t.content for t in config.triggers if t.pattern == "/plan:resume"
+    )
+    handler = config.script_handlers[handler_key]
+    conv = world.get_component(agent_id, ConversationComponent)
+    assert conv is not None
+    user_text = f"/plan:resume {workflow_id}"
+    conv.messages.append(Message(role="user", content=user_text))
+    result = await handler(world, agent_id, user_text)
+    assert result is not None
+
+
+def _persist_workflow(base_dir: Path, workflow_id: str, phase: str) -> ArtifactAdapter:
+    adapter = ArtifactAdapter(base_dir=base_dir, workflow_id=workflow_id)
+    state = _make_state_at_phase(phase)
+    state.workflow_id = workflow_id
+    adapter.write_draft("# Draft\n")
+    adapter.write_plan("# Plan\n")
+    adapter.write_state(state)
+    return adapter
+
+
+async def test_restore_demotion_is_journaled_as_phase_transition(
+    tmp_path: Path,
+) -> None:
+    world, agent_id, _adapter, _runtime_state = await _build_test_world(tmp_path)
+    wf = _persist_workflow(tmp_path, "journal-wf", "TASK_RUNNING")
+
+    await _resume_via_handler(world, agent_id, "journal-wf")
+
+    entries = _read_journal(wf)
+    demotions = [
+        e
+        for e in entries
+        if e["type"] == "phase_transition" and e["reason"] == "on_resume"
+    ]
+    assert len(demotions) == 1
+    assert demotions[0]["from"] == "TASK_RUNNING"
+    assert demotions[0]["to"] == "TASK_BLOCKED"
+    assert demotions[0]["forced"] is True
+    assert demotions[0]["workflow_id"] == "journal-wf"
+
+
+async def test_workflow_switch_journals_restore_to_the_new_workflow(
+    tmp_path: Path,
+) -> None:
+    world, agent_id, _adapter, _runtime_state = await _build_test_world(tmp_path)
+    wf_a = _persist_workflow(tmp_path, "journal-wf-a", "TASK_RUNNING")
+    wf_b = _persist_workflow(tmp_path, "journal-wf-b", "TASK_RUNNING")
+
+    await _resume_via_handler(world, agent_id, "journal-wf-a")
+    await _resume_via_handler(world, agent_id, "journal-wf-b")
+
+    a_entries = _read_journal(wf_a)
+    b_entries = _read_journal(wf_b)
+    assert all(e["workflow_id"] == "journal-wf-a" for e in a_entries)
+    assert any(
+        e["reason"] == "on_resume" and e["workflow_id"] == "journal-wf-b"
+        for e in b_entries
+    )
+
+
+async def test_task_lifecycle_transitions_are_journaled(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    world, agent_id, _adapter, runtime_state = await _build_test_world(tmp_path)
+    wf = _persist_workflow(tmp_path, "journal-wf-life", "TASK_BLOCKED")
+
+    await _resume_via_handler(world, agent_id, "journal-wf-life")
+    loaded = runtime_state[0]
+    assert loaded is not None
+    controller = PlanController(world, agent_id)
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter,
+    )
+
+    live_adapter = PlanTaskScratchbookAdapter(
+        base_dir=tmp_path, workflow_id="journal-wf-life"
+    )
+    await controller.handle_task_resume(loaded, live_adapter)
+    await controller.handle_task_abort(loaded, live_adapter, "operator stop")
+
+    entries = _read_journal(wf)
+    reasons = [e["reason"] for e in entries if e["type"] == "phase_transition"]
+    assert "task:resume" in reasons
+    assert any(str(r).startswith("task:abort:") for r in reasons)
+    # The three hand-built event types are gone from the journal vocabulary.
+    assert all(
+        e["type"] == "phase_transition"
+        for e in entries
+        if e["type"] in {"task_resumed", "task_aborted", "task_replan_requested"}
+        or e["type"] == "phase_transition"
+    )

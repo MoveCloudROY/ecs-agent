@@ -58,6 +58,7 @@ from ecs_agent.types import (
     EntityId,
     InheritancePolicy,
     Message,
+    PhaseChangedEvent,
     SubagentConfig,
     CompactionMethod,
     ToolSchema,
@@ -220,11 +221,15 @@ async def resume_workflow(
     *,
     base_dir: Path,
     preserve_user_text: str | None = None,
+    adapter_ref: list[ArtifactAdapter | None] | None = None,
+    runtime_state_ref: list[RuntimeState | None] | None = None,
 ) -> tuple[RuntimeState, ArtifactAdapter, list[ResumeAction]]:
     """Single restore path shared by /plan:resume, task-command auto-load, and tests.
 
-    Steps, in order: read persisted state, mark stale subagents, restore the
-    phase graph via resume_phase_graph() — validation, structural-drift
+    Steps, in order: read persisted state, mark stale subagents, hand the
+    session refs over (so PhaseChangedEvent subscribers journal the restore's
+    own transitions into THIS workflow, not a previously active one), restore
+    the phase graph via resume_phase_graph() — validation, structural-drift
     detection, the on_resume TASK_RUNNING→TASK_BLOCKED demotion, and the
     approval-gate replay against the persisted verdicts — then persist the
     snapshot and reset the conversation boundary.
@@ -232,6 +237,10 @@ async def resume_workflow(
     adapter = ArtifactAdapter(base_dir=base_dir, workflow_id=workflow_id)
     state = adapter.read_state()
     stale_task_ids = adapter.mark_stale_subagents(state)
+    if adapter_ref is not None:
+        adapter_ref[0] = adapter
+    if runtime_state_ref is not None:
+        runtime_state_ref[0] = state
     report = await resume_phase_graph(
         world,
         entity_id,
@@ -401,15 +410,15 @@ async def build_plan_task_world(
         *,
         preserve_user_text: str | None = None,
     ) -> tuple[RuntimeState, list[ResumeAction]]:
-        state, new_adapter, actions = await resume_workflow(
+        state, _new_adapter, actions = await resume_workflow(
             w,
             eid,
             workflow_id,
             base_dir=_base_dir,
             preserve_user_text=preserve_user_text,
+            adapter_ref=adapter_ref,
+            runtime_state_ref=runtime_state,
         )
-        adapter_ref[0] = new_adapter
-        runtime_state[0] = state
         return state, actions
 
     def _workflow_id_from_command(user_text: str) -> str:
@@ -520,6 +529,34 @@ async def build_plan_task_world(
             )
 
     world.event_bus.subscribe(DelegationCompletedEvent, _on_delegation_completed)
+
+    async def _on_phase_changed(event: PhaseChangedEvent) -> None:
+        """Journal every committed transition into the active workflow's events.jsonl."""
+        if event.entity_id != agent_id:
+            return
+        journal_adapter = adapter_ref[0]
+        if journal_adapter is None:
+            return
+        current_state = runtime_state[0]
+        journal_adapter.append_event(
+            {
+                "type": "phase_transition",
+                "workflow_id": journal_adapter.workflow_id,
+                "from": event.from_phase,
+                "to": event.to_phase,
+                "reason": event.reason,
+                "forced": event.forced,
+                "tick": event.tick,
+                "task_id": (
+                    current_state.current_task_id
+                    if current_state is not None
+                    else None
+                ),
+                "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
+            }
+        )
+
+    world.event_bus.subscribe(PhaseChangedEvent, _on_phase_changed)
 
     tool_registry = world.get_component(agent_id, ToolRegistryComponent)
     if tool_registry is None:

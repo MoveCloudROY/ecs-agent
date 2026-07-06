@@ -367,13 +367,6 @@ class PlanController:
         await self._advance("TASK_ABORTED", reason=f"task:abort:{reason[:80]}")
         state.last_checkpoint = reason
         state.updated_at = timestamp
-        self._append_task_event(
-            adapter,
-            event_type="task_aborted",
-            state=state,
-            reason=reason,
-            scope_changed=False,
-        )
         self._save(state, adapter)
         logger.info(
             "plan_task_aborted",
@@ -398,13 +391,6 @@ class PlanController:
         await self._advance("TASK_REPLAN", reason=f"task:replan:{reason[:80]}")
         state.last_checkpoint = reason
         state.abort_reason = None
-        self._append_task_event(
-            adapter,
-            event_type="task_replan_requested",
-            state=state,
-            reason=reason,
-            scope_changed=scope_changed,
-        )
 
         if scope_changed:
             state.review_verdicts = []
@@ -439,13 +425,6 @@ class PlanController:
         await self._advance("TASK_RUNNING", reason="task:resume")
         state.abort_reason = None
         state.updated_at = timestamp
-        self._append_task_event(
-            adapter,
-            event_type="task_resumed",
-            state=state,
-            reason=state.last_checkpoint,
-            scope_changed=False,
-        )
         self._save(state, adapter)
         logger.info(
             "plan_task_resumed",
@@ -531,28 +510,6 @@ execution_hints: []
     def _require_reason(self, reason: str) -> None:
         if not reason.strip():
             raise ValueError("Task control reason must be a non-empty string")
-
-    def _append_task_event(
-        self,
-        adapter: ArtifactAdapter,
-        *,
-        event_type: str,
-        state: RuntimeState,
-        reason: str | None,
-        scope_changed: bool,
-    ) -> None:
-        adapter.append_event(
-            {
-                "type": event_type,
-                "workflow_id": state.workflow_id,
-                "task_id": state.current_task_id,
-                "phase": self.current_phase(),
-                "reason": reason,
-                "scope_changed": scope_changed,
-                "evidence_refs": list(state.memory_refs),
-                "timestamp": self._utcnow_isoformat(),
-            }
-        )
 
     def _utcnow_isoformat(self) -> str:
         return datetime.datetime.now(datetime.UTC).isoformat()

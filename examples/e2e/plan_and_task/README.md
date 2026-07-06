@@ -59,7 +59,7 @@ The interactive runtime supports eleven slash commands:
 All workflow data is persisted in `scratchbook/<workflow_id>/`:
 
 - `plan/`: Contains `draft.md` (working draft, included as `draft_plan` artifact) and `workflow_plan.md` (the single living plan file, edited in-place).
-- `state/`: Contains `runtime_state.json` (whose `tasks` field is the live task queue) and `events.jsonl`.
+- `state/`: Contains `runtime_state.json` (whose `tasks` field is the live task queue) and `events.jsonl` — one `phase_transition` line per committed phase transition (from/to/reason/forced/tick), written by a `PhaseChangedEvent` subscriber.
 - `memory/`: Contains `knowledge.jsonl` for cross-task context.
 - `evidence/`: Directory for task execution artifacts.
 - `review/`: Contains JSON verdicts from Advisor and QA reviews.
