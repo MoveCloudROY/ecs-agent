@@ -240,11 +240,11 @@ approval=ApprovalGate(verdicts={
 3. Auto-advances when the verdict maps to a target.
 
 Because the routing lives in graph data, resume reconciliation can **replay
-the gate** instead of duplicating the rule: read the persisted verdict, look
-up `spec.approval.verdicts[verdict]`, and `advance()` if it maps to a target —
-without calling `record_approval()` again (no duplicate ledger entries).
-`examples/e2e/plan_and_task/controller.py::reconcile_after_resume` is the
-reference implementation of this pattern.
+the gate** instead of duplicating the rule: `resume_phase_graph()` does this
+for you — pass the persisted verdicts via `approvals=` and the current phase's
+gate is replayed with reason `approval_replay:<verdict>`, without calling
+`record_approval()` again (no duplicate ledger entries).
+`examples/e2e/plan_and_task/main.py::resume_workflow` is the reference caller.
 
 ## Per-Phase Tool Allowlists
 
@@ -295,7 +295,8 @@ PhaseChangedEvent(
     from_phase="TASK_READY",
     to_phase="TASK_RUNNING",
     reason="task:init",       # free-form; conventions: "tool:<name>",
-                              # "approval:<verdict>", "on_resume", "plan:start"
+                              # "approval:<verdict>", "approval_replay:<verdict>",
+                              # "on_resume", "plan:start"
     forced=False,             # True for force() and on_resume demotions
     tick=42,
 )
@@ -339,10 +340,13 @@ The re-bind contract:
   on a half-bound entity raises `PhaseIntegrityError` with instructions.
 
 State persisted outside the world serializer (e.g. plan-and-task's
-`runtime_state.json`) can reuse the same machinery: write a `PhaseComponent`
-with the persisted phase, then `bind_phase_graph()` — validation and
-`on_resume` apply exactly as above (`examples/e2e/plan_and_task/main.py::
-resume_workflow`).
+`runtime_state.json`) uses `resume_phase_graph(world, entity_id, graph,
+phase=..., graph_hash=..., approvals=...)`: it overwrites `PhaseComponent`
+with the persisted phase, re-binds (validation, drift handling, `on_resume`
+apply exactly as above), replays the current phase's approval gate against
+the persisted verdicts, and returns a `ResumeReport` with `demoted_from` and
+`replayed` (`examples/e2e/plan_and_task/main.py::resume_workflow` is the
+reference caller). In-memory transition history restarts per restore.
 
 ## Transition History
 

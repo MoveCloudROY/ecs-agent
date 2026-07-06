@@ -353,35 +353,6 @@ class PlanController:
         logger.info("plan_task_write_plan_completed", workflow_id=state.workflow_id)
         return state
 
-    async def reconcile_after_resume(
-        self, state: RuntimeState, adapter: ArtifactAdapter
-    ) -> list[ResumeAction]:
-        """Replay the current phase's gate mapping against persisted verdicts.
-
-        The routing rule lives in the graph's ApprovalGate — no duplication with
-        the live review handlers. record_approval is NOT called (the verdict is
-        already in the artifact ledger)."""
-        current = self.current_phase()
-        spec = PLAN_TASK_PHASE_GRAPH.phases_by_id[current]
-        if spec.approval is not None:
-            verdicts_by_phase = {v.phase: v.verdict for v in state.review_verdicts}
-            verdict = verdicts_by_phase.get(current)
-            target = spec.approval.verdicts.get(verdict) if verdict else None
-            if target is not None:
-                await self._advance(target, reason=f"reconcile:{verdict}")
-                self._save(state, adapter)
-                logger.info(
-                    "plan_task_reconcile_advanced",
-                    workflow_id=state.workflow_id,
-                    to_phase=target,
-                    source="reconcile_after_resume",
-                )
-        # Gate targets are graph-validated, so "replayed into WRITE_PLAN" and
-        # "resumed already in WRITE_PLAN" collapse into one final-phase check.
-        if self.current_phase() == "WRITE_PLAN":
-            return [ResumeAction.TRIGGER_PLAN_WRITER]
-        return []
-
     async def handle_task_abort(
         self, state: RuntimeState, adapter: ArtifactAdapter, reason: str
     ) -> RuntimeState:

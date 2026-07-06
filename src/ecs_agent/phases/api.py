@@ -1,8 +1,10 @@
-"""Explicit phase-transition API: bind, advance, force, record_approval."""
+"""Explicit phase-transition API: bind, advance, force, record_approval, resume."""
 
 from __future__ import annotations
 
 import datetime
+from collections.abc import Mapping
+from dataclasses import dataclass
 
 from ecs_agent.components import (
     PermissionComponent,
@@ -197,6 +199,97 @@ async def record_approval(
     if target is not None:
         await advance(world, entity_id, target, reason=f"approval:{verdict}")
     return component.phase
+
+
+@dataclass(slots=True)
+class ResumeReport:
+    """Outcome of resume_phase_graph(): the live component plus what changed."""
+
+    component: PhaseComponent
+    demoted_from: str | None
+    replayed: tuple[str, str] | None
+
+
+async def resume_phase_graph(
+    world: World,
+    entity_id: EntityId,
+    graph: PhaseGraph,
+    *,
+    phase: str,
+    graph_hash: str | None = None,
+    agent_key: str = "main",
+    approvals: Mapping[str, str] | None = None,
+) -> ResumeReport:
+    """Restore harness-persisted phase state in one step: jump, re-bind, replay.
+
+    Overwrites (or inserts) PhaseComponent at the persisted phase — in-memory
+    transition history restarts per restore — then delegates to
+    bind_phase_graph() (validation, structural-drift handling, the on_resume
+    policy). When ``approvals`` is provided and the post-demotion phase
+    declares an ApprovalGate, the gate is replayed against that phase's
+    persisted verdict: a mapped target advances exactly once with reason
+    ``approval_replay:<verdict>`` and NO PhaseApprovalsComponent append (the
+    verdict's ledger entry is the original one). Use this for state persisted
+    outside the world serializer; checkpoint restores keep calling
+    bind_phase_graph() directly.
+
+    Args:
+        world: World holding the entity.
+        entity_id: Entity to restore.
+        graph: Graph to bind.
+        phase: Persisted phase to restore to.
+        graph_hash: Persisted structural hash; defaults to the graph's current
+            hash for state that predates hash tracking.
+        agent_key: Prompt-binding agent key.
+        approvals: Latest persisted verdict per phase, e.g.
+            ``{"DRAFT_QA_REVIEW": "approved"}``.
+
+    Returns:
+        ResumeReport with the live component, the pre-demotion phase when the
+        on_resume policy demoted (else None), and the (verdict, target) pair
+        when a gate replay advanced (else None).
+
+    Raises:
+        PhaseError: The persisted verdict for the current phase is not
+            declared by its gate (corrupt or hand-edited persisted state).
+        PhaseGraphMismatchError: Bound graph_id differs, or the persisted
+            phase no longer exists in the graph (via bind_phase_graph).
+    """
+    world.add_component(
+        entity_id,
+        PhaseComponent(
+            graph_id=graph.graph_id,
+            phase=phase,
+            graph_hash=graph_hash or graph.structure_hash,
+        ),
+    )
+    component = await bind_phase_graph(world, entity_id, graph, agent_key=agent_key)
+    demoted_from = phase if component.phase != phase else None
+
+    replayed: tuple[str, str] | None = None
+    if approvals is not None:
+        gate = graph.phases_by_id[component.phase].approval
+        if gate is not None:
+            verdict = approvals.get(component.phase)
+            if verdict is not None:
+                if verdict not in gate.verdicts:
+                    raise PhaseError(
+                        f"persisted verdict {verdict!r} for phase "
+                        f"{component.phase!r} is not declared by its gate; "
+                        f"allowed: {sorted(gate.verdicts)}"
+                    )
+                target = gate.verdicts[verdict]
+                if target is not None:
+                    await advance(
+                        world,
+                        entity_id,
+                        target,
+                        reason=f"approval_replay:{verdict}",
+                    )
+                    replayed = (verdict, target)
+    return ResumeReport(
+        component=component, demoted_from=demoted_from, replayed=replayed
+    )
 
 
 def allowed_targets(world: World, entity_id: EntityId) -> frozenset[str]:

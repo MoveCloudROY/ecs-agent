@@ -121,3 +121,153 @@ async def test_rebind_tolerates_structural_drift_when_phase_survives() -> None:
     assert component is not None
     assert component.phase == "READY"
     assert component.graph_hash == drifted.structure_hash
+
+
+# --- resume_phase_graph(): one-step harness restore --------------------------
+
+
+def _gated_graph():
+    from ecs_agent.phases.contracts import ApprovalGate
+
+    return build_graph(
+        "job2",
+        initial="READY",
+        phases=[
+            PhaseSpec(phase_id="READY", prompts={"main": "ready"}, to=("REVIEW",)),
+            PhaseSpec(
+                phase_id="REVIEW",
+                prompts={"main": "review"},
+                to=("RUNNING", "READY"),
+                approval=ApprovalGate(verdicts={"approved": "RUNNING", "revise": None}),
+            ),
+            PhaseSpec(
+                phase_id="RUNNING",
+                prompts={"main": "running"},
+                to=("REVIEW", "DONE"),
+                on_resume="REVIEW",
+            ),
+            PhaseSpec(phase_id="DONE", prompts={"main": "done"}, terminal=True),
+        ],
+    )
+
+
+async def test_resume_phase_graph_fresh_insert_is_pure_restore() -> None:
+    from ecs_agent.phases.api import resume_phase_graph
+
+    world = World()
+    eid = world.create_entity()
+    report = await resume_phase_graph(world, eid, _gated_graph(), phase="READY")
+
+    assert report.component.phase == "READY"
+    assert report.demoted_from is None
+    assert report.replayed is None
+    component = world.get_component(eid, PhaseComponent)
+    assert component is report.component
+
+
+async def test_resume_phase_graph_overwrites_existing_component() -> None:
+    from ecs_agent.phases.api import resume_phase_graph
+
+    graph = _gated_graph()
+    world = World()
+    eid = world.create_entity()
+    await bind_phase_graph(world, eid, graph)
+    await advance(world, eid, "REVIEW", reason="progress")
+
+    report = await resume_phase_graph(world, eid, graph, phase="READY")
+
+    assert report.component.phase == "READY"
+    # Overwrite semantics: in-memory history restarts per load (accepted risk).
+    assert report.component.history == []
+
+
+async def test_resume_phase_graph_reports_on_resume_demotion() -> None:
+    from ecs_agent.phases.api import resume_phase_graph
+
+    world = World()
+    eid = world.create_entity()
+    report = await resume_phase_graph(world, eid, _gated_graph(), phase="RUNNING")
+
+    assert report.component.phase == "REVIEW"
+    assert report.demoted_from == "RUNNING"
+    assert report.replayed is None
+
+
+async def test_resume_phase_graph_replays_approved_gate_without_ledger_append() -> None:
+    from ecs_agent.components import PhaseApprovalsComponent
+    from ecs_agent.phases.api import resume_phase_graph
+
+    world = World()
+    eid = world.create_entity()
+    report = await resume_phase_graph(
+        world, eid, _gated_graph(), phase="REVIEW", approvals={"REVIEW": "approved"}
+    )
+
+    assert report.component.phase == "RUNNING"
+    assert report.replayed == ("approved", "RUNNING")
+    assert report.component.history[-1]["reason"] == "approval_replay:approved"
+    assert world.get_component(eid, PhaseApprovalsComponent) is None
+
+
+async def test_resume_phase_graph_stay_verdict_does_not_advance() -> None:
+    from ecs_agent.phases.api import resume_phase_graph
+
+    world = World()
+    eid = world.create_entity()
+    report = await resume_phase_graph(
+        world, eid, _gated_graph(), phase="REVIEW", approvals={"REVIEW": "revise"}
+    )
+
+    assert report.component.phase == "REVIEW"
+    assert report.replayed is None
+
+
+async def test_resume_phase_graph_unknown_verdict_raises() -> None:
+    from ecs_agent.phases.api import PhaseError, resume_phase_graph
+
+    world = World()
+    eid = world.create_entity()
+    with pytest.raises(PhaseError, match="not declared by its gate"):
+        await resume_phase_graph(
+            world, eid, _gated_graph(), phase="REVIEW", approvals={"REVIEW": "bogus"}
+        )
+
+
+async def test_resume_phase_graph_without_approvals_skips_replay() -> None:
+    from ecs_agent.phases.api import resume_phase_graph
+
+    world = World()
+    eid = world.create_entity()
+    report = await resume_phase_graph(world, eid, _gated_graph(), phase="REVIEW")
+
+    assert report.component.phase == "REVIEW"
+    assert report.replayed is None
+
+
+async def test_resume_phase_graph_updates_stale_structure_hash() -> None:
+    from ecs_agent.phases.api import resume_phase_graph
+
+    graph = _gated_graph()
+    world = World()
+    eid = world.create_entity()
+    report = await resume_phase_graph(
+        world, eid, graph, phase="READY", graph_hash="stale-structure-hash"
+    )
+
+    assert report.component.graph_hash == graph.structure_hash
+
+
+async def test_resume_phase_graph_replays_gate_of_post_demotion_phase() -> None:
+    from ecs_agent.phases.api import resume_phase_graph
+
+    world = World()
+    eid = world.create_entity()
+    report = await resume_phase_graph(
+        world, eid, _gated_graph(), phase="RUNNING", approvals={"REVIEW": "approved"}
+    )
+
+    # RUNNING demotes to REVIEW on resume; the gate replay then applies to
+    # the post-demotion phase and advances back to RUNNING.
+    assert report.demoted_from == "RUNNING"
+    assert report.replayed == ("approved", "RUNNING")
+    assert report.component.phase == "RUNNING"

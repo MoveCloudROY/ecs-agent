@@ -1290,9 +1290,8 @@ async def _run_restart_flow(state: RuntimeState, adapter: ArtifactAdapter) -> Ru
     adapter.write_state(state)
     world = World()
     eid = world.create_entity()
-    controller = PlanController(world, eid)
     loaded, _adapter, _actions = await resume_workflow(
-        world, eid, controller, adapter.workflow_id, base_dir=adapter.base_dir
+        world, eid, adapter.workflow_id, base_dir=adapter.base_dir
     )
     return loaded
 
@@ -4266,84 +4265,71 @@ def _make_verdict(phase: str, verdict: str) -> ReviewVerdict:
     return ReviewVerdict(phase=phase, verdict=verdict, decided_at="2026-01-01T00:00:00")
 
 
-async def test_reconcile_draft_qa_approved_triggers_plan_writer(tmp_path: Path) -> None:
+async def _resume_at(
+    tmp_path: Path, phase: str, verdict: str | None = None
+) -> tuple[RuntimeState, list["ResumeAction"]]:
+    """Persist a state at `phase` (optionally with a verdict) and restore it."""
+    from examples.e2e.plan_and_task.main import resume_workflow
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
+    state = _make_state_at_phase(phase)
+    if verdict is not None:
+        state.review_verdicts.append(_make_verdict(phase, verdict))
+    adapter.write_draft("# Draft\n")
+    adapter.write_plan("# Plan\n")
+    adapter.write_state(state)
+    world = World()
+    eid = world.create_entity()
+    loaded, _adapter, actions = await resume_workflow(
+        world, eid, "test-wf", base_dir=tmp_path
+    )
+    return loaded, actions
+
+
+async def test_resume_draft_qa_approved_triggers_plan_writer(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import ResumeAction
 
-    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
-    state = _make_state_at_phase("DRAFT_QA_REVIEW")
-    state.review_verdicts.append(_make_verdict("DRAFT_QA_REVIEW", "approved"))
-    world, eid = await _bound_world_at(state.phase)
-    ctrl = PlanController(world, eid)
-
-    actions = await ctrl.reconcile_after_resume(state, adapter)
+    loaded, actions = await _resume_at(tmp_path, "DRAFT_QA_REVIEW", "approved")
 
     assert ResumeAction.TRIGGER_PLAN_WRITER in actions
-    assert state.phase == "WRITE_PLAN"
+    assert loaded.phase == "WRITE_PLAN"
 
 
-async def test_reconcile_write_plan_triggers_plan_writer(tmp_path: Path) -> None:
+async def test_resume_write_plan_triggers_plan_writer(tmp_path: Path) -> None:
     from examples.e2e.plan_and_task.controller import ResumeAction
 
-    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
-    state = _make_state_at_phase("WRITE_PLAN")
-    world, eid = await _bound_world_at(state.phase)
-    ctrl = PlanController(world, eid)
-
-    actions = await ctrl.reconcile_after_resume(state, adapter)
+    loaded, actions = await _resume_at(tmp_path, "WRITE_PLAN")
 
     assert ResumeAction.TRIGGER_PLAN_WRITER in actions
-    assert state.phase == "WRITE_PLAN"
+    assert loaded.phase == "WRITE_PLAN"
 
 
-async def test_reconcile_plan_qa_approved_advances_to_finalized(tmp_path: Path) -> None:
-    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
-    state = _make_state_at_phase("PLAN_QA_REVIEW")
-    state.review_verdicts.append(_make_verdict("PLAN_QA_REVIEW", "approved"))
-    world, eid = await _bound_world_at(state.phase)
-    ctrl = PlanController(world, eid)
-
-    actions = await ctrl.reconcile_after_resume(state, adapter)
+async def test_resume_plan_qa_approved_advances_to_finalized(tmp_path: Path) -> None:
+    loaded, actions = await _resume_at(tmp_path, "PLAN_QA_REVIEW", "approved")
 
     assert actions == []
-    assert state.phase == "PLAN_FINALIZED"
+    assert loaded.phase == "PLAN_FINALIZED"
 
 
-async def test_reconcile_draft_qa_revise_returns_no_triggers(tmp_path: Path) -> None:
-    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
-    state = _make_state_at_phase("DRAFT_QA_REVIEW")
-    state.review_verdicts.append(_make_verdict("DRAFT_QA_REVIEW", "revise"))
-    world, eid = await _bound_world_at(state.phase)
-    ctrl = PlanController(world, eid)
-
-    actions = await ctrl.reconcile_after_resume(state, adapter)
+async def test_resume_draft_qa_revise_returns_no_triggers(tmp_path: Path) -> None:
+    loaded, actions = await _resume_at(tmp_path, "DRAFT_QA_REVIEW", "revise")
 
     assert actions == []
-    assert state.phase == "DRAFT_QA_REVIEW"
+    assert loaded.phase == "DRAFT_QA_REVIEW"
 
 
-async def test_reconcile_draft_interview_returns_no_triggers(tmp_path: Path) -> None:
-    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
-    state = _make_state_at_phase("DRAFT_INTERVIEW")
-    world, eid = await _bound_world_at(state.phase)
-    ctrl = PlanController(world, eid)
-
-    actions = await ctrl.reconcile_after_resume(state, adapter)
+async def test_resume_draft_interview_returns_no_triggers(tmp_path: Path) -> None:
+    loaded, actions = await _resume_at(tmp_path, "DRAFT_INTERVIEW")
 
     assert actions == []
-    assert state.phase == "DRAFT_INTERVIEW"
+    assert loaded.phase == "DRAFT_INTERVIEW"
 
 
-async def test_reconcile_plan_qa_revise_returns_no_triggers(tmp_path: Path) -> None:
-    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
-    state = _make_state_at_phase("PLAN_QA_REVIEW")
-    state.review_verdicts.append(_make_verdict("PLAN_QA_REVIEW", "revise"))
-    world, eid = await _bound_world_at(state.phase)
-    ctrl = PlanController(world, eid)
-
-    actions = await ctrl.reconcile_after_resume(state, adapter)
+async def test_resume_plan_qa_revise_returns_no_triggers(tmp_path: Path) -> None:
+    loaded, actions = await _resume_at(tmp_path, "PLAN_QA_REVIEW", "revise")
 
     assert actions == []
-    assert state.phase == "PLAN_QA_REVIEW"
+    assert loaded.phase == "PLAN_QA_REVIEW"
 
 
 @pytest.mark.asyncio
@@ -5790,7 +5776,6 @@ async def test_save_state_snapshots_phase_and_derives_status(
 async def test_resume_workflow_is_the_single_restore_entrypoint(
     tmp_path: Path,
 ) -> None:
-    from examples.e2e.plan_and_task.controller import PlanController
     from examples.e2e.plan_and_task.main import resume_workflow
 
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
@@ -5802,9 +5787,8 @@ async def test_resume_workflow_is_the_single_restore_entrypoint(
 
     world = World()
     eid = world.create_entity()
-    controller = PlanController(world, eid)
     loaded, loaded_adapter, actions = await resume_workflow(
-        world, eid, controller, adapter.workflow_id, base_dir=tmp_path
+        world, eid, adapter.workflow_id, base_dir=tmp_path
     )
 
     # on_resume demotion + persist-time snapshot + gate replay, in one path.

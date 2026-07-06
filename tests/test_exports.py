@@ -115,6 +115,7 @@ def test_phase_symbols_importable() -> None:
         PhaseIntegrityError,
         PhasePromptPlaceholderProvider,
         PhaseSpec,
+        ResumeReport,
         advance,
         allowed_targets,
         bind_phase_graph,
@@ -123,7 +124,9 @@ def test_phase_symbols_importable() -> None:
         is_terminal,
         latest_verdicts,
         record_approval,
+        resume_phase_graph,
     )
 
     assert PhaseComponent is not None
     assert callable(advance) and callable(bind_phase_graph)
+    assert callable(resume_phase_graph) and ResumeReport is not None

@@ -118,7 +118,7 @@ Framework checkpoint restore may also mark a previously running background subag
 
 ### Mid-flight State Reconciliation
 
-When `/plan:resume <workflow_id>` is called, the system reads the persisted state and automatically reconciles any in-progress phases so the workflow can continue without manual intervention. Reconciliation replays the resumed phase's declarative `ApprovalGate` mapping (the same one used for live verdict routing) against the latest persisted verdict — the routing rule lives only in `phase_graph.py`, and no duplicate entry is written to the approval ledger:
+When `/plan:resume <workflow_id>` is called, the system reads the persisted state and automatically reconciles any in-progress phases so the workflow can continue without manual intervention. Reconciliation replays the resumed phase's declarative `ApprovalGate` mapping (the same one used for live verdict routing) against the latest persisted verdict via `ecs_agent.phases.resume_phase_graph(approvals=...)` — the routing rule lives only in `phase_graph.py`, and no duplicate entry is written to the approval ledger:
 
 | Resumed phase | Condition | Automatic action |
 |---|---|---|
@@ -269,7 +269,7 @@ This example explicitly enables logging in `main.py` when `DEBUG=1`; the base `e
 | `plan_task_qa_review_recorded` | info | `controller.py` | Draft QA verdict recorded; `approved` routes `DRAFT_QA_REVIEW` → `WRITE_PLAN` through the phase's `ApprovalGate`; `workflow_id=`, `verdict=` |
 | `plan_task_plan_qa_review_recorded` | info | `controller.py` | Plan QA verdict recorded; `approved` routes `PLAN_QA_REVIEW` → `PLAN_FINALIZED` through the phase's `ApprovalGate`; `workflow_id=`, `verdict=` |
 | `plan_task_review_verdict_ignored` | info | `controller.py` | Later same-phase verdict discarded because the phase already holds a sticky `approved` verdict; `workflow_id=`, `phase=`, `verdict=` |
-| `plan_task_reconcile_advanced` | info | `controller.py` | Gate replay on `/plan:resume` or task-command auto-load advanced the phase from the persisted verdict; `workflow_id=`, `to_phase=`, `source=reconcile_after_resume` |
+| `plan_task_reconcile_advanced` | info | `main.py` | Gate replay on `/plan:resume` or task-command auto-load advanced the phase from the persisted verdict; `workflow_id=`, `to_phase=`, `source=reconcile_after_resume` |
 | `plan_task_verdict_recording_failed` | error | `main.py` | Subagent verdict rejected by the controller (e.g. review phase neither current nor adjacent); `subagent_name=`, `exception=` |
 | `plan_task_auto_trigger_plan_writer` | info | `main.py` | QA approved — injected write-plan trigger message to start `plan_writer` subagent automatically; `workflow_id=`, `source=` (omitted when triggered by live QA event; `source=reconcile_after_resume` when triggered on `/plan:resume`) |
 

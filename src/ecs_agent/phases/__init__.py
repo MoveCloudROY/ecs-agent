@@ -6,6 +6,7 @@ from ecs_agent.phases.api import (
     PhaseError,
     PhaseGraphMismatchError,
     PhaseIntegrityError,
+    ResumeReport,
     advance,
     allowed_targets,
     bind_phase_graph,
@@ -13,6 +14,7 @@ from ecs_agent.phases.api import (
     is_terminal,
     latest_verdicts,
     record_approval,
+    resume_phase_graph,
 )
 from ecs_agent.phases.contracts import ApprovalGate, PhaseGraph, PhaseSpec, build_graph
 from ecs_agent.phases.prompt_provider import (
@@ -31,6 +33,7 @@ __all__ = [
     "PhaseIntegrityError",
     "PhasePromptPlaceholderProvider",
     "PhaseSpec",
+    "ResumeReport",
     "advance",
     "allowed_targets",
     "bind_phase_graph",
@@ -39,4 +42,5 @@ __all__ = [
     "is_terminal",
     "latest_verdicts",
     "record_approval",
+    "resume_phase_graph",
 ]

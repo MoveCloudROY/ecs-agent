@@ -36,7 +36,7 @@ from ecs_agent.prompts.contracts import (
     SystemPromptConfigSpec,
     TriggerSpec,
 )
-from ecs_agent.phases import bind_phase_graph
+from ecs_agent.phases import bind_phase_graph, resume_phase_graph
 from ecs_agent.providers import Model
 from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
@@ -216,7 +216,6 @@ def _reset_workflow_boundary_state(
 async def resume_workflow(
     world: World,
     entity_id: EntityId,
-    controller: PlanController,
     workflow_id: str,
     *,
     base_dir: Path,
@@ -224,32 +223,36 @@ async def resume_workflow(
 ) -> tuple[RuntimeState, ArtifactAdapter, list[ResumeAction]]:
     """Single restore path shared by /plan:resume, task-command auto-load, and tests.
 
-    Steps, in order: read persisted state, mark stale subagents, jump the
-    runtime phase to the persisted one, re-bind the graph (drift detection +
-    the on_resume TASK_RUNNING→TASK_BLOCKED demotion), persist the snapshot,
-    reset the conversation boundary, then replay the current phase's
-    approval gate against the persisted verdicts.
+    Steps, in order: read persisted state, mark stale subagents, restore the
+    phase graph via resume_phase_graph() — validation, structural-drift
+    detection, the on_resume TASK_RUNNING→TASK_BLOCKED demotion, and the
+    approval-gate replay against the persisted verdicts — then persist the
+    snapshot and reset the conversation boundary.
     """
     adapter = ArtifactAdapter(base_dir=base_dir, workflow_id=workflow_id)
     state = adapter.read_state()
     stale_task_ids = adapter.mark_stale_subagents(state)
-    # The persisted graph_hash (current hash for pre-field states) lets
-    # bind_phase_graph detect structural drift since the state was written.
-    world.add_component(
+    report = await resume_phase_graph(
+        world,
         entity_id,
-        PhaseComponent(
-            graph_id=PLAN_TASK_PHASE_GRAPH.graph_id,
-            phase=state.phase,
-            graph_hash=state.graph_hash or PLAN_TASK_PHASE_GRAPH.structure_hash,
-        ),
+        PLAN_TASK_PHASE_GRAPH,
+        phase=state.phase,
+        graph_hash=state.graph_hash,
+        agent_key="main",
+        approvals={v.phase: v.verdict for v in state.review_verdicts},
     )
-    await bind_phase_graph(world, entity_id, PLAN_TASK_PHASE_GRAPH, agent_key="main")
-    component = world.get_component(entity_id, PhaseComponent)
-    if component is not None and component.phase != state.phase:
+    if report.demoted_from is not None:
         logger.info(
             "plan_task_restart_blocked",
             workflow_id=state.workflow_id,
             stale_task_ids=stale_task_ids,
+        )
+    if report.replayed is not None:
+        logger.info(
+            "plan_task_reconcile_advanced",
+            workflow_id=state.workflow_id,
+            to_phase=report.replayed[1],
+            source="reconcile_after_resume",
         )
     state.updated_at = datetime.datetime.now(datetime.UTC).isoformat()
     # Persist-time snapshot: stamps phase, graph hash, and derived status.
@@ -258,7 +261,11 @@ async def resume_workflow(
         world, entity_id, preserve_user_text=preserve_user_text
     )
     world.add_component(entity_id, build_scratchbook_prompt_config(workflow_id))
-    actions = await controller.reconcile_after_resume(state, adapter)
+    actions = (
+        [ResumeAction.TRIGGER_PLAN_WRITER]
+        if report.component.phase == "WRITE_PLAN"
+        else []
+    )
     return state, adapter, actions
 
 
@@ -397,7 +404,6 @@ async def build_plan_task_world(
         state, new_adapter, actions = await resume_workflow(
             w,
             eid,
-            controller,
             workflow_id,
             base_dir=_base_dir,
             preserve_user_text=preserve_user_text,
