@@ -6078,3 +6078,98 @@ async def test_task_lifecycle_transitions_are_journaled(tmp_path: Path) -> None:
         if e["type"] in {"task_resumed", "task_aborted", "task_replan_requested"}
         or e["type"] == "phase_transition"
     )
+
+
+# --- Faithful approvals ledger (framework-extensions Task C) ----------------
+
+
+async def test_restore_rehydrates_the_approvals_ledger(tmp_path: Path) -> None:
+    from ecs_agent.phases import latest_verdicts
+    from examples.e2e.plan_and_task.main import resume_workflow
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="ledger-wf")
+    state = _make_state_at_phase("DRAFT_QA_REVIEW")
+    state.workflow_id = "ledger-wf"
+    state.review_verdicts.append(_make_verdict("DRAFT_ADVISOR_REVIEW", "approved"))
+    adapter.write_draft("# Draft\n")
+    adapter.write_state(state)
+
+    world = World()
+    eid = world.create_entity()
+    await resume_workflow(world, eid, "ledger-wf", base_dir=tmp_path)
+
+    assert latest_verdicts(world, eid) == {"DRAFT_ADVISOR_REVIEW": "approved"}
+
+
+async def test_plan_start_resets_the_approvals_ledger(tmp_path: Path) -> None:
+    from ecs_agent.phases import latest_verdicts, record_approval
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    world, eid = await _bound_world_at("DRAFT_ADVISOR_REVIEW")
+    await record_approval(world, eid, "approved")
+    assert latest_verdicts(world, eid) == {"DRAFT_ADVISOR_REVIEW": "approved"}
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="fresh-wf")
+    controller = PlanController(world, eid)
+    await controller.handle_plan_start(adapter, "brand new workflow")
+
+    assert latest_verdicts(world, eid) == {}
+
+
+async def test_scope_replan_resets_the_approvals_ledger(tmp_path: Path) -> None:
+    from ecs_agent.components import PhaseApprovalsComponent
+    from ecs_agent.phases import latest_verdicts
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-wf")
+    state = _make_state_at_phase("TASK_RUNNING")
+    adapter.write_plan("# Plan\n")
+    world, eid = await _bound_world_at("TASK_RUNNING")
+    world.add_component(
+        eid,
+        PhaseApprovalsComponent(
+            records=[
+                {
+                    "phase": "DRAFT_QA_REVIEW",
+                    "verdict": "approved",
+                    "notes": None,
+                    "decided_at": "t",
+                }
+            ]
+        ),
+    )
+    controller = PlanController(world, eid)
+
+    await controller.handle_task_replan(state, adapter, "scope grew", scope_changed=True)
+
+    assert latest_verdicts(world, eid) == {}
+
+
+async def test_live_review_after_rehydration_appends_latest(tmp_path: Path) -> None:
+    from ecs_agent.components import PhaseApprovalsComponent
+    from ecs_agent.phases import latest_verdicts
+    from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.main import resume_workflow
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="ledger-wf-2")
+    state = _make_state_at_phase("DRAFT_QA_REVIEW")
+    state.workflow_id = "ledger-wf-2"
+    state.review_verdicts.append(_make_verdict("DRAFT_QA_REVIEW", "revise"))
+    adapter.write_draft("# Draft\n")
+    adapter.write_state(state)
+
+    world = World()
+    eid = world.create_entity()
+    loaded, live_adapter, _actions = await resume_workflow(
+        world, eid, "ledger-wf-2", base_dir=tmp_path
+    )
+    controller = PlanController(world, eid)
+    await controller.handle_qa_review(loaded, live_adapter, "approved", notes="great")
+
+    # The fold returns the newest verdict; the rehydrated record is retained.
+    assert latest_verdicts(world, eid)["DRAFT_QA_REVIEW"] == "approved"
+    ledger = world.get_component(eid, PhaseApprovalsComponent)
+    assert ledger is not None
+    assert [r["verdict"] for r in ledger.records] == ["revise", "approved"]
+    # Notes alignment: sticky clearing applies to the ledger copy too.
+    assert ledger.records[-1]["notes"] is None

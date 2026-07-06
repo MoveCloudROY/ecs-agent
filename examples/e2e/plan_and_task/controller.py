@@ -6,7 +6,7 @@ import datetime
 from enum import Enum
 from typing import Any
 
-from ecs_agent.components import PhaseComponent
+from ecs_agent.components import PhaseApprovalsComponent, PhaseComponent
 from ecs_agent.core import World
 from ecs_agent.logging import get_logger
 from ecs_agent.phases import PhaseGraph, advance, force, record_approval
@@ -103,6 +103,9 @@ class PlanController:
             timestamp=timestamp,
         )
         adapter.write_draft(draft_content)
+        # A new workflow starts with a clean audit ledger; without this, a
+        # previous workflow's approvals would leak into latest_verdicts().
+        self._world.remove_component(self._entity_id, PhaseApprovalsComponent)
         # force(): a new workflow may start from any prior phase, including
         # terminal ones left by a previous workflow in this process.
         await force(self._world, self._entity_id, "DRAFT_INTERVIEW", reason="plan:start")
@@ -309,11 +312,13 @@ class PlanController:
         if current != review_phase and review_phase in allowed:
             await self._advance(review_phase, reason=f"verdict:{review_phase}")
         if self.current_phase() == review_phase:
+            # verdict.notes, not the raw parameter: the sticky rule cleared
+            # notes for approved verdicts, and both ledgers must agree.
             await record_approval(
                 self._world,
                 self._entity_id,
                 verdict_str,
-                notes=notes,
+                notes=verdict.notes,
                 decided_at=timestamp,
             )
 
@@ -394,6 +399,7 @@ class PlanController:
 
         if scope_changed:
             state.review_verdicts = []
+            self._world.remove_component(self._entity_id, PhaseApprovalsComponent)
             await self._advance("DRAFT_ADVISOR_REVIEW", reason="replan:scope_changed")
         else:
             await self._advance("TASK_RUNNING", reason="replan:same_scope")

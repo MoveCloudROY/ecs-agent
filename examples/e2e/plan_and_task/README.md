@@ -118,7 +118,7 @@ Framework checkpoint restore may also mark a previously running background subag
 
 ### Mid-flight State Reconciliation
 
-When `/plan:resume <workflow_id>` is called, the system reads the persisted state and automatically reconciles any in-progress phases so the workflow can continue without manual intervention. Reconciliation replays the resumed phase's declarative `ApprovalGate` mapping (the same one used for live verdict routing) against the latest persisted verdict via `ecs_agent.phases.resume_phase_graph(approvals=...)` — the routing rule lives only in `phase_graph.py`, and no duplicate entry is written to the approval ledger:
+When `/plan:resume <workflow_id>` is called, the system reads the persisted state and automatically reconciles any in-progress phases so the workflow can continue without manual intervention. Reconciliation replays the resumed phase's declarative `ApprovalGate` mapping (the same one used for live verdict routing) against the latest persisted verdict via `ecs_agent.phases.resume_phase_graph(approvals=...)` — the routing rule lives only in `phase_graph.py`, and no duplicate entry is written to the approval ledger. The load flow also rehydrates the in-world `PhaseApprovalsComponent` audit ledger as a one-record-per-phase snapshot of the persisted verdicts, so `latest_verdicts()` stays truthful across restarts; `/plan:start` and a scope-changed `/task:replan` clear it:
 
 | Resumed phase | Condition | Automatic action |
 |---|---|---|

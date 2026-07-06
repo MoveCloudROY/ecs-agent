@@ -21,6 +21,7 @@ from ecs_agent.components import (
     ConversationArchiveComponent,
     CurrentCompactionSummaryComponent,
     LLMComponent,
+    PhaseApprovalsComponent,
     PhaseComponent,
     RenderedSystemPromptComponent,
     SubagentRegistryComponent,
@@ -241,6 +242,24 @@ async def resume_workflow(
         adapter_ref[0] = adapter
     if runtime_state_ref is not None:
         runtime_state_ref[0] = state
+    # Rehydrate the framework audit ledger from the persisted verdicts BEFORE
+    # binding, so latest_verdicts() is truthful for any subscriber observing
+    # the restore's own transitions. Deliberately NOT via record_approval():
+    # the rehydrated record IS the original entry — no duplicate ledger rows.
+    world.add_component(
+        entity_id,
+        PhaseApprovalsComponent(
+            records=[
+                {
+                    "phase": v.phase,
+                    "verdict": v.verdict,
+                    "notes": v.notes,
+                    "decided_at": v.decided_at,
+                }
+                for v in state.review_verdicts
+            ]
+        ),
+    )
     report = await resume_phase_graph(
         world,
         entity_id,
