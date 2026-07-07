@@ -202,8 +202,6 @@ class PlanController:
         adapter: ArtifactAdapter,
         verdict_str: str,
         notes: str | None = None,
-        citations: list[str] | None = None,
-        evidence_refs: list[str] | None = None,
     ) -> RuntimeState:
         return await self._handle_review(
             state,
@@ -211,8 +209,6 @@ class PlanController:
             review_phase="DRAFT_ADVISOR_REVIEW",
             verdict_str=verdict_str,
             notes=notes,
-            citations=citations,
-            evidence_refs=evidence_refs,
             log_event="plan_task_advisor_review_recorded",
         )
 
@@ -222,8 +218,6 @@ class PlanController:
         adapter: ArtifactAdapter,
         verdict_str: str,
         notes: str | None = None,
-        citations: list[str] | None = None,
-        evidence_refs: list[str] | None = None,
     ) -> RuntimeState:
         return await self._handle_review(
             state,
@@ -231,8 +225,6 @@ class PlanController:
             review_phase="DRAFT_QA_REVIEW",
             verdict_str=verdict_str,
             notes=notes,
-            citations=citations,
-            evidence_refs=evidence_refs,
             log_event="plan_task_qa_review_recorded",
         )
 
@@ -242,8 +234,6 @@ class PlanController:
         adapter: ArtifactAdapter,
         verdict_str: str,
         notes: str | None = None,
-        citations: list[str] | None = None,
-        evidence_refs: list[str] | None = None,
     ) -> RuntimeState:
         return await self._handle_review(
             state,
@@ -251,8 +241,6 @@ class PlanController:
             review_phase="PLAN_QA_REVIEW",
             verdict_str=verdict_str,
             notes=notes,
-            citations=citations,
-            evidence_refs=evidence_refs,
             log_event="plan_task_plan_qa_review_recorded",
         )
 
@@ -264,8 +252,6 @@ class PlanController:
         review_phase: str,
         verdict_str: str,
         notes: str | None,
-        citations: list[str] | None,
-        evidence_refs: list[str] | None,
         log_event: str,
     ) -> RuntimeState:
         """Shared review flow: gate, record, persist, and route a review verdict.
@@ -295,8 +281,6 @@ class PlanController:
             verdict=verdict_str,
             decided_at=timestamp,
             notes=notes,
-            citations=citations or [],
-            evidence_refs=evidence_refs or [],
         )
         applied = state.upsert_verdict(verdict)
         if not applied:

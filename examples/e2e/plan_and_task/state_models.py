@@ -43,14 +43,12 @@ class SubagentRecord:
 
 @dataclass(slots=True)
 class ReviewVerdict:
-    """Records a review decision with phase, verdict, notes, and citations."""
+    """Records a review decision with phase, verdict, notes, and timestamp."""
 
     phase: str
     verdict: str
     decided_at: str
     notes: str | None = None
-    citations: list[str] = field(default_factory=list)
-    evidence_refs: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.phase not in _PHASE_VALUES:
@@ -164,8 +162,17 @@ class RuntimeState:
     def from_dict(cls, payload: dict[str, Any]) -> "RuntimeState":
         """Deserialize a runtime state from a dictionary, validating all required fields."""
         try:
+            # Drop legacy citations/evidence_refs keys so state files written
+            # before those write-only fields were removed still load cleanly.
             review_verdicts = [
-                ReviewVerdict(**item) for item in payload["review_verdicts"]
+                ReviewVerdict(
+                    **{
+                        key: value
+                        for key, value in item.items()
+                        if key not in ("citations", "evidence_refs")
+                    }
+                )
+                for item in payload["review_verdicts"]
             ]
             active_subagents = [
                 SubagentRecord(**item) for item in payload["active_subagents"]
