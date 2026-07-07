@@ -327,15 +327,6 @@ class TaskExec:
             )
         return triggered
 
-    def check_retry_budget_exhausted(
-        self,
-        state: RuntimeState,
-        task_id: str,
-        max_retries: int = 3,
-    ) -> bool:
-        """Return True if the task's retry budget is exhausted (alias for check_circuit_breaker)."""
-        return self.check_circuit_breaker(state, task_id, max_retries=max_retries)
-
     def _require_approved_reviews(self) -> None:
         missing = missing_approvals(self.state.review_verdicts)
         if missing:

@@ -17,10 +17,6 @@ from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
     build_scratchbook_prompt_config,
 )
-from examples.e2e.plan_and_task.commands import (
-    Command,
-    parse_command,
-)
 from examples.e2e.plan_and_task.controller import PlanController
 from examples.e2e.plan_and_task.plan_schema import (
     PlanTask,
@@ -163,97 +159,6 @@ async def _bound_world_at(phase: str):
     if phase != "IDLE":
         await _force(world, eid, phase, reason="test setup")
     return world, eid
-
-
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        (
-            "/plan:start Build a local runtime surface",
-            Command(
-                name="/plan:start",
-                raw="/plan:start Build a local runtime surface",
-                args=["Build", "a", "local", "runtime", "surface"],
-            ),
-        ),
-        (
-            "/plan:status",
-            Command(name="/plan:status", raw="/plan:status", args=[]),
-        ),
-        (
-            "/plan:finalize",
-            Command(name="/plan:finalize", raw="/plan:finalize", args=[]),
-        ),
-        (
-            "/plan:write",
-            Command(name="/plan:write", raw="/plan:write", args=[]),
-        ),
-        (
-            "/plan:qa_review approved looks good",
-            Command(
-                name="/plan:qa_review",
-                raw="/plan:qa_review approved looks good",
-                args=["approved", "looks", "good"],
-            ),
-        ),
-        (
-            "/task:start implement parser",
-            Command(
-                name="/task:start",
-                raw="/task:start implement parser",
-                args=["implement", "parser"],
-            ),
-        ),
-        (
-            "/task:status",
-            Command(name="/task:status", raw="/task:status", args=[]),
-        ),
-        (
-            "/task:resume phase-2",
-            Command(name="/task:resume", raw="/task:resume phase-2", args=["phase-2"]),
-        ),
-        (
-            "/task:replan blocked_on_review",
-            Command(
-                name="/task:replan",
-                raw="/task:replan blocked_on_review",
-                args=["blocked_on_review"],
-            ),
-        ),
-        (
-            "/task:abort",
-            Command(name="/task:abort", raw="/task:abort", args=[]),
-        ),
-    ],
-)
-def test_parse_command_accepts_closed_supported_grammar(
-    text: str, expected: Command
-) -> None:
-    assert parse_command(text) == expected
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "",
-        "   ",
-        "plan:start missing slash",
-        "/plan",
-        "/task",
-        "/task:pause",
-        "/plan:startx wrong prefix",
-        "/task:status extra words still supported by name? no",
-    ],
-)
-def test_parse_command_rejects_unsupported_input(text: str) -> None:
-    with pytest.raises(ValueError):
-        parse_command(text)
-
-
-def test_parse_command_ignores_outer_whitespace() -> None:
-    command = parse_command("  /plan:status   ")
-
-    assert command == Command(name="/plan:status", raw="/plan:status", args=[])
 
 
 def test_slug_from_description_returns_empty_on_blank() -> None:
@@ -1272,17 +1177,6 @@ def test_circuit_breaker_treats_unknown_task_as_zero_retries() -> None:
     assert TaskExec(state=state).check_circuit_breaker(state, "task-unknown") is False
 
 
-def test_retry_budget_exhausted_blocks_task() -> None:
-    from examples.e2e.plan_and_task.task_exec import TaskExec
-
-    state = _make_runtime_state()
-    state.tasks = [
-        TaskRecord(task_id="task-001", title="Retry me", status="pending", retry_count=3)
-    ]
-
-    assert TaskExec(state=state).check_retry_budget_exhausted(state, "task-001") is True
-
-
 async def _run_restart_flow(state: RuntimeState, adapter: ArtifactAdapter) -> RuntimeState:
     """Drive the restart/load flow through the production resume_workflow()."""
     from examples.e2e.plan_and_task.main import resume_workflow
@@ -1731,34 +1625,41 @@ async def test_restart_flow_running_without_subagents_becomes_blocked(tmp_path: 
     assert persisted.status == "blocked"
 
 
-def test_readme_command_examples_match_supported_commands() -> None:
-    """Each command documented in README.md is accepted by parse_command().
+async def test_readme_command_examples_match_supported_commands(tmp_path: Path) -> None:
+    """The live slash-command triggers stay in sync with README's 'Supported Commands'.
 
-    This test validates that the README's 'Supported Commands' section stays
-    in sync with the actual command parser so documentation never drifts.
+    The vocabulary is derived from the built world's TriggerSpec patterns — not a
+    parallel copy — so this guard can never drift from what the harness routes.
     """
-    from examples.e2e.plan_and_task.commands import parse_command
+    from ecs_agent.components import UserPromptConfigComponent
 
-    # The 8 commands listed under '## Supported Commands' in README.md
-    documented_commands = [
+    # The 11 commands listed under '## Supported Commands' in README.md.
+    documented_commands = {
         "/plan:start",
+        "/plan:resume",
         "/plan:status",
         "/plan:finalize",
+        "/plan:write",
+        "/plan:qa_review",
         "/task:start",
         "/task:status",
         "/task:resume",
         "/task:replan",
         "/task:abort",
-    ]
-    for cmd_str in documented_commands:
-        result = parse_command(cmd_str)
-        assert result is not None, (
-            f"README-documented command {cmd_str!r} was rejected by parse_command(). "
-            "Update README or commands.py to stay in sync."
-        )
-        assert result.name == cmd_str.split()[0], (
-            f"Unexpected parse result for {cmd_str!r}: got name={result.name!r}"
-        )
+    }
+
+    world, agent_id, _, _ = await _build_test_world(tmp_path)
+    config = world.get_component(agent_id, UserPromptConfigComponent)
+    assert config is not None
+
+    live_patterns = {t.pattern for t in config.triggers}
+    assert live_patterns == documented_commands, (
+        "README '## Supported Commands' drifted from the live TriggerSpec patterns. "
+        f"only-in-README={documented_commands - live_patterns}, "
+        f"only-in-code={live_patterns - documented_commands}"
+    )
+    for trigger in config.triggers:
+        assert trigger.content in config.script_handlers
 
 
 async def test_review_verdict_artifact_has_phase_and_verdict(tmp_path: Path) -> None:
@@ -3300,27 +3201,6 @@ async def test_controller_missing_approved_reviews_uses_last_verdict(
 # ── /plan:resume command tests ─────────────────────────────────────────────────
 
 
-def test_parse_command_accepts_plan_resume_with_workflow_id() -> None:
-    from examples.e2e.plan_and_task.commands import Command, parse_command
-
-    cmd = parse_command("/plan:resume my-workflow-id")
-    assert cmd == Command(
-        name="/plan:resume",
-        raw="/plan:resume my-workflow-id",
-        args=["my-workflow-id"],
-    )
-
-
-def test_parse_command_plan_resume_without_args_parses_cleanly() -> None:
-    from examples.e2e.plan_and_task.commands import parse_command
-
-    # /plan:resume is in _COMMANDS_WITH_ARGS — missing args is still parseable;
-    # the handler is responsible for returning the "missing arg" error.
-    cmd = parse_command("/plan:resume")
-    assert cmd.name == "/plan:resume"
-    assert cmd.args == []
-
-
 async def test_main_world_registers_plan_resume_trigger(tmp_path: Path) -> None:
     from ecs_agent.components import UserPromptConfigComponent
 
@@ -4587,6 +4467,12 @@ def test_upsert_verdict_approved_sticky_across_all_phases() -> None:
 def test_review_verdict_has_no_plan_version_field() -> None:
     v = ReviewVerdict(phase="DRAFT_ADVISOR_REVIEW", verdict="approved", decided_at="2026-01-01T00:00:00")
     assert not hasattr(v, "plan_version")
+
+
+def test_review_verdict_has_no_citation_fields() -> None:
+    v = ReviewVerdict(phase="DRAFT_ADVISOR_REVIEW", verdict="approved", decided_at="2026-01-01T00:00:00")
+    assert not hasattr(v, "citations")
+    assert not hasattr(v, "evidence_refs")
 
 
 async def test_handle_advisor_review_sets_status_active_after_transition(tmp_path: Path) -> None:
@@ -5963,6 +5849,25 @@ def test_from_dict_migrates_legacy_completed_ids_onto_tasks() -> None:
     loaded = RuntimeState.from_dict(payload)
     assert loaded.tasks[0].status == "completed"
     assert loaded.completed_task_ids == ["task-001"]
+
+
+def test_from_dict_drops_legacy_review_verdict_citation_keys() -> None:
+    # State files written before citations/evidence_refs were removed still load.
+    state = _make_runtime_state()
+    payload = state.to_dict()
+    payload["review_verdicts"] = [
+        {
+            "phase": "DRAFT_ADVISOR_REVIEW",
+            "verdict": "approved",
+            "decided_at": "2026-01-01T00:00:00",
+            "notes": None,
+            "citations": ["legacy-cite"],
+            "evidence_refs": ["legacy-ref"],
+        }
+    ]
+    loaded = RuntimeState.from_dict(payload)
+    assert loaded.review_verdicts[0].verdict == "approved"
+    assert not hasattr(loaded.review_verdicts[0], "citations")
 
 
 # --- PhaseChangedEvent journal (framework-extensions Task B) ----------------
