@@ -24,6 +24,7 @@ The following types and classes are re-exported for convenience:
 - `scan_module`, `sandboxed_execute`, `tool` from `ecs_agent.tools`
 - `ScratchbookRef`, `ScratchbookRefComponent`, `ScratchbookIndexComponent` from `ecs_agent.types` and `ecs_agent.components`
 - `SubagentConfig`, `FreeSubagentConfig`, `SubagentLifecycleStatus`, `SubagentSessionRecord`, `InheritancePolicy` from `ecs_agent.types`
+- `TodoSkill` from `ecs_agent.skills.todo`; `TodoItem`, `TodoStatus`, `TodoListUpdatedEvent` from `ecs_agent.types`; `TodoListComponent` from `ecs_agent.components`
 - `ScratchbookService`, `ScratchbookIndexer`, `ToolResultsSink` from `ecs_agent.scratchbook`
 - `AgentSpec`, `validate_agent_spec`, `discover_agent_sources`, `load_json_agents`, `load_markdown_agent`, `resolve_agent_specs`, `compile_agent_specs`, `resolve_prompt_file` from `ecs_agent.dsl`
 
@@ -87,6 +88,11 @@ class ToolSchema:
     name: str
     description: str
     parameters: dict[str, Any]
+
+@dataclass(slots=True)
+class TodoItem:
+    content: str
+    status: TodoStatus = "pending"  # "pending" | "in_progress" | "completed"
 
 @dataclass(slots=True)
 class Usage:
@@ -197,6 +203,13 @@ class MessageBusResponseEvent:
 class MessageBusTimeoutEvent:
     entity_id: EntityId
     correlation_id: str
+
+@dataclass(slots=True)
+class TodoListUpdatedEvent:
+    entity_id: EntityId
+    items: list[TodoItem]  # snapshot copy, not the live list
+    completed_count: int
+    total_count: int
 
 @dataclass(slots=True)
 class PlanStepCompletedEvent:
@@ -458,6 +471,7 @@ All components are implemented as `@dataclass(slots=True)`.
  `PendingToolCallsComponent(tool_calls: list[ToolCall])`
  `ToolResultsComponent(results: dict[str, str])`
  `PlanComponent(steps: list[str], current_step: int = 0, completed: bool = False)`
+ `TodoListComponent(items: list[TodoItem] = [])`
  `MessageBusConfigComponent(max_queue_size: int = 1000, publish_timeout: float = 2.0, request_timeout: float = 30.0, cleanup_interval: float = 10.0)`
  `MessageBusSubscriptionComponent(subscriptions: set[str], inbox: deque[MessageBusEnvelope])`
  `MessageBusConversationComponent(active_requests: dict[str, float])`

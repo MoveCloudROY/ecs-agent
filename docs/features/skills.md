@@ -338,6 +338,8 @@ Stored in the `SkillComponent` for each installed skill.
 
 ## Built-in Skills
 - **BuiltinToolsSkill**: Basic file manipulation (`read_file`, `write_file`, `edit_file`, `glob`) and shell execution (`bash`). See [Built-in Tools](builtin-tools.md).
+- **TodoSkill**: Agent-maintained session checklist via the `todo_write` tool. See [Todo List](todo-list.md).
+- **WebSearchSkill**: Brave Search integration. See [Web Search](web-search.md).
 
 ## Workspace Binding
 
