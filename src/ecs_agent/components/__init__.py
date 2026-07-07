@@ -42,6 +42,7 @@ from ecs_agent.components.definitions import (
     SubagentWaitComponent,
     SystemPromptComponent,
     TerminalComponent,
+    TodoListComponent,
     ToolApprovalComponent,
     ToolRegistryComponent,
     ToolResultsComponent,
@@ -58,6 +59,7 @@ from ecs_agent.components.definitions import (
     PromptContextReservationComponent,
     VectorStoreComponent,
 )
+from ecs_agent.types import TodoItem, TodoStatus
 
 __all__ = [
     "CheckpointComponent",
@@ -101,6 +103,9 @@ __all__ = [
     "SubagentWaitComponent",
     "SystemPromptComponent",
     "TerminalComponent",
+    "TodoItem",
+    "TodoListComponent",
+    "TodoStatus",
     "ToolApprovalComponent",
     "ToolRegistryComponent",
     "ToolResultsComponent",

@@ -198,6 +198,27 @@ from ecs_agent.components import PlanComponent
 world.add_component(agent, PlanComponent(steps=["Analyze", "Execute", "Verify"]))
 ```
 
+### TodoListComponent
+Agent-maintained session todo list, written by the `todo_write` tool (`TodoSkill`). Lazily created on the first write; hosts may pre-seed it. Serializes through `WorldSerializer`.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `items` | `list[TodoItem]` | `[]` | Checklist entries (`content` + `status`: `pending` / `in_progress` / `completed`) |
+
+**Used by:** `todo_write` handler, `TodoCompactionContextProvider`
+
+**Usage:**
+```python
+from ecs_agent.components import TodoListComponent
+
+todo = world.get_component(agent, TodoListComponent)
+if todo is not None:
+    done = sum(1 for item in todo.items if item.status == "completed")
+    print(f"progress {done}/{len(todo.items)}")
+```
+
+See [Todo List](features/todo-list.md) for the full feature guide.
+
 ## Collaboration Components
 
 ### MessageBusConfigComponent

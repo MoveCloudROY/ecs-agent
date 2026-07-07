@@ -1798,3 +1798,32 @@ def test_serialization_backward_compat_missing_world_name() -> None:
     }
     restored = WorldSerializer.from_dict(data, providers={}, tool_handlers={})
     assert restored.name is None
+
+
+def test_serialization_roundtrip_todo_list_component() -> None:
+    from ecs_agent.components import TodoItem, TodoListComponent
+
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        TodoListComponent(
+            items=[
+                TodoItem(content="Split utils into io/format modules", status="completed"),
+                TodoItem(content="Add unit tests for both new modules", status="in_progress"),
+                TodoItem(content="Update docs and README"),
+            ]
+        ),
+    )
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+
+    component = restored.get_component(entity, TodoListComponent)
+    assert component is not None
+    assert all(isinstance(item, TodoItem) for item in component.items)
+    assert [(item.content, item.status) for item in component.items] == [
+        ("Split utils into io/format modules", "completed"),
+        ("Add unit tests for both new modules", "in_progress"),
+        ("Update docs and README", "pending"),
+    ]

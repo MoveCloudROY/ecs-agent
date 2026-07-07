@@ -17,6 +17,7 @@ Overview of the included examples for the ECS-based LLM Agent framework.
 | [World Serialization](#world-serialization) | Save/load world state to/from JSON | No | WorldSerializer.save/load |
 | [Tool Approval Agent](#tool-approval-agent) | Policy-based tool call approval flow | No | ToolApprovalComponent, ToolApprovalSystem |
 | [Markdown Skill Agent](#markdown-skill-agent) | Load SKILL.md and install markdown-driven skill | Optional | MarkdownSkill, SkillManager |
+| [Todo Agent](#todo-agent) | Agent-maintained checklist with mid-task replanning | Optional | TodoSkill, TodoListUpdatedEvent |
 | [Tree Search Agent](#tree-search-agent) | MCTS planning for complex goals | No | PlanSearchComponent, TreeSearchSystem |
 | [RAG Agent](#rag-agent) | Vector search retrieval-augmented generation | No | RAGTriggerComponent, RAGSystem |
 | [Sub-Agent Delegation](#sub-agent-delegation) | Parent agent delegates to child agents | No | Subagent components, MessageBusSystem |
@@ -402,6 +403,16 @@ Landmarks:
 - **What it demonstrates:** Policy-based manual approval flow for sensitive tool calls.
 - **Run:** `uv run python examples/tool_approval_agent.py`
 - **Pattern:** `ToolApprovalComponent` + `ToolApprovalSystem`.
+
+---
+
+### Todo Agent
+- **File:** `examples/todo_agent.py`
+- **What it demonstrates:** An agent planning and tracking a multi-step task with the `todo_write` tool — checklist creation, mid-task discovery of new work, completion — plus host-side progress observation via `TodoListUpdatedEvent` and final-state reading from `TodoListComponent`.
+- **Run:** `uv run python examples/todo_agent.py`
+- **Pattern:** `TodoSkill` + `SkillManager` + `ReasoningSystem` + `ToolExecutionSystem`.
+
+> **Dual-Mode Support**: This example supports both fake and real modes. Run without `LLM_API_KEY` for `FakeModel`, or set `LLM_API_KEY` to use `Model(...)`. See [Dual-Mode Model Selection](#dual-mode-model-selection) for details.
 
 ---
 

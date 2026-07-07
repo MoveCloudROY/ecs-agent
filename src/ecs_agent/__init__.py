@@ -50,6 +50,9 @@ from ecs_agent.types import (
     SubagentStreamStartEvent,
     SystemExecutionCompletedEvent,
     SystemExecutionStartedEvent,
+    TodoItem,
+    TodoListUpdatedEvent,
+    TodoStatus,
     ToolApprovedEvent,
     ToolApprovalRequestedEvent,
     ToolDeniedEvent,
@@ -74,7 +77,9 @@ from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.discovery import DiscoveryManager, DiscoveryReport, SkillDiscovery
 from ecs_agent.skills.web_search import WebSearchSkill
 from ecs_agent.skills.skill import Skill
+from ecs_agent.skills.todo import TodoSkill
 from ecs_agent.components.definitions import SkillComponent, SkillMetadata
+from ecs_agent.components.definitions import TodoListComponent
 from ecs_agent.tools.builtins import BuiltinToolsSkill
 from ecs_agent.systems.permission import PermissionSystem
 from ecs_agent.systems.tool_approval import ToolApprovalSystem
@@ -276,6 +281,11 @@ __all__ = [
     "SubagentSystem",
     "SystemExecutionCompletedEvent",
     "SystemExecutionStartedEvent",
+    "TodoItem",
+    "TodoListComponent",
+    "TodoListUpdatedEvent",
+    "TodoSkill",
+    "TodoStatus",
     "ToolApprovalRequestedEvent",
     "ToolApprovalSystem",
     "ToolApprovedEvent",

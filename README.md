@@ -137,6 +137,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **Script Skills** — Extend markdown skills with Python tool handlers in a `scripts/` directory, executed as sandboxed subprocesses.
 - **Built-in Tools** — `BuiltinToolsSkill` provides `read_file`, `write_file`, `edit_file`, `bash`, `glob`, and `interactive_bash` with workspace binding, path traversal protection, clean file reads, ECS-scoped snapshot-protected editing, and persistent tmux session support. File snapshots are framework-managed through `ToolExecutionContext` and `ToolRuntimeStateComponent`, so hashes and snapshot IDs stay out of LLM-visible tool calls.
 - **Skill Discovery** — File-based skill loading from directories with metadata-first activation and staged full-context injection via `load_skill_details`.
+- **Todo List** — `TodoSkill` provides a `todo_write` tool for agent-maintained session checklists (full-replacement semantics, single `in_progress` invariant). State lives in `TodoListComponent`, updates publish `TodoListUpdatedEvent`, and the current list survives compaction via `TodoCompactionContextProvider` — never rendered into the system prompt, keeping conversation prompt caching intact. See [`docs/features/todo-list.md`](docs/features/todo-list.md).
 
 ### Production Infrastructure
 - **5 LLM Providers + Streaming** — OpenAI, Claude, LiteLLM (100+ models), Fake, and Retry providers with real-time SSE token delivery.
@@ -203,6 +204,7 @@ src/ecs_agent/
 │   ├── protocol.py             # ScriptSkill Protocol definition
 │   ├── manager.py              # SkillManager lifecycle handler
 │   ├── discovery.py            # File-based skill discovery
+│   ├── todo.py                 # TodoSkill: todo_write session checklist
 │   └── web_search.py           # Brave Search integration
 ├── mcp/                          # MCP integration
 ```
@@ -263,6 +265,7 @@ The `examples/` directory contains runnable demos for the major patterns in the 
 | [`context_management_agent.py`](examples/context_management_agent.py) | Checkpoint, undo, and compaction demo (dual-mode) |
 | [`skill_agent.py`](examples/skill_agent.py) | Skill system and BuiltinTools ScriptSkill (read/write/edit) lifecycle |
 | [`skill_discovery_agent.py`](examples/skill_discovery_agent.py) | File-based skill loading from folder (dual-mode) |
+| [`todo_agent.py`](examples/todo_agent.py) | Agent-maintained todo checklist via `TodoSkill`, with mid-task replanning and host-side event observation (dual-mode) |
 | [`permission_agent.py`](examples/permission_agent.py) | Permission-restricted agent with tool filtering (dual-mode) |
 | [`skill_agent.py`](examples/skill_agent.py) | Load a SKILL.md Skill and install it on an agent (dual-mode) |
 | [`mcp_agent.py`](examples/mcp_agent.py) | MCP server integration and namespaced tool usage |
@@ -452,6 +455,7 @@ See [`docs/`](docs/) for detailed guides:
 ### Tools & Integration
 - [Skills](docs/features/skills.md), Composable capabilities and progressive disclosure
 - [Built-in Tools](docs/features/builtin-tools.md), File manipulation and shell execution
+- [Todo List](docs/features/todo-list.md), Agent-maintained session checklist via `todo_write`
 - [Tool Discovery & Approval](docs/features/tool-discovery.md), Auto-discovery, sandbox, approval flow
 - [MCP Integration](docs/features/mcp.md), Connecting to external MCP tool servers
 - [Web Search](docs/features/web-search.md), Brave Search API integration

@@ -155,9 +155,9 @@ def test_render_blocks_returns_none_when_all_providers_are_silent() -> None:
     assert render_compaction_context_blocks(world, entity_id, []) is None
 
 
-def test_default_providers_include_subagent_sessions() -> None:
+def test_default_providers_include_subagent_sessions_and_todo_list() -> None:
     provider_ids = [
         provider.provider_id for provider in DEFAULT_COMPACTION_CONTEXT_PROVIDERS
     ]
 
-    assert provider_ids == ["subagent_sessions"]
+    assert provider_ids == ["subagent_sessions", "todo_list"]

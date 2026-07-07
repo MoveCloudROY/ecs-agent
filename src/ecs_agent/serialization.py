@@ -49,6 +49,8 @@ from ecs_agent.components import (
     SubagentSessionTableComponent,
     SubagentWaitComponent,
     TerminalComponent,
+    TodoItem,
+    TodoListComponent,
     ToolApprovalComponent,
     ToolRegistryComponent,
     ToolResultsComponent,
@@ -126,6 +128,7 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     PromptContextReservationComponent.__name__: PromptContextReservationComponent,
     PhaseComponent.__name__: PhaseComponent,
     PhaseApprovalsComponent.__name__: PhaseApprovalsComponent,
+    TodoListComponent.__name__: TodoListComponent,
 }
 
 
@@ -409,6 +412,12 @@ class WorldSerializer:
             normalized_data["tool_calls"] = [
                 ToolCall(**tool_call)
                 for tool_call in normalized_data.get("tool_calls", [])
+            ]
+
+        if component_name == TodoListComponent.__name__:
+            normalized_data["items"] = [
+                TodoItem(**item) if isinstance(item, dict) else item
+                for item in normalized_data.get("items", [])
             ]
 
         if component_name == ToolRegistryComponent.__name__:

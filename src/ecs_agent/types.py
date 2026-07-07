@@ -144,6 +144,19 @@ class ToolSchema:
     sandbox_compatible: bool = False
 
 
+TodoStatus = Literal["pending", "in_progress", "completed"]
+
+TODO_STATUSES: tuple[TodoStatus, ...] = ("pending", "in_progress", "completed")
+
+
+@dataclass(slots=True)
+class TodoItem:
+    """One entry in an agent's session todo list."""
+
+    content: str
+    status: TodoStatus = "pending"
+
+
 Usage = UsageRecord
 
 RunnerLifecycleStatus = Literal[
@@ -508,6 +521,20 @@ class CompactionCompleteEvent:
     compacted_tokens: int
     operation: str = "compact"
     status: str = "success"
+
+
+@dataclass(slots=True)
+class TodoListUpdatedEvent:
+    """Event emitted after todo_write replaces an entity's todo list.
+
+    ``items`` is a snapshot copy, not the live component list. Consumers must
+    treat the stream as full snapshots: counts may go up or down across events.
+    """
+
+    entity_id: EntityId
+    items: list[TodoItem]
+    completed_count: int
+    total_count: int
 
 
 @dataclass(slots=True)

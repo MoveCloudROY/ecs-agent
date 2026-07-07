@@ -18,6 +18,7 @@ from typing import Protocol
 from ecs_agent.components import (
     SubagentNotificationQueueComponent,
     SubagentSessionTableComponent,
+    TodoListComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.types import (
@@ -89,8 +90,24 @@ class SubagentCompactionContextProvider:
         return "\n".join(lines)
 
 
+class TodoCompactionContextProvider:
+    """Snapshot of the agent's todo list so it survives compaction verbatim."""
+
+    provider_id = "todo_list"
+
+    def render_compaction_context(
+        self, world: World, entity_id: EntityId
+    ) -> str | None:
+        todo = world.get_component(entity_id, TodoListComponent)
+        if todo is None or not todo.items:
+            return None
+        lines = [f"- [{item.status}] {item.content}" for item in todo.items]
+        return "Current todo list (carry forward verbatim):\n" + "\n".join(lines)
+
+
 DEFAULT_COMPACTION_CONTEXT_PROVIDERS: tuple[CompactionContextProvider, ...] = (
     SubagentCompactionContextProvider(),
+    TodoCompactionContextProvider(),
 )
 
 
@@ -115,5 +132,6 @@ __all__ = [
     "CompactionContextProvider",
     "DEFAULT_COMPACTION_CONTEXT_PROVIDERS",
     "SubagentCompactionContextProvider",
+    "TodoCompactionContextProvider",
     "render_compaction_context_blocks",
 ]

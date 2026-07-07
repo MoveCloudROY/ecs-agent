@@ -22,6 +22,7 @@ from ecs_agent.types import (
     SubagentConfig,
     SubagentNotificationRecord,
     SubagentSessionRecord,
+    TodoItem,
     ToolCall,
     ToolSchema,
     ScratchbookRef,
@@ -64,6 +65,13 @@ class KVStoreComponent:
     """Simple key-value memory."""
 
     store: dict[str, Any]
+
+
+@dataclass(slots=True)
+class TodoListComponent:
+    """Agent-maintained session todo list (written via the todo_write tool)."""
+
+    items: list[TodoItem] = field(default_factory=list)
 
 
 @dataclass(slots=True)
