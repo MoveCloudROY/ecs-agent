@@ -21,17 +21,11 @@ from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.types import Message
 
+from tests.live.api_format import live_openai_base_url
+
 _ENDPOINT_PARAMS = [
-    pytest.param(
-        "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        ApiFormat.OPENAI_CHAT_COMPLETIONS,
-        id="chat-completions",
-    ),
-    pytest.param(
-        "https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
-        ApiFormat.OPENAI_RESPONSES,
-        id="responses",
-    ),
+    pytest.param(ApiFormat.OPENAI_CHAT_COMPLETIONS, id="chat-completions"),
+    pytest.param(ApiFormat.OPENAI_RESPONSES, id="responses"),
 ]
 
 
@@ -62,14 +56,12 @@ def _build_scratchbook_prompt_config() -> ScratchbookPromptConfig:
     )
 
 
-def _make_provider(
-    api_key: str, base_url: str, api_format: ApiFormat
-) -> OpenAIModel:
+def _make_provider(api_key: str, api_format: ApiFormat) -> OpenAIModel:
     model = os.getenv("LLM_MODEL") or "qwen3.5-flash"
     return OpenAIModel(
         config=ProviderConfig(
             provider_id="aliyun",
-            base_url=base_url,
+            base_url=live_openai_base_url(api_format),
             api_key=api_key,
             api_format=api_format,
         ),
@@ -94,13 +86,12 @@ class _CapturingAsyncClient:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("base_url,api_format", _ENDPOINT_PARAMS)
+@pytest.mark.parametrize("api_format", _ENDPOINT_PARAMS)
 async def test_live_scratchbook_placeholders_render_into_system_prompt_snapshot(
     live_api_key: str,
-    base_url: str,
     api_format: ApiFormat,
 ) -> None:
-    model = _make_provider(live_api_key, base_url, api_format)
+    model = _make_provider(live_api_key, api_format)
     world = World()
     entity_id = world.create_entity()
 
@@ -155,13 +146,12 @@ async def test_live_scratchbook_placeholders_render_into_system_prompt_snapshot(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("base_url,api_format", _ENDPOINT_PARAMS)
+@pytest.mark.parametrize("api_format", _ENDPOINT_PARAMS)
 async def test_live_scratchbook_rendered_prompt_reaches_aliyun_outbound_channel(
     live_api_key: str,
-    base_url: str,
     api_format: ApiFormat,
 ) -> None:
-    model = _make_provider(live_api_key, base_url, api_format)
+    model = _make_provider(live_api_key, api_format)
     capturing_client = _CapturingAsyncClient(model._client)
     model._client = capturing_client  # type: ignore[assignment]  # test-only: monkeypatching private attr for HTTP capture
 

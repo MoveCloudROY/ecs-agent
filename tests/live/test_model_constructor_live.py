@@ -8,9 +8,9 @@ Environment variables:
 
   Aliyun / OpenAI-compatible:
     LLM_API_KEY (required)
-    ALIYUN_LIVE_CHAT_BASE_URL (optional)
-    ALIYUN_LIVE_RESPONSES_BASE_URL (optional)
-    ALIYUN_LIVE_MODEL (optional, defaults to qwen3.5-flash)
+    ALIYUN_LIVE_CHAT_BASE_URL / LLM_BASE_URL (optional; falls back to DashScope)
+    ALIYUN_LIVE_RESPONSES_BASE_URL / LLM_RESPONSES_BASE_URL / LLM_BASE_URL (optional)
+    ALIYUN_LIVE_MODEL / LLM_MODEL (optional, defaults to qwen3.5-flash)
 
 Tests skip automatically when the required credentials are not present.
 """
@@ -25,20 +25,14 @@ from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.model_constructor import Model
 from ecs_agent.types import CompletionResult, Message
 
+from tests.live.api_format import live_openai_base_url, live_openai_model
+
 _ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_LIVE_BASE_URL") or "https://cc2.caaa.tech"
 _ANTHROPIC_MODEL = os.getenv("ANTHROPIC_LIVE_MODEL") or "kimi-for-coding"
 
-_ALIYUN_CHAT_BASE_URL = os.getenv(
-    "ALIYUN_LIVE_CHAT_BASE_URL",
-    "https://dashscope.aliyuncs.com/compatible-mode/v1",
-)
-_ALIYUN_RESPONSES_BASE_URL = (
-    os.getenv(
-        "ALIYUN_LIVE_RESPONSES_BASE_URL",
-        "https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
-    )
-)
-_ALIYUN_MODEL = os.getenv("ALIYUN_LIVE_MODEL") or "qwen3.5-flash"
+_ALIYUN_CHAT_BASE_URL = live_openai_base_url(ApiFormat.OPENAI_CHAT_COMPLETIONS)
+_ALIYUN_RESPONSES_BASE_URL = live_openai_base_url(ApiFormat.OPENAI_RESPONSES)
+_ALIYUN_MODEL = live_openai_model()
 
 _GREETING = "Say 'hello world' in exactly those two words and nothing else."
 
