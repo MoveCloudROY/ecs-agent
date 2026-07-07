@@ -28,6 +28,7 @@ from examples.e2e.plan_and_task.controller import PlanController
 from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
 from examples.e2e.plan_and_task.runtime import derive_workflow_id_from_llm
 from examples.e2e.plan_and_task.task_exec import TaskExec
+from tests.live.api_format import resolve_live_api_format
 
 
 _WRITING_SOFTWARE_DESCRIPTION = """我希望开发一份辅助写作软件，目前实现的前端位于 @frontend/，请为其在 @backend/ 中补全后端，并与前端进行对接
@@ -249,7 +250,7 @@ async def test_live_controller_advisor_retry_loop_revise_then_approved(
 
 
 _ANTHROPIC_SKIP = pytest.mark.skipif(
-    os.getenv("LLM_API_FORMAT") != ApiFormat.ANTHROPIC_MESSAGES,
+    resolve_live_api_format() is not ApiFormat.ANTHROPIC_MESSAGES,
     reason="Set LLM_API_FORMAT=anthropic_messages to run Anthropic live tests",
 )
 

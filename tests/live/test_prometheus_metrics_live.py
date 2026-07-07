@@ -28,23 +28,17 @@ from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import Message
+from tests.live.api_format import resolve_live_api_format
 
 
 def _api_format_from_env() -> ApiFormat:
-    raw = os.getenv("LLM_API_FORMAT", ApiFormat.OPENAI_CHAT_COMPLETIONS.value).lower()
-    aliases = {
-        "openai": ApiFormat.OPENAI_CHAT_COMPLETIONS,
-        "chat": ApiFormat.OPENAI_CHAT_COMPLETIONS,
-        "openai_chat_completions": ApiFormat.OPENAI_CHAT_COMPLETIONS,
-        "responses": ApiFormat.OPENAI_RESPONSES,
-        "openai_responses": ApiFormat.OPENAI_RESPONSES,
-        "anthropic": ApiFormat.ANTHROPIC_MESSAGES,
-        "anthropic_messages": ApiFormat.ANTHROPIC_MESSAGES,
-    }
-    try:
-        return aliases[raw]
-    except KeyError:
-        pytest.skip(f"Unsupported LLM_API_FORMAT for live metrics smoke: {raw}")
+    api_format = resolve_live_api_format()
+    if api_format is None:
+        pytest.skip(
+            "Unsupported LLM_API_FORMAT for live metrics smoke: "
+            f"{os.getenv('LLM_API_FORMAT')!r}"
+        )
+    return api_format
 
 
 def _make_live_model(api_key: str) -> LLMModel:

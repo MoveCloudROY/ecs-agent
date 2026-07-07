@@ -115,4 +115,4 @@ LLM_API_KEY="$LLM_API_KEY" \
   uv run pytest tests/live/test_prometheus_metrics_live.py -v
 ```
 
-Supported `LLM_API_FORMAT` values are `openai_chat_completions`, `openai_responses`, and `anthropic_messages`; existing shorthand values `openai`, `chat`, `responses`, and `anthropic` are accepted by the live test helper.
+Supported `LLM_API_FORMAT` values are `openai_chat_completions`, `openai_responses`, and `anthropic_messages`; shorthand values `openai`, `chat`, `responses`, and `anthropic` are also accepted. All live tests resolve the variable through the shared helper in `tests/live/api_format.py`, so the same value drives every live file.

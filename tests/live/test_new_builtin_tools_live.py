@@ -5,7 +5,9 @@ Run with real credentials:
         LLM_BASE_URL=https://api.anthropic.com
         LLM_API_KEY=<key>
         LLM_MODEL=kimi-for-coding
-        LLM_API_FORMAT=anthropic  (optional, defaults to openai)
+        LLM_API_FORMAT=anthropic_messages  (optional, defaults to
+            openai_chat_completions; shorthand aliases accepted — see
+            tests/live/api_format.py)
 
     OpenAI-compatible (qwen):
         LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
@@ -32,6 +34,7 @@ from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.tools.builtins import BuiltinToolsSkill
 from ecs_agent.types import Message
+from tests.live.api_format import resolve_live_api_format
 
 
 def _make_provider(live_api_key: str) -> OpenAIModel | ClaudeModel:
@@ -40,18 +43,20 @@ def _make_provider(live_api_key: str) -> OpenAIModel | ClaudeModel:
         "LLM_BASE_URL",
         "https://dashscope.aliyuncs.com/compatible-mode/v1",
     )
-    api_format_str = os.getenv("LLM_API_FORMAT", "openai").lower()
+    api_format = resolve_live_api_format()
+    if api_format is None:
+        pytest.skip(
+            f"Unsupported LLM_API_FORMAT: {os.getenv('LLM_API_FORMAT')!r}"
+        )
 
     config = ProviderConfig(
         provider_id="live",
         base_url=base_url,
         api_key=live_api_key,
-        api_format=ApiFormat.ANTHROPIC_MESSAGES
-        if api_format_str == "anthropic"
-        else ApiFormat.OPENAI_CHAT_COMPLETIONS,
+        api_format=api_format,
     )
 
-    if api_format_str == "anthropic":
+    if api_format is ApiFormat.ANTHROPIC_MESSAGES:
         return ClaudeModel(config=config, model=model)
     return OpenAIModel(config=config, model=model)
 
