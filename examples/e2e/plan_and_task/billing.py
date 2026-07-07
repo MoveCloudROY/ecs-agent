@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ecs_agent.accounting.models import LLMInvocationEvent, PromptCacheStats
+from ecs_agent.accounting.models import LLMInvocationEvent
 from ecs_agent.accounting.normalization import compute_cache_stats
 from ecs_agent.logging import get_logger
 
@@ -28,28 +28,9 @@ class BillingSubscriber:
         self._total_tokens: int = 0
         self._total_cached_input_tokens: int = 0
         self._invocation_count: int = 0
-        self._agg_cache_read: dict[tuple[str, str], int] = {}
-        self._agg_total_prompt: dict[tuple[str, str], int] = {}
 
     def subscribe(self, event_bus: EventBus) -> None:
         event_bus.subscribe(LLMInvocationEvent, self._handle_llm_invocation)
-
-    def get_aggregate_cache_stats(
-        self, provider_id: str, model: str
-    ) -> PromptCacheStats | None:
-        key = (provider_id, model)
-        cache_read = self._agg_cache_read.get(key)
-        total_prompt = self._agg_total_prompt.get(key)
-        if cache_read is None or total_prompt is None:
-            return None
-        hit_rate: float | None = None
-        if total_prompt > 0:
-            hit_rate = cache_read / total_prompt
-        return PromptCacheStats(
-            cache_read_tokens=cache_read,
-            total_prompt_tokens=total_prompt,
-            hit_rate=hit_rate,
-        )
 
     def log_session_summary(self) -> None:
         logger.info(
@@ -91,7 +72,6 @@ class BillingSubscriber:
 
         cache_stats = compute_cache_stats(usage)
         if cache_stats is not None:
-            self._update_aggregate(event, cache_stats)
             logger.info(
                 "plan_task_llm_cache_stats",
                 entity_id=event.entity_id,
@@ -102,14 +82,3 @@ class BillingSubscriber:
                 total_prompt_tokens=cache_stats.total_prompt_tokens,
                 cache_hit_rate=cache_stats.hit_rate,
             )
-
-    def _update_aggregate(
-        self, event: LLMInvocationEvent, cache_stats: PromptCacheStats
-    ) -> None:
-        key = (event.provider_id, event.model)
-        self._agg_cache_read[key] = (
-            self._agg_cache_read.get(key, 0) + cache_stats.cache_read_tokens
-        )
-        self._agg_total_prompt[key] = (
-            self._agg_total_prompt.get(key, 0) + cache_stats.total_prompt_tokens
-        )
