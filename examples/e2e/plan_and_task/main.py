@@ -912,73 +912,17 @@ async def build_plan_task_world(
         "task_replan": _handle_task_replan,
         "task_abort": _handle_task_abort,
     }
+    # Each command's slash pattern derives from its handler key by turning the
+    # FIRST underscore into a colon: plan_start -> /plan:start, plan_qa_review
+    # -> /plan:qa_review. Keep new commands in script_handlers above only.
     triggers = [
         TriggerSpec(
-            pattern="/plan:start",
+            pattern="/" + name.replace("_", ":", 1),
             match_mode="prefix",
             action="script",
-            content="plan_start",
-        ),
-        TriggerSpec(
-            pattern="/plan:resume",
-            match_mode="prefix",
-            action="script",
-            content="plan_resume",
-        ),
-        TriggerSpec(
-            pattern="/plan:status",
-            match_mode="prefix",
-            action="script",
-            content="plan_status",
-        ),
-        TriggerSpec(
-            pattern="/plan:finalize",
-            match_mode="prefix",
-            action="script",
-            content="plan_finalize",
-        ),
-        TriggerSpec(
-            pattern="/plan:write",
-            match_mode="prefix",
-            action="script",
-            content="plan_write",
-        ),
-        TriggerSpec(
-            pattern="/plan:qa_review",
-            match_mode="prefix",
-            action="script",
-            content="plan_qa_review",
-        ),
-        TriggerSpec(
-            pattern="/task:start",
-            match_mode="prefix",
-            action="script",
-            content="task_start",
-        ),
-        TriggerSpec(
-            pattern="/task:status",
-            match_mode="prefix",
-            action="script",
-            content="task_status",
-        ),
-        TriggerSpec(
-            pattern="/task:resume",
-            match_mode="prefix",
-            action="script",
-            content="task_resume",
-        ),
-        TriggerSpec(
-            pattern="/task:replan",
-            match_mode="prefix",
-            action="script",
-            content="task_replan",
-        ),
-        TriggerSpec(
-            pattern="/task:abort",
-            match_mode="prefix",
-            action="script",
-            content="task_abort",
-        ),
+            content=name,
+        )
+        for name in script_handlers
     ]
     world.add_component(
         agent_id,
