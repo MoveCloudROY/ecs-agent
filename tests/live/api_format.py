@@ -71,3 +71,45 @@ def live_openai_base_url(
 def live_openai_model(default: str = "qwen3.5-flash") -> str:
     """OpenAI-family live model id: ``ALIYUN_LIVE_MODEL`` -> ``LLM_MODEL`` -> default."""
     return os.getenv("ALIYUN_LIVE_MODEL") or os.getenv("LLM_MODEL") or default
+
+
+_TRANSIENT_LIVE_ERROR_MARKERS = (
+    # httpx timeout family. str(exc) is often empty for these, so
+    # ErrorComponent carries the exception type name instead.
+    "readtimeout",
+    "connecttimeout",
+    "writetimeout",
+    "pooltimeout",
+    "timed out",
+    # Gateway-side transient statuses.
+    "too many requests",
+    "bad gateway",
+    "service unavailable",
+    "gateway timeout",
+    "internal server error",
+    # Connection drops.
+    "connecterror",
+    "connection refused",
+    "connection reset",
+    "server disconnected",
+    "peer closed connection",
+    "all connection attempts failed",
+)
+
+
+def live_transient_error_reason(error_text: str) -> str | None:
+    """Classify an agent ``ErrorComponent`` message as transient endpoint noise.
+
+    Live smokes ``pytest.skip`` on timeout / rate-limit / 5xx / connection-drop
+    shapes instead of failing. Auth and request-mapping errors (4xx, parsing)
+    return ``None`` so genuine regressions keep failing. Systems swallow LLM
+    exceptions into ``ErrorComponent`` rather than raising through
+    ``Runner.run``, so live tests must inspect the component to see them.
+    """
+    lowered = error_text.strip().lower()
+    if not lowered:
+        return None
+    for marker in _TRANSIENT_LIVE_ERROR_MARKERS:
+        if marker in lowered:
+            return f"{marker!r} in live endpoint error: {error_text[:160]}"
+    return None

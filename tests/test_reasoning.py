@@ -906,3 +906,33 @@ async def test_reasoning_without_usage_does_not_create_usage_component() -> None
     await ReasoningSystem().process(world)
 
     assert world.get_component(entity_id, TokenUsageComponent) is None
+
+
+@pytest.mark.asyncio
+async def test_reasoning_error_component_names_exception_type_when_message_empty() -> None:
+    """Empty exception strings (httpx timeout family) still yield a descriptive error."""
+    import httpx
+
+    class EmptyMessageTimeoutModel(FakeModel):
+        async def complete(
+            self,
+            messages: list[Message],
+            tools: list[ToolSchema] | None = None,
+        ) -> CompletionResult:
+            _ = (messages, tools)
+            raise httpx.ReadTimeout("")
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=EmptyMessageTimeoutModel(responses=[])))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="hi")]),
+    )
+
+    await ReasoningSystem().process(world)
+
+    error = world.get_component(entity_id, ErrorComponent)
+    assert error is not None
+    assert error.error == "ReadTimeout"
+    assert error.system_name == "ReasoningSystem"
