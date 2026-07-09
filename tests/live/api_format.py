@@ -34,3 +34,40 @@ def resolve_live_api_format(
     if raw is None or not raw.strip():
         return default
     return _ALIASES.get(raw.strip().lower())
+
+
+_DASHSCOPE_CHAT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+_DASHSCOPE_RESPONSES_BASE_URL = (
+    "https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1"
+)
+
+
+def live_openai_base_url(
+    api_format: ApiFormat = ApiFormat.OPENAI_CHAT_COMPLETIONS,
+) -> str:
+    """Base URL for an OpenAI-family live test, from env with DashScope defaults.
+
+    Precedence, most specific first: the historical ``ALIYUN_LIVE_*_BASE_URL``
+    vars, then the shared ``LLM_RESPONSES_BASE_URL``/``LLM_BASE_URL``, then the
+    DashScope default. This lets one ``LLM_BASE_URL`` drive every OpenAI-format
+    live test against an aggregator gateway (chat -> ``/chat/completions``,
+    responses -> ``/responses`` are appended by the provider), while leaving the
+    historical DashScope endpoints in place when nothing is set.
+    """
+    if api_format is ApiFormat.OPENAI_RESPONSES:
+        return (
+            os.getenv("ALIYUN_LIVE_RESPONSES_BASE_URL")
+            or os.getenv("LLM_RESPONSES_BASE_URL")
+            or os.getenv("LLM_BASE_URL")
+            or _DASHSCOPE_RESPONSES_BASE_URL
+        )
+    return (
+        os.getenv("ALIYUN_LIVE_CHAT_BASE_URL")
+        or os.getenv("LLM_BASE_URL")
+        or _DASHSCOPE_CHAT_BASE_URL
+    )
+
+
+def live_openai_model(default: str = "qwen3.5-flash") -> str:
+    """OpenAI-family live model id: ``ALIYUN_LIVE_MODEL`` -> ``LLM_MODEL`` -> default."""
+    return os.getenv("ALIYUN_LIVE_MODEL") or os.getenv("LLM_MODEL") or default

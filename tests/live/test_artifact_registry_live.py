@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -29,33 +28,23 @@ from ecs_agent.systems.user_prompt_normalization_system import (
 )
 from ecs_agent.types import EntityId, Message, ToolCall, ToolSchema
 
+from tests.live.api_format import live_openai_base_url, live_openai_model
+
 _ENDPOINT_PARAMS = [
-    pytest.param(
-        "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        id="chat-completions",
-    ),
-    pytest.param(
-        "https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
-        id="responses",
-    ),
+    pytest.param(ApiFormat.OPENAI_CHAT_COMPLETIONS, id="chat-completions"),
+    pytest.param(ApiFormat.OPENAI_RESPONSES, id="responses"),
 ]
 
 
-def _api_format_for_base_url(base_url: str) -> ApiFormat:
-    if "protocols/compatible-mode" in base_url:
-        return ApiFormat.OPENAI_RESPONSES
-    return ApiFormat.OPENAI_CHAT_COMPLETIONS
-
-
-def _make_provider(api_key: str, base_url: str, model: str) -> OpenAIModel:
+def _make_provider(api_key: str, api_format: ApiFormat) -> OpenAIModel:
     return OpenAIModel(
         config=ProviderConfig(
             provider_id="aliyun",
-            base_url=base_url,
+            base_url=live_openai_base_url(api_format),
             api_key=api_key,
-            api_format=_api_format_for_base_url(base_url),
+            api_format=api_format,
         ),
-        model=model,
+        model=live_openai_model(),
     )
 
 
@@ -120,14 +109,13 @@ async def test_live_tool_execution_persists_canonical_artifact(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("base_url", _ENDPOINT_PARAMS)
+@pytest.mark.parametrize("api_format", _ENDPOINT_PARAMS)
 async def test_live_planning_writes_canonical_plan_md(
     live_api_key: str,
     tmp_path: Path,
-    base_url: str,
+    api_format: ApiFormat,
 ) -> None:
-    model = os.getenv("LLM_MODEL") or "qwen3.5-flash"
-    model = _make_provider(api_key=live_api_key, base_url=base_url, model=model)
+    model = _make_provider(api_key=live_api_key, api_format=api_format)
 
     registry = ArtifactRegistry(root=tmp_path)
     world = World()
@@ -214,14 +202,13 @@ async def test_live_trigger_creates_boulder_on_plan_script(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("base_url", _ENDPOINT_PARAMS)
+@pytest.mark.parametrize("api_format", _ENDPOINT_PARAMS)
 async def test_live_no_legacy_category_paths_written(
     live_api_key: str,
     tmp_path: Path,
-    base_url: str,
+    api_format: ApiFormat,
 ) -> None:
-    model = os.getenv("LLM_MODEL") or "qwen3.5-flash"
-    model = _make_provider(api_key=live_api_key, base_url=base_url, model=model)
+    model = _make_provider(api_key=live_api_key, api_format=api_format)
 
     registry = ArtifactRegistry(root=tmp_path)
     world = World()

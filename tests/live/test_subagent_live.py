@@ -24,6 +24,7 @@ from ecs_agent.types import (
     SubagentConfig,
     SubagentStreamStartEvent,
 )
+from tests.live.api_format import live_openai_base_url, live_openai_model
 
 BACKGROUND_PROMPT = (
     "Say 'hello' in one word. "
@@ -38,7 +39,7 @@ BACKGROUND_PROMPT = (
 def _build_provider(
     api_key: str, *, base_url: str, api_format: ApiFormat
 ) -> OpenAIModel:
-    model = "qwen3.5-flash"
+    model = live_openai_model()
     return OpenAIModel(
         config=ProviderConfig(
             provider_id="aliyun",
@@ -243,12 +244,14 @@ async def _execute_live_notification_flow(
 
     conversation = world.get_component(entity_id, ConversationComponent)
     assert conversation is not None
-    system_messages = [
-        message for message in conversation.messages if message.role == "system"
+    # The wait system injects completion notifications as a role="user" message
+    # in the conversation tail (cache-stable), not into the system prompt.
+    notification_messages = [
+        message for message in conversation.messages if message.role == "user"
     ]
-    assert len(system_messages) == 1
-    assert "Background subagent updates:" in system_messages[0].content
-    assert session_id in system_messages[0].content
+    assert len(notification_messages) == 1
+    assert "Background subagent updates:" in notification_messages[0].content
+    assert session_id in notification_messages[0].content
 
     summary_result = json.loads(
         await tools.handlers["subagent_result"](
@@ -279,7 +282,7 @@ async def _execute_live_notification_flow(
 async def test_subagent_compatible_mode(live_api_key: str) -> None:
     await _execute_live_subagent(
         live_api_key,
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        base_url=live_openai_base_url(ApiFormat.OPENAI_CHAT_COMPLETIONS),
         api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
     )
 
@@ -288,7 +291,7 @@ async def test_subagent_compatible_mode(live_api_key: str) -> None:
 async def test_subagent_responses_mode(live_api_key: str) -> None:
     await _execute_live_subagent(
         live_api_key,
-        base_url="https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
+        base_url=live_openai_base_url(ApiFormat.OPENAI_RESPONSES),
         api_format=ApiFormat.OPENAI_RESPONSES,
     )
 
@@ -297,7 +300,7 @@ async def test_subagent_responses_mode(live_api_key: str) -> None:
 async def test_subagent_streaming_smoke(live_api_key: str) -> None:
     await _execute_live_subagent(
         live_api_key,
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        base_url=live_openai_base_url(ApiFormat.OPENAI_CHAT_COMPLETIONS),
         api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
         stream=True,
     )
@@ -309,7 +312,7 @@ async def test_aliyun_completions_background_completion_notification_flow(
 ) -> None:
     await _execute_live_notification_flow(
         live_api_key,
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        base_url=live_openai_base_url(ApiFormat.OPENAI_CHAT_COMPLETIONS),
         api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
     )
 
@@ -320,8 +323,6 @@ async def test_aliyun_responses_background_completion_notification_flow(
 ) -> None:
     await _execute_live_notification_flow(
         live_api_key,
-        base_url=(
-            "https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1"
-        ),
+        base_url=live_openai_base_url(ApiFormat.OPENAI_RESPONSES),
         api_format=ApiFormat.OPENAI_RESPONSES,
     )
