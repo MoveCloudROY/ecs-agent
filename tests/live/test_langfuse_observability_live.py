@@ -15,10 +15,8 @@ import pytest
 
 from ecs_agent.components import ConversationComponent, ErrorComponent, LLMComponent
 from ecs_agent.core import Runner, World
-from ecs_agent.integrations.langfuse import (
-    LangfuseConfig,
-    install_langfuse_observability,
-)
+from ecs_agent.plugins import install_plugins
+from ecs_agent.plugins.langfuse import LangfuseConfig, LangfusePlugin
 from ecs_agent.providers import Model
 from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
@@ -69,15 +67,19 @@ def _make_live_model(api_format: ApiFormat) -> LLMModel:
 
 async def _run_live_langfuse_agent(api_format: ApiFormat) -> None:
     world = World(name="langfuse-live-test")
-    handle = install_langfuse_observability(
+    handle = await install_plugins(
         world,
-        LangfuseConfig(
-            environment="live-test",
-            tags=["live-test", api_format.value],
-            metadata={"LLM_API_FORMAT": api_format.value},
-            flush_at=1,
-            flush_interval=1.0,
-        ),
+        [
+            LangfusePlugin(
+                LangfuseConfig(
+                    environment="live-test",
+                    tags=["live-test", api_format.value],
+                    metadata={"LLM_API_FORMAT": api_format.value},
+                    flush_at=1,
+                    flush_interval=1.0,
+                )
+            )
+        ],
     )
     agent = world.create_entity()
     world.add_component(

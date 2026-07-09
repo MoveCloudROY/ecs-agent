@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from typing import Protocol
+from typing import Any, Protocol
 
 import pytest
 from prometheus_client import REGISTRY
@@ -86,27 +86,33 @@ EXPECTED_FORBIDDEN_LABELS = {
 }
 
 
-def test_metrics_public_surface_importable_from_package_and_root() -> None:
-    """Prometheus API names are importable from both metrics and root packages."""
-    from ecs_agent import PrometheusMetrics as RootPrometheusMetrics
-    from ecs_agent import install_prometheus_metrics as root_install_prometheus_metrics
-    from ecs_agent import uninstall_prometheus_metrics as root_uninstall_prometheus_metrics
-    from ecs_agent.metrics import (
+async def _install_metrics(world: World, metrics: Any | None = None) -> Any:
+    """Mount a PrometheusPlugin on a world and return its recorder."""
+    from ecs_agent.plugins import install_plugins
+    from ecs_agent.plugins.prometheus import PrometheusPlugin
+
+    plugin = PrometheusPlugin(metrics=metrics)
+    await install_plugins(world, [plugin])
+    installed = plugin.metrics
+    assert installed is not None
+    return installed
+
+
+def test_metrics_public_surface_importable() -> None:
+    """Prometheus plugin API names are importable from the plugin module."""
+    from ecs_agent.plugins.prometheus import (
+        PrometheusConfig,
         PrometheusMetrics,
-        install_prometheus_metrics,
+        PrometheusPlugin,
         make_metrics_asgi_app,
         make_metrics_wsgi_app,
         render_metrics,
         start_metrics_server,
-        uninstall_prometheus_metrics,
     )
 
-    assert RootPrometheusMetrics is PrometheusMetrics
-    assert root_install_prometheus_metrics is install_prometheus_metrics
-    assert root_uninstall_prometheus_metrics is uninstall_prometheus_metrics
     assert PrometheusMetrics.__name__ == "PrometheusMetrics"
-    assert callable(install_prometheus_metrics)
-    assert callable(uninstall_prometheus_metrics)
+    assert PrometheusPlugin.__name__ == "PrometheusPlugin"
+    assert PrometheusConfig.__name__ == "PrometheusConfig"
     assert callable(render_metrics)
     assert callable(make_metrics_asgi_app)
     assert callable(make_metrics_wsgi_app)
@@ -115,7 +121,7 @@ def test_metrics_public_surface_importable_from_package_and_root() -> None:
 
 def test_metric_contract_freezes_names_types_and_allowed_labels() -> None:
     """Metric contract encodes exact names, types, and low-cardinality labels."""
-    from ecs_agent.metrics import ALLOWED_LABELS, FORBIDDEN_LABELS, METRIC_CONTRACT
+    from ecs_agent.plugins.prometheus import ALLOWED_LABELS, FORBIDDEN_LABELS, METRIC_CONTRACT
 
     assert set(METRIC_CONTRACT) == EXPECTED_METRIC_NAMES
     assert ALLOWED_LABELS == frozenset(EXPECTED_ALLOWED_LABELS)
@@ -130,7 +136,7 @@ def test_metric_contract_freezes_names_types_and_allowed_labels() -> None:
 
 def test_prometheus_metrics_uses_private_registry_and_renders_bytes() -> None:
     """Creating a metrics surface does not mutate the global Prometheus registry."""
-    from ecs_agent.metrics import PrometheusMetrics, render_metrics
+    from ecs_agent.plugins.prometheus import PrometheusMetrics, render_metrics
 
     before_global_names = {sample.name for sample in REGISTRY.collect()}
 
@@ -160,7 +166,7 @@ def _count_sample(
 
 def test_forbidden_labels_are_rejected_by_contract_helper() -> None:
     """ID-class and sensitive labels cannot enter metric definitions."""
-    from ecs_agent.metrics import validate_metric_labels
+    from ecs_agent.plugins.prometheus import validate_metric_labels
 
     validate_metric_labels(("system", "status"))
 
@@ -172,11 +178,11 @@ def test_forbidden_labels_are_rejected_by_contract_helper() -> None:
         validate_metric_labels(("raw_prompt_text",))
 
 
-def test_installed_metrics_can_be_rendered_without_global_registry() -> None:
-    """Install helper returns the same isolated metrics surface render_metrics accepts."""
-    from ecs_agent.metrics import PrometheusMetrics, install_prometheus_metrics, render_metrics
+def test_metrics_can_be_rendered_without_global_registry() -> None:
+    """The recorder owns an isolated registry that render_metrics accepts."""
+    from ecs_agent.plugins.prometheus import PrometheusMetrics, render_metrics
 
-    metrics = install_prometheus_metrics()
+    metrics = PrometheusMetrics()
 
     assert isinstance(metrics, PrometheusMetrics)
     assert b"ecs_agent_active_entities" in render_metrics(metrics)
@@ -185,7 +191,7 @@ def test_installed_metrics_can_be_rendered_without_global_registry() -> None:
 async def test_prometheus_metrics_direct_handlers_update_core_llm_and_tool_metrics() -> None:
     """Direct recorder handlers update counters, histograms, and gauges."""
     from ecs_agent.accounting.models import UsageRecord
-    from ecs_agent.metrics import PrometheusMetrics
+    from ecs_agent.plugins.prometheus import PrometheusMetrics
     from ecs_agent.types import (
         EntityId,
         LLMInvocationEvent,
@@ -311,18 +317,19 @@ async def test_prometheus_metrics_direct_handlers_update_core_llm_and_tool_metri
     ) == 1.0
 
 
-async def test_install_prometheus_metrics_binds_world_event_bus_idempotently() -> None:
-    """Installing metrics twice on a world does not double-subscribe handlers."""
+async def test_plugin_install_binds_world_event_bus_once() -> None:
+    """Installing the prometheus plugin subscribes each handler exactly once."""
     from ecs_agent.core import World
-    from ecs_agent.metrics import install_prometheus_metrics
+    from ecs_agent.plugins import install_plugins
+    from ecs_agent.plugins.prometheus import PrometheusPlugin
     from ecs_agent.types import RunnerTickCompletedEvent
 
     world = World()
+    plugin = PrometheusPlugin()
+    await install_plugins(world, [plugin])
 
-    first = install_prometheus_metrics(world)
-    second = install_prometheus_metrics(world)
-
-    assert second is first
+    with pytest.raises(ValueError, match="already installed"):
+        await install_plugins(world, [PrometheusPlugin()])
 
     await world.event_bus.publish(
         RunnerTickCompletedEvent(
@@ -333,19 +340,22 @@ async def test_install_prometheus_metrics_binds_world_event_bus_idempotently() -
         )
     )
 
-    assert first.registry.get_sample_value(
+    assert plugin.metrics is not None
+    assert plugin.metrics.registry.get_sample_value(
         "ecs_agent_runner_ticks_total", {"status": "success"}
     ) == 1.0
 
 
-async def test_uninstall_prometheus_metrics_removes_subscriptions_and_is_idempotent() -> None:
+async def test_uninstall_plugins_removes_metric_subscriptions_and_is_idempotent() -> None:
     """Uninstall removes recorder subscriptions and is safe to call repeatedly."""
     from ecs_agent.core import World
-    from ecs_agent.metrics import install_prometheus_metrics, uninstall_prometheus_metrics
+    from ecs_agent.plugins import install_plugins, uninstall_plugins
+    from ecs_agent.plugins.prometheus import PrometheusPlugin
     from ecs_agent.types import RunnerTickCompletedEvent
 
     world = World()
-    metrics = install_prometheus_metrics(world)
+    plugin = PrometheusPlugin()
+    handle = await install_plugins(world, [plugin])
 
     await world.event_bus.publish(
         RunnerTickCompletedEvent(
@@ -355,15 +365,14 @@ async def test_uninstall_prometheus_metrics_removes_subscriptions_and_is_idempot
             active_entities=4,
         )
     )
+    metrics = plugin.metrics
+    assert metrics is not None
     assert metrics.registry.get_sample_value(
         "ecs_agent_runner_ticks_total", {"status": "success"}
     ) == 1.0
 
-    removed = uninstall_prometheus_metrics(world)
-    removed_again = uninstall_prometheus_metrics(world)
-
-    assert removed is metrics
-    assert removed_again is None
+    assert await uninstall_plugins(world) is handle
+    assert await uninstall_plugins(world) is None
 
     await world.event_bus.publish(
         RunnerTickCompletedEvent(
@@ -379,21 +388,20 @@ async def test_uninstall_prometheus_metrics_removes_subscriptions_and_is_idempot
     ) == 1.0
 
 
-async def test_reinstall_prometheus_metrics_after_uninstall_counts_once() -> None:
+async def test_reinstall_prometheus_plugin_after_uninstall_counts_once() -> None:
     """Reinstalling after uninstall creates one active subscription set."""
     from ecs_agent.core import World
-    from ecs_agent.metrics import install_prometheus_metrics, uninstall_prometheus_metrics
+    from ecs_agent.plugins import install_plugins, uninstall_plugins
+    from ecs_agent.plugins.prometheus import PrometheusPlugin
     from ecs_agent.types import RunnerTickCompletedEvent
 
     world = World()
-    first = install_prometheus_metrics(world)
-    assert uninstall_prometheus_metrics(world) is first
+    first = PrometheusPlugin()
+    await install_plugins(world, [first])
+    assert await uninstall_plugins(world) is not None
 
-    second = install_prometheus_metrics(world)
-    third = install_prometheus_metrics(world)
-
-    assert second is third
-    assert second is not first
+    second = PrometheusPlugin()
+    await install_plugins(world, [second])
 
     await world.event_bus.publish(
         RunnerTickCompletedEvent(
@@ -404,10 +412,14 @@ async def test_reinstall_prometheus_metrics_after_uninstall_counts_once() -> Non
         )
     )
 
-    assert first.registry.get_sample_value(
+    first_metrics = first.metrics
+    second_metrics = second.metrics
+    assert first_metrics is not None
+    assert second_metrics is not None
+    assert first_metrics.registry.get_sample_value(
         "ecs_agent_runner_ticks_total", {"status": "success"}
     ) is None
-    assert second.registry.get_sample_value(
+    assert second_metrics.registry.get_sample_value(
         "ecs_agent_runner_ticks_total", {"status": "success"}
     ) == 1.0
 
@@ -447,14 +459,14 @@ async def test_installed_metrics_update_from_offline_reasoning_tool_run() -> Non
     """A representative offline agent run updates runtime, LLM, tool, and terminal metrics."""
     from ecs_agent.components import ConversationComponent, LLMComponent, ToolRegistryComponent
     from ecs_agent.core import Runner, World
-    from ecs_agent.metrics import install_prometheus_metrics, render_metrics
+    from ecs_agent.plugins.prometheus import render_metrics
     from ecs_agent.providers import FakeModel
     from ecs_agent.systems.reasoning import ReasoningSystem
     from ecs_agent.systems.tool_execution import ToolExecutionSystem
     from ecs_agent.types import CompletionResult, Message, ToolCall, ToolSchema, Usage
 
     world = World()
-    metrics = install_prometheus_metrics(world)
+    metrics = await _install_metrics(world)
 
     async def lookup(city: str) -> str:
         return f"weather for {city}"
@@ -536,7 +548,6 @@ async def test_framework_owned_non_reasoning_llm_paths_emit_logical_invocations(
         PlanSearchComponent,
     )
     from ecs_agent.core import World
-    from ecs_agent.metrics import install_prometheus_metrics
     from ecs_agent.providers import FakeModel
     from ecs_agent.systems.compaction import CompactionSystem
     from ecs_agent.systems.planning import PlanningSystem
@@ -548,7 +559,7 @@ async def test_framework_owned_non_reasoning_llm_paths_emit_logical_invocations(
         system: _ProcessSystem, components: list[object]
     ) -> CollectorRegistry:
         world = World()
-        metrics = install_prometheus_metrics(world)
+        metrics = await _install_metrics(world)
         entity_id = world.create_entity()
         for component in components:
             world.add_component(entity_id, component)
@@ -651,7 +662,6 @@ async def test_retry_model_emits_retry_without_double_counting_logical_invocatio
 
     from ecs_agent.components import ConversationComponent, LLMComponent
     from ecs_agent.core import World
-    from ecs_agent.metrics import install_prometheus_metrics
     from ecs_agent.providers.retry_model import RetryModel
     from ecs_agent.systems.reasoning import ReasoningSystem
     from ecs_agent.types import CompletionResult, Message, RetryConfig
@@ -673,7 +683,7 @@ async def test_retry_model_emits_retry_without_double_counting_logical_invocatio
             return CompletionResult(Message(role="assistant", content="ok"))
 
     world = World()
-    metrics = install_prometheus_metrics(world)
+    metrics = await _install_metrics(world)
     provider = FlakyProvider()
     entity_id = world.create_entity()
     world.add_component(
@@ -703,7 +713,6 @@ async def test_streaming_metrics_capture_first_delta_duration_and_interruption()
     import asyncio
     from ecs_agent.components import ConversationComponent, InterruptionComponent, LLMComponent, StreamingComponent
     from ecs_agent.core import World
-    from ecs_agent.metrics import install_prometheus_metrics
     from ecs_agent.providers import FakeModel
     from ecs_agent.systems.reasoning import ReasoningSystem
     from ecs_agent.types import (
@@ -720,7 +729,7 @@ async def test_streaming_metrics_capture_first_delta_duration_and_interruption()
             yield StreamDelta(content="b")
 
     success_world = World()
-    success_metrics = install_prometheus_metrics(success_world)
+    success_metrics = await _install_metrics(success_world)
     success_entity = success_world.create_entity()
     success_world.add_component(
         success_entity,
@@ -756,7 +765,7 @@ async def test_streaming_metrics_capture_first_delta_duration_and_interruption()
             yield StreamDelta(content="ignored")
 
     interrupted_world = World()
-    interrupted_metrics = install_prometheus_metrics(interrupted_world)
+    interrupted_metrics = await _install_metrics(interrupted_world)
     interrupted_entity = interrupted_world.create_entity()
     interrupted_world.add_component(interrupted_entity, ConversationComponent([Message(role="user", content="stream")]))
     interrupted_world.add_component(interrupted_entity, StreamingComponent(enabled=True))
@@ -852,7 +861,7 @@ async def test_non_blocking_stream_delta_events_carry_bounded_metadata_and_first
 
 async def test_runtime_control_handlers_use_conservative_label_safe_counts() -> None:
     """Runtime-control event handlers count bounded operations without raw IDs or text labels."""
-    from ecs_agent.metrics import PrometheusMetrics, render_metrics
+    from ecs_agent.plugins.prometheus import PrometheusMetrics, render_metrics
     from ecs_agent.types import (
         CheckpointCreatedEvent,
         CompactionCompleteEvent,
@@ -984,7 +993,7 @@ async def test_runtime_control_metrics_increment_from_representative_offline_pat
         ToolRegistryComponent,
     )
     from ecs_agent.core import World
-    from ecs_agent.metrics import install_prometheus_metrics, render_metrics
+    from ecs_agent.plugins.prometheus import render_metrics
     from ecs_agent.providers import FakeModel
     from ecs_agent.scratchbook import ArtifactRegistry
     from ecs_agent.systems.checkpoint import CheckpointSystem
@@ -998,7 +1007,7 @@ async def test_runtime_control_metrics_increment_from_representative_offline_pat
     from ecs_agent.types import CompletionResult, Message, SubagentConfig, ToolCall, ToolSchema
 
     world = World()
-    metrics = install_prometheus_metrics(world)
+    metrics = await _install_metrics(world)
 
     parent = world.create_entity()
     world.add_component(
@@ -1040,7 +1049,7 @@ async def test_runtime_control_metrics_increment_from_representative_offline_pat
         )
 
     checkpoint_world = World()
-    install_prometheus_metrics(checkpoint_world, metrics=metrics)
+    await _install_metrics(checkpoint_world, metrics=metrics)
     checkpoint_entity = checkpoint_world.create_entity()
     checkpoint_world.add_component(checkpoint_entity, CheckpointComponent())
     checkpoint_world.add_component(
@@ -1188,7 +1197,7 @@ async def test_runtime_control_metrics_increment_from_representative_offline_pat
 
 async def test_runtime_control_events_preserve_backward_compatibility_with_safe_defaults() -> None:
     """New low-cardinality event metadata is optional for existing publishers."""
-    from ecs_agent.metrics import PrometheusMetrics
+    from ecs_agent.plugins.prometheus import PrometheusMetrics
     from ecs_agent.types import (
         CheckpointCreatedEvent,
         CompactionCompleteEvent,

@@ -15,7 +15,8 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import configure_logging
-from ecs_agent.metrics import install_prometheus_metrics, start_metrics_server
+from ecs_agent.plugins import install_plugins
+from ecs_agent.plugins.prometheus import PrometheusConfig, PrometheusPlugin
 from ecs_agent.providers import Model
 from ecs_agent.providers.config import ApiFormat
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
@@ -318,16 +319,22 @@ async def main(argv: Sequence[str] | None = None) -> None:
     model = create_llm_model(config)
 
     world = World(name="prometheus-demo")
-    metrics = install_prometheus_metrics(world)
+    handle = await install_plugins(
+        world,
+        [
+            PrometheusPlugin(
+                PrometheusConfig(
+                    start_server=True,
+                    port=args.metrics_port,
+                    addr=args.metrics_addr,
+                )
+            )
+        ],
+    )
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
-    handle = start_metrics_server(
-        args.metrics_port,
-        addr=args.metrics_addr,
-        metrics=metrics,
-    )
     print(
         f"ecs-agent metrics are available at "
         f"http://{args.metrics_addr}:{args.metrics_port}/metrics"
@@ -348,7 +355,7 @@ async def main(argv: Sequence[str] | None = None) -> None:
     except KeyboardInterrupt:
         print("Stopping Prometheus metrics demo.")
     finally:
-        handle.close(timeout=5)
+        await handle.shutdown()
 
 
 if __name__ == "__main__":

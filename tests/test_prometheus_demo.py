@@ -12,7 +12,8 @@ from ecs_agent.providers.config import ApiFormat
 from ecs_agent.accounting.instrumentation import resolve_provider_id
 from ecs_agent.components import LLMComponent
 from ecs_agent.core import World
-from ecs_agent.metrics import install_prometheus_metrics, render_metrics
+from ecs_agent.plugins import install_plugins
+from ecs_agent.plugins.prometheus import PrometheusPlugin, render_metrics
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import CompletionResult, Message, ToolCall
@@ -145,7 +146,9 @@ async def test_demo_tool_workflow_records_tool_metrics() -> None:
     """The demo workflow exercises ToolExecutionSystem metrics with real tool schemas."""
     demo = _load_demo_module()
     world = World(name="test-prometheus-demo-tools")
-    metrics = install_prometheus_metrics(world)
+    plugin = PrometheusPlugin()
+    await install_plugins(world, [plugin])
+    metrics = plugin.metrics
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
     model = _ToolCallingModel()

@@ -19,7 +19,7 @@ from ecs_agent.components import ConversationComponent
 from ecs_agent.core.runner import Runner
 from ecs_agent.core.world import World
 from ecs_agent.observability.context import current_run_id, current_trace_id
-from ecs_agent.observability.install import install_observability
+from ecs_agent.plugins import propagate_plugins
 from ecs_agent.types import (
     EntityId,
     Message,
@@ -128,16 +128,10 @@ class DelegationExecutor:
         run_id: str | None = None,
         parent_observation_id: str,
     ) -> None:
-        """Install parent observability sink on a child world when available."""
-        parent_sink = getattr(parent_world, "_ecs_agent_observability_sink", None)
-        if parent_sink is None:
+        """Install the parent world's observability pipeline on a child world."""
+        propagate_plugins(parent_world, child_world)
+        if getattr(child_world, "_ecs_agent_observability_sink", None) is None:
             return
-        parent_config = getattr(
-            parent_world,
-            "_ecs_agent_observability_config",
-            None,
-        )
-        install_observability(child_world, parent_sink, config=parent_config)
         active_trace_id, active_run_id, _ = active_observability_context(parent_world)
         if trace_id is not None:
             active_trace_id = trace_id

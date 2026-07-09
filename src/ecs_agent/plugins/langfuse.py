@@ -1,4 +1,4 @@
-"""Optional Langfuse telemetry adapter."""
+"""Langfuse observability plugin (optional ``ecs-agent[langfuse]`` extra)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any
 
 from ecs_agent.logging import get_logger
-from ecs_agent.observability.install import ObservabilityHandle, install_observability
+from ecs_agent.observability.install import EventSubscription
 from ecs_agent.observability.redaction import SecretRedactor, sanitize_payload
 from ecs_agent.observability.schema import JsonSafe, TelemetryRecord, TelemetryScore
 from ecs_agent.observability.sinks import NoOpTelemetrySink, TelemetrySink
@@ -700,23 +700,60 @@ class LangfuseTelemetrySink:
             await result
 
 
-def install_langfuse_observability(
-    world: Any,
-    config: LangfuseConfig | None = None,
-    sink: TelemetrySink | None = None,
-) -> ObservabilityHandle:
-    """Install generic observability with an optional Langfuse sink."""
-    resolved_config = (LangfuseConfig() if config is None else config).with_env()
-    telemetry_sink = sink
-    if telemetry_sink is None:
-        if resolved_config.enabled:
-            telemetry_sink = LangfuseTelemetrySink(
-                client=_create_langfuse_client(resolved_config),
-                config=resolved_config,
-            )
-        else:
-            telemetry_sink = NoOpTelemetrySink()
-    return install_observability(world, telemetry_sink, config=resolved_config)
+class LangfusePlugin:
+    """Langfuse tracing backend mounted as an observability plugin.
+
+    The Langfuse SDK client is created lazily in ``start`` so constructing
+    the plugin never requires the optional ``langfuse`` package. ``sink``
+    overrides the created sink (test injection); ``client`` overrides only
+    the SDK client while keeping the sink mapping.
+    """
+
+    def __init__(
+        self,
+        config: LangfuseConfig | None = None,
+        *,
+        client: Any | None = None,
+        sink: TelemetrySink | None = None,
+    ) -> None:
+        self.name = "langfuse"
+        self.propagate_to_children = False
+        self.config = LangfuseConfig() if config is None else config
+        self._client = client
+        self._sink = sink
+
+    def telemetry_sink(self) -> TelemetrySink | None:
+        """Return the mounted sink once started (or the injected override)."""
+        return self._sink
+
+    def event_subscriptions(self, world: Any) -> tuple[EventSubscription, ...]:
+        """No raw-event capability; Langfuse consumes the record pipeline."""
+        _ = world
+        return ()
+
+    async def start(self, world: Any) -> None:
+        """Resolve env config and create the Langfuse sink."""
+        _ = world
+        self.config = self.config.with_env()
+        if self._sink is not None:
+            return
+        if not self.config.enabled:
+            self._sink = NoOpTelemetrySink()
+            return
+        client = self._client
+        if client is None:
+            client = _create_langfuse_client(self.config)
+        self._sink = LangfuseTelemetrySink(client=client, config=self.config)
+
+    async def flush(self) -> None:
+        """Flush the mounted sink."""
+        if self._sink is not None:
+            await self._sink.flush()
+
+    async def shutdown(self) -> None:
+        """Shut the mounted sink down."""
+        if self._sink is not None:
+            await self._sink.shutdown()
 
 
 def _create_langfuse_client(config: LangfuseConfig) -> Any:
@@ -1006,6 +1043,6 @@ def _langfuse_level(status: JsonSafe, error: JsonSafe) -> str:
 
 __all__ = [
     "LangfuseConfig",
+    "LangfusePlugin",
     "LangfuseTelemetrySink",
-    "install_langfuse_observability",
 ]

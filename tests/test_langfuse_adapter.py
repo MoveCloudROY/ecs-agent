@@ -440,67 +440,16 @@ def test_langfuse_module_import_does_not_import_optional_dependency(
 
     monkeypatch.setattr(builtins, "__import__", guarded_import)
 
-    import ecs_agent.integrations.langfuse as langfuse_adapter
+    import ecs_agent.plugins.langfuse as langfuse_adapter
 
     assert langfuse_adapter.LangfuseConfig().enabled is True
-
-
-def test_install_without_sdk_raises_actionable_import_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Client creation raises a clear optional-extra ImportError only on use."""
-    from ecs_agent.integrations.langfuse import install_langfuse_observability
-
-    original_import = builtins.__import__
-
-    def missing_langfuse(name: str, *args: Any, **kwargs: Any) -> Any:
-        if name == "langfuse" or name.startswith("langfuse."):
-            raise ImportError("not installed")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", missing_langfuse)
-
-    with pytest.raises(
-        ImportError,
-        match="Install ecs-agent\\[langfuse\\] to use Langfuse observability",
-    ):
-        install_langfuse_observability(World())
-
-
-def test_install_reads_env_only_for_absent_config_fields(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Install resolves Langfuse env aliases without overriding explicit config."""
-    from ecs_agent.integrations.langfuse import (
-        LangfuseConfig,
-        install_langfuse_observability,
-    )
-
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "env-public-value")
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "env-private-value")
-    monkeypatch.setenv("LANGFUSE_BASE_URL", "env-base-url-value")
-    monkeypatch.setenv("LANGFUSE_HOST", "env-host-value")
-    sink = RecordingTelemetrySink()
-
-    handle = install_langfuse_observability(
-        World(),
-        config=LangfuseConfig(public_key="explicit-public", host=None),
-        sink=sink,
-    )
-
-    resolved = handle.config
-    assert resolved.public_key == "explicit-public"
-    assert resolved.secret_key == "env-private-value"
-    assert resolved.host == "env-host-value"
-    assert resolved.enabled is True
-    assert handle.sink is sink
 
 
 def test_base_url_fills_host_when_host_env_is_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """LANGFUSE_BASE_URL is a sensible host alias when LANGFUSE_HOST is absent."""
-    from ecs_agent.integrations.langfuse import LangfuseConfig
+    from ecs_agent.plugins.langfuse import LangfuseConfig
 
     monkeypatch.delenv("LANGFUSE_HOST", raising=False)
     monkeypatch.setenv("LANGFUSE_BASE_URL", "env-base-url-value")
@@ -514,7 +463,7 @@ def test_langfuse_client_creation_passes_timeout_to_sdk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Self-hosted Langfuse installs can raise the SDK export timeout."""
-    from ecs_agent.integrations.langfuse import LangfuseConfig, _create_langfuse_client
+    from ecs_agent.plugins.langfuse import LangfuseConfig, _create_langfuse_client
 
     fake_module = types.ModuleType("langfuse")
     fake_module.Langfuse = FakeLangfuseClient
@@ -537,7 +486,7 @@ async def test_langfuse_adapter_maps_generation_and_scores(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Generations and scores are mapped to Langfuse calls after redaction."""
-    from ecs_agent.integrations.langfuse import LangfuseConfig, LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseConfig, LangfuseTelemetrySink
 
     private_value = "private-redaction-value"
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", private_value)
@@ -616,7 +565,7 @@ async def test_langfuse_adapter_maps_generation_and_scores(
 @pytest.mark.asyncio
 async def test_langfuse_config_metadata_uses_sink_redactor_extra_values() -> None:
     """Config metadata is sanitized with the sink's configured redactor."""
-    from ecs_agent.integrations.langfuse import LangfuseConfig, LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseConfig, LangfuseTelemetrySink
 
     synthetic_marker = "synthetic-config-metadata-secret-value"
     client = FakeLangfuseClient()
@@ -648,7 +597,7 @@ async def test_langfuse_config_metadata_uses_sink_redactor_extra_values() -> Non
 @pytest.mark.asyncio
 async def test_langfuse_config_fields_are_redacted_in_trace_exports() -> None:
     """Config-derived trace kwargs and metadata are sanitized before export."""
-    from ecs_agent.integrations.langfuse import LangfuseConfig, LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseConfig, LangfuseTelemetrySink
 
     synthetic_marker = "synthetic-config-export-secret-value"
     client = FakeLangfuseClient()
@@ -696,7 +645,7 @@ async def test_langfuse_config_fields_are_redacted_in_trace_exports() -> None:
 @pytest.mark.asyncio
 async def test_langfuse_adapter_maps_trace_span_tool_and_event_records() -> None:
     """Every internal record kind maps to a Langfuse trace or observation call."""
-    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
 
     client = FakeLangfuseClient()
     sink = LangfuseTelemetrySink(client=client)
@@ -761,7 +710,7 @@ async def test_langfuse_adapter_maps_trace_span_tool_and_event_records() -> None
 @pytest.mark.asyncio
 async def test_langfuse_trace_record_with_parent_exports_as_child_span() -> None:
     """Parented trace records are root observations, not top-level trace containers."""
-    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
 
     client = FakeLangfuseClient()
     sink = LangfuseTelemetrySink(client=client)
@@ -789,7 +738,7 @@ async def test_langfuse_trace_record_with_parent_exports_as_child_span() -> None
 @pytest.mark.asyncio
 async def test_langfuse_user_turn_trace_record_exports_as_root_span_observation() -> None:
     """User turns are root observations inside a trace, not trace containers."""
-    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
 
     client = FakeLangfuseClient()
     sink = LangfuseTelemetrySink(client=client)
@@ -816,7 +765,7 @@ async def test_langfuse_user_turn_trace_record_exports_as_root_span_observation(
 @pytest.mark.asyncio
 async def test_langfuse_v4_user_turn_final_emit_updates_existing_root_observation() -> None:
     """Finalizing a user turn must not create a nested duplicate root observation."""
-    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
 
     client = FakeLangfuseV4Client()
     sink = LangfuseTelemetrySink(client=client)
@@ -860,7 +809,7 @@ async def test_langfuse_v4_user_turn_final_emit_updates_existing_root_observatio
 @pytest.mark.asyncio
 async def test_langfuse_v4_root_observation_uses_non_current_start_to_avoid_ambient_parent() -> None:
     """Root observations must not inherit a lingering SDK current observation."""
-    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
 
     client = FakeLangfuseV4AmbientParentClient()
     client.active_observations.append({"name": "workflow.state"})
@@ -886,7 +835,7 @@ async def test_langfuse_v4_root_observation_uses_non_current_start_to_avoid_ambi
 @pytest.mark.asyncio
 async def test_langfuse_v4_user_turn_root_has_no_synthetic_parent() -> None:
     """Root user turns should export as real OTel roots, not synthetic children."""
-    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
 
     client = FakeLangfuseV4OtelParentClient()
     sink = LangfuseTelemetrySink(client=client)
@@ -938,7 +887,7 @@ async def test_langfuse_v4_real_sdk_user_turn_root_ignores_ambient_workflow_span
         exporter_class = memory_export_module.InMemorySpanExporter
     except pytest.skip.Exception:
         exporter_class = export_module.InMemorySpanExporter
-    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
 
     exporter = exporter_class()
     provider = trace_module.TracerProvider()
@@ -1010,7 +959,7 @@ async def test_langfuse_v4_real_sdk_user_turn_root_ignores_ambient_workflow_span
 @pytest.mark.asyncio
 async def test_langfuse_v4_trace_context_shortens_internal_uuid_parent_ids() -> None:
     """v4 trace_context parent_span_id must use Langfuse's 16-hex span ID shape."""
-    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
 
     client = FakeLangfuseV4Client()
     sink = LangfuseTelemetrySink(client=client)
@@ -1040,7 +989,7 @@ async def test_langfuse_v4_trace_context_shortens_internal_uuid_parent_ids() -> 
 @pytest.mark.asyncio
 async def test_langfuse_v4_historical_remote_parent_shortens_internal_uuid_parent_ids() -> None:
     """Historical remote parent creation must not pass 32-hex observation IDs as span IDs."""
-    from ecs_agent.integrations.langfuse import LangfuseConfig, LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseConfig, LangfuseTelemetrySink
 
     client = FakeLangfuseV4HistoricalClient()
     sink = LangfuseTelemetrySink(
@@ -1072,7 +1021,7 @@ async def test_langfuse_v4_historical_remote_parent_shortens_internal_uuid_paren
 @pytest.mark.asyncio
 async def test_langfuse_v4_tool_parent_uses_generation_sdk_observation_id() -> None:
     """Tool spans should parent to the actual v4 generation observation ID."""
-    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
 
     generation_observation_id = "215222198bf24da4a4effcf01c89521a"
     root_observation_id = "3bd19b7975c845a2920fcd8b68b95a62"
@@ -1119,7 +1068,7 @@ async def test_langfuse_v4_tool_parent_uses_generation_sdk_observation_id() -> N
 @pytest.mark.asyncio
 async def test_langfuse_adapter_uses_v4_trace_context_methods() -> None:
     """Langfuse v4 manual observations receive trace_context, not trace_id kwargs."""
-    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
 
     client = FakeLangfuseV4Client()
     sink = LangfuseTelemetrySink(client=client)
@@ -1185,7 +1134,7 @@ async def test_langfuse_adapter_uses_v4_trace_context_methods() -> None:
 @pytest.mark.asyncio
 async def test_langfuse_v4_current_observation_does_not_receive_timing_kwargs() -> None:
     """v4 observation creation in newer SDKs rejects start_time/end_time kwargs."""
-    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
 
     client = FakeLangfuseV4ClientRejectingObservationTimes()
     sink = LangfuseTelemetrySink(client=client)
@@ -1214,7 +1163,7 @@ async def test_langfuse_v4_current_observation_does_not_receive_timing_kwargs() 
 @pytest.mark.asyncio
 async def test_langfuse_v4_observation_uses_explicit_record_timing() -> None:
     """v4 exports should preserve record timing instead of export-context timing."""
-    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
 
     client = FakeLangfuseV4TimedClient()
     sink = LangfuseTelemetrySink(client=client)
@@ -1264,7 +1213,7 @@ async def test_langfuse_v4_observation_uses_explicit_record_timing() -> None:
 @pytest.mark.asyncio
 async def test_langfuse_v4_timed_generation_uses_manual_lifecycle_when_current_api_exists() -> None:
     """Completed records use manual v4 lifecycle so Langfuse receives real timing."""
-    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
 
     client = FakeLangfuseV4Client()
     sink = LangfuseTelemetrySink(client=client)
@@ -1300,7 +1249,7 @@ async def test_langfuse_v4_timed_generation_uses_manual_lifecycle_when_current_a
 @pytest.mark.asyncio
 async def test_langfuse_v4_private_historical_otel_is_opt_in() -> None:
     """Private v4 OTel hooks are not used unless explicitly enabled."""
-    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
 
     client = FakeLangfuseV4HistoricalClient()
     sink = LangfuseTelemetrySink(client=client)
@@ -1327,7 +1276,7 @@ async def test_langfuse_v4_private_historical_otel_is_opt_in() -> None:
 @pytest.mark.asyncio
 async def test_langfuse_v4_historical_observation_backdates_start_and_end() -> None:
     """v4 OTel-backed observations preserve elapsed record latency in Langfuse."""
-    from ecs_agent.integrations.langfuse import LangfuseConfig, LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseConfig, LangfuseTelemetrySink
 
     client = FakeLangfuseV4HistoricalClient()
     sink = LangfuseTelemetrySink(
@@ -1388,7 +1337,7 @@ async def test_langfuse_v4_historical_observation_backdates_start_and_end() -> N
 @pytest.mark.asyncio
 async def test_langfuse_v4_partial_historical_client_uses_public_fallback() -> None:
     """Partial private SDK hooks must not create orphaned historical spans."""
-    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
 
     client = FakeLangfuseV4PartialHistoricalClient()
     sink = LangfuseTelemetrySink(client=client)
@@ -1420,7 +1369,7 @@ async def test_langfuse_v4_partial_historical_client_uses_public_fallback() -> N
 @pytest.mark.asyncio
 async def test_langfuse_v4_historical_root_observation_propagates_session() -> None:
     """Historical root observations keep Langfuse Session attributes."""
-    from ecs_agent.integrations.langfuse import LangfuseConfig, LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseConfig, LangfuseTelemetrySink
 
     client = FakeLangfuseV4HistoricalClient()
     sink = LangfuseTelemetrySink(
@@ -1464,7 +1413,7 @@ async def test_langfuse_v4_historical_module_propagation_is_active_at_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Historical observations use module-level propagation for SDK v4.5."""
-    from ecs_agent.integrations.langfuse import LangfuseConfig, LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseConfig, LangfuseTelemetrySink
 
     client = FakeLangfuseV4HistoricalModuleClient()
 
@@ -1518,7 +1467,7 @@ async def test_langfuse_adapter_preserves_env_configured_model_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """LLM_MODEL is configuration, not a secret, so generation.model stays readable."""
-    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
 
     monkeypatch.setenv("LLM_MODEL", "deepseek-v4-flash")
     client = FakeLangfuseClient()
@@ -1547,7 +1496,7 @@ async def test_langfuse_adapter_preserves_env_configured_model_name(
 @pytest.mark.asyncio
 async def test_langfuse_adapter_propagates_v4_session_id_as_trace_attribute() -> None:
     """Langfuse v4 sessions use propagate_attributes, not metadata.session_id."""
-    from ecs_agent.integrations.langfuse import LangfuseConfig, LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseConfig, LangfuseTelemetrySink
 
     client = FakeLangfuseV4Client()
     sink = LangfuseTelemetrySink(
@@ -1596,7 +1545,7 @@ async def test_langfuse_adapter_propagates_v4_session_id_as_trace_attribute() ->
 @pytest.mark.asyncio
 async def test_langfuse_adapter_sets_session_on_active_v4_root_observation() -> None:
     """Sessions require propagation while the root observation is current."""
-    from ecs_agent.integrations.langfuse import LangfuseConfig, LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseConfig, LangfuseTelemetrySink
 
     client = FakeLangfuseV4Client()
     sink = LangfuseTelemetrySink(
@@ -1633,7 +1582,7 @@ async def test_langfuse_adapter_uses_module_level_v4_session_propagation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Langfuse SDK v4.5 exposes propagate_attributes on the module."""
-    from ecs_agent.integrations.langfuse import LangfuseConfig, LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseConfig, LangfuseTelemetrySink
 
     client = FakeLangfuseV4ModuleClient()
 
@@ -1674,7 +1623,7 @@ async def test_langfuse_adapter_uses_module_level_v4_session_propagation(
 @pytest.mark.asyncio
 async def test_langfuse_adapter_flush_shutdown_and_client_errors_are_safe() -> None:
     """Langfuse client failures never escape telemetry sink operations."""
-    from ecs_agent.integrations.langfuse import LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
 
     client = FakeLangfuseClient(fail=True)
     sink = LangfuseTelemetrySink(client=client)
@@ -1719,7 +1668,7 @@ async def test_langfuse_adapter_flush_shutdown_and_client_errors_are_safe() -> N
 @pytest.mark.asyncio
 async def test_langfuse_adapter_can_suppress_raw_inputs_and_outputs() -> None:
     """Export privacy controls omit raw payload fields without dropping metadata."""
-    from ecs_agent.integrations.langfuse import LangfuseConfig, LangfuseTelemetrySink
+    from ecs_agent.plugins.langfuse import LangfuseConfig, LangfuseTelemetrySink
 
     private_value = "private-redaction-value"
     client = FakeLangfuseClient()
@@ -1755,25 +1704,27 @@ async def test_langfuse_adapter_can_suppress_raw_inputs_and_outputs() -> None:
     assert private_value not in str(client.calls)
 
 
-def test_install_delegates_to_generic_observability_with_langfuse_sink() -> None:
-    """Langfuse install returns the generic ObservabilityHandle shape."""
-    from ecs_agent.integrations.langfuse import (
+@pytest.mark.asyncio
+async def test_plugin_install_mounts_langfuse_sink_on_record_pipeline() -> None:
+    """Plugin install mounts the Langfuse sink behind the world's composite."""
+    from ecs_agent.plugins import CompositeTelemetrySink, install_plugins
+    from ecs_agent.plugins.langfuse import (
         LangfuseConfig,
+        LangfusePlugin,
         LangfuseTelemetrySink,
-        install_langfuse_observability,
     )
-    from ecs_agent.observability import ObservabilityHandle
 
     world = World()
     sink = LangfuseTelemetrySink(client=FakeLangfuseClient())
 
-    handle = install_langfuse_observability(
+    handle = await install_plugins(
         world,
-        config=LangfuseConfig(enabled=True),
-        sink=sink,
+        [LangfusePlugin(LangfuseConfig(enabled=True), sink=sink)],
     )
 
-    assert isinstance(handle, ObservabilityHandle)
-    assert handle.sink is sink
-    assert handle.config.enabled is True
-    assert getattr(world, "_ecs_agent_observability_sink") is sink
+    plugin = handle.plugin("langfuse")
+    assert plugin is not None
+    assert plugin.telemetry_sink() is sink
+    composite = getattr(world, "_ecs_agent_observability_sink")
+    assert isinstance(composite, CompositeTelemetrySink)
+    assert dict(composite.sinks()) == {"langfuse": sink}

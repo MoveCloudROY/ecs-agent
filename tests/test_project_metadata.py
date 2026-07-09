@@ -14,3 +14,19 @@ def test_langfuse_extra_includes_socks_proxy_support() -> None:
     langfuse_extra = pyproject["project"]["optional-dependencies"]["langfuse"]
 
     assert any(dependency.startswith("httpx[socks]") for dependency in langfuse_extra)
+
+
+def test_prometheus_is_an_optional_extra_not_a_core_dependency() -> None:
+    """prometheus-client installs via ecs-agent[prometheus], never with the core."""
+    project_root = Path(__file__).parent.parent
+    pyproject = tomllib.loads((project_root / "pyproject.toml").read_text())
+
+    core_dependencies = pyproject["project"]["dependencies"]
+    prometheus_extra = pyproject["project"]["optional-dependencies"]["prometheus"]
+
+    assert not any(
+        dependency.startswith("prometheus-client") for dependency in core_dependencies
+    )
+    assert any(
+        dependency.startswith("prometheus-client") for dependency in prometheus_extra
+    )

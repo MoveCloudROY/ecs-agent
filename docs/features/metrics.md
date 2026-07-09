@@ -1,36 +1,80 @@
 # Prometheus Metrics
 
-`ecs_agent.metrics` provides a Prometheus metrics surface for production observability. The integration subscribes to the `World` event bus, records framework-owned runtime events into a private `CollectorRegistry`, and exposes Prometheus text format without using the global default registry.
+`ecs_agent.plugins.prometheus` provides Prometheus metrics as an
+[observability plugin](plugins.md). The plugin subscribes to the `World`
+event bus, records framework-owned runtime events into a private
+`CollectorRegistry`, and exposes Prometheus text format without using the
+global default registry.
+
+## Installation
+
+Prometheus support is optional. Install it with the `prometheus` extra:
+
+```bash
+uv pip install "ecs-agent[prometheus]"
+```
+
+The `prometheus_client` package is imported lazily when the plugin starts,
+so the core library installs and imports without it.
 
 ## Quick Start
 
 ```python
 from ecs_agent.core import Runner, World
-from ecs_agent.metrics import install_prometheus_metrics, render_metrics
+from ecs_agent.plugins import install_plugins
+from ecs_agent.plugins.prometheus import PrometheusPlugin, render_metrics
 
 world = World()
-metrics = install_prometheus_metrics(world)
+plugin = PrometheusPlugin()
+handle = await install_plugins(world, [plugin])
 
 # Register systems and add agent entities as usual.
 await Runner().run(world, max_ticks=3)
 
-body = render_metrics(metrics)
+body = render_metrics(plugin.metrics)
+await handle.shutdown()
 ```
 
-`install_prometheus_metrics(world)` is idempotent: repeated calls on the same world return the already installed `PrometheusMetrics` recorder and do not double-subscribe handlers. Use `uninstall_prometheus_metrics(world)` to remove the event-bus subscriptions; the returned recorder remains renderable for final scrape or test assertions.
+The plugin mounts alongside any other observability plugin (for example
+`LangfusePlugin`) in the same `install_plugins` call. Use
+`uninstall_plugins(world)` to remove the event-bus subscriptions; the
+recorder on `plugin.metrics` remains renderable for a final scrape or test
+assertions.
+
+`PrometheusConfig` controls the recorder and the embedded endpoint:
+
+- `registry` / `metric_contract`: inject a custom `CollectorRegistry` or
+  metric contract (defaults: private registry, built-in contract).
+- `start_server`, `port`, `addr`: own an embedded `/metrics` HTTP server
+  for the lifetime of the installation. `port`/`addr` also resolve from
+  `ECS_AGENT_PROMETHEUS_PORT` / `ECS_AGENT_PROMETHEUS_ADDR` when unset,
+  falling back to `9100` on `0.0.0.0`.
+- `propagate_to_children`: opt into recording events from subagent child
+  worlds (off by default).
+
+```python
+from ecs_agent.plugins.prometheus import PrometheusConfig, PrometheusPlugin
+
+plugin = PrometheusPlugin(PrometheusConfig(start_server=True, port=9100))
+handle = await install_plugins(world, [plugin])
+# ... /metrics is live until:
+await handle.shutdown()
+```
 
 ## Endpoint Modes
 
-All endpoint helpers use the registry owned by the `PrometheusMetrics` instance you pass in.
+Besides the embedded server, standalone endpoint helpers use the registry
+owned by the `PrometheusMetrics` instance you pass in.
 
 ```python
-from ecs_agent.metrics import (
+from ecs_agent.plugins.prometheus import (
     make_metrics_asgi_app,
     make_metrics_wsgi_app,
     render_metrics,
     start_metrics_server,
 )
 
+metrics = plugin.metrics
 body = render_metrics(metrics)
 asgi_app = make_metrics_asgi_app(metrics)
 wsgi_app = make_metrics_wsgi_app(metrics)

@@ -17,11 +17,8 @@ import pytest
 
 from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.core import Runner, World
-from ecs_agent.metrics import (
-    install_prometheus_metrics,
-    render_metrics,
-    uninstall_prometheus_metrics,
-)
+from ecs_agent.plugins import install_plugins, uninstall_plugins
+from ecs_agent.plugins.prometheus import PrometheusPlugin, render_metrics
 from ecs_agent.providers import Model
 from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
@@ -61,7 +58,10 @@ async def test_live_prometheus_metrics_smoke(live_api_key: str) -> None:
     import httpx
 
     world = World()
-    metrics = install_prometheus_metrics(world)
+    plugin = PrometheusPlugin()
+    await install_plugins(world, [plugin])
+    metrics = plugin.metrics
+    assert metrics is not None
     agent = world.create_entity()
     model = _make_live_model(live_api_key)
     world.add_component(
@@ -88,7 +88,7 @@ async def test_live_prometheus_metrics_smoke(live_api_key: str) -> None:
     except httpx.ReadTimeout:
         pytest.skip("Live LLM endpoint timed out during Prometheus metrics smoke")
     finally:
-        uninstall_prometheus_metrics(world)
+        await uninstall_plugins(world)
 
     conversation = world.get_component(agent, ConversationComponent)
     assert conversation is not None

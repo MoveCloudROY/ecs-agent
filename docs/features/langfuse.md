@@ -1,6 +1,6 @@
 # Langfuse Observability
 
-`ecs_agent.integrations.langfuse` provides a native integration with [Langfuse](https://langfuse.com/) for open-source LLM observability. It captures traces, spans, and observations from the `World` event bus and exports them to Langfuse.
+`ecs_agent.plugins.langfuse` provides [Langfuse](https://langfuse.com/) LLM observability as an observability plugin. It captures traces, spans, and observations from the `World` event bus and exports them to Langfuse.
 
 ## Installation
 
@@ -12,24 +12,30 @@ uv pip install "ecs-agent[langfuse]"
 
 ## Quick Start
 
-Install the observability handler on any `World` before running agents.
+Mount the `LangfusePlugin` on any `World` through the plugin installer before
+running agents. Plugins mount alongside any other observability plugin (for
+example Prometheus metrics) on the same world.
 
 ```python
 import os
 from ecs_agent.core import World, Runner
-from ecs_agent.integrations.langfuse import install_langfuse_observability, LangfuseConfig
+from ecs_agent.plugins import install_plugins
+from ecs_agent.plugins.langfuse import LangfuseConfig, LangfusePlugin
 
 world = World()
 
-# Install Langfuse observability
-handle = install_langfuse_observability(
+handle = await install_plugins(
     world,
-    LangfuseConfig(
-        public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
-        secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-        host=os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL"),
-        environment="production",
-    )
+    [
+        LangfusePlugin(
+            LangfuseConfig(
+                public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
+                secret_key=os.environ["LANGFUSE_SECRET_KEY"],
+                host=os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL"),
+                environment="production",
+            )
+        )
+    ],
 )
 
 try:
@@ -39,6 +45,10 @@ finally:
     await handle.flush()
     await handle.shutdown()
 ```
+
+The Langfuse SDK client is created when the plugin starts (at install), so
+constructing `LangfusePlugin(...)` never requires the optional `langfuse`
+package by itself. See [plugins.md](plugins.md) for the plugin interface.
 
 ## Configuration
 
@@ -60,13 +70,17 @@ The integration uses the following environment variables for configuration:
 Langfuse SDK v4 exports observations through the OpenTelemetry HTTP OTLP exporter. A log such as `Failed to export span batch ... Read timed out. (read timeout=...)` means the background span batch upload to the configured Langfuse host timed out; it does not indicate a failed agent run. For slower self-hosted endpoints, raise the SDK timeout explicitly:
 
 ```python
-install_langfuse_observability(
+await install_plugins(
     world,
-    LangfuseConfig(
-        timeout=30,
-        flush_at=32,
-        flush_interval=2.0,
-    ),
+    [
+        LangfusePlugin(
+            LangfuseConfig(
+                timeout=30,
+                flush_at=32,
+                flush_interval=2.0,
+            )
+        )
+    ],
 )
 ```
 
