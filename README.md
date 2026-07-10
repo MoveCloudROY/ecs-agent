@@ -26,6 +26,8 @@ uv pip install -e ".[embeddings]"
 uv pip install -e ".[mcp]"
 # Install with Langfuse observability (optional)
 uv pip install -e ".[langfuse]"
+# Install with Prometheus metrics (optional)
+uv pip install -e ".[prometheus]"
 # Install a real BPE tokenizer for accurate context-budget/compaction token counts (optional)
 uv pip install -e ".[tokenizer]"
 ```
@@ -145,8 +147,8 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **Anthropic Prompt Caching** — The Claude adapter emits `cache_control` breakpoints on (1) the tool definitions, (2) the cache-stable system prefix, and (3) the latest message, for automatic incremental caching (GA — no `anthropic-beta` header). The system prompt is split into a byte-stable prefix (base instructions + tool/skill inventory + scratchbook metadata) and a volatile tail (compaction summary + phase prompt) so the cached prefix never invalidates mid-conversation. Enabled by default; toggle with `Model(..., enable_prompt_caching=False)` or `ProviderConfig(enable_prompt_caching=False)` to revert to the pre-caching request shape. Verify hits via `usage.cache_read_tokens`.
 - **Tool Ecosystem** — Auto-discovery via `@tool` decorator, manual approval flows, secure `bwrap` sandboxing, and composable skills.
 - **MCP Integration** — Connect to external MCP tool servers via stdio, SSE, or HTTP transports with namespaced tool mapping.
-- **Prometheus Metrics**, Install low-cardinality runtime, LLM, tool, streaming, and runtime-control metrics on any `World` and expose them via render, ASGI/WSGI, or a standalone `/metrics` server.
-- **Langfuse Observability**, Capture traces, spans, and observations via `ecs-agent[langfuse]`. Install `install_langfuse_observability()` on any `World` to export user input, LLM generations, tool calls, retries, subagent runs, and errors to Langfuse; raw input and output capture remains enabled by default for backward compatibility and can be disabled with `LangfuseConfig(capture_input=False, capture_output=False)`. Supports mandatory redaction, one trace per interactive user turn (with one-shot run compatibility), nested `subagent.<name>` spans with child LLM/tool observations, tool calls that nest under the generation that requested them, recorded operation end timing through the Langfuse SDK v4 public lifecycle, optional private historical start-time backdating with `enable_private_v4_historical_otel=True`, readable model identifiers from `LLM_MODEL`, integer token usage, resilient background export, and Langfuse Sessions by propagating `session_id` as a trace-level attribute rather than metadata-only. See [`docs/features/langfuse.md`](docs/features/langfuse.md) for configuration via `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_HOST`, plus live test commands (OpenAI/Anthropic) and skip behavior when credentials are missing. Credential rotation is recommended if keys are exposed.
+- **Prometheus Metrics**, Mount `PrometheusPlugin` on any `World` via `install_plugins()` for low-cardinality runtime, LLM, tool, streaming, and runtime-control metrics, exposed via an embedded `/metrics` server, render, or ASGI/WSGI adapters. Installs with `ecs-agent[prometheus]`.
+- **Langfuse Observability**, Capture traces, spans, and observations via `ecs-agent[langfuse]`. Mount `LangfusePlugin` on any `World` via `install_plugins()` to export user input, LLM generations, tool calls, retries, subagent runs, and errors to Langfuse; raw input and output capture remains enabled by default for backward compatibility and can be disabled with `LangfuseConfig(capture_input=False, capture_output=False)`. Supports mandatory redaction, one trace per interactive user turn (with one-shot run compatibility), nested `subagent.<name>` spans with child LLM/tool observations, tool calls that nest under the generation that requested them, recorded operation end timing through the Langfuse SDK v4 public lifecycle, optional private historical start-time backdating with `enable_private_v4_historical_otel=True`, readable model identifiers from `LLM_MODEL`, integer token usage, resilient background export, and Langfuse Sessions by propagating `session_id` as a trace-level attribute rather than metadata-only. See [`docs/features/langfuse.md`](docs/features/langfuse.md) for configuration via `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_HOST`, plus live test commands (OpenAI/Anthropic) and skip behavior when credentials are missing. Credential rotation is recommended if keys are exposed.
 
 ## Architecture
 
@@ -310,34 +312,36 @@ Model setup, registry-based construction, supported protocols, and model ID rule
 
 ## Prometheus Metrics
 
-Install metrics on a `World` before running agents, then expose the same private registry through whichever deployment shape fits your service:
+Mount the Prometheus plugin on a `World` before running agents, then expose the same private registry through whichever deployment shape fits your service:
 
 ```python
 from ecs_agent.core import Runner, World
-from ecs_agent.metrics import (
-    install_prometheus_metrics,
+from ecs_agent.plugins import install_plugins
+from ecs_agent.plugins.prometheus import (
+    PrometheusConfig,
+    PrometheusPlugin,
     make_metrics_asgi_app,
     make_metrics_wsgi_app,
     render_metrics,
-    start_metrics_server,
 )
 
 world = World()
-metrics = install_prometheus_metrics(world)
+plugin = PrometheusPlugin(
+    PrometheusConfig(start_server=True, port=9100, addr="127.0.0.1")
+)
+handle = await install_plugins(world, [plugin])  # /metrics is live from here
 
-# Direct scrape payload for tests, CLIs, or custom handlers.
-body = render_metrics(metrics)
-
-# Framework adapters.
-asgi_app = make_metrics_asgi_app(metrics)  # mount at /metrics in an ASGI app
-wsgi_app = make_metrics_wsgi_app(metrics)  # mount at /metrics in a WSGI app
-
-# Standalone endpoint helper.
-handle = start_metrics_server(9100, addr="127.0.0.1", metrics=metrics)
 try:
     await Runner().run(world, max_ticks=3)
 finally:
-    handle.close(timeout=5)
+    await handle.shutdown()  # closes the embedded /metrics server
+
+# Direct scrape payload for tests, CLIs, or custom handlers.
+body = render_metrics(plugin.metrics)
+
+# Framework adapters for existing web services.
+asgi_app = make_metrics_asgi_app(plugin.metrics)  # mount at /metrics in an ASGI app
+wsgi_app = make_metrics_wsgi_app(plugin.metrics)  # mount at /metrics in a WSGI app
 ```
 
 The exposition uses `ecs_agent_*` metric families such as `ecs_agent_runs_total`, `ecs_agent_llm_invocations_total`, `ecs_agent_tool_calls_total`, and `ecs_agent_stream_events_total`. Labels are intentionally low-cardinality (`status`, `system`, `provider`, `model`, `operation`, `tool`, and similar bounded values); IDs, raw prompts/responses, tool arguments/results, paths, API keys, and tokens are never accepted as labels. See [`docs/features/metrics.md`](docs/features/metrics.md) for the complete metric contract, endpoint modes, install/uninstall behavior, and live smoke test instructions.
@@ -438,6 +442,7 @@ See [`docs/`](docs/) for detailed guides:
 - [Systems](docs/systems.md), Built-in systems and configuration details
 - [Models](docs/models.md), model selection, registry routing, and built-in model implementations
 - [Streaming](docs/features/streaming.md), SSE streaming setup and usage
+- [Observability Plugins](docs/features/plugins.md), one interface for mounting tracing/metrics backends on a `World`
 - [Prometheus Metrics](docs/features/metrics.md), low-cardinality metrics and `/metrics` exposure helpers
 - [Langfuse Observability](docs/features/langfuse.md), traces, spans, observations, raw capture controls, and optional historical timing
 - [Structured Output](docs/features/structured-output.md), Pydantic schema → JSON mode

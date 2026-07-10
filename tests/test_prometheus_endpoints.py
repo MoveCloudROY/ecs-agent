@@ -12,7 +12,7 @@ from prometheus_client import CONTENT_TYPE_LATEST
 
 def test_render_metrics_returns_prometheus_text_for_bound_registry() -> None:
     """render_metrics emits HELP/TYPE/sample lines for the provided registry."""
-    from ecs_agent.metrics import PrometheusMetrics, render_metrics
+    from ecs_agent.plugins.prometheus import PrometheusMetrics, render_metrics
     from ecs_agent.types import RunCompletedEvent
 
     metrics = PrometheusMetrics()
@@ -40,7 +40,7 @@ def test_render_metrics_returns_prometheus_text_for_bound_registry() -> None:
 
 async def test_make_metrics_asgi_app_serves_bound_registry_without_framework() -> None:
     """ASGI helper returns a raw app that serves the bound registry."""
-    from ecs_agent.metrics import PrometheusMetrics, make_metrics_asgi_app
+    from ecs_agent.plugins.prometheus import PrometheusMetrics, make_metrics_asgi_app
     from ecs_agent.types import RunnerTickCompletedEvent
 
     metrics = PrometheusMetrics()
@@ -88,7 +88,7 @@ async def test_make_metrics_asgi_app_serves_bound_registry_without_framework() -
 
 def test_make_metrics_wsgi_app_serves_bound_registry_without_framework() -> None:
     """WSGI helper returns a raw app that serves the bound registry."""
-    from ecs_agent.metrics import PrometheusMetrics, make_metrics_wsgi_app
+    from ecs_agent.plugins.prometheus import PrometheusMetrics, make_metrics_wsgi_app
     from ecs_agent.types import ToolApprovedEvent
 
     metrics = PrometheusMetrics()
@@ -143,7 +143,7 @@ def test_make_metrics_wsgi_app_serves_bound_registry_without_framework() -> None
 
 def test_start_metrics_server_returns_cleanup_handle_for_bound_registry() -> None:
     """Standalone server can be started, scraped, and deterministically cleaned up."""
-    from ecs_agent.metrics import PrometheusMetrics, start_metrics_server
+    from ecs_agent.plugins.prometheus import PrometheusMetrics, start_metrics_server
     from ecs_agent.types import LLMRetryEvent
 
     metrics = PrometheusMetrics()
@@ -177,7 +177,7 @@ def test_start_metrics_server_returns_cleanup_handle_for_bound_registry() -> Non
 
 def test_start_metrics_server_handle_can_be_tuple_unpacked() -> None:
     """Cleanup handle preserves access to the underlying server and thread."""
-    from ecs_agent.metrics import PrometheusMetrics, start_metrics_server
+    from ecs_agent.plugins.prometheus import PrometheusMetrics, start_metrics_server
 
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))

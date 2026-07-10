@@ -1,24 +1,24 @@
-"""Prometheus metrics surface and low-cardinality metric contract."""
+"""Prometheus observability plugin (optional ``ecs-agent[prometheus]`` extra).
+
+Provides the low-cardinality metric contract, the ``PrometheusMetrics``
+recorder, metrics endpoint helpers, and ``PrometheusPlugin`` for mounting
+metrics collection on a world through ``ecs_agent.plugins``.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import importlib
+import os
+from dataclasses import dataclass, replace
 from collections.abc import Iterator
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
-from typing import Any, Literal
-
-from prometheus_client import (
-    CONTENT_TYPE_LATEST,
-    CollectorRegistry,
-    Counter,
-    Gauge,
-    Histogram,
-    generate_latest,
-)
+from typing import TYPE_CHECKING, Any, Literal
 
 from ecs_agent.accounting.models import LLMInvocationEvent, LLMRetryEvent, UsageRecord
+from ecs_agent.observability.install import EventSubscription
+from ecs_agent.observability.sinks import TelemetrySink
 from ecs_agent.types import (
     CheckpointCreatedEvent,
     CheckpointRestoredEvent,
@@ -50,7 +50,20 @@ from ecs_agent.types import (
     ToolResultCachedEvent,
 )
 
+if TYPE_CHECKING:
+    from prometheus_client import CollectorRegistry
+
 MetricType = Literal["counter", "histogram", "gauge"]
+
+PROMETHEUS_IMPORT_ERROR = "Install ecs-agent[prometheus] to use Prometheus metrics"
+
+
+def _prometheus_client() -> Any:
+    """Import prometheus_client lazily with an actionable error message."""
+    try:
+        return importlib.import_module("prometheus_client")
+    except ImportError as exc:
+        raise ImportError(PROMETHEUS_IMPORT_ERROR) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -373,31 +386,34 @@ class PrometheusMetrics:
         registry: CollectorRegistry | None = None,
         metric_contract: dict[str, MetricSpec] | None = None,
     ) -> None:
-        self.registry = CollectorRegistry() if registry is None else registry
+        self.registry = (
+            _prometheus_client().CollectorRegistry() if registry is None else registry
+        )
         self.metric_contract = METRIC_CONTRACT if metric_contract is None else metric_contract
         self.collectors: dict[str, Any] = {}
         self._install_collectors()
 
     def _install_collectors(self) -> None:
+        prometheus = _prometheus_client()
         for spec in self.metric_contract.values():
             validate_metric_labels(spec.labels)
             collector: Any
             if spec.metric_type == "counter":
-                collector = Counter(
+                collector = prometheus.Counter(
                     spec.name,
                     spec.documentation,
                     spec.labels,
                     registry=self.registry,
                 )
             elif spec.metric_type == "histogram":
-                collector = Histogram(
+                collector = prometheus.Histogram(
                     spec.name,
                     spec.documentation,
                     spec.labels,
                     registry=self.registry,
                 )
             else:
-                collector = Gauge(
+                collector = prometheus.Gauge(
                     spec.name,
                     spec.documentation,
                     spec.labels,
@@ -744,45 +760,104 @@ def _event_subscriptions(
     )
 
 
-def install_prometheus_metrics(
-    world: Any | None = None,
-    *,
-    registry: CollectorRegistry | None = None,
-    metrics: PrometheusMetrics | None = None,
-) -> PrometheusMetrics:
-    """Create metrics and optionally subscribe them to a world's EventBus idempotently."""
-    if world is None:
-        return PrometheusMetrics(registry=registry) if metrics is None else metrics
+@dataclass(slots=True)
+class PrometheusConfig:
+    """Configuration for the Prometheus observability plugin.
 
-    installed = getattr(world, "_ecs_agent_prometheus_metrics", None)
-    if isinstance(installed, PrometheusMetrics):
-        return installed
+    ``port``/``addr`` apply only to the embedded metrics server enabled by
+    ``start_server``; when left unset they resolve from
+    ``ECS_AGENT_PROMETHEUS_PORT`` / ``ECS_AGENT_PROMETHEUS_ADDR`` and fall
+    back to 9100 on ``0.0.0.0``.
+    """
 
-    recorder = metrics if metrics is not None else PrometheusMetrics(registry=registry)
-    subscriptions = _event_subscriptions(recorder)
-    for event_type, handler in subscriptions:
-        world.event_bus.subscribe(event_type, handler)
+    registry: CollectorRegistry | None = None
+    metric_contract: dict[str, MetricSpec] | None = None
+    start_server: bool = False
+    port: int | None = None
+    addr: str | None = None
+    propagate_to_children: bool = False
 
-    setattr(world, "_ecs_agent_prometheus_metrics", recorder)
-    setattr(world, "_ecs_agent_prometheus_subscriptions", subscriptions)
-    return recorder
+    def with_env(self, env: dict[str, str] | None = None) -> PrometheusConfig:
+        """Return a copy with missing server fields loaded from env names."""
+        source = os.environ if env is None else env
+        port = self.port
+        if port is None:
+            raw_port = source.get("ECS_AGENT_PROMETHEUS_PORT")
+            if raw_port is not None:
+                port = int(raw_port)
+        addr = self.addr
+        if addr is None:
+            addr = source.get("ECS_AGENT_PROMETHEUS_ADDR")
+        return replace(self, port=port, addr=addr)
 
 
-def uninstall_prometheus_metrics(world: Any) -> PrometheusMetrics | None:
-    """Unsubscribe Prometheus metrics handlers from a world's EventBus idempotently."""
-    installed = getattr(world, "_ecs_agent_prometheus_metrics", None)
-    subscriptions = getattr(world, "_ecs_agent_prometheus_subscriptions", ())
-    if not isinstance(installed, PrometheusMetrics):
+class PrometheusPlugin:
+    """Prometheus metrics backend mounted as an observability plugin.
+
+    Consumes raw EventBus events (the metric contract needs low-cardinality
+    raw data, not redacted telemetry records) and optionally owns an embedded
+    ``/metrics`` HTTP server for the lifetime of the installation.
+    """
+
+    def __init__(
+        self,
+        config: PrometheusConfig | None = None,
+        *,
+        metrics: PrometheusMetrics | None = None,
+    ) -> None:
+        self.name = "prometheus"
+        self.config = PrometheusConfig() if config is None else config
+        self.propagate_to_children = self.config.propagate_to_children
+        self._metrics = metrics
+        self._server_handle: MetricsServerHandle | None = None
+
+    @property
+    def metrics(self) -> PrometheusMetrics | None:
+        """Return the metrics recorder once started (or the injected one)."""
+        return self._metrics
+
+    @property
+    def server_handle(self) -> MetricsServerHandle | None:
+        """Return the embedded metrics server handle while it is running."""
+        return self._server_handle
+
+    def telemetry_sink(self) -> TelemetrySink | None:
+        """No record-pipeline capability; metrics consume raw events."""
         return None
 
-    for event_type, handler in subscriptions:
-        world.event_bus.unsubscribe(event_type, handler)
+    def event_subscriptions(self, world: Any) -> tuple[EventSubscription, ...]:
+        """Return the metric recorder's event subscriptions."""
+        _ = world
+        return _event_subscriptions(self._require_metrics())
 
-    if hasattr(world, "_ecs_agent_prometheus_metrics"):
-        delattr(world, "_ecs_agent_prometheus_metrics")
-    if hasattr(world, "_ecs_agent_prometheus_subscriptions"):
-        delattr(world, "_ecs_agent_prometheus_subscriptions")
-    return installed
+    async def start(self, world: Any) -> None:
+        """Create the metrics recorder and optionally the embedded server."""
+        _ = world
+        self.config = self.config.with_env()
+        self._require_metrics()
+        if self.config.start_server and self._server_handle is None:
+            self._server_handle = start_metrics_server(
+                self.config.port if self.config.port is not None else 9100,
+                addr=self.config.addr if self.config.addr is not None else "0.0.0.0",
+                metrics=self._metrics,
+            )
+
+    async def flush(self) -> None:
+        """Prometheus collectors are pull-based; nothing to flush."""
+
+    async def shutdown(self) -> None:
+        """Close the embedded metrics server when one was started."""
+        if self._server_handle is not None:
+            self._server_handle.close(timeout=5)
+            self._server_handle = None
+
+    def _require_metrics(self) -> PrometheusMetrics:
+        if self._metrics is None:
+            self._metrics = PrometheusMetrics(
+                registry=self.config.registry,
+                metric_contract=self.config.metric_contract,
+            )
+        return self._metrics
 
 
 def _resolve_registry(metrics: PrometheusMetrics | CollectorRegistry | None) -> CollectorRegistry:
@@ -795,24 +870,27 @@ def _resolve_registry(metrics: PrometheusMetrics | CollectorRegistry | None) -> 
 
 def render_metrics(metrics: PrometheusMetrics | CollectorRegistry | None = None) -> bytes:
     """Render metrics from an isolated registry using Prometheus text format."""
-    return generate_latest(_resolve_registry(metrics))
+    prometheus = _prometheus_client()
+    rendered: bytes = prometheus.generate_latest(_resolve_registry(metrics))
+    return rendered
 
 
 def make_metrics_asgi_app(metrics: PrometheusMetrics | CollectorRegistry | None = None) -> Any:
     """Create a Prometheus ASGI app bound to the provided metrics registry."""
+    prometheus = _prometheus_client()
     registry = _resolve_registry(metrics)
 
     async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
         _ = receive
         if scope.get("type") != "http":
             raise ValueError("Prometheus metrics ASGI app only supports HTTP scopes")
-        body = generate_latest(registry)
+        body = prometheus.generate_latest(registry)
         await send(
             {
                 "type": "http.response.start",
                 "status": HTTPStatus.OK.value,
                 "headers": [
-                    (b"content-type", CONTENT_TYPE_LATEST.encode()),
+                    (b"content-type", prometheus.CONTENT_TYPE_LATEST.encode()),
                     (b"content-length", str(len(body)).encode()),
                 ],
             }
@@ -824,15 +902,16 @@ def make_metrics_asgi_app(metrics: PrometheusMetrics | CollectorRegistry | None 
 
 def make_metrics_wsgi_app(metrics: PrometheusMetrics | CollectorRegistry | None = None) -> Any:
     """Create a Prometheus WSGI app bound to the provided metrics registry."""
+    prometheus = _prometheus_client()
     registry = _resolve_registry(metrics)
 
     def app(environ: dict[str, Any], start_response: Any) -> list[bytes]:
         _ = environ
-        body = generate_latest(registry)
+        body = prometheus.generate_latest(registry)
         start_response(
             "200 OK",
             [
-                ("Content-Type", CONTENT_TYPE_LATEST),
+                ("Content-Type", prometheus.CONTENT_TYPE_LATEST),
                 ("Content-Length", str(len(body))),
             ],
         )
@@ -842,11 +921,13 @@ def make_metrics_wsgi_app(metrics: PrometheusMetrics | CollectorRegistry | None 
 
 
 def _make_metrics_handler(registry: CollectorRegistry) -> type[BaseHTTPRequestHandler]:
+    prometheus = _prometheus_client()
+
     class MetricsHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
-            body = generate_latest(registry)
+            body = prometheus.generate_latest(registry)
             self.send_response(HTTPStatus.OK.value)
-            self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+            self.send_header("Content-Type", prometheus.CONTENT_TYPE_LATEST)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -885,12 +966,13 @@ __all__ = [
     "MetricsServerHandle",
     "MetricSpec",
     "MetricType",
+    "PROMETHEUS_IMPORT_ERROR",
+    "PrometheusConfig",
     "PrometheusMetrics",
-    "install_prometheus_metrics",
+    "PrometheusPlugin",
     "make_metrics_asgi_app",
     "make_metrics_wsgi_app",
     "render_metrics",
     "start_metrics_server",
-    "uninstall_prometheus_metrics",
     "validate_metric_labels",
 ]

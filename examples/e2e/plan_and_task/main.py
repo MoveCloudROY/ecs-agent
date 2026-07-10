@@ -91,8 +91,8 @@ from examples.e2e.plan_and_task.runtime import (
 from examples.e2e.plan_and_task.state_models import RuntimeState
 
 if TYPE_CHECKING:
-    from ecs_agent.observability.install import ObservabilityHandle
     from ecs_agent.observability.sinks import TelemetrySink
+    from ecs_agent.plugins import PluginsHandle
 
 logger = get_logger(__name__)
 
@@ -139,21 +139,19 @@ def _env_flag_enabled(value: str | None) -> bool:
     return value is not None and value.lower() in {"1", "true", "yes", "on"}
 
 
-def install_plan_task_langfuse_observability(
+async def install_plan_task_langfuse_observability(
     world: World,
     *,
     env: Mapping[str, str] | None = None,
     sink: TelemetrySink | None = None,
-) -> ObservabilityHandle | None:
+) -> PluginsHandle | None:
     """Install optional Langfuse observability for the plan-and-task example."""
     source = os.environ if env is None else env
     if not _env_flag_enabled(source.get("PLAN_TASK_LANGFUSE")):
         return None
 
-    from ecs_agent.integrations.langfuse import (
-        LangfuseConfig,
-        install_langfuse_observability,
-    )
+    from ecs_agent.plugins import install_plugins
+    from ecs_agent.plugins.langfuse import LangfuseConfig, LangfusePlugin
 
     config = LangfuseConfig(
         environment=source.get("PLAN_TASK_LANGFUSE_ENVIRONMENT", "plan-and-task"),
@@ -162,7 +160,7 @@ def install_plan_task_langfuse_observability(
         tags=["plan-and-task"],
         metadata={"source": "examples/e2e/plan_and_task"},
     )
-    return install_langfuse_observability(world, config=config, sink=sink)
+    return await install_plugins(world, [LangfusePlugin(config, sink=sink)])
 
 
 def _extract_verdict_from_result(result: str) -> str:
@@ -1004,7 +1002,7 @@ async def main() -> None:
         base_dir=_WORKFLOW_BASE_DIR,
         enable_tool_sink=True,
     )
-    langfuse_handle = install_plan_task_langfuse_observability(world)
+    langfuse_handle = await install_plan_task_langfuse_observability(world)
 
     billing = BillingSubscriber()
     billing.subscribe(world.event_bus)

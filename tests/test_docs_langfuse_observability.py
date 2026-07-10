@@ -33,13 +33,14 @@ def get_langfuse_docs_content() -> str:
 
 
 def test_langfuse_docs_describe_optional_extra_and_install_api() -> None:
-    """README and docs must mention ecs-agent[langfuse] and install_langfuse_observability."""
+    """README and docs must mention ecs-agent[langfuse] and the plugin install API."""
     readme = get_readme_content()
     docs = get_langfuse_docs_content()
 
     for content, source in [(readme, "README"), (docs, "docs/features/langfuse.md")]:
         assert "ecs-agent[langfuse]" in content, f"{source} missing installation instructions for ecs-agent[langfuse]"
-        assert "install_langfuse_observability" in content, f"{source} missing mention of install_langfuse_observability"
+        assert "LangfusePlugin" in content, f"{source} missing mention of LangfusePlugin"
+        assert "install_plugins" in content, f"{source} missing mention of install_plugins"
 
 
 def test_langfuse_docs_mention_configuration() -> None:

@@ -2065,7 +2065,7 @@ async def test_plan_task_langfuse_disabled_by_default(tmp_path: Path) -> None:
     world, _, _, _ = await _build_test_world(tmp_path)
     sink = RecordingTelemetrySink()
 
-    handle = install_plan_task_langfuse_observability(
+    handle = await install_plan_task_langfuse_observability(
         world,
         env={},
         sink=sink,
@@ -2082,7 +2082,7 @@ async def test_plan_task_langfuse_installs_when_enabled(tmp_path: Path) -> None:
     world, _, _, _ = await _build_test_world(tmp_path)
     sink = RecordingTelemetrySink()
 
-    handle = install_plan_task_langfuse_observability(
+    handle = await install_plan_task_langfuse_observability(
         world,
         env={
             "PLAN_TASK_LANGFUSE": "1",
@@ -2092,11 +2092,14 @@ async def test_plan_task_langfuse_installs_when_enabled(tmp_path: Path) -> None:
     )
 
     assert handle is not None
-    assert handle.sink is sink
-    assert handle.config.environment == "plan-and-task"
-    assert handle.config.session_id == "session-one"
-    assert handle.config.tags == ["plan-and-task"]
-    assert handle.config.metadata == {"source": "examples/e2e/plan_and_task"}
+    plugin = handle.plugin("langfuse")
+    assert plugin is not None
+    assert plugin.telemetry_sink() is sink
+    config = getattr(plugin, "config")
+    assert config.environment == "plan-and-task"
+    assert config.session_id == "session-one"
+    assert config.tags == ["plan-and-task"]
+    assert config.metadata == {"source": "examples/e2e/plan_and_task"}
 
 
 def test_plan_task_readme_documents_langfuse_observability() -> None:
@@ -2127,7 +2130,7 @@ async def test_plan_task_langfuse_records_runner_trace_when_enabled(
     assert conversation is not None
     conversation.messages.append(Message(role="user", content="Summarize plan status"))
     sink = RecordingTelemetrySink()
-    handle = install_plan_task_langfuse_observability(
+    handle = await install_plan_task_langfuse_observability(
         world,
         env={"PLAN_TASK_LANGFUSE": "true"},
         sink=sink,

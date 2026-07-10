@@ -10,21 +10,19 @@ from __future__ import annotations
 import os
 import re
 
-import httpx
 import pytest
 
-from ecs_agent.components import ConversationComponent, ErrorComponent, LLMComponent
+from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.core import Runner, World
-from ecs_agent.integrations.langfuse import (
-    LangfuseConfig,
-    install_langfuse_observability,
-)
+from ecs_agent.plugins import install_plugins
+from ecs_agent.plugins.langfuse import LangfuseConfig, LangfusePlugin
 from ecs_agent.providers import Model
 from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
-from ecs_agent.types import Message
+from ecs_agent.types import ErrorOccurredEvent, Message
+from tests.live.api_format import live_transient_error_reason
 
 _LANGFUSE_KEY_ENV = ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
 _LLM_ENV = ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL")
@@ -69,15 +67,19 @@ def _make_live_model(api_format: ApiFormat) -> LLMModel:
 
 async def _run_live_langfuse_agent(api_format: ApiFormat) -> None:
     world = World(name="langfuse-live-test")
-    handle = install_langfuse_observability(
+    handle = await install_plugins(
         world,
-        LangfuseConfig(
-            environment="live-test",
-            tags=["live-test", api_format.value],
-            metadata={"LLM_API_FORMAT": api_format.value},
-            flush_at=1,
-            flush_interval=1.0,
-        ),
+        [
+            LangfusePlugin(
+                LangfuseConfig(
+                    environment="live-test",
+                    tags=["live-test", api_format.value],
+                    metadata={"LLM_API_FORMAT": api_format.value},
+                    flush_at=1,
+                    flush_interval=1.0,
+                )
+            )
+        ],
     )
     agent = world.create_entity()
     world.add_component(
@@ -99,21 +101,38 @@ async def _run_live_langfuse_agent(api_format: ApiFormat) -> None:
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
+    llm_errors: list[ErrorOccurredEvent] = []
+
+    async def collect_error(event: ErrorOccurredEvent) -> None:
+        llm_errors.append(event)
+
+    world.event_bus.subscribe(ErrorOccurredEvent, collect_error)
+
     try:
         await Runner().run(world, max_ticks=2)
-    except httpx.ReadTimeout:
-        pytest.skip("Live LLM endpoint timed out during Langfuse observability smoke")
     finally:
         try:
             await handle.flush()
         finally:
             await handle.shutdown()
 
-    error = world.get_component(agent, ErrorComponent)
-    if error is not None:
-        if "ReadTimeout" in error.error or "timed out" in error.error.lower():
-            pytest.skip("Live LLM endpoint timed out during Langfuse observability smoke")
-        pytest.fail("Live Langfuse observability agent run failed")
+    # LLM failures never raise through Runner.run: ReasoningSystem swallows
+    # them into ErrorComponent and ErrorHandlingSystem removes that component
+    # after publishing ErrorOccurredEvent, so the event is the durable signal.
+    if llm_errors:
+        hard_failures = [
+            event.error
+            for event in llm_errors
+            if live_transient_error_reason(event.error) is None
+        ]
+        if hard_failures:
+            pytest.fail(
+                f"Live Langfuse observability agent run failed: {hard_failures[0][:200]}"
+            )
+        pytest.skip(
+            "Transient live endpoint error during Langfuse observability smoke: "
+            f"{live_transient_error_reason(llm_errors[0].error)}"
+        )
 
     conversation = world.get_component(agent, ConversationComponent)
     assert conversation is not None

@@ -412,6 +412,8 @@ class ReasoningSystem:
                     )
                 raise
             except Exception as exc:
+                # httpx timeout exceptions stringify to ""; keep at least the type name.
+                error_text = str(exc) or type(exc).__name__
                 if not observation_event_published:
                     invocation_end_time = datetime.now(timezone.utc)
                     await publish_llm_observation_completed_event(
@@ -425,7 +427,7 @@ class ReasoningSystem:
                         streaming=streaming_enabled,
                         model_parameters=model_parameters,
                         status="error",
-                        error=str(exc),
+                        error=error_text,
                         duration_seconds=time.monotonic() - invocation_started_at,
                         start_time=invocation_start_time,
                         end_time=invocation_end_time,
@@ -455,12 +457,12 @@ class ReasoningSystem:
                     "reasoning_error",
                     entity_id=int(entity_id),
                     system="ReasoningSystem",
-                    reason=str(exc),
+                    reason=error_text,
                 )
                 world.add_component(
                     entity_id,
                     ErrorComponent(
-                        error=str(exc),
+                        error=error_text,
                         system_name="ReasoningSystem",
                         timestamp=time.time(),
                     ),
