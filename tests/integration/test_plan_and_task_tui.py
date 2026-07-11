@@ -17,6 +17,7 @@ from ecs_agent.types import (
     PromptReplacementEvent,
     ReasoningCompleteEvent,
     StreamContentDeltaEvent,
+    StreamContentStartEvent,
     StreamEndEvent,
     StreamReasoningDeltaEvent,
     StreamReasoningEndEvent,
@@ -120,7 +121,8 @@ class TestViewModelTranscript:
         )
         assert transcript_kinds(vm) == ["user"]
         assert vm.transcript[0].text == "/plan:status"
-        assert sections(changes) == {"transcript"}
+        # A user message also starts a busy turn (status section).
+        assert sections(changes) == {"transcript", "status"}
 
     def test_script_prompt_replacement_appends_command_entry(self) -> None:
         vm = make_vm()
@@ -357,6 +359,251 @@ class TestViewModelPhasesAndUsage:
         assert [t.task_id for t in vm.tasks] == ["task-001", "task-002"]
         assert vm.tasks[1].retry_count == 1
         assert vm.current_task_id == "task-002"
+
+
+class TestViewModelActivity:
+    async def test_turn_activity_lifecycle(self) -> None:
+        vm = make_vm()
+        assert vm.activity == "idle"
+        assert not vm.busy
+
+        changes = vm.apply_event(
+            UserInputReceivedEvent(entity_id=AGENT, prompt="You> ", text="hi")
+        )
+        assert vm.busy
+        assert vm.activity == "waiting"
+        assert "status" in sections(changes)
+
+        changes = vm.apply_event(StreamStartEvent(entity_id=AGENT, timestamp=0.0))
+        assert vm.activity == "thinking"
+        assert "status" in sections(changes)
+
+        vm.apply_event(
+            StreamReasoningDeltaEvent(entity_id=AGENT, reasoning_delta="hmm")
+        )
+        assert vm.activity == "thinking"
+
+        changes = vm.apply_event(StreamContentStartEvent(entity_id=AGENT))
+        assert vm.activity == "generating"
+        assert "status" in sections(changes)
+
+        # Repeated deltas in the same state do not re-emit a status change.
+        changes = vm.apply_event(StreamContentDeltaEvent(entity_id=AGENT, delta="x"))
+        assert "status" not in sections(changes)
+
+        vm.apply_event(StreamEndEvent(entity_id=AGENT, timestamp=1.0))
+        assert vm.activity == "thinking"
+
+        changes = vm.apply_event(
+            ToolExecutionStartedEvent(
+                entity_id=AGENT,
+                tool_call=ToolCall(id="t1", name="read_file", arguments={}),
+            )
+        )
+        assert vm.activity == "tool"
+        assert vm.activity_detail == "read_file"
+        assert "status" in sections(changes)
+
+        vm.apply_event(
+            ToolExecutionCompletedEvent(
+                entity_id=AGENT,
+                tool_call_id="t1",
+                result="ok",
+                success=True,
+                tool_name="read_file",
+            )
+        )
+        assert vm.activity == "thinking"
+
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        changes = vm.apply_event(
+            UserInputRequestedEvent(
+                entity_id=AGENT, prompt="You> ", input_future=future
+            )
+        )
+        assert not vm.busy
+        assert vm.activity == "idle"
+        assert "status" in sections(changes)
+
+    def test_subagent_delegation_sets_activity(self) -> None:
+        vm = make_vm()
+        vm.apply_event(
+            UserInputReceivedEvent(entity_id=AGENT, prompt="You> ", text="go")
+        )
+        vm.apply_event(
+            DelegationStartedEvent(
+                entity_id=AGENT,
+                subagent_name="advisor",
+                task="review",
+                correlation_id="c-1",
+                traceparent="",
+            )
+        )
+        assert (vm.activity, vm.activity_detail) == ("subagent", "advisor")
+        vm.apply_event(
+            DelegationCompletedEvent(
+                entity_id=AGENT,
+                subagent_name="advisor",
+                result="approved",
+                success=True,
+                correlation_id="c-1",
+                traceparent="",
+            )
+        )
+        assert vm.activity == "thinking"
+
+    def test_turn_token_estimate_grows_with_deltas(self) -> None:
+        vm = make_vm()
+        vm.apply_event(
+            UserInputReceivedEvent(entity_id=AGENT, prompt="You> ", text="hi")
+        )
+        assert vm.turn_output_tokens == 0
+        vm.apply_event(StreamStartEvent(entity_id=AGENT, timestamp=0.0))
+        vm.apply_event(
+            StreamReasoningDeltaEvent(entity_id=AGENT, reasoning_delta="abcdefgh")
+        )
+        after_reasoning = vm.turn_output_tokens
+        assert after_reasoning >= 2  # 8 ascii chars ≈ 2 tokens
+        vm.apply_event(StreamContentDeltaEvent(entity_id=AGENT, delta="中文四字"))
+        assert vm.turn_output_tokens >= after_reasoning + 4  # CJK ≈ 1 token/char
+        assert vm.turn_tokens_estimated
+
+    def test_invocation_usage_reconciles_estimate(self) -> None:
+        vm = make_vm()
+        vm.apply_event(
+            UserInputReceivedEvent(entity_id=AGENT, prompt="You> ", text="hi")
+        )
+        vm.apply_event(StreamStartEvent(entity_id=AGENT, timestamp=0.0))
+        vm.apply_event(
+            StreamContentDeltaEvent(entity_id=AGENT, delta="some streamed text")
+        )
+        assert vm.turn_tokens_estimated
+        vm.apply_event(StreamEndEvent(entity_id=AGENT, timestamp=1.0))
+        vm.apply_event(
+            LLMInvocationEvent(
+                entity_id=int(AGENT),
+                provider_id="openai",
+                model="m",
+                usage=UsageRecord(
+                    prompt_tokens=10, completion_tokens=42, total_tokens=52
+                ),
+            )
+        )
+        assert vm.turn_output_tokens == 42
+        assert not vm.turn_tokens_estimated
+
+        # A second invocation in the same turn accumulates on top.
+        vm.apply_event(StreamStartEvent(entity_id=AGENT, timestamp=2.0))
+        vm.apply_event(StreamContentDeltaEvent(entity_id=AGENT, delta="moremore"))
+        assert vm.turn_output_tokens > 42
+        assert vm.turn_tokens_estimated
+
+    def test_new_turn_resets_token_counter(self) -> None:
+        vm = make_vm()
+        vm.apply_event(
+            UserInputReceivedEvent(entity_id=AGENT, prompt="You> ", text="one")
+        )
+        vm.apply_event(
+            LLMInvocationEvent(
+                entity_id=int(AGENT),
+                provider_id="openai",
+                model="m",
+                usage=UsageRecord(
+                    prompt_tokens=1, completion_tokens=7, total_tokens=8
+                ),
+            )
+        )
+        assert vm.turn_output_tokens == 7
+        vm.apply_event(
+            UserInputReceivedEvent(entity_id=AGENT, prompt="You> ", text="two")
+        )
+        assert vm.turn_output_tokens == 0
+
+
+class TestStatusBar:
+    async def test_status_bar_reflects_busy_state(self) -> None:
+        from textual.widgets import Static
+
+        from examples.e2e.plan_and_task.tui.app import (
+            SPINNER_FRAMES,
+            PlanTaskTuiApp,
+        )
+
+        class StubSink:
+            input_pending = False
+
+            def submit_input(self, text: str) -> bool:
+                return True
+
+            def request_quit(self) -> None:
+                return None
+
+        vm = make_vm()
+        app = PlanTaskTuiApp(view_model=vm, sink=StubSink())
+        async with app.run_test(size=(100, 30)) as pilot:
+            bar = app.query_one("#status-bar")
+            assert not bar.display
+
+            for change in vm.apply_event(
+                UserInputReceivedEvent(entity_id=AGENT, prompt="You> ", text="hi")
+            ):
+                app.dispatch_change(change)
+            await pilot.pause()
+            assert bar.display
+            label = str(app.query_one("#status-label", Static).content)
+            assert "waiting" in label
+            assert any(frame in label for frame in SPINNER_FRAMES)
+
+            for change in vm.apply_event(
+                StreamStartEvent(entity_id=AGENT, timestamp=0.0)
+            ):
+                app.dispatch_change(change)
+            vm.apply_event(
+                StreamContentDeltaEvent(entity_id=AGENT, delta="hello world data")
+            )
+            await pilot.pause(0.3)  # let the status timer tick
+            label = str(app.query_one("#status-label", Static).content)
+            assert "generating" in label
+            tokens = str(app.query_one("#status-tokens", Static).content)
+            assert "tok" in tokens
+            assert "~" in tokens  # estimate marker while streaming
+
+            future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+            for change in vm.apply_event(
+                UserInputRequestedEvent(
+                    entity_id=AGENT, prompt="You> ", input_future=future
+                )
+            ):
+                app.dispatch_change(change)
+            await pilot.pause()
+            assert not bar.display
+
+    async def test_spinner_frame_advances_over_time(self) -> None:
+        from textual.widgets import Static
+
+        from examples.e2e.plan_and_task.tui.app import PlanTaskTuiApp
+
+        class StubSink:
+            input_pending = False
+
+            def submit_input(self, text: str) -> bool:
+                return True
+
+            def request_quit(self) -> None:
+                return None
+
+        vm = make_vm()
+        app = PlanTaskTuiApp(view_model=vm, sink=StubSink())
+        async with app.run_test(size=(100, 30)) as pilot:
+            for change in vm.apply_event(
+                UserInputReceivedEvent(entity_id=AGENT, prompt="You> ", text="hi")
+            ):
+                app.dispatch_change(change)
+            await pilot.pause()
+            first = str(app.query_one("#status-label", Static).content)
+            await pilot.pause(0.5)
+            second = str(app.query_one("#status-label", Static).content)
+            assert first != second  # spinner frame advanced
 
 
 class TestBridge:

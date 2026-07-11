@@ -23,6 +23,7 @@ from ecs_agent.types import (
     PhaseChangedEvent,
     PromptReplacementEvent,
     StreamContentDeltaEvent,
+    StreamContentStartEvent,
     StreamEndEvent,
     StreamReasoningDeltaEvent,
     StreamReasoningEndEvent,
@@ -32,6 +33,7 @@ from ecs_agent.types import (
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
     UserInputReceivedEvent,
+    UserInputRequestedEvent,
 )
 
 if TYPE_CHECKING:
@@ -60,7 +62,10 @@ Section = Literal[
     "subagents",
     "notify",
     "input",
+    "status",
 ]
+
+Activity = Literal["idle", "waiting", "thinking", "generating", "tool", "subagent"]
 
 _PREVIEW_CHARS = 160
 
@@ -70,6 +75,19 @@ def _preview(text: str, limit: int = _PREVIEW_CHARS) -> str:
     if len(collapsed) <= limit:
         return collapsed
     return collapsed[: limit - 1] + "…"
+
+
+def _estimate_token_count(text: str) -> float:
+    """Rough live token estimate for streamed text (display-only).
+
+    Real token counts only arrive with the invocation usage record at the
+    end of a stream; while streaming, approximate CJK at one token per
+    character and everything else at four characters per token.
+    """
+    total = 0.0
+    for char in text:
+        total += 1.0 if ord(char) >= 0x2E80 else 0.25
+    return total
 
 
 @dataclass(slots=True)
@@ -149,6 +167,21 @@ class PlanTaskViewModel:
         self.tasks: list[TaskRow] = []
         self.review_verdicts: list[tuple[str, str]] = []
         self.usage = UsageTotals()
+        self.busy: bool = False
+        self.activity: Activity = "idle"
+        self.activity_detail: str = ""
+        self._turn_actual_tokens: int = 0
+        self._stream_token_estimate: float = 0.0
+
+    @property
+    def turn_output_tokens(self) -> int:
+        """Tokens generated in the current turn (actual + live estimate)."""
+        return self._turn_actual_tokens + int(self._stream_token_estimate)
+
+    @property
+    def turn_tokens_estimated(self) -> bool:
+        """True while the displayed turn count includes a live estimate."""
+        return self._stream_token_estimate > 0
 
     # -- reducers ---------------------------------------------------------
 
@@ -159,15 +192,21 @@ class PlanTaskViewModel:
                 self.streaming = True
                 self.live_reasoning = ""
                 self.live_content = ""
-                return [UiChange(section="live")]
+                return [UiChange(section="live"), *self._set_activity("thinking")]
             case StreamReasoningDeltaEvent() if event.entity_id == self.agent_id:
                 self.live_reasoning += event.reasoning_delta
-                return [UiChange(section="live")]
+                self._stream_token_estimate += _estimate_token_count(
+                    event.reasoning_delta
+                )
+                return [UiChange(section="live"), *self._set_activity("thinking")]
             case StreamReasoningEndEvent() if event.entity_id == self.agent_id:
                 return self._flush_reasoning()
+            case StreamContentStartEvent() if event.entity_id == self.agent_id:
+                return self._set_activity("generating")
             case StreamContentDeltaEvent() if event.entity_id == self.agent_id:
                 self.live_content += event.delta
-                return [UiChange(section="live")]
+                self._stream_token_estimate += _estimate_token_count(event.delta)
+                return [UiChange(section="live"), *self._set_activity("generating")]
             case StreamEndEvent() if event.entity_id == self.agent_id:
                 self.streaming = False
                 changes = self._flush_reasoning()
@@ -177,9 +216,20 @@ class PlanTaskViewModel:
                     )
                     self.live_content = ""
                 changes.append(UiChange(section="live"))
+                changes.extend(self._set_activity("thinking"))
                 return changes
             case UserInputReceivedEvent() if event.entity_id == self.agent_id:
-                return self._append(TranscriptEntry(kind="user", text=event.text))
+                self.busy = True
+                self._turn_actual_tokens = 0
+                self._stream_token_estimate = 0.0
+                changes = self._append(
+                    TranscriptEntry(kind="user", text=event.text)
+                )
+                changes.extend(self._set_activity("waiting"))
+                return changes
+            case UserInputRequestedEvent() if event.entity_id == self.agent_id:
+                self.busy = False
+                return self._set_activity("idle")
             case PromptReplacementEvent() if (
                 event.entity_id == self.agent_id
                 and event.prompt_kind == "user"
@@ -194,13 +244,15 @@ class PlanTaskViewModel:
                 )
             case ToolExecutionStartedEvent() if event.entity_id == self.agent_id:
                 args = json.dumps(event.tool_call.arguments, ensure_ascii=False)
-                return self._append(
+                changes = self._append(
                     TranscriptEntry(
                         kind="tool_call",
                         text=f"{event.tool_call.name} {_preview(args, 120)}",
                         meta={"tool": event.tool_call.name},
                     )
                 )
+                changes.extend(self._set_activity("tool", event.tool_call.name))
+                return changes
             case ToolExecutionCompletedEvent() if event.entity_id == self.agent_id:
                 duration = (
                     f"{event.duration_seconds:.1f}s"
@@ -208,7 +260,7 @@ class PlanTaskViewModel:
                     else "?"
                 )
                 marker = "✓" if event.success else "✗"
-                return self._append(
+                changes = self._append(
                     TranscriptEntry(
                         kind="tool_result",
                         text=(
@@ -221,6 +273,9 @@ class PlanTaskViewModel:
                         },
                     )
                 )
+                if self.busy:
+                    changes.extend(self._set_activity("thinking"))
+                return changes
             case DelegationStartedEvent() if event.entity_id == self.agent_id:
                 self.subagent_runs.append(
                     SubagentRun(
@@ -237,6 +292,9 @@ class PlanTaskViewModel:
                     )
                 )
                 changes.append(UiChange(section="subagents"))
+                changes.extend(
+                    self._set_activity("subagent", event.subagent_name)
+                )
                 return changes
             case DelegationCompletedEvent() if event.entity_id == self.agent_id:
                 status: Literal["completed", "failed"] = (
@@ -255,6 +313,8 @@ class PlanTaskViewModel:
                     )
                 )
                 changes.append(UiChange(section="subagents"))
+                if self.busy:
+                    changes.extend(self._set_activity("thinking"))
                 return changes
             case SubagentStreamDeltaEvent() if (
                 event.parent_entity_id == self.agent_id
@@ -297,6 +357,10 @@ class PlanTaskViewModel:
                 if event.cost is not None:
                     self.usage.total_cost += event.cost.total_cost or 0.0
                 self.usage.last_model = event.model
+                # Reconcile the live estimate against the invocation's real
+                # completion count; the next stream re-estimates on top.
+                self._turn_actual_tokens += completion
+                self._stream_token_estimate = 0.0
                 return [UiChange(section="usage")]
             case CompactionCompleteEvent() if event.entity_id == self.agent_id:
                 message = (
@@ -346,6 +410,14 @@ class PlanTaskViewModel:
     def _append(self, entry: TranscriptEntry) -> list[UiChange]:
         self.transcript.append(entry)
         return [UiChange(section="transcript", entries=[entry])]
+
+    def _set_activity(self, activity: Activity, detail: str = "") -> list[UiChange]:
+        """Transition the busy-state label; emits only on actual change."""
+        if (activity, detail) == (self.activity, self.activity_detail):
+            return []
+        self.activity = activity
+        self.activity_detail = detail
+        return [UiChange(section="status")]
 
     def _flush_reasoning(self) -> list[UiChange]:
         if not self.live_reasoning:
