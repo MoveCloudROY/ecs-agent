@@ -5,9 +5,9 @@ of an isolated child ``World`` for a delegated subagent: LLM/prompt/conversation
 components, inheritance-policy application (tools, skills, permissions, workspace,
 compaction), and registration of the child system set.
 
-The child system set is still hardcoded here (SystemPromptRenderSystem, ReasoningSystem,
-ErrorHandlingSystem, and CompactionSystem when the parent has compaction config).
-Task 12 replaces it with configurable runtime profiles; behavior is unchanged for now.
+The child system set comes from the runtime profile named by
+``SubagentConfig.runtime_profile`` (default ``"default"``), resolved via
+``systems.subagent.runtime_profiles``.
 """
 
 from __future__ import annotations
