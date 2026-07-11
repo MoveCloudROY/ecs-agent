@@ -95,3 +95,17 @@ def test_non_transient_live_errors_do_not_skip() -> None:
     ]
     for error_text in hard_failures:
         assert live_transient_error_reason(error_text) is None, error_text
+
+
+def test_live_llm_timeout_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.live.api_format import live_llm_timeout
+
+    monkeypatch.delenv("LLM_LIVE_TIMEOUT", raising=False)
+    assert live_llm_timeout() == 30.0
+    assert live_llm_timeout(default=45.0) == 45.0
+
+    monkeypatch.setenv("LLM_LIVE_TIMEOUT", "120")
+    assert live_llm_timeout() == 120.0
+
+    monkeypatch.setenv("LLM_LIVE_TIMEOUT", "   ")
+    assert live_llm_timeout() == 30.0

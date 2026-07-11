@@ -73,6 +73,19 @@ def live_openai_model(default: str = "qwen3.5-flash") -> str:
     return os.getenv("ALIYUN_LIVE_MODEL") or os.getenv("LLM_MODEL") or default
 
 
+def live_llm_timeout(default: float = 30.0) -> float:
+    """Per-request LLM timeout for live smokes, from ``LLM_LIVE_TIMEOUT``.
+
+    The default keeps smokes fast against responsive endpoints; raise it
+    (e.g. ``LLM_LIVE_TIMEOUT=120``) for slower models whose replies exceed
+    the default and would otherwise skip as transient timeouts.
+    """
+    raw = os.getenv("LLM_LIVE_TIMEOUT")
+    if raw is None or not raw.strip():
+        return default
+    return float(raw)
+
+
 _TRANSIENT_LIVE_ERROR_MARKERS = (
     # httpx timeout family. str(exc) is often empty for these, so
     # ErrorComponent carries the exception type name instead.
