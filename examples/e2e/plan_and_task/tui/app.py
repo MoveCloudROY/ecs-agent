@@ -138,6 +138,17 @@ _RUN_STYLES = {"running": "yellow", "completed": "green", "failed": "red"}
 _WAITING_PLACEHOLDER = "agent is working… (Ctrl+Q to quit)"
 _READY_PLACEHOLDER = "type a message or /command — Enter to send"
 
+SPINNER_FRAMES: tuple[str, ...] = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+_STATUS_INTERVAL = 1 / 8
+
+_ACTIVITY_LABELS = {
+    "waiting": "waiting for model",
+    "thinking": "thinking",
+    "generating": "generating",
+    "tool": "tool",
+    "subagent": "subagent",
+}
+
 
 class PlanTaskTuiApp(App[None]):
     """Dashboard-style TUI for the plan-and-task workflow."""
@@ -176,6 +187,19 @@ class PlanTaskTuiApp(App[None]):
         height: 1fr;
         min-height: 3;
     }
+    #status-bar {
+        height: 1;
+        padding: 0 1;
+        display: none;
+    }
+    #status-label {
+        width: 1fr;
+        color: $success;
+    }
+    #status-tokens {
+        width: auto;
+        color: $warning;
+    }
     #usage-bar {
         height: 1;
         padding: 0 1;
@@ -204,6 +228,7 @@ class PlanTaskTuiApp(App[None]):
         self._commands = commands
         self._backlog: list[UiChange] = []
         self._last_copied: str | None = None
+        self._spinner_frame = 0
 
     # -- layout -----------------------------------------------------------
 
@@ -220,6 +245,9 @@ class PlanTaskTuiApp(App[None]):
                 yield Static(id="review-panel")
                 yield DataTable(id="task-table", cursor_type="row")
                 yield Static(id="subagent-panel")
+        with Horizontal(id="status-bar"):
+            yield Static(id="status-label")
+            yield Static(id="status-tokens")
         yield Static(id="usage-bar")
         suggester = (
             SuggestFromList(self._commands, case_sensitive=False)
@@ -239,6 +267,7 @@ class PlanTaskTuiApp(App[None]):
         self._render_reviews()
         self._render_subagents()
         self._render_usage()
+        self.set_interval(_STATUS_INTERVAL, self._tick_status)
         self.query_one(CommandInput).focus()
         backlog, self._backlog = self._backlog, []
         for change in backlog:
@@ -276,6 +305,8 @@ class PlanTaskTuiApp(App[None]):
                 self._render_subagents()
             case "input":
                 self._render_input_state()
+            case "status":
+                self._render_status()
             case "notify":
                 if change.notification is not None:
                     self.notify(change.notification, severity=change.severity)
@@ -426,6 +457,36 @@ class PlanTaskTuiApp(App[None]):
         if usage.last_model:
             parts.append(usage.last_model)
         self.query_one("#usage-bar", Static).update(" · ".join(parts))
+
+    def _tick_status(self) -> None:
+        """Animate the spinner and the live token count while busy."""
+        if not self._vm.busy:
+            return
+        self._spinner_frame += 1
+        self._render_status()
+
+    def _status_label_text(self) -> str:
+        frame = SPINNER_FRAMES[self._spinner_frame % len(SPINNER_FRAMES)]
+        label = _ACTIVITY_LABELS.get(self._vm.activity, self._vm.activity)
+        if self._vm.activity_detail:
+            label = f"{label} {self._vm.activity_detail}"
+        return f"{frame} {label}…"
+
+    def _status_tokens_text(self) -> str:
+        marker = "~" if self._vm.turn_tokens_estimated else ""
+        return f"▲ {marker}{self._vm.turn_output_tokens} tok"
+
+    def _render_status(self) -> None:
+        bar = self.query_one("#status-bar")
+        bar.display = self._vm.busy
+        if not self._vm.busy:
+            return
+        self.query_one("#status-label", Static).update(
+            Text(self._status_label_text())
+        )
+        self.query_one("#status-tokens", Static).update(
+            Text(self._status_tokens_text())
+        )
 
     def _render_input_state(self) -> None:
         field = self.query_one(CommandInput)
