@@ -545,7 +545,10 @@ class ReasoningSystem:
         prompt = usage.prompt_tokens or 0
         completion = usage.completion_tokens or 0
         total = usage.total_tokens or (prompt + completion)
-        cache_read = usage.cache_read_tokens or 0
+        # Anthropic reports cache reads in cache_read_tokens; OpenAI-compatible
+        # providers report them in cached_input_tokens (same canonical meaning,
+        # mirroring AccountingSubscriber).
+        cache_read = usage.cache_read_tokens or usage.cached_input_tokens or 0
         cache_creation = usage.cache_creation_tokens or 0
 
         component.last_prompt_tokens = prompt

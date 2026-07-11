@@ -160,3 +160,5 @@ LLM_API_KEY="$LLM_API_KEY" \
 ```
 
 Supported `LLM_API_FORMAT` values are `openai_chat_completions`, `openai_responses`, and `anthropic_messages`; shorthand values `openai`, `chat`, `responses`, and `anthropic` are also accepted. All live tests resolve the variable through the shared helper in `tests/live/api_format.py`, so the same value drives every live file.
+
+The smoke's per-request LLM timeout defaults to 30 seconds and can be raised for slower models with `LLM_LIVE_TIMEOUT` (seconds). Transient endpoint errors — timeouts, rate limits, 5xx, connection drops — skip the smoke with a diagnostic reason instead of failing; auth and request-mapping errors still fail.

@@ -45,6 +45,7 @@ def _openai_config(
 class _MockStreamResponse:
     def __init__(self, lines: list[str]) -> None:
         self._lines = lines
+        self.is_error = False
         self.raise_for_status = Mock()
 
     async def aiter_lines(self):
@@ -118,6 +119,105 @@ async def test_streaming_returns_stream_delta_objects() -> None:
     assert deltas[0].content == "Hel"
     assert deltas[1].content == "lo"
     assert deltas[1].finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_streaming_request_includes_usage_stream_options() -> None:
+    """Streaming requests opt into the final usage chunk (OpenAI spec)."""
+    stream_lines = [
+        _sse_data({"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}),
+        "data: [DONE]",
+    ]
+    stream_response = _MockStreamResponse(stream_lines)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
+
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
+
+    stream_iter = await model.complete(
+        [Message(role="user", content="hello")], stream=True
+    )
+    _ = [delta async for delta in stream_iter]
+
+    body = mock_client.stream.call_args[1]["json"]
+    assert body["stream"] is True
+    assert body["stream_options"] == {"include_usage": True}
+
+
+@pytest.mark.asyncio
+async def test_streaming_usage_chunk_with_empty_choices_yields_usage() -> None:
+    """The terminal usage chunk has "choices": [] — it must not crash the
+    stream, and its usage (incl. cached tokens) must reach the caller."""
+    stream_lines = [
+        _sse_data({"choices": [{"delta": {"content": "Hi"}, "finish_reason": None}]}),
+        _sse_data({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        _sse_data(
+            {
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 8077,
+                    "completion_tokens": 5,
+                    "total_tokens": 8082,
+                    "prompt_tokens_details": {"cached_tokens": 7936},
+                },
+            }
+        ),
+        "data: [DONE]",
+    ]
+    stream_response = _MockStreamResponse(stream_lines)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
+
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
+
+    stream_iter = await model.complete(
+        [Message(role="user", content="hello")], stream=True
+    )
+    deltas = [delta async for delta in stream_iter]
+
+    assert [delta.content for delta in deltas if delta.content] == ["Hi"]
+    usage_deltas = [delta for delta in deltas if delta.usage is not None]
+    assert len(usage_deltas) == 1
+    usage = usage_deltas[0].usage
+    assert usage is not None
+    assert usage.prompt_tokens == 8077
+    assert usage.cached_input_tokens == 7936
+
+
+@pytest.mark.asyncio
+async def test_streaming_http_error_surfaces_status_error() -> None:
+    """A non-2xx streaming response raises HTTPStatusError with a readable
+    body (not ResponseNotRead from the error logger)."""
+
+    class _AsyncBody(httpx.AsyncByteStream):
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+
+        async def __aiter__(self):
+            yield self._body
+
+    error_response = httpx.Response(
+        400,
+        request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+        stream=_AsyncBody(b'{"error": {"message": "bad request"}}'),
+    )
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(return_value=_MockStreamContext(error_response))
+
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
+
+    stream_iter = await model.complete(
+        [Message(role="user", content="hello")], stream=True
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        async for _delta in stream_iter:
+            pass
 
 
 @pytest.mark.asyncio

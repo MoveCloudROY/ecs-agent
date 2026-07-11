@@ -25,7 +25,11 @@ from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import ErrorOccurredEvent, Message
-from tests.live.api_format import live_transient_error_reason, resolve_live_api_format
+from tests.live.api_format import (
+    live_llm_timeout,
+    live_transient_error_reason,
+    resolve_live_api_format,
+)
 
 
 def _api_format_from_env() -> ApiFormat:
@@ -48,7 +52,7 @@ def _make_live_model(api_key: str) -> LLMModel:
         api_key=api_key,
         api_format=_api_format_from_env(),
         provider_id="live",
-        timeout=30.0,
+        timeout=live_llm_timeout(),
     )
 
 

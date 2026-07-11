@@ -989,12 +989,18 @@ async def main() -> None:
             api_format = ApiFormat.OPENAI_CHAT_COMPLETIONS
         logger.info("using_model", model_name=model_name, api_format=api_format)
         print(f"Using model: {model_name}")
+        # LLM_ENABLE_STORE=0 disables stored-response chaining (previous_response_id)
+        # for gateways that reject it over plain HTTP Responses API.
+        store_enabled = os.environ.get("LLM_ENABLE_STORE", "1").lower() not in (
+            "0",
+            "false",
+        )
         llm_model = Model(
             model_name,
             base_url=base_url,
             api_key=api_key,
             api_format=api_format,
-            enable_store=api_format == ApiFormat.OPENAI_RESPONSES,
+            enable_store=api_format == ApiFormat.OPENAI_RESPONSES and store_enabled,
         )
 
     world, agent_id, _, _ = await build_plan_task_world(

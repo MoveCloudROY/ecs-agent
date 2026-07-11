@@ -194,6 +194,9 @@ To run the live tests, set the following environment variables in your shell:
 - `LLM_API_KEY`: Your LLM API key
 - `LLM_BASE_URL`: Your LLM base URL
 - `LLM_MODEL`: Your LLM model
+- `LLM_LIVE_TIMEOUT` (optional): per-request LLM timeout in seconds for the
+  smoke, default `30`. Raise it (e.g. `120`) for slower models; timeouts are
+  otherwise reported as transient skips, not failures.
 
 Then execute the full suite or specific node tests:
 

@@ -66,6 +66,39 @@ async for delta in model.complete(messages, stream=True):
     print(delta.content, end="", flush=True)
 ```
 
+The stream parser understands both SSE dialects found in the wild:
+
+- **Standard OpenAI events** — `response.output_text.delta` (string delta),
+  `response.function_call_arguments.delta`, `response.completed`,
+  `response.failed` (raises `ValueError` with the provider's error code and
+  message).
+- **Legacy object-delta events** — `response.output_item.delta` carrying
+  `{"type": "content_delta"|"arguments_delta", ...}` payloads, terminated by
+  `response.done`.
+
+When a `response.output_item.done` item carries a complete `arguments` string,
+it overrides whatever accumulated from delta events.
+
+## Stored-Response Chaining (`previous_response_id`)
+
+`ReasoningSystem` records each `response_id` in `ResponsesAPIStateComponent`
+and passes it to the next request as `previous_response_id`. Two gates decide
+whether the chain is actually sent:
+
+1. **`enable_store`** — the chain is only included when the model was built
+   with `Model(..., enable_store=True)`. With `store=false` the referenced
+   response was never persisted server-side, and providers reject the id.
+2. **Provider support** — some gateways reject `previous_response_id` on the
+   plain HTTP endpoint (e.g. `400: previous_response_id is only supported on
+   Responses WebSocket v2`). When a 400 blames the chain, the adapter retries
+   the request once without it, logs a
+   `responses_previous_response_id_rejected` warning, and stops sending the
+   chain for the lifetime of that model instance.
+
+Both degradations are lossless: the full message history is always sent in
+`input`, so dropping the chain never loses context. `store: true/false` itself
+is still sent according to `enable_store`.
+
 ## Automatic Fallback
 
 If the Responses API endpoint is not available, `OpenAIModel` automatically falls back to Chat Completions:
@@ -136,6 +169,10 @@ Use Chat Completions when:
 1. Attempting a request to `/v1/responses`
 2. Falling back to `/v1/chat/completions` on HTTP 404
 3. Caching the decision for subsequent requests
+
+A 400 that blames `previous_response_id` stays on the Responses endpoint: the
+adapter drops the chain, retries once, and keeps using `/v1/responses` (see
+[Stored-Response Chaining](#stored-response-chaining-previous_response_id)).
 
 This ensures zero-configuration compatibility across providers.
 
