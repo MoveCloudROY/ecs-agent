@@ -890,6 +890,41 @@ async def test_reasoning_records_api_token_usage_on_entity() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reasoning_records_openai_cached_input_tokens_as_cache_read() -> None:
+    """OpenAI-style cached_input_tokens count as cache reads on the entity."""
+    from ecs_agent.types import UsageRecord
+
+    world = World()
+    model = RecordingFakeModel(
+        responses=[
+            CompletionResult(
+                message=Message(role="assistant", content="ok"),
+                usage=UsageRecord(
+                    prompt_tokens=8077,
+                    completion_tokens=5,
+                    total_tokens=8082,
+                    cached_input_tokens=7936,
+                ),
+            ),
+        ]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="hi")]),
+    )
+
+    await ReasoningSystem().process(world)
+
+    usage = world.get_component(entity_id, TokenUsageComponent)
+    assert usage is not None
+    assert usage.last_cache_read_tokens == 7936
+    assert usage.total_cache_read_tokens == 7936
+    assert usage.last_cache_creation_tokens == 0
+
+
+@pytest.mark.asyncio
 async def test_reasoning_without_usage_does_not_create_usage_component() -> None:
     """A provider that reports no usage leaves TokenUsageComponent absent."""
     world = World()

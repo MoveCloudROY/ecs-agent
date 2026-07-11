@@ -26,6 +26,14 @@ Each chunk emitted by the iterator is a `StreamDelta` object with the following 
 - `finish_reason: str | None`: The reason why the generation stopped (e.g., `"stop"`, `"tool_calls"`).
 - `usage: Usage | None`: Usage statistics, typically only provided in the final delta.
 
+For Chat Completions streams, `OpenAIModel` requests the usage chunk via
+`stream_options: {"include_usage": true}` and tolerates its `"choices": []`
+shape (some gateways send it unconditionally). The usage — including
+`cached_input_tokens` from `prompt_tokens_details` — arrives as a trailing
+usage-only delta *after* the delta carrying `finish_reason`, so consumers must
+keep iterating to the end of the stream rather than stopping at
+`finish_reason`.
+
 ## Usage Example
 
 The following pattern demonstrates how to consume a streamed response in real-time.

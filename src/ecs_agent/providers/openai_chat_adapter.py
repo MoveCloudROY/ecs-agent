@@ -84,6 +84,9 @@ class OpenAIChatAdapter:
         request_body = self._build_request_body(messages, tools, response_format)
         stream_body = dict(request_body)
         stream_body["stream"] = True
+        # Spec-compliant providers only emit the final usage chunk (token
+        # counts incl. cached_tokens) when explicitly requested.
+        stream_body["stream_options"] = {"include_usage": True}
 
         timeout = httpx.Timeout(
             connect=self._facade._timeout.connect,
@@ -101,6 +104,11 @@ class OpenAIChatAdapter:
                 headers=self._facade._build_headers(),
                 timeout=timeout,
             ) as response:
+                if response.is_error:
+                    # Buffer the error body inside the stream context so
+                    # HTTPStatusError handlers can read response.text after
+                    # the context closes.
+                    await response.aread()
                 response.raise_for_status()
                 async for line in response.aiter_lines():
                     if not line:
@@ -120,8 +128,16 @@ class OpenAIChatAdapter:
                     except json.JSONDecodeError:
                         continue
 
-                    choice = response_json["choices"][0]
-                    delta = choice.get("delta", {})
+                    # The terminal usage chunk carries "choices": [] (sent by
+                    # OpenAI under stream_options.include_usage, and by some
+                    # gateways unconditionally).
+                    choices = response_json.get("choices")
+                    if isinstance(choices, list) and choices:
+                        choice = choices[0]
+                        delta = choice.get("delta", {})
+                    else:
+                        choice = {}
+                        delta = {}
 
                     content = delta.get("content")
                     reasoning_content = delta.get("reasoning_content")
