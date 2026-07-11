@@ -105,6 +105,34 @@ Automate interactions by piping commands. In pipe mode each `\n\n` (double newli
 printf '/plan:start Build demo\n\n/plan:status\n\nexit\n\n' | uv run python examples/e2e/plan_and_task/main.py
 ```
 
+### TUI Mode
+
+A [Textual](https://textual.textualize.io/)-based terminal UI over the same world, commands, and environment variables (install the `tui` extra first — `uv sync --group dev` already includes it):
+
+```bash
+LLM_API_KEY=your-api-key uv run python -m examples.e2e.plan_and_task.tui
+```
+
+What it renders, all driven by the ECS event bus (design notes: `docs/plans/2026-07-11-plan-and-task-tui.md`):
+
+- **Transcript pane** — token-streamed assistant output (reasoning dimmed, content as Markdown), slash-command results as titled panels, tool call/result lines, and subagent lifecycle lines.
+- **Sidebar** — the 13-phase graph with the current `PhaseComponent` phase highlighted, recorded review verdicts, the live task queue table (current task marked), and recent subagent activity.
+- **Usage bar** — cumulative tokens, cache hit-rate, and cost from `LLMInvocationEvent` accounting.
+- **Input** — single-line prompt with slash-command suggestions (derived from the world's registered `TriggerSpec`s). `Enter` submits; `exit`/`quit` or `Ctrl+Q` ends the session; `Ctrl+L` clears the transcript.
+- **Copy-on-select** — mouse-selecting text (transcript, sidebar panels, live tail) automatically copies it to the system clipboard and shows a brief `clipboard` toast. Selection in the transcript is character-precise (double-width CJK included) and highlights with the theme selection background; dragging into the blank area below the text selects to the end of the content. The clipboard write uses the OSC 52 escape sequence via Textual's `App.copy_to_clipboard`, which requires a terminal that accepts OSC 52 (kitty, Alacritty, WezTerm, iTerm2, recent VTE/GNOME Terminal; over SSH it reaches the local clipboard). The `Input` field keeps its own native selection and shortcuts and is not auto-copied.
+
+Implementation layout (`examples/e2e/plan_and_task/tui/`):
+
+| Module | Role |
+|---|---|
+| `view_model.py` | Pure reducer: ECS events → renderable state (no textual imports; unit-testable) |
+| `bridge.py` | Event-bus subscriptions → view model; owns the pending `UserInputRequestedEvent` future; mirrors the REPL re-arm loop of `runtime.py` |
+| `app.py` | Textual `App`: widgets, CSS layout, key bindings; consumes `UiChange` messages. Includes `SelectableRichLog` (text selection over `RichLog`) and the `on_text_selected` copy-on-select handler |
+| `session.py` | Wires view model + bridge + app over a built world (shared by `__main__` and tests) |
+| `__main__.py` | Entrypoint: builds the world via `build_plan_task_world(...)`, runs `Runner.run` and `App.run_async` concurrently on one asyncio loop |
+
+The TUI enables `StreamingComponent(enabled=True, non_blocking_delta_publish=False)` on the agent entity; ordered delta publishing is required so `StreamEndEvent` arrives after all `StreamContentDeltaEvent`s (non-blocking publish would flush an empty assistant message). The stdin REPL (`main.py`) keeps streaming off and prints whole messages, unchanged.
+
 ## Recovery / Restart
 
 The workflow can be restarted at any time. On startup, no workflow ID is resolved and no scratchbook folder is created. Instead:
@@ -137,6 +165,12 @@ Run the integration suite to verify command parsing, phase-transition logic, art
 
 ```bash
 uv run pytest tests/integration/test_plan_and_task_flow.py -v
+```
+
+TUI coverage lives in `tests/integration/test_plan_and_task_tui.py`: pure view-model reducer tests, bridge input-future tests against a real `World`, headless Textual smoke tests (`App.run_test()`), and an end-to-end session that ticks a real `Runner` with a `FakeModel` through `/plan:status` and streaming output:
+
+```bash
+uv run pytest tests/integration/test_plan_and_task_tui.py -v
 ```
 
 - `uv run pytest tests/integration/test_plan_and_task_flow.py -k "subagent"` — verifies subagent component wiring

@@ -952,13 +952,13 @@ async def build_plan_task_world(
     return world, agent_id, adapter_ref, runtime_state
 
 
-async def main() -> None:
-    debug_mode = os.environ.get("DEBUG", "").lower() in ("1", "true")
-    configure_logging(json_output=False, level="DEBUG" if debug_mode else None)
+def build_model_from_env() -> LLMModel:
+    """Construct the LLM model from ``LLM_*`` environment variables.
 
-    if debug_mode:
-        logger.info("debug_mode_enabled")
-
+    Shared by the stdin REPL entrypoint (this module) and the TUI entrypoint
+    (``examples.e2e.plan_and_task.tui``). Exits the process when
+    ``LLM_API_KEY`` is missing.
+    """
     api_key: str = os.environ.get("LLM_API_KEY", "")
     base_url: str = os.environ.get(
         "LLM_BASE_URL",
@@ -977,31 +977,41 @@ async def main() -> None:
     if api_format_str == ApiFormat.ANTHROPIC_MESSAGES:
         logger.info("using_model", model_name=model_name, api_format="anthropic_messages")
         print(f"Using Anthropic Messages API with model: {model_name}")
-        llm_model: LLMModel = Model(
+        return Model(
             model_name,
             base_url=base_url,
             api_key=api_key,
             api_format=ApiFormat.ANTHROPIC_MESSAGES,
         )
-    else:
-        api_format = ApiFormat.OPENAI_RESPONSES
-        if api_format_str == ApiFormat.OPENAI_CHAT_COMPLETIONS:
-            api_format = ApiFormat.OPENAI_CHAT_COMPLETIONS
-        logger.info("using_model", model_name=model_name, api_format=api_format)
-        print(f"Using model: {model_name}")
-        # LLM_ENABLE_STORE=0 disables stored-response chaining (previous_response_id)
-        # for gateways that reject it over plain HTTP Responses API.
-        store_enabled = os.environ.get("LLM_ENABLE_STORE", "1").lower() not in (
-            "0",
-            "false",
-        )
-        llm_model = Model(
-            model_name,
-            base_url=base_url,
-            api_key=api_key,
-            api_format=api_format,
-            enable_store=api_format == ApiFormat.OPENAI_RESPONSES and store_enabled,
-        )
+
+    api_format = ApiFormat.OPENAI_RESPONSES
+    if api_format_str == ApiFormat.OPENAI_CHAT_COMPLETIONS:
+        api_format = ApiFormat.OPENAI_CHAT_COMPLETIONS
+    logger.info("using_model", model_name=model_name, api_format=api_format)
+    print(f"Using model: {model_name}")
+    # LLM_ENABLE_STORE=0 disables stored-response chaining (previous_response_id)
+    # for gateways that reject it over plain HTTP Responses API.
+    store_enabled = os.environ.get("LLM_ENABLE_STORE", "1").lower() not in (
+        "0",
+        "false",
+    )
+    return Model(
+        model_name,
+        base_url=base_url,
+        api_key=api_key,
+        api_format=api_format,
+        enable_store=api_format == ApiFormat.OPENAI_RESPONSES and store_enabled,
+    )
+
+
+async def main() -> None:
+    debug_mode = os.environ.get("DEBUG", "").lower() in ("1", "true")
+    configure_logging(json_output=False, level="DEBUG" if debug_mode else None)
+
+    if debug_mode:
+        logger.info("debug_mode_enabled")
+
+    llm_model = build_model_from_env()
 
     world, agent_id, _, _ = await build_plan_task_world(
         model=llm_model,

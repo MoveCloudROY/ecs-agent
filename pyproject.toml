@@ -63,6 +63,7 @@ langfuse = ["langfuse>=3.0.0", "httpx[socks]>=0.24.0"]
 mcp = ["mcp>=1.20.0"]
 prometheus = ["prometheus-client>=0.25.0"]
 tokenizer = ["tiktoken>=0.7.0"]
+tui = ["textual>=8.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -85,5 +86,6 @@ dev = [
     "prometheus-client>=0.25.0",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
+    "textual>=8.0",
     "types-pyyaml>=6.0.12.20250915",
 ]
