@@ -77,9 +77,14 @@ SubagentConfig(
 Each delegated subagent runs in its own isolated child `World` with a set of ECS
 systems. Which systems is chosen by a **runtime profile** — a name resolved against a
 process-level registry to a builder that returns the whole system set. The default
-profile `"default"` reproduces the historical set exactly:
-`SystemPromptRenderSystem(-20)`, `ReasoningSystem(0)`, `ErrorHandlingSystem(99)`, plus
-`CompactionSystem(-30)` when the parent entity has a `CompactionConfigComponent`.
+profile `"default"` provides the full agent loop:
+`SystemPromptRenderSystem(-20)`, `ReasoningSystem(0)`, `ToolExecutionSystem(5)`,
+`ErrorHandlingSystem(99)`, plus `CompactionSystem(-30)` when the parent entity has a
+`CompactionConfigComponent`. `ToolExecutionSystem` is what executes the child's tool
+calls (inherited tools and skill tools alike); a custom profile that omits it leaves
+the child unable to act on tool calls — reasoning parks them on a
+`PendingToolCallsComponent` that nothing consumes, and the child idles until
+`max_ticks`.
 
 `SubagentConfig.runtime_profile` selects the profile by name (`None` → `"default"`).
 Because it is a plain string, it is serialization-safe and round-trips through

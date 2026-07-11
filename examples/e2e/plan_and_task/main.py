@@ -362,7 +362,7 @@ async def build_plan_task_world(
                     model=model,
                     description="Reviews workflow drafts as an advisor.",
                     system_prompt=ADVISOR_SYSTEM_PROMPT,
-                    max_ticks=30,
+                    max_ticks=None,
                     inheritance_policy=InheritancePolicy(
                         inherit_system_prompt=False,
                         inherit_tools=["read_file", "glob"],
@@ -374,7 +374,7 @@ async def build_plan_task_world(
                     model=model,
                     description="Performs QA review of workflow drafts.",
                     system_prompt=QA_SYSTEM_PROMPT,
-                    max_ticks=30,
+                    max_ticks=None,
                     inheritance_policy=InheritancePolicy(
                         inherit_system_prompt=False,
                         inherit_tools=["read_file", "glob"],
@@ -386,7 +386,7 @@ async def build_plan_task_world(
                     model=model,
                     description="Performs QA review of the finalized workflow_plan.md.",
                     system_prompt=PLAN_QA_REVIEW_SYSTEM_PROMPT,
-                    max_ticks=30,
+                    max_ticks=None,
                     inheritance_policy=InheritancePolicy(
                         inherit_system_prompt=False,
                         inherit_tools=["read_file", "glob"],

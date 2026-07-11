@@ -7,9 +7,9 @@ resolved against this process-level registry to a builder that, given a
 
 Whole-set replacement (coarse-grained): a profile fully defines the child system set.
 Callables live only here (never on the serializable ``SubagentConfig``), so
-checkpoints stay pure data. The ``"default"`` profile reproduces the historical
-hardcoded set exactly, including the "add CompactionSystem only when the parent has
-compaction config" conditional.
+checkpoints stay pure data. The ``"default"`` profile provides the full agent loop
+(prompt render, reasoning, tool execution, error handling), plus CompactionSystem
+only when the parent has compaction config.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
+from ecs_agent.systems.tool_execution import ToolExecutionSystem
 
 # Priority of CompactionSystem in a child world (kept identical to the historical
 # _SUBAGENT_COMPACTION_PRIORITY constant).
@@ -74,7 +75,14 @@ def resolve_child_runtime_profile(name: str | None) -> ProfileBuilder:
 
 
 def default_child_system_specs(ctx: ChildProfileContext) -> list[ChildSystemSpec]:
-    """The historical child system set. Reproduces _assemble_child_world exactly."""
+    """The default child system set: the full reason→act agent loop.
+
+    ToolExecutionSystem is required whenever the child can hold tools (inherited
+    via ``InheritancePolicy.inherit_tools`` or installed by skills): ReasoningSystem
+    parks tool calls on a PendingToolCallsComponent that only ToolExecutionSystem
+    consumes, so without it the child deadlocks and idles until max_ticks. With no
+    tools registered it is a no-op, so unconditional registration is safe.
+    """
     specs: list[ChildSystemSpec] = []
     if ctx.parent_has_compaction:
         specs.append(
@@ -91,6 +99,12 @@ def default_child_system_specs(ctx: ChildProfileContext) -> list[ChildSystemSpec
     )
     specs.append(
         ChildSystemSpec(factory=lambda: ReasoningSystem(priority=0), priority=0)
+    )
+    specs.append(
+        ChildSystemSpec(
+            factory=lambda: ToolExecutionSystem(priority=5),
+            priority=5,
+        )
     )
     specs.append(
         ChildSystemSpec(factory=lambda: ErrorHandlingSystem(priority=99), priority=99)

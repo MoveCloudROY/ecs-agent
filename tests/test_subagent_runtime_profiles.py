@@ -24,6 +24,7 @@ from ecs_agent.systems.subagent.runtime_profiles import (
     resolve_child_runtime_profile,
 )
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
+from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import SubagentConfig
 
 
@@ -53,6 +54,7 @@ def test_default_profile_without_compaction_reproduces_current_set() -> None:
 
     assert by_type["SystemPromptRenderSystem"] == -20
     assert by_type["ReasoningSystem"] == 0
+    assert by_type["ToolExecutionSystem"] == 5
     assert by_type["ErrorHandlingSystem"] == 99
     assert "CompactionSystem" not in by_type
 
@@ -82,6 +84,7 @@ def test_child_world_registers_default_profile_systems() -> None:
 
     assert SystemPromptRenderSystem in types
     assert ReasoningSystem in types
+    assert ToolExecutionSystem in types
     assert ErrorHandlingSystem in types
     assert CompactionSystem not in types
 

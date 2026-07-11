@@ -45,6 +45,7 @@ from ecs_agent.types import (
     SubagentSessionRecord,
     SubagentConfig,
     FreeSubagentConfig,
+    ToolCall,
     ToolSchema,
     is_wake_worthy,
     validate_subagent_lifecycle_transition,
@@ -1065,6 +1066,99 @@ async def test_inheritance_policy_whitelist_only_inherits_named_tools() -> None:
     )
     assert "subagent" not in child_tools.tools, (
         "Whitelist inheritance must not copy tools omitted from inherit_tools"
+    )
+
+
+async def test_delegated_subagent_executes_inherited_tool_calls() -> None:
+    """A child world must be able to EXECUTE inherited tools, not just list them.
+
+    Regression test: the default child runtime profile lacked ToolExecutionSystem,
+    so a child whose model emitted a tool call deadlocked on an unconsumed
+    PendingToolCallsComponent and spun to max_ticks with an empty result.
+    """
+    from ecs_agent.systems.subagent import SubagentSystem
+
+    world = World()
+    parent_entity = world.create_entity()
+
+    tool_invocations: list[str] = []
+
+    async def probe_tool_handler(file_path: str) -> str:
+        tool_invocations.append(file_path)
+        return f"contents of {file_path}"
+
+    probe_schema = ToolSchema(
+        name="probe_tool",
+        description="Reads a file for the child",
+        parameters={
+            "type": "object",
+            "properties": {"file_path": {"type": "string"}},
+            "required": ["file_path"],
+        },
+    )
+    world.add_component(
+        parent_entity,
+        ToolRegistryComponent(
+            tools={"probe_tool": probe_schema},
+            handlers={"probe_tool": probe_tool_handler},
+        ),
+    )
+    world.add_component(
+        parent_entity,
+        LLMComponent(model=FakeModel(responses=[]), system_prompt="parent"),
+    )
+
+    child_provider = FakeModel(
+        responses=[
+            CompletionResult(
+                message=Message(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id="call_1",
+                            name="probe_tool",
+                            arguments={"file_path": "plan/draft.md"},
+                        )
+                    ],
+                )
+            ),
+            CompletionResult(
+                message=Message(role="assistant", content="verdict: approve")
+            ),
+        ]
+    )
+    config = SubagentConfig(
+        name="reviewer",
+        model=child_provider,
+        system_prompt="Review the draft using probe_tool.",
+        max_ticks=30,
+        inheritance_policy=InheritancePolicy(
+            enabled=True,
+            inherit_tools=["probe_tool"],
+        ),
+    )
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={"reviewer": config}),
+    )
+    _register_message_bus(world, parent_entity)
+
+    system = SubagentSystem()
+    await system.process(world)
+
+    parent_tools = world.get_component(parent_entity, ToolRegistryComponent)
+    assert parent_tools is not None
+    subagent_handler = parent_tools.handlers["subagent"]
+    result = await subagent_handler(category="reviewer", prompt="Review plan/draft.md")
+
+    assert tool_invocations == ["plan/draft.md"], (
+        "Child world must execute the inherited tool call instead of deadlocking "
+        "on PendingToolCallsComponent"
+    )
+    assert result == "verdict: approve", (
+        "Delegation must return the post-tool assistant message, not the empty "
+        "tool-call turn"
     )
 
 
