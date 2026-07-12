@@ -229,9 +229,10 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py::test_anthropic_plan_ta
 - `LLM_BASE_URL`: API base URL (defaults to DashScope Responses API: `https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1`).
 - `LLM_MODEL`: Model ID (defaults to `qwen3.5-flash`).
 - `LLM_API_FORMAT`: Provider/format selector. Accepted values:
-  - `openai_responses` (default) — OpenAI Responses API via `OpenAIModel` (enables `enable_store=True` for prefix caching)
+  - `openai_responses` (default) — OpenAI Responses API via `OpenAIModel`
   - `openai_chat_completions` — OpenAI Chat Completions API via `OpenAIModel`
   - `anthropic_messages` — Anthropic Messages API via `ClaudeModel` (also works with Kimi-compatible Anthropic endpoints)
+- `LLM_ENABLE_STORE`: Set to `1`/`true` to enable Responses API stored-response chaining (`previous_response_id`). **Off by default** for this example: it is human-in-the-loop, so `ask_question` and the input prompt can pause a turn for minutes, during which a server-side stored response can expire — and because the Responses stream has no read timeout, a gateway that then stalls on the stale chain hangs the turn indefinitely (the loop appears to abort right after the user finally answers). The adapter always sends the full history in `input`, so chaining saves no tokens here; leave it off unless a gateway is known to benefit.
 - `PLAN_TASK_LANGFUSE`: Set to `1`, `true`, `yes`, or `on` to install Langfuse observability on the plan-and-task `World` before `Runner.run()` starts.
 - `PLAN_TASK_LANGFUSE_ENVIRONMENT`: Optional Langfuse environment label. Defaults to `plan-and-task`.
 - `PLAN_TASK_LANGFUSE_RELEASE`: Optional release label sent with plan-and-task traces.

@@ -210,16 +210,22 @@ best, and write it into that section as your recommendation, tagged "(proposed)"
 a one-line "why". A populated proposed section beats a blank one — never leave the
 active section waiting to be told what to write.
 
-Then put the choice to the user through the `ask_question` tool, never plain prose:
-offer your recommendation and the alternatives you weighed as `options` (e.g. Confirm /
-Tweak / Redirect, or the competing choices themselves), keeping free-text for
-open-ended details. It blocks until they answer; fold their choice into `draft.md`
-before advancing — on confirm drop the "(proposed)" tag, on tweak or redirect rewrite
-the section and re-propose. At most one `ask_question` per section; never an
+Then put the choice to the user through the `ask_question` tool, never plain prose.
+Make the `options` your concrete, specific proposals — the real alternatives you
+weighed, NOT meta-actions like "Confirm / Tweak / Reject". List your recommendation
+first with "(recommended)" in its label, then the other viable choices; give every
+option a one-line `description` naming its trade-off, so the user is choosing among
+clear suggestions rather than being asked to invent one. The always-present free-text
+field already covers "none of these / adjust it" — do not spend an option on it.
+Picking your recommended option means confirm; picking another switches to it; free text
+is a tweak or redirect. It blocks until they answer; fold the choice into `draft.md`
+before advancing — on confirm drop the "(proposed)" tag, otherwise rewrite the section to
+match their choice and re-propose. At most one `ask_question` per section; never an
 open-ended "what do you want here?".
 
 FIRST turn: on the topic, do NOT open with a question — immediately propose the Scope
-section into `draft.md` and put the confirm-or-redirect choice via `ask_question`.
+section into `draft.md` and put your concrete Scope options (recommendation first,
+each with its trade-off) via `ask_question`.
 
 Raise a genuinely open question (free-text `ask_question`) ONLY when a decision is both
 high-stakes and under-determined so you cannot pick a sensible default; otherwise

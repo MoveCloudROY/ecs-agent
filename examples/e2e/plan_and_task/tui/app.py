@@ -8,6 +8,7 @@ updates arrive through :meth:`PlanTaskTuiApp.dispatch_change`, which posts a
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Protocol
 
 from rich.cells import cell_len
@@ -19,6 +20,7 @@ from rich.text import Text
 from textual import events, on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.selection import Selection
@@ -39,7 +41,7 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 from textual.widgets.selection_list import Selection as ListSelection
 
-from examples.e2e.plan_and_task.ask_tool import AskOption, AskQuestion, QuestionAnswer
+from examples.e2e.plan_and_task.ask_tool import AskQuestion, QuestionAnswer
 from examples.e2e.plan_and_task.tui.view_model import (
     PlanTaskViewModel,
     TranscriptEntry,
@@ -161,33 +163,58 @@ class QuestionScreen(ModalScreen[list[QuestionAnswer] | None]):
         align: center middle;
     }
     #question-dialog {
-        width: 72;
-        max-width: 90%;
+        width: 80;
+        max-width: 95%;
         height: auto;
-        max-height: 80%;
+        max-height: 90%;
         border: round $accent;
         background: $surface;
         padding: 1 2;
     }
     #question-title {
+        height: auto;
         text-style: bold;
         color: $accent;
         margin-bottom: 1;
     }
+    /* The body is the only flexible region: it takes the space left between the
+       title and the pinned footer/buttons and scrolls when content overflows,
+       so the Submit/Cancel buttons are always on screen. */
     #question-body {
-        height: auto;
-        max-height: 20;
+        height: 1fr;
+        min-height: 3;
     }
     .question-header {
+        height: auto;
         text-style: bold;
+        color: $accent;
         margin-top: 1;
     }
     .question-text {
+        height: auto;
         margin-bottom: 1;
+    }
+    /* Option descriptions render here as full, wrapping text (radio/selection
+       labels are single-line and would truncate long descriptions). */
+    .option-legend {
+        height: auto;
+        color: $text-muted;
+        margin: 0 0 1 1;
+    }
+    #question-body RadioSet, #question-body SelectionList {
+        height: auto;
+        width: 1fr;
+    }
+    #question-body Input {
+        margin-bottom: 1;
+    }
+    #question-hint {
+        height: auto;
+        color: $text-muted;
+        margin-top: 1;
     }
     #question-buttons {
         height: auto;
-        margin-top: 1;
         align-horizontal: right;
     }
     #question-buttons Button {
@@ -214,20 +241,18 @@ class QuestionScreen(ModalScreen[list[QuestionAnswer] | None]):
                     if question.options and question.multi_select:
                         yield SelectionList[int](
                             *[
-                                ListSelection(self._option_label(option), opt_index)
+                                ListSelection(option.label, opt_index)
                                 for opt_index, option in enumerate(question.options)
                             ],
                             id=f"q{index}-select",
                         )
+                        yield from self._option_legend(question)
                     elif question.options:
-                        radio = RadioSet(
-                            *[
-                                self._option_label(option)
-                                for option in question.options
-                            ],
+                        yield RadioSet(
+                            *[option.label for option in question.options],
                             id=f"q{index}-radio",
                         )
-                        yield radio
+                        yield from self._option_legend(question)
                     yield Input(
                         placeholder=(
                             "type a custom answer…"
@@ -236,22 +261,37 @@ class QuestionScreen(ModalScreen[list[QuestionAnswer] | None]):
                         ),
                         id=f"q{index}-input",
                     )
+            yield Static(
+                "Submit button or Ctrl+S to send · Esc to cancel", id="question-hint"
+            )
             with Horizontal(id="question-buttons"):
                 yield Button("Cancel", id="cancel")
                 yield Button("Submit", variant="primary", id="submit")
 
     @staticmethod
-    def _option_label(option: AskOption) -> str:
-        if option.description:
-            return f"{option.label}  —  {option.description}"
-        return option.label
+    def _option_legend(question: AskQuestion) -> Iterator[Static]:
+        """Full, wrapping descriptions for a question's options.
+
+        Radio/selection labels are single-line and truncate, so descriptions
+        are shown here in a wrapping ``Static`` legend instead of on the
+        control itself. Yields nothing when no option has a description.
+        """
+        if not any(option.description for option in question.options):
+            return
+        legend = Text()
+        for option in question.options:
+            if not option.description:
+                continue
+            legend.append(f"• {option.label}: ", style="bold")
+            legend.append(f"{option.description}\n")
+        yield Static(legend, classes="option-legend")
 
     def on_mount(self) -> None:
-        # Focus the first field so Enter-to-submit works immediately; every
-        # question contributes an Input, so one always exists.
-        inputs = self.query(Input)
-        if inputs:
-            inputs.first().focus()
+        # Focus the first interactive control so keyboard use works immediately
+        # (arrows to pick options, Enter to submit); fall back to the input.
+        focusables = self.query("RadioSet, SelectionList, Input")
+        if focusables:
+            focusables.first().focus()
 
     @on(Button.Pressed, "#submit")
     def _on_submit_pressed(self, event: Button.Pressed) -> None:
@@ -271,6 +311,9 @@ class QuestionScreen(ModalScreen[list[QuestionAnswer] | None]):
         self.action_submit()
 
     def action_submit(self) -> None:
+        # Always dismiss, even if answer collection hits an unexpected widget
+        # error: a modal that fails to dismiss would leave the ask_question
+        # future unresolved and hang the agent loop forever.
         self.dismiss(self._collect_answers())
 
     def action_cancel(self) -> None:
@@ -279,17 +322,11 @@ class QuestionScreen(ModalScreen[list[QuestionAnswer] | None]):
     def _collect_answers(self) -> list[QuestionAnswer]:
         answers: list[QuestionAnswer] = []
         for index, question in enumerate(self._questions):
-            selected: list[str] = []
-            if question.options and question.multi_select:
-                widget = self.query_one(f"#q{index}-select", SelectionList)
-                selected = [
-                    question.options[value].label for value in sorted(widget.selected)
-                ]
-            elif question.options:
-                radio = self.query_one(f"#q{index}-radio", RadioSet)
-                if radio.pressed_index >= 0:
-                    selected = [question.options[radio.pressed_index].label]
-            custom = self.query_one(f"#q{index}-input", Input).value.strip()
+            selected = self._collect_selection(index, question)
+            try:
+                custom = self.query_one(f"#q{index}-input", Input).value.strip()
+            except NoMatches:
+                custom = ""
             answers.append(
                 QuestionAnswer(
                     header=question.header,
@@ -299,6 +336,21 @@ class QuestionScreen(ModalScreen[list[QuestionAnswer] | None]):
                 )
             )
         return answers
+
+    def _collect_selection(self, index: int, question: AskQuestion) -> list[str]:
+        try:
+            if question.options and question.multi_select:
+                widget = self.query_one(f"#q{index}-select", SelectionList)
+                return [
+                    question.options[value].label for value in sorted(widget.selected)
+                ]
+            if question.options:
+                radio = self.query_one(f"#q{index}-radio", RadioSet)
+                if radio.pressed_index >= 0:
+                    return [question.options[radio.pressed_index].label]
+        except (NoMatches, IndexError):
+            return []
+        return []
 
 
 class VmChanged(Message):

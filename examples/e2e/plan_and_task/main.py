@@ -1018,11 +1018,19 @@ def build_model_from_env() -> LLMModel:
         api_format = ApiFormat.OPENAI_CHAT_COMPLETIONS
     logger.info("using_model", model_name=model_name, api_format=api_format)
     print(f"Using model: {model_name}")
-    # LLM_ENABLE_STORE=0 disables stored-response chaining (previous_response_id)
-    # for gateways that reject it over plain HTTP Responses API.
-    store_enabled = os.environ.get("LLM_ENABLE_STORE", "1").lower() not in (
-        "0",
-        "false",
+    # Stored-response chaining (previous_response_id) is OFF by default.
+    # This workflow is human-in-the-loop: `ask_question` and the input prompt
+    # can pause a turn for minutes, during which a server-side stored response
+    # can expire. The Responses stream sets no read timeout, so a gateway that
+    # then stalls on the stale chain hangs the turn indefinitely (the loop
+    # appears to abort after the user finally answers). Chaining saves no tokens
+    # here — the adapter always sends the full history in `input` — so it stays
+    # off unless a gateway is known to benefit. Set LLM_ENABLE_STORE=1 to opt in.
+    store_enabled = os.environ.get("LLM_ENABLE_STORE", "0").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
     )
     return Model(
         model_name,

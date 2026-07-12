@@ -145,17 +145,24 @@ def build_ask_question_schema(tool_name: str = "ask_question") -> ToolSchema:
                                 "type": "array",
                                 "minItems": _MIN_OPTIONS,
                                 "maxItems": _MAX_OPTIONS,
-                                "description": "2-4 choices; omit for a free-text question.",
+                                "description": (
+                                    "2-4 concrete choices; omit for a free-text question. "
+                                    "Prefer real, specific alternatives over generic "
+                                    "actions. When you have a recommendation, list it "
+                                    "first and mark it '(recommended)' in its label. The "
+                                    "user can always add a custom answer, so you do not "
+                                    "need an 'other' option."
+                                ),
                                 "items": {
                                     "type": "object",
                                     "properties": {
                                         "label": {
                                             "type": "string",
-                                            "description": "The choice text the user selects.",
+                                            "description": "The concrete choice the user selects; mark a recommendation with '(recommended)'.",
                                         },
                                         "description": {
                                             "type": "string",
-                                            "description": "Optional one-line explanation of the choice.",
+                                            "description": "One-line explanation of this choice — ideally its trade-off versus the others.",
                                         },
                                     },
                                     "required": ["label"],

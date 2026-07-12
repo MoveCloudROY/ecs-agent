@@ -374,6 +374,28 @@ class TestQuestionModal:
             await pilot.pause()
         assert sink.answers == [None]
 
+    async def test_submit_button_click_sends_answer(self) -> None:
+        """Clicking the Submit button (the primary path) collects and sends."""
+        from textual.widgets import RadioButton
+
+        vm = PlanTaskViewModel(agent_id=AGENT, phase_ids=PHASE_IDS)
+        sink = _CapturingSink()
+        app = PlanTaskTuiApp(view_model=vm, sink=sink)
+        async with app.run_test(size=(100, 40)) as pilot:
+            app.dispatch_change(
+                UiChange(section="question", questions=_questions())
+            )
+            for _ in range(8):
+                await pilot.pause()
+            app.screen.query(RadioButton).first().value = True
+            await pilot.pause()
+            await pilot.click("#submit")
+            await pilot.pause()
+        assert len(sink.answers) == 1
+        answer = sink.answers[0]
+        assert answer is not None
+        assert answer[0].selected == ["Postgres"]
+
 
 class TestAskQuestionThroughTui:
     async def test_handler_resolves_via_modal(self) -> None:
@@ -429,3 +451,227 @@ class TestAskQuestionThroughTui:
         payload = json.loads(result)
         assert payload["answers"][0]["answer"] == "Postgres"
         assert not bridge.question_pending
+
+
+_LONG_DESC = (
+    "This is a fairly long option description that explains the trade-offs in "
+    "enough detail that it cannot possibly fit on a single truncated line."
+)
+
+
+def _tall_questions() -> list[AskQuestion]:
+    return [
+        AskQuestion(
+            question=f"Q{i}: " + ("Pick the datastore and justify the choice. " * 3),
+            header=f"Header {i}",
+            options=[
+                AskOption(label="Postgres", description=_LONG_DESC),
+                AskOption(label="Redis", description=_LONG_DESC),
+                AskOption(label="SQLite", description=_LONG_DESC),
+            ],
+        )
+        for i in range(3)
+    ]
+
+
+class TestQuestionModalLayout:
+    async def test_submit_button_visible_with_tall_content(self) -> None:
+        """Long, multi-question modals must keep Submit on screen.
+
+        Regression: a fixed-height body pushed the buttons off-screen so the
+        user could not submit, leaving the ask_question future unresolved and
+        hanging the agent loop.
+        """
+        from textual.widgets import Button
+
+        vm = PlanTaskViewModel(agent_id=AGENT, phase_ids=PHASE_IDS)
+        app = PlanTaskTuiApp(view_model=vm, sink=_CapturingSink())
+        async with app.run_test(size=(80, 20)) as pilot:
+            app.dispatch_change(
+                UiChange(section="question", questions=_tall_questions())
+            )
+            for _ in range(8):
+                await pilot.pause()
+            assert isinstance(app.screen, QuestionScreen)
+            submit = app.screen.query_one("#submit", Button)
+            assert app.screen.region.contains_region(submit.region), (
+                "Submit button must be fully on screen even with tall content"
+            )
+
+    async def test_option_descriptions_render_as_wrapping_legend(self) -> None:
+        """Descriptions appear in a multi-line legend, not a truncated label."""
+        from textual.widgets import RadioButton, Static
+
+        vm = PlanTaskViewModel(agent_id=AGENT, phase_ids=PHASE_IDS)
+        app = PlanTaskTuiApp(view_model=vm, sink=_CapturingSink())
+        async with app.run_test(size=(80, 30)) as pilot:
+            app.dispatch_change(
+                UiChange(section="question", questions=_tall_questions())
+            )
+            for _ in range(8):
+                await pilot.pause()
+            # Radio labels stay short (single line, no embedded description).
+            labels = [str(rb.label) for rb in app.screen.query(RadioButton)]
+            assert "Postgres" in labels
+            assert all(_LONG_DESC not in label for label in labels)
+            # The description shows fully in a wrapping legend that occupies
+            # multiple rows.
+            legends = app.screen.query(".option-legend")
+            assert len(legends) == 3
+            assert all(
+                isinstance(node, Static) and node.region.height > 1
+                for node in legends
+            )
+
+
+class _ScriptedStreamModel:
+    """Streaming model that calls ask_question once, then answers in prose."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[tuple[str, str]]] = []
+        self.model_id = "scripted"
+
+    async def complete(
+        self, messages, tools=None, stream=False, response_format=None
+    ):  # type: ignore[no-untyped-def]
+        from ecs_agent.types import CompletionResult, Message, Usage
+
+        self.calls.append([(m.role, m.content or "") for m in messages])
+        idx = len(self.calls) - 1
+        if not stream:
+            return CompletionResult(
+                message=Message(role="assistant", content="scripted"),
+                usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            )
+        return self._toolcall_stream() if idx == 0 else self._text_stream("Done.")
+
+    async def _toolcall_stream(self):  # type: ignore[no-untyped-def]
+        from ecs_agent.types import StreamDelta, ToolCall, Usage
+
+        yield StreamDelta(
+            tool_calls=[
+                ToolCall(
+                    id="c1",
+                    name="ask_question",
+                    arguments={
+                        "questions": [
+                            {
+                                "header": "Storage",
+                                "question": "Which datastore?",
+                                "options": [
+                                    {"label": "Postgres"},
+                                    {"label": "Redis"},
+                                ],
+                            }
+                        ]
+                    },
+                )
+            ]
+        )
+        yield StreamDelta(
+            finish_reason="tool_calls",
+            usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+
+    async def _text_stream(self, text: str):  # type: ignore[no-untyped-def]
+        from ecs_agent.types import StreamDelta, Usage
+
+        for char in text:
+            yield StreamDelta(content=char)
+        yield StreamDelta(
+            finish_reason="stop",
+            usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+
+
+class TestAskQuestionFeedbackEndToEnd:
+    async def test_answer_is_fed_back_to_the_model(self, tmp_path: object) -> None:
+        """The modal answer must reach the model's next call as a tool result.
+
+        Full loop: build_plan_task_world + create_tui_session + a real Runner,
+        with a streaming model that calls ask_question. Answering the modal must
+        feed the answer back so the model is invoked again with the tool result.
+        """
+        from pathlib import Path
+
+        from textual.widgets import RadioButton
+
+        from ecs_agent.core import Runner
+        from examples.e2e.plan_and_task.main import build_plan_task_world
+        from examples.e2e.plan_and_task.tui.session import create_tui_session
+
+        assert isinstance(tmp_path, Path)
+        model = _ScriptedStreamModel()
+        world, agent_id, _adapter_ref, runtime_state = await build_plan_task_world(
+            model=model, base_dir=tmp_path
+        )
+        session = create_tui_session(world, agent_id, runtime_state)
+
+        async def wait_for(predicate: object, timeout: float = 8.0) -> None:
+            assert callable(predicate)
+            deadline = asyncio.get_running_loop().time() + timeout
+            while not predicate():
+                if asyncio.get_running_loop().time() > deadline:
+                    raise AssertionError("timed out")
+                await asyncio.sleep(0.02)
+
+        async with session.app.run_test() as pilot:
+            runner_task = asyncio.create_task(Runner().run(world, max_ticks=None))
+            await wait_for(lambda: session.bridge.input_pending)
+            session.bridge.submit_input("hi")
+
+            await wait_for(
+                lambda: isinstance(session.app.screen, QuestionScreen)
+            )
+            for _ in range(10):
+                await pilot.pause()
+                if session.app.screen.query(RadioButton):
+                    break
+            session.app.screen.query(RadioButton).first().value = True
+            await pilot.pause()
+            await pilot.press("ctrl+s")
+
+            await wait_for(lambda: len(model.calls) >= 2, timeout=6.0)
+            session.bridge.request_quit()
+            try:
+                await asyncio.wait_for(runner_task, timeout=8)
+            except asyncio.TimeoutError:
+                runner_task.cancel()
+
+        # The model's second call must include the ask_question tool result
+        # carrying the chosen answer.
+        second_call = model.calls[1]
+        tool_messages = [content for role, content in second_call if role == "tool"]
+        assert tool_messages, "answer was not fed back to the model"
+        assert "Postgres" in tool_messages[-1]
+
+
+class TestInteractiveModelStoreDefault:
+    """Stored-response chaining must be off by default for the interactive flow.
+
+    ``ask_question`` (and the input prompt) can pause a turn for minutes; a
+    server-side ``previous_response_id`` chain can expire during that pause and,
+    with the Responses stream having no read timeout, stall the next turn
+    forever. The adapter always sends the full history, so chaining saves no
+    tokens here — it stays off unless explicitly opted in.
+    """
+
+    def test_store_chaining_off_by_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from examples.e2e.plan_and_task.main import build_model_from_env
+
+        monkeypatch.setenv("LLM_API_KEY", "sk-test")
+        monkeypatch.setenv("LLM_API_FORMAT", "openai_responses")
+        monkeypatch.delenv("LLM_ENABLE_STORE", raising=False)
+        model = build_model_from_env()
+        assert model._provider_config.enable_store is False
+
+    def test_store_chaining_opt_in(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from examples.e2e.plan_and_task.main import build_model_from_env
+
+        monkeypatch.setenv("LLM_API_KEY", "sk-test")
+        monkeypatch.setenv("LLM_API_FORMAT", "openai_responses")
+        monkeypatch.setenv("LLM_ENABLE_STORE", "1")
+        model = build_model_from_env()
+        assert model._provider_config.enable_store is True
