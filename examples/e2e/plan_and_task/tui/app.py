@@ -25,7 +25,6 @@ from textual.message import Message
 from textual.screen import ModalScreen
 from textual.selection import Selection
 from textual.strip import Strip
-from textual.suggester import SuggestFromList
 from textual.widgets import (
     Button,
     DataTable,
@@ -37,6 +36,7 @@ from textual.widgets import (
     RichLog,
     SelectionList,
     Static,
+    TextArea,
 )
 from textual.widgets.option_list import Option
 from textual.widgets.selection_list import Selection as ListSelection
@@ -59,19 +59,91 @@ class InputSink(Protocol):
     def request_quit(self) -> None: ...
 
 
-class CommandInput(Input):
-    """Single-line prompt with slash-command suggestions and completion.
+class CommandInput(TextArea):
+    """Multi-line prompt with slash-command suggestions and completion.
 
-    Completion-list navigation keys (up/down/tab/enter/escape) are offered to
-    the app first; anything the completion list does not consume falls through
-    to the regular ``Input`` behavior.
+    Enter submits the whole buffer; Ctrl+J inserts a newline, so multi-line
+    messages can be composed before sending. Completion-list navigation keys
+    (up/down/tab/enter/escape) are offered to the app first; anything the
+    completion list does not consume falls through to the regular ``TextArea``
+    behavior (arrows move between lines, printable keys insert).
+
+    The widget keeps an ``Input``-compatible surface — a ``value`` alias for
+    ``text``, a linear ``cursor_position``, and a ``Submitted`` message — so
+    the surrounding app and its tests treat it like the single-line prompt it
+    replaced.
     """
+
+    class Submitted(Message):
+        """Posted when the user presses Enter to send the buffer."""
+
+        def __init__(self, input: CommandInput, value: str) -> None:
+            self.input = input
+            self.value = value
+            super().__init__()
+
+        @property
+        def control(self) -> CommandInput:
+            return self.input
+
+    def __init__(self, *, placeholder: str = "") -> None:
+        # tab_behavior="focus" keeps Tab free for command completion instead of
+        # indenting; soft_wrap lets long lines wrap inside the bordered box.
+        super().__init__(
+            soft_wrap=True,
+            show_line_numbers=False,
+            tab_behavior="focus",
+            placeholder=placeholder,
+        )
+
+    @property
+    def value(self) -> str:
+        """The buffer text (``Input``-compatible alias for ``text``)."""
+        return self.text
+
+    @value.setter
+    def value(self, new_value: str) -> None:
+        # ``TextArea.load_text`` parks the cursor at (0, 0); ``Input`` left it at
+        # the end. Restore end-of-buffer placement so typing/Ctrl+J after a
+        # programmatic set appends instead of inserting at the front.
+        self.text = new_value
+        self.cursor_position = len(new_value)
+
+    @property
+    def cursor_position(self) -> int:
+        """Cursor offset as a linear character index into ``value``."""
+        row, column = self.cursor_location
+        lines = self.text.split("\n")
+        return sum(len(line) + 1 for line in lines[:row]) + column
+
+    @cursor_position.setter
+    def cursor_position(self, index: int) -> None:
+        text = self.text
+        index = max(0, min(index, len(text)))
+        prefix = text[:index]
+        row = prefix.count("\n")
+        column = index - (prefix.rfind("\n") + 1)
+        self.move_cursor((row, column))
 
     async def _on_key(self, event: events.Key) -> None:
         app = self.app
         if isinstance(app, PlanTaskTuiApp) and app.handle_completion_key(event.key):
             event.stop()
             event.prevent_default()
+            return
+        if event.key == "enter":
+            # Enter sends the message; Ctrl+J is the newline key (handled below).
+            event.stop()
+            event.prevent_default()
+            self.post_message(self.Submitted(self, self.text))
+            return
+        if event.key == "ctrl+j":
+            # Mirror TextArea's own Enter handling so a selection is replaced
+            # and the cursor lands after the inserted newline.
+            event.stop()
+            event.prevent_default()
+            start, end = self.selection
+            self._replace_via_keyboard("\n", start, end)
             return
         await super()._on_key(event)
 
@@ -372,7 +444,7 @@ def _fmt_tokens(count: int) -> str:
 _RUN_ICONS = {"running": "▶", "completed": "✓", "failed": "✗"}
 _RUN_STYLES = {"running": "yellow", "completed": "green", "failed": "red"}
 _WAITING_PLACEHOLDER = "agent is working… (Ctrl+Q to quit)"
-_READY_PLACEHOLDER = "type a message or /command — Enter to send"
+_READY_PLACEHOLDER = "type a message or /command — Enter to send · Ctrl+J newline"
 
 SPINNER_FRAMES: tuple[str, ...] = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 _STATUS_INTERVAL = 1 / 8
@@ -451,6 +523,9 @@ class PlanTaskTuiApp(App[None]):
     }
     CommandInput {
         border: round $accent;
+        height: auto;
+        min-height: 3;
+        max-height: 10;
     }
     """
 
@@ -494,14 +569,7 @@ class PlanTaskTuiApp(App[None]):
             yield Static(id="status-tokens")
         yield Static(id="usage-bar")
         yield OptionList(id="command-list")
-        patterns = [pattern for pattern, _ in self._commands]
-        suggester = (
-            SuggestFromList(patterns, case_sensitive=False) if patterns else None
-        )
-        yield CommandInput(
-            placeholder=_WAITING_PLACEHOLDER,
-            suggester=suggester,
-        )
+        yield CommandInput(placeholder=_WAITING_PLACEHOLDER)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -560,8 +628,8 @@ class PlanTaskTuiApp(App[None]):
                 if change.notification is not None:
                     self.notify(change.notification, severity=change.severity)
 
-    @on(Input.Submitted)
-    def _handle_submit(self, event: Input.Submitted) -> None:
+    @on(CommandInput.Submitted)
+    def _handle_submit(self, event: CommandInput.Submitted) -> None:
         if self._sink.submit_input(event.value):
             field = self.query_one(CommandInput)
             field.value = ""
@@ -579,9 +647,9 @@ class PlanTaskTuiApp(App[None]):
 
     # -- slash-command completion ---------------------------------------------
 
-    @on(Input.Changed)
-    def _handle_input_changed(self, event: Input.Changed) -> None:
-        self._refresh_command_list(event.value)
+    @on(CommandInput.Changed)
+    def _handle_input_changed(self, event: CommandInput.Changed) -> None:
+        self._refresh_command_list(event.text_area.text)
 
     @on(OptionList.OptionSelected, "#command-list")
     def _handle_option_selected(self, event: OptionList.OptionSelected) -> None:
@@ -656,7 +724,7 @@ class PlanTaskTuiApp(App[None]):
         field = self.query_one(CommandInput)
         # Trailing space so argument-taking commands are ready for input; the
         # completed value is no longer a prefix of any pattern, which closes
-        # the list via the Input.Changed refresh.
+        # the list via the CommandInput.Changed refresh.
         field.value = f"{pattern} "
         field.cursor_position = len(field.value)
         field.focus()

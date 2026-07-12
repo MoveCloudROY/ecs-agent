@@ -978,6 +978,97 @@ class TestTextualApp:
             await pilot.pause()
 
 
+class TestMultilineInput:
+    """The command input composes multi-line messages: Ctrl+J inserts a
+    newline, Enter submits the whole (possibly multi-line) buffer."""
+
+    def _make_app(self, submitted: list[str]) -> object:
+        from examples.e2e.plan_and_task.tui.app import PlanTaskTuiApp
+
+        class StubSink:
+            input_pending = True
+
+            def submit_input(self, text: str) -> bool:
+                submitted.append(text)
+                return True
+
+            def request_quit(self) -> None:
+                return None
+
+        return PlanTaskTuiApp(view_model=make_vm(), sink=StubSink())
+
+    async def test_ctrl_j_inserts_newline_without_submitting(self) -> None:
+        from examples.e2e.plan_and_task.tui.app import CommandInput
+
+        submitted: list[str] = []
+        app = self._make_app(submitted)
+        assert isinstance(app, object)
+        async with app.run_test(size=(100, 30)) as pilot:
+            field = app.query_one(CommandInput)  # type: ignore[attr-defined]
+            field.focus()
+            await pilot.press("a")
+            await pilot.press("ctrl+j")
+            await pilot.press("b")
+            await pilot.pause()
+            assert field.value == "a\nb"
+            assert submitted == []  # Ctrl+J must not submit
+
+    async def test_enter_submits_multiline_and_clears(self) -> None:
+        from examples.e2e.plan_and_task.tui.app import CommandInput
+
+        submitted: list[str] = []
+        app = self._make_app(submitted)
+        async with app.run_test(size=(100, 30)) as pilot:
+            field = app.query_one(CommandInput)  # type: ignore[attr-defined]
+            field.value = "first line"
+            field.cursor_position = len(field.value)
+            await pilot.press("ctrl+j")
+            await pilot.press("s", "e", "c", "o", "n", "d")
+            await pilot.pause()
+            assert field.value == "first line\nsecond"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert submitted == ["first line\nsecond"]
+            assert field.value == ""
+
+    async def test_value_roundtrips_multiline_text(self) -> None:
+        from examples.e2e.plan_and_task.tui.app import CommandInput
+
+        app = self._make_app([])
+        async with app.run_test(size=(100, 30)) as pilot:
+            field = app.query_one(CommandInput)  # type: ignore[attr-defined]
+            field.value = "x\ny\nz"
+            await pilot.pause()
+            assert field.value == "x\ny\nz"
+
+    async def test_value_setter_places_cursor_at_end(self) -> None:
+        from examples.e2e.plan_and_task.tui.app import CommandInput
+
+        app = self._make_app([])
+        async with app.run_test(size=(100, 30)) as pilot:
+            field = app.query_one(CommandInput)  # type: ignore[attr-defined]
+            field.value = "/plan"
+            await pilot.pause()
+            # Cursor sits at the end, so typing appends rather than prepends.
+            await pilot.press("!")
+            await pilot.pause()
+            assert field.value == "/plan!"
+            assert field.cursor_position == len(field.value)
+
+    async def test_cursor_position_roundtrips_across_lines(self) -> None:
+        from examples.e2e.plan_and_task.tui.app import CommandInput
+
+        app = self._make_app([])
+        async with app.run_test(size=(100, 30)) as pilot:
+            field = app.query_one(CommandInput)  # type: ignore[attr-defined]
+            field.value = "ab\ncd"
+            # Index 4 is the "c": "ab\n" spans indices 0..2, so 3 lands on the
+            # second line's start and 4 is one column in.
+            field.cursor_position = 4
+            await pilot.pause()
+            assert field.cursor_position == 4
+
+
 class TestCommandCompletion:
     COMMANDS = (
         ("/plan:finalize", "finalize the reviewed plan"),
