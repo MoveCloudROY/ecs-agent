@@ -72,7 +72,8 @@ def _grep_python(pattern: str, target: Path) -> str:
     description=(
         "Search a file for lines matching a regex pattern. "
         "Returns matching lines with line numbers in 'LINE: content' format."
-    )
+    ),
+    concurrency_safe=True,
 )
 async def grep(
     pattern: Annotated[str, "Regular expression pattern to search for."],

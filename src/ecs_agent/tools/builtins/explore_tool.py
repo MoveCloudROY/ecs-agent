@@ -38,7 +38,10 @@ def _build_tree(
     return lines
 
 
-@tool(description="Display the directory tree of a workspace path up to a given depth.")
+@tool(
+    description="Display the directory tree of a workspace path up to a given depth.",
+    concurrency_safe=True,
+)
 async def explore(
     path: Annotated[
         str, "Workspace-relative path to explore. Use '.' for workspace root."

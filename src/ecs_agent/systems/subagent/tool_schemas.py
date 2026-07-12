@@ -124,6 +124,7 @@ def build_status_schema() -> ToolSchema:
             },
             "required": [],
         },
+        concurrency_safe=True,
     )
 
 

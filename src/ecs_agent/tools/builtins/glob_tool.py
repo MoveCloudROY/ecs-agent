@@ -11,7 +11,10 @@ from ecs_agent.tools.discovery import tool
 logger = get_logger(__name__)
 
 
-@tool(description="Find files matching a glob pattern in a workspace subtree.")
+@tool(
+    description="Find files matching a glob pattern in a workspace subtree.",
+    concurrency_safe=True,
+)
 async def glob(
     pattern: Annotated[
         str, "Glob expression to match files (e.g. '**/*.py', '*.txt')."

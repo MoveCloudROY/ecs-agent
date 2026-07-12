@@ -95,6 +95,8 @@ class ToolSchema:
     name: str
     description: str
     parameters: dict[str, Any]
+    sandbox_compatible: bool = False
+    concurrency_safe: bool = False  # safe to run alongside other batch calls
 
 @dataclass(slots=True)
 class TodoItem:
@@ -494,6 +496,7 @@ All components are implemented as `@dataclass(slots=True)`.
  `UserInputComponent(prompt: str = "", future: asyncio.Future[str] | None = None, timeout: float | None = None, result: str | None = None)`
  `ToolApprovalComponent(policy: ApprovalPolicy, timeout: float | None = 30.0, approved_calls: list[str] = [], denied_calls: list[str] = [])`
  `SandboxConfigComponent(timeout: float = 30.0, max_output_size: int = 10000)`
+ `ToolExecutionConfigComponent(max_concurrency: int = 8)`
  `PlanSearchComponent(max_depth: int = 5, max_branching: int = 3, exploration_weight: float = 1.414, best_plan: list[str] = [], search_active: bool = False)`
  `RAGTriggerComponent(query: str = "", top_k: int = 5, retrieved_docs: list[str] = [])`
  `EmbeddingComponent(provider: EmbeddingProvider, dimension: int = 0)`
@@ -522,9 +525,18 @@ class PlanningSystem(priority: int = 0):
 ### ToolExecutionSystem
 
 ```python
-class ToolExecutionSystem(priority: int = 0):
+class ToolExecutionSystem(
+    priority: int = 0,
+    scratchbook_service: ScratchbookService | None = None,
+    registry: ArtifactRegistry | None = None,
+):
     async def process(self, world: World) -> None: ...
 ```
+
+Executes each entity's pending batch group by group: consecutive calls whose
+`ToolSchema.concurrency_safe` is `True` run concurrently (bounded by
+`ToolExecutionConfigComponent.max_concurrency`, default 8); other calls run
+alone as barriers. Results land in the original `tool_calls` order.
 
 ### MessageBusSystem
 
@@ -757,7 +769,7 @@ def get_logger(name: str) -> BoundLogger: ...
 ```python
 def scan_module(module: ModuleType) -> tuple[dict[str, ToolSchema], dict[str, Callable[..., Awaitable[str]]]]: ...
 async def sandboxed_execute(func: Callable[..., Awaitable[str]], args: dict[str, Any], timeout: float = 30.0, max_output_size: int = 10000) -> str: ...
-def tool(name: str, description: str, parameters: dict[str, Any]) -> Callable: ...
+def tool(name: str | None = None, description: str | None = None, concurrency_safe: bool = False) -> Callable: ...
 ```
 
 ---

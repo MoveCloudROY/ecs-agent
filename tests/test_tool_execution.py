@@ -1,3 +1,6 @@
+import asyncio
+from typing import Awaitable, Callable
+
 import pytest
 
 from ecs_agent.components import (
@@ -5,14 +8,23 @@ from ecs_agent.components import (
     ContextTrimConfig,
     ContextCacheComponent,
     PendingToolCallsComponent,
+    ToolExecutionConfigComponent,
     ToolRegistryComponent,
     ToolResultsComponent,
 )
 from ecs_agent.core import World
 from ecs_agent.scratchbook import ArtifactRegistry
+from ecs_agent.serialization import WorldSerializer
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.tools.context import current_tool_context
-from ecs_agent.types import Message, ToolCall, ToolExecutionCompletedEvent, ToolSchema
+from ecs_agent.types import (
+    EntityId,
+    Message,
+    ToolCall,
+    ToolExecutionCompletedEvent,
+    ToolExecutionStartedEvent,
+    ToolSchema,
+)
 
 
 @pytest.mark.asyncio
@@ -374,3 +386,335 @@ async def test_tool_execution_caches_result_on_overflow(tmp_path) -> None:
     assert artifact_path.exists()
     artifact_payload = artifact_path.read_text(encoding="utf-8")
     assert "cached payload " in artifact_payload
+
+
+def _safe_schema(name: str) -> ToolSchema:
+    return ToolSchema(
+        name=name,
+        description=f"{name} (concurrency-safe)",
+        parameters={"type": "object"},
+        concurrency_safe=True,
+    )
+
+
+def _unsafe_schema(name: str) -> ToolSchema:
+    return ToolSchema(
+        name=name,
+        description=f"{name} (serial-only)",
+        parameters={"type": "object"},
+    )
+
+
+def _install_tool_entity(
+    world: World,
+    tools: dict[str, ToolSchema],
+    handlers: dict[str, Callable[..., Awaitable[str]]],
+    tool_calls: list[ToolCall],
+) -> EntityId:
+    entity_id = world.create_entity()
+    world.add_component(entity_id, ConversationComponent(messages=[]))
+    world.add_component(entity_id, ToolRegistryComponent(tools=tools, handlers=handlers))
+    world.add_component(entity_id, PendingToolCallsComponent(tool_calls=tool_calls))
+    return entity_id
+
+
+@pytest.mark.asyncio
+async def test_concurrency_safe_tools_run_concurrently() -> None:
+    """Two safe tools rendezvous: each returns only after the other started."""
+    world = World()
+    started_a = asyncio.Event()
+    started_b = asyncio.Event()
+
+    async def tool_a() -> str:
+        started_a.set()
+        await asyncio.wait_for(started_b.wait(), timeout=2.0)
+        return "a-done"
+
+    async def tool_b() -> str:
+        started_b.set()
+        await asyncio.wait_for(started_a.wait(), timeout=2.0)
+        return "b-done"
+
+    entity_id = _install_tool_entity(
+        world,
+        tools={"tool_a": _safe_schema("tool_a"), "tool_b": _safe_schema("tool_b")},
+        handlers={"tool_a": tool_a, "tool_b": tool_b},
+        tool_calls=[
+            ToolCall(id="par-1", name="tool_a", arguments={}),
+            ToolCall(id="par-2", name="tool_b", arguments={}),
+        ],
+    )
+
+    await ToolExecutionSystem().process(world)
+
+    results = world.get_component(entity_id, ToolResultsComponent)
+    assert results is not None
+    assert results.results == {"par-1": "a-done", "par-2": "b-done"}
+
+
+@pytest.mark.asyncio
+async def test_concurrent_results_land_in_original_tool_call_order() -> None:
+    """Completion order (fast first) must not affect conversation order."""
+    world = World()
+    completion_order: list[str] = []
+
+    async def slow_tool() -> str:
+        await asyncio.sleep(0.05)
+        completion_order.append("slow")
+        return "slow-result"
+
+    async def fast_tool() -> str:
+        completion_order.append("fast")
+        return "fast-result"
+
+    entity_id = _install_tool_entity(
+        world,
+        tools={"slow": _safe_schema("slow"), "fast": _safe_schema("fast")},
+        handlers={"slow": slow_tool, "fast": fast_tool},
+        tool_calls=[
+            ToolCall(id="ord-1", name="slow", arguments={}),
+            ToolCall(id="ord-2", name="fast", arguments={}),
+        ],
+    )
+
+    await ToolExecutionSystem().process(world)
+
+    assert completion_order == ["fast", "slow"]
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages == [
+        Message(role="tool", content="slow-result", tool_call_id="ord-1"),
+        Message(role="tool", content="fast-result", tool_call_id="ord-2"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unsafe_tool_is_a_barrier_between_safe_groups() -> None:
+    """A serial-only tool never overlaps surrounding concurrency-safe groups."""
+    world = World()
+    events: list[tuple[str, str]] = []
+
+    def make_tool(name: str, delay: float) -> Callable[[], Awaitable[str]]:
+        async def handler() -> str:
+            events.append(("start", name))
+            await asyncio.sleep(delay)
+            events.append(("end", name))
+            return name
+
+        return handler
+
+    entity_id = _install_tool_entity(
+        world,
+        tools={
+            "safe1": _safe_schema("safe1"),
+            "safe2": _safe_schema("safe2"),
+            "unsafe": _unsafe_schema("unsafe"),
+            "safe3": _safe_schema("safe3"),
+        },
+        handlers={
+            "safe1": make_tool("safe1", 0.03),
+            "safe2": make_tool("safe2", 0.01),
+            "unsafe": make_tool("unsafe", 0.01),
+            "safe3": make_tool("safe3", 0.0),
+        },
+        tool_calls=[
+            ToolCall(id="b-1", name="safe1", arguments={}),
+            ToolCall(id="b-2", name="safe2", arguments={}),
+            ToolCall(id="b-3", name="unsafe", arguments={}),
+            ToolCall(id="b-4", name="safe3", arguments={}),
+        ],
+    )
+
+    await ToolExecutionSystem().process(world)
+
+    unsafe_start = events.index(("start", "unsafe"))
+    assert events.index(("end", "safe1")) < unsafe_start
+    assert events.index(("end", "safe2")) < unsafe_start
+    assert events.index(("end", "unsafe")) < events.index(("start", "safe3"))
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert [message.tool_call_id for message in conversation.messages] == [
+        "b-1",
+        "b-2",
+        "b-3",
+        "b-4",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_max_concurrency_bounds_in_flight_tools() -> None:
+    world = World()
+    in_flight = 0
+    peak = 0
+
+    def make_tool() -> Callable[[], Awaitable[str]]:
+        async def handler() -> str:
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0.02)
+            in_flight -= 1
+            return "ok"
+
+        return handler
+
+    tool_names = [f"tool{i}" for i in range(4)]
+    entity_id = _install_tool_entity(
+        world,
+        tools={name: _safe_schema(name) for name in tool_names},
+        handlers={name: make_tool() for name in tool_names},
+        tool_calls=[
+            ToolCall(id=f"cap-{i}", name=name, arguments={})
+            for i, name in enumerate(tool_names)
+        ],
+    )
+    world.add_component(entity_id, ToolExecutionConfigComponent(max_concurrency=2))
+
+    await ToolExecutionSystem().process(world)
+
+    assert peak == 2
+    results = world.get_component(entity_id, ToolResultsComponent)
+    assert results is not None
+    assert len(results.results) == 4
+
+
+@pytest.mark.asyncio
+async def test_max_concurrency_one_serializes_safe_tools() -> None:
+    world = World()
+    in_flight = 0
+    peak = 0
+    completion_order: list[str] = []
+
+    def make_tool(name: str) -> Callable[[], Awaitable[str]]:
+        async def handler() -> str:
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0.01)
+            in_flight -= 1
+            completion_order.append(name)
+            return name
+
+        return handler
+
+    entity_id = _install_tool_entity(
+        world,
+        tools={"first": _safe_schema("first"), "second": _safe_schema("second")},
+        handlers={"first": make_tool("first"), "second": make_tool("second")},
+        tool_calls=[
+            ToolCall(id="ser-1", name="first", arguments={}),
+            ToolCall(id="ser-2", name="second", arguments={}),
+        ],
+    )
+    world.add_component(entity_id, ToolExecutionConfigComponent(max_concurrency=1))
+
+    await ToolExecutionSystem().process(world)
+
+    assert peak == 1
+    assert completion_order == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_batch_publishes_paired_events_per_tool_call() -> None:
+    world = World()
+    started: list[ToolExecutionStartedEvent] = []
+    completed: list[ToolExecutionCompletedEvent] = []
+
+    async def on_started(event: ToolExecutionStartedEvent) -> None:
+        started.append(event)
+
+    async def on_completed(event: ToolExecutionCompletedEvent) -> None:
+        completed.append(event)
+
+    world.event_bus.subscribe(ToolExecutionStartedEvent, on_started)
+    world.event_bus.subscribe(ToolExecutionCompletedEvent, on_completed)
+
+    async def ping() -> str:
+        await asyncio.sleep(0.01)
+        return "pong"
+
+    tool_names = [f"ping{i}" for i in range(3)]
+    _install_tool_entity(
+        world,
+        tools={name: _safe_schema(name) for name in tool_names},
+        handlers={name: ping for name in tool_names},
+        tool_calls=[
+            ToolCall(id=f"evt-{i}", name=name, arguments={})
+            for i, name in enumerate(tool_names)
+        ],
+    )
+
+    await ToolExecutionSystem().process(world)
+
+    started_ids = sorted(event.tool_call.id for event in started)
+    completed_ids = sorted(event.tool_call_id for event in completed)
+    assert started_ids == ["evt-0", "evt-1", "evt-2"]
+    assert completed_ids == ["evt-0", "evt-1", "evt-2"]
+    assert all(event.success for event in completed)
+    assert all(
+        event.duration_seconds is not None and event.duration_seconds >= 0
+        for event in completed
+    )
+
+
+@pytest.mark.asyncio
+async def test_unknown_tool_between_safe_tools_lands_error_in_order() -> None:
+    world = World()
+
+    async def ok_tool() -> str:
+        return "ok"
+
+    entity_id = _install_tool_entity(
+        world,
+        tools={"ok1": _safe_schema("ok1"), "ok2": _safe_schema("ok2")},
+        handlers={"ok1": ok_tool, "ok2": ok_tool},
+        tool_calls=[
+            ToolCall(id="mix-1", name="ok1", arguments={}),
+            ToolCall(id="mix-2", name="missing", arguments={}),
+            ToolCall(id="mix-3", name="ok2", arguments={}),
+        ],
+    )
+
+    await ToolExecutionSystem().process(world)
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages == [
+        Message(role="tool", content="ok", tool_call_id="mix-1"),
+        Message(
+            role="tool",
+            content="Error: unknown tool 'missing'",
+            tool_call_id="mix-2",
+        ),
+        Message(role="tool", content="ok", tool_call_id="mix-3"),
+    ]
+
+
+def test_concurrency_metadata_survives_serialization_roundtrip() -> None:
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ToolRegistryComponent(
+            tools={"grep": _safe_schema("grep"), "bash": _unsafe_schema("bash")},
+            handlers={},
+        ),
+    )
+    world.add_component(entity_id, ToolExecutionConfigComponent(max_concurrency=3))
+
+    serialized = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(serialized, providers={}, tool_handlers={})
+
+    entries = restored.query(ToolRegistryComponent)
+    assert len(entries) == 1
+    _, (registry,) = entries[0]
+    assert isinstance(registry, ToolRegistryComponent)
+    assert registry.tools["grep"].concurrency_safe is True
+    assert registry.tools["bash"].concurrency_safe is False
+
+    config_entries = restored.query(ToolExecutionConfigComponent)
+    assert len(config_entries) == 1
+    _, (config,) = config_entries[0]
+    assert isinstance(config, ToolExecutionConfigComponent)
+    assert config.max_concurrency == 3

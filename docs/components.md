@@ -418,6 +418,21 @@ from ecs_agent.components import SandboxConfigComponent
 world.add_component(agent, SandboxConfigComponent(timeout=10.0, max_output_size=5000))
 ```
 
+### ToolExecutionConfigComponent
+Bounds how many concurrency-safe tool calls of one entity's batch run at once. Calls whose `ToolSchema.concurrency_safe` is `True` run concurrently in consecutive groups; all other calls act as serial barriers. Optional — without the component the bound defaults to 8.
+
+| Name | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `max_concurrency` | `int` | `8` | Concurrent call bound per group; `1` restores fully serial execution |
+
+**Used by:** `ToolExecutionSystem`
+
+**Usage:**
+```python
+from ecs_agent.components import ToolExecutionConfigComponent
+world.add_component(agent, ToolExecutionConfigComponent(max_concurrency=4))
+```
+
 ### PlanSearchComponent
 Configures Monte Carlo Tree Search (MCTS) for finding the optimal plan path.
 

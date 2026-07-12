@@ -5986,3 +5986,10 @@ def test_build_background_child_prompt_template_appends_background_result_envelo
     assert "<subagent_background_result>" in result
     assert "<summary>" in result
     assert "<full_result>" in result
+
+
+def test_subagent_status_schema_is_concurrency_safe() -> None:
+    """subagent_status is read-only and may run alongside other safe tools."""
+    from ecs_agent.systems.subagent.tool_schemas import build_status_schema
+
+    assert build_status_schema().concurrency_safe is True
