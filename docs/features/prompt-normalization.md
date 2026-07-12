@@ -167,9 +167,10 @@ Frozen dataclass defining a pattern-based trigger rule applied by `UserPromptNor
 | :--- | :--- | :--- | :--- |
 | `pattern` | `str` | (required) | Text pattern to match against the user message |
 | `match_mode` | `"keyword" \| "prefix" \| "contains"` | (required) | How to match the pattern |
-| `action` | `"replace" \| "inject"` | (required) | What to do on match |
-| `content` | `str` | (required) | Content to inject or replace with |
+| `action` | `"replace" \| "inject" \| "script"` | (required) | What to do on match |
+| `content` | `str` | (required) | Content to inject or replace with, or the script handler key for `action="script"` |
 | `priority` | `int` | `0` | Higher priority triggers are evaluated first |
+| `description` | `str` | `""` | Human-facing hint (e.g. argument shape + purpose of a slash command), surfaced by frontends such as completion lists |
 
 ```python
 from ecs_agent.prompts.contracts import TriggerSpec

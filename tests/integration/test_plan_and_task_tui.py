@@ -976,3 +976,185 @@ class TestTextualApp:
             entry = TranscriptEntry(kind="system", text="direct entry")
             app.dispatch_change(UiChange(section="transcript", entries=[entry]))
             await pilot.pause()
+
+
+class TestCommandCompletion:
+    COMMANDS = (
+        ("/plan:finalize", "finalize the reviewed plan"),
+        ("/plan:start", "<description> — start a new planning workflow"),
+        ("/plan:status", "show current plan status"),
+        ("/task:abort", "abort task execution"),
+        ("/task:start", "[workflow_id] — initialize the task queue and run"),
+    )
+
+    def _make_app(self, submitted: list[str]) -> object:
+        from examples.e2e.plan_and_task.tui.app import PlanTaskTuiApp
+
+        class StubSink:
+            input_pending = True
+
+            def submit_input(self, text: str) -> bool:
+                submitted.append(text)
+                return True
+
+            def request_quit(self) -> None:
+                return None
+
+        return PlanTaskTuiApp(
+            view_model=make_vm(), sink=StubSink(), commands=self.COMMANDS
+        )
+
+    async def test_slash_shows_completion_list_with_hints(self) -> None:
+        from textual.widgets import OptionList
+
+        from examples.e2e.plan_and_task.tui.app import CommandInput
+
+        app = self._make_app([])
+        async with app.run_test(size=(100, 30)) as pilot:
+            lst = app.query_one("#command-list", OptionList)
+            assert not lst.display
+
+            app.query_one(CommandInput).value = "/"
+            await pilot.pause()
+            assert lst.display
+            assert lst.option_count == len(self.COMMANDS)
+            first = str(lst.get_option_at_index(0).prompt)
+            assert "/plan:finalize" in first
+            assert "finalize the reviewed plan" in first
+
+    async def test_typing_filters_completion_list(self) -> None:
+        from textual.widgets import OptionList
+
+        from examples.e2e.plan_and_task.tui.app import CommandInput
+
+        app = self._make_app([])
+        async with app.run_test(size=(100, 30)) as pilot:
+            app.query_one(CommandInput).value = "/plan:s"
+            await pilot.pause()
+            lst = app.query_one("#command-list", OptionList)
+            assert lst.display
+            prompts = [
+                str(lst.get_option_at_index(i).prompt)
+                for i in range(lst.option_count)
+            ]
+            assert len(prompts) == 2
+            assert any("/plan:start" in p for p in prompts)
+            assert any("/plan:status" in p for p in prompts)
+
+    async def test_plain_text_keeps_list_hidden(self) -> None:
+        from textual.widgets import OptionList
+
+        from examples.e2e.plan_and_task.tui.app import CommandInput
+
+        app = self._make_app([])
+        async with app.run_test(size=(100, 30)) as pilot:
+            app.query_one(CommandInput).value = "describe the goal"
+            await pilot.pause()
+            assert not app.query_one("#command-list", OptionList).display
+
+    async def test_tab_completes_highlighted_command(self) -> None:
+        from examples.e2e.plan_and_task.tui.app import CommandInput
+
+        app = self._make_app([])
+        async with app.run_test(size=(100, 30)) as pilot:
+            field = app.query_one(CommandInput)
+            field.value = "/task:a"
+            await pilot.pause()
+            await pilot.press("tab")
+            await pilot.pause()
+            assert field.value == "/task:abort "
+            assert field.cursor_position == len(field.value)
+
+    async def test_enter_completes_partial_instead_of_submitting(self) -> None:
+        from textual.widgets import OptionList
+
+        from examples.e2e.plan_and_task.tui.app import CommandInput
+
+        submitted: list[str] = []
+        app = self._make_app(submitted)
+        async with app.run_test(size=(100, 30)) as pilot:
+            field = app.query_one(CommandInput)
+            field.value = "/plan:f"
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert field.value == "/plan:finalize "
+            assert submitted == []
+            # the completed value is no command prefix, so the list closes
+            assert not app.query_one("#command-list", OptionList).display
+
+    async def test_enter_submits_exact_command(self) -> None:
+        from examples.e2e.plan_and_task.tui.app import CommandInput
+
+        submitted: list[str] = []
+        app = self._make_app(submitted)
+        async with app.run_test(size=(100, 30)) as pilot:
+            field = app.query_one(CommandInput)
+            field.value = "/plan:status"
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert submitted == ["/plan:status"]
+            assert field.value == ""
+
+    async def test_escape_hides_completion_list(self) -> None:
+        from textual.widgets import OptionList
+
+        from examples.e2e.plan_and_task.tui.app import CommandInput
+
+        app = self._make_app([])
+        async with app.run_test(size=(100, 30)) as pilot:
+            app.query_one(CommandInput).value = "/"
+            await pilot.pause()
+            lst = app.query_one("#command-list", OptionList)
+            assert lst.display
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not lst.display
+
+    async def test_arrow_down_moves_highlight(self) -> None:
+        from examples.e2e.plan_and_task.tui.app import CommandInput
+
+        app = self._make_app([])
+        async with app.run_test(size=(100, 30)) as pilot:
+            field = app.query_one(CommandInput)
+            field.value = "/plan:s"
+            await pilot.pause()
+            await pilot.press("down")
+            await pilot.press("tab")
+            await pilot.pause()
+            assert field.value == "/plan:status "
+
+    async def test_clicking_option_completes_command(self) -> None:
+        from textual.widgets import OptionList
+
+        from examples.e2e.plan_and_task.tui.app import CommandInput
+
+        app = self._make_app([])
+        async with app.run_test(size=(100, 30)) as pilot:
+            field = app.query_one(CommandInput)
+            field.value = "/task:a"
+            await pilot.pause()
+            lst = app.query_one("#command-list", OptionList)
+            lst.action_select()  # same path as a mouse click on the option
+            await pilot.pause()
+            assert field.value == "/task:abort "
+            assert app.focused is field
+
+    async def test_world_triggers_carry_command_hints(self, tmp_path: object) -> None:
+        """The real world wires a non-empty hint for every slash command."""
+        from pathlib import Path
+
+        from ecs_agent.providers import FakeModel
+        from examples.e2e.plan_and_task.main import build_plan_task_world
+        from examples.e2e.plan_and_task.tui.session import _slash_commands
+
+        assert isinstance(tmp_path, Path)
+        world, agent_id, _, _ = await build_plan_task_world(
+            model=FakeModel(responses=[]), base_dir=tmp_path
+        )
+        commands = _slash_commands(world, agent_id)
+        assert commands, "expected slash commands from the world's TriggerSpecs"
+        for pattern, hint in commands:
+            assert pattern.startswith("/")
+            assert hint, f"command {pattern} is missing a completion hint"

@@ -223,6 +223,16 @@ before advancing — on confirm drop the "(proposed)" tag, otherwise rewrite the
 match their choice and re-propose. At most one `ask_question` per section; never an
 open-ended "what do you want here?".
 
+Keep driving after every answer — do NOT stop and wait. The tool's return value IS the
+user's decision, already delivered: never acknowledge it in prose, thank them, summarize,
+or re-ask the same choice as text (that is the bug where the interview stalls). Instead,
+fold the answer into `draft.md` and, in the SAME turn, advance to the next section —
+propose it and open its `ask_question`. The user only ever answers modals; they never
+type to move you forward, so EVERY interview turn ends with an `ask_question` (the
+blocking hand-off), never with a plain-text message like "let me know what you think".
+You stop chaining questions only when no "(to be filled" placeholder remains — then go
+straight to the Review Chain below without pausing for the user.
+
 FIRST turn: on the topic, do NOT open with a question — immediately propose the Scope
 section into `draft.md` and put your concrete Scope options (recommendation first,
 each with its trade-off) via `ask_question`.
