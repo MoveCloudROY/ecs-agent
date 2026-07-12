@@ -315,7 +315,15 @@ async def test_load_skill_details_returns_full_context_directly() -> None:
 
 
 @pytest.mark.asyncio
-async def test_load_skill_details_missing_skill_returns_error() -> None:
+async def test_load_skill_details_missing_skill_returns_corrective_error() -> None:
+    """A miss must not dead-end.
+
+    Mirrors the plan-and-task orchestrator: an agent that carries only the
+    built-in tool bundle (no loadable skills of its own) may speculatively
+    probe a skill that lives on a subagent — e.g. ``writing-plans``. The reply
+    must report the failure *and* name what can actually be loaded so the model
+    corrects course instead of re-issuing the same failing call.
+    """
     from ecs_agent import BuiltinToolsSkill, SkillManager
 
     world = World()
@@ -328,9 +336,12 @@ async def test_load_skill_details_missing_skill_returns_error() -> None:
     handler = registry.handlers.get("load_skill_details")
     assert handler is not None
 
-    result = await handler(skill_name="missing-skill")
+    result = await handler(skill_name="writing-plans")
 
-    assert "is not installed" in result
+    assert "Skill 'writing-plans' is not installed." in result
+    # Corrective: the built-in tool bundle is loadable, so it is offered back.
+    assert "Skills you can load:" in result
+    assert "builtin-tools" in result
 
 
 @pytest.mark.asyncio

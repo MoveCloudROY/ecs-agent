@@ -369,7 +369,26 @@ class SkillManager:
         async def load_skill_details(skill_name: str) -> str:
             details = self.format_skill_details(world, entity_id, skill_name)
             if details is None:
-                return f"Skill '{skill_name}' is not installed."
+                # Corrective payload instead of a dead end: name the skills that
+                # *can* be loaded so the model recovers (picks a real one, or
+                # stops guessing and proceeds) rather than re-issuing the same
+                # failing call. A skill referenced only in a prompt or delegated
+                # to a subagent is not loadable here.
+                available = world.skill_runtime.loadable_skill_names(
+                    world, entity_id
+                )
+                if available:
+                    return (
+                        f"Skill '{skill_name}' is not installed. Skills you can "
+                        f"load: {', '.join(available)}. Call load_skill_details "
+                        "with one of those names, or continue without loading a "
+                        "skill."
+                    )
+                return (
+                    f"Skill '{skill_name}' is not installed. No skills are "
+                    "available to load here; continue with your current tools "
+                    "and do not call load_skill_details again."
+                )
             return details
 
         registry.tools[self._DETAILS_TOOL_NAME] = ToolSchema(

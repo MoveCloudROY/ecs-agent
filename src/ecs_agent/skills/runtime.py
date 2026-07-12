@@ -92,6 +92,23 @@ class SkillRuntime:
             return []
         return list(skill_component.skills.values())
 
+    def loadable_skill_names(self, world: World, entity_id: EntityId) -> list[str]:
+        """Names this entity can pass to ``load_skill_details``.
+
+        Combines regular skills (tracked in ``SkillComponent``) with tool
+        bundles and any other skills kept only in the runtime's installed map
+        (tool bundles are deliberately not listed in ``SkillComponent``).
+        De-duplicated and sorted for stable output.
+        """
+        names: set[str] = set()
+        skill_component = world.get_component(entity_id, SkillComponent)
+        if skill_component is not None:
+            names.update(skill_component.skills.keys())
+        for installed_entity_id, skill_name in self._installed_skills:
+            if installed_entity_id == entity_id:
+                names.add(skill_name)
+        return sorted(names)
+
     def get_skill_metadata(
         self,
         world: World,

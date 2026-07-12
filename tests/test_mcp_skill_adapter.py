@@ -353,7 +353,10 @@ async def test_meta_tool_handles_unknown_skill_name() -> None:
     registry = world.get_component(entity_id, ToolRegistryComponent)
     assert registry is not None
     result = await registry.handlers["load_skill_details"](skill_name="missing")
-    assert result == "Skill 'missing' is not installed."
+    # Corrective payload: reports the failure and steers the model toward the
+    # skills that can actually be loaded on this entity instead of dead-ending.
+    assert "Skill 'missing' is not installed." in result
+    assert "Skills you can load:" in result
 
 
 def test_tier2_details_contain_full_schema_json() -> None:
