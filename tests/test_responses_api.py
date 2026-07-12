@@ -1298,3 +1298,339 @@ async def test_responses_api_streaming_previous_response_id_preserved_on_interru
     state = world.get_component(entity, ResponsesAPIStateComponent)
     assert state is not None
     assert state.previous_response_id == "resp_keep_old"
+
+
+@pytest.mark.asyncio
+async def test_responses_api_translates_json_schema_response_format_to_text() -> None:
+    """Chat-shaped json_schema response_format becomes a flattened text.format.
+
+    The Responses API configures structured output via text.format, not the
+    top-level response_format parameter, and expects {name, schema, strict}
+    alongside the type rather than nested under a json_schema key.
+    """
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "id": "resp_fmt_1",
+        "model": "gpt-4o-mini",
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "{}"}],
+            }
+        ],
+    }
+    mock_response.raise_for_status = Mock()
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post.return_value = mock_response
+
+    model = OpenAIModel(
+        config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
+    )
+    model._client = mock_client
+
+    schema = {"type": "object", "properties": {"city": {"type": "string"}}}
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {"name": "CityInfo", "schema": schema, "strict": True},
+    }
+
+    await model.complete(
+        [Message(role="user", content="hello")], response_format=response_format
+    )
+
+    body = mock_client.post.call_args[1]["json"]
+    assert "response_format" not in body
+    assert body["text"] == {
+        "format": {
+            "type": "json_schema",
+            "name": "CityInfo",
+            "schema": schema,
+            "strict": True,
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_responses_api_translates_json_object_response_format_to_text() -> None:
+    """A bare {"type": "json_object"} maps straight into text.format."""
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "id": "resp_fmt_2",
+        "model": "gpt-4o-mini",
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "{}"}],
+            }
+        ],
+    }
+    mock_response.raise_for_status = Mock()
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post.return_value = mock_response
+
+    model = OpenAIModel(
+        config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
+    )
+    model._client = mock_client
+
+    await model.complete(
+        [Message(role="user", content="hello")],
+        response_format={"type": "json_object"},
+    )
+
+    body = mock_client.post.call_args[1]["json"]
+    assert "response_format" not in body
+    assert body["text"] == {"format": {"type": "json_object"}}
+
+
+@pytest.mark.asyncio
+async def test_responses_api_complete_extracts_reasoning_summary() -> None:
+    """A reasoning output item's summary_text populates reasoning_content."""
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "id": "resp_reason_1",
+        "model": "gpt-5",
+        "output": [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "summary": [
+                    {"type": "summary_text", "text": "First I consider the goal."},
+                    {"type": "summary_text", "text": "Then I pick an approach."},
+                ],
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "The answer is 42."}],
+            },
+        ],
+    }
+    mock_response.raise_for_status = Mock()
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post.return_value = mock_response
+
+    model = OpenAIModel(
+        config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES),
+        model="gpt-5",
+    )
+    model._client = mock_client
+
+    result = await model.complete([Message(role="user", content="question")])
+
+    assert result.message.content == "The answer is 42."
+    assert result.reasoning_content == (
+        "First I consider the goal.\nThen I pick an approach."
+    )
+
+
+@pytest.mark.asyncio
+async def test_responses_api_streaming_yields_reasoning_summary_delta() -> None:
+    """Streaming reasoning summary deltas surface as StreamDelta.reasoning_content."""
+    model, _ = _streaming_model(
+        [
+            'data: {"type": "response.created", "response": {"id": "resp_reason_stream"}}',
+            'data: {"type": "response.reasoning_summary_text.delta", "output_index": 0, "delta": "think "}',
+            'data: {"type": "response.reasoning_summary_text.delta", "output_index": 0, "delta": "hard"}',
+            'data: {"type": "response.output_item.added", "output_index": 1, "item": {"type": "message", "role": "assistant"}}',
+            'data: {"type": "response.output_text.delta", "output_index": 1, "delta": "done"}',
+            'data: {"type": "response.completed", "response": {"id": "resp_reason_stream"}}',
+        ]
+    )
+
+    deltas = []
+    stream_result = await model.complete(
+        [Message(role="user", content="Hi")], stream=True
+    )
+    async for delta in stream_result:
+        deltas.append(delta)
+
+    reasoning = [d.reasoning_content for d in deltas if d.reasoning_content]
+    assert reasoning == ["think ", "hard"]
+    contents = [d.content for d in deltas if d.content]
+    assert contents == ["done"]
+
+
+@pytest.mark.asyncio
+async def test_responses_api_streaming_falls_back_to_chat_on_404() -> None:
+    """A 404 on the streaming Responses endpoint falls back to Chat Completions."""
+    error_response = httpx.Response(
+        404,
+        request=httpx.Request("POST", "https://test.openai.com/v1/responses"),
+        text="Not Found",
+    )
+    error_cm = MagicMock()
+    error_cm.__aenter__.return_value = error_response
+
+    chat_response = AsyncMock()
+    chat_response.is_error = False
+    chat_response.raise_for_status = Mock()
+
+    async def chat_aiter_lines():
+        yield 'data: {"choices": [{"delta": {"content": "fallback"}, "finish_reason": null}]}'
+        yield 'data: {"choices": [{"delta": {}, "finish_reason": "stop"}]}'
+        yield "data: [DONE]"
+
+    chat_response.aiter_lines = chat_aiter_lines
+    chat_cm = MagicMock()
+    chat_cm.__aenter__.return_value = chat_response
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = MagicMock(side_effect=[error_cm, chat_cm])
+
+    model = OpenAIModel(
+        config=_openai_config(
+            api_key="test-key",
+            base_url="https://test.openai.com/v1",
+            api_format=ApiFormat.OPENAI_RESPONSES,
+        )
+    )
+    model._client = mock_client
+
+    deltas = []
+    stream_result = await model.complete(
+        [Message(role="user", content="hello")], stream=True
+    )
+    async for delta in stream_result:
+        deltas.append(delta)
+
+    assert any(d.content == "fallback" for d in deltas)
+    assert model._responses_api_available is False
+    assert mock_client.stream.call_count == 2
+    responses_url = mock_client.stream.call_args_list[0][0][1]
+    chat_url = mock_client.stream.call_args_list[1][0][1]
+    assert responses_url == "https://test.openai.com/v1/responses"
+    assert chat_url == "https://test.openai.com/v1/chat/completions"
+
+
+@pytest.mark.asyncio
+async def test_responses_api_streaming_emits_done_only_message_text() -> None:
+    """A message delivered solely via output_item.done still yields its text.
+
+    Some gateways skip content deltas and hand the whole message in the
+    terminal output_item.done item; the parser must recover that text.
+    """
+    model, _ = _streaming_model(
+        [
+            'data: {"type": "response.created", "response": {"id": "resp_doneonly"}}',
+            'data: {"type": "response.output_item.added", "output_index": 0, "item": {"type": "message", "role": "assistant"}}',
+            'data: {"type": "response.output_item.done", "output_index": 0, "item": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "full answer"}]}}',
+            'data: {"type": "response.completed", "response": {"id": "resp_doneonly"}}',
+        ]
+    )
+
+    deltas = []
+    stream_result = await model.complete(
+        [Message(role="user", content="Hi")], stream=True
+    )
+    async for delta in stream_result:
+        deltas.append(delta)
+
+    contents = [d.content for d in deltas if d.content]
+    assert contents == ["full answer"]
+
+
+@pytest.mark.asyncio
+async def test_responses_api_streaming_done_text_not_duplicated_after_deltas() -> None:
+    """When text already streamed via deltas, the done item must not re-emit it."""
+    model, _ = _streaming_model(
+        [
+            'data: {"type": "response.created", "response": {"id": "resp_dup"}}',
+            'data: {"type": "response.output_item.added", "output_index": 0, "item": {"type": "message", "role": "assistant"}}',
+            'data: {"type": "response.output_text.delta", "output_index": 0, "delta": "Hel"}',
+            'data: {"type": "response.output_text.delta", "output_index": 0, "delta": "lo"}',
+            'data: {"type": "response.output_item.done", "output_index": 0, "item": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Hello"}]}}',
+            'data: {"type": "response.completed", "response": {"id": "resp_dup"}}',
+        ]
+    )
+
+    deltas = []
+    stream_result = await model.complete(
+        [Message(role="user", content="Hi")], stream=True
+    )
+    async for delta in stream_result:
+        deltas.append(delta)
+
+    contents = [d.content for d in deltas if d.content]
+    assert contents == ["Hel", "lo"]
+
+
+@pytest.mark.asyncio
+async def test_responses_api_retries_on_400_with_structured_param_error() -> None:
+    """A 400 whose error.param names previous_response_id triggers the retry."""
+    param_body = (
+        '{"error":{"message":"Invalid value","type":"invalid_request_error",'
+        '"param":"previous_response_id","code":null}}'
+    )
+    request = httpx.Request("POST", "https://test.openai.com/v1/responses")
+    error = httpx.HTTPStatusError(
+        "400 Bad Request",
+        request=request,
+        response=httpx.Response(400, request=request, text=param_body),
+    )
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post.side_effect = [error, _responses_success("resp_ok", "recovered")]
+
+    model = OpenAIModel(
+        config=_openai_config(
+            api_key="test-key",
+            base_url="https://test.openai.com/v1",
+            api_format=ApiFormat.OPENAI_RESPONSES,
+            enable_store=True,
+        )
+    )
+    model._client = mock_client
+
+    result = await model.complete(
+        [Message(role="user", content="hi")], thread_response_id="resp_old"
+    )
+
+    assert result.message.content == "recovered"
+    assert mock_client.post.call_count == 2
+    assert "previous_response_id" not in mock_client.post.call_args_list[1][1]["json"]
+
+
+@pytest.mark.asyncio
+async def test_responses_api_no_retry_when_token_outside_error_object() -> None:
+    """A 400 that only echoes the id outside error.* must not trigger a retry.
+
+    The full JSON body contains the token (in an echoed input field), but the
+    structured error blames something else, so retrying would be wrong.
+    """
+    unrelated_body = (
+        '{"error":{"message":"model is overloaded","type":"server_error",'
+        '"param":null,"code":null},'
+        '"echo":{"previous_response_id":"resp_old"}}'
+    )
+    request = httpx.Request("POST", "https://test.openai.com/v1/responses")
+    error = httpx.HTTPStatusError(
+        "400 Bad Request",
+        request=request,
+        response=httpx.Response(400, request=request, text=unrelated_body),
+    )
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post.side_effect = error
+
+    model = OpenAIModel(
+        config=_openai_config(
+            api_key="test-key",
+            base_url="https://test.openai.com/v1",
+            api_format=ApiFormat.OPENAI_RESPONSES,
+            enable_store=True,
+        )
+    )
+    model._client = mock_client
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await model.complete(
+            [Message(role="user", content="hi")], thread_response_id="resp_old"
+        )
+
+    assert mock_client.post.call_count == 1

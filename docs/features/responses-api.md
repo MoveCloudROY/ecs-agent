@@ -77,7 +77,41 @@ The stream parser understands both SSE dialects found in the wild:
   `response.done`.
 
 When a `response.output_item.done` item carries a complete `arguments` string,
-it overrides whatever accumulated from delta events.
+it overrides whatever accumulated from delta events. Likewise, if a message
+item arrives with no text deltas at all (some gateways send only
+`output_item.added` + `output_item.done`), its text is recovered from the done
+item's content — without duplicating text that already streamed.
+
+Reasoning models stream their summary on a separate channel
+(`response.reasoning_summary_text.delta`); the parser surfaces it as
+`StreamDelta.reasoning_content` so callers can split private reasoning from the
+user-facing answer, exactly as they would on Chat Completions.
+
+## Structured Output
+
+Pass a `response_format` (e.g. from
+[`pydantic_to_response_format`](./structured-output.md)) and the adapter
+translates it into the Responses-native `text.format` block. The Responses API
+does **not** accept the top-level `response_format` parameter, and it expects
+the schema flattened rather than nested under a `json_schema` key, so the
+adapter rewrites both automatically:
+
+```python
+# Chat-shaped input (what pydantic_to_response_format produces)
+{"type": "json_schema", "json_schema": {"name": ..., "schema": ..., "strict": true}}
+
+# Sent to /v1/responses as
+{"text": {"format": {"type": "json_schema", "name": ..., "schema": ..., "strict": true}}}
+```
+
+The same `response_format` value therefore works unchanged across both
+`OPENAI_CHAT_COMPLETIONS` and `OPENAI_RESPONSES`.
+
+## Reasoning Content
+
+For reasoning models, `type: "reasoning"` output items are parsed into
+`CompletionResult.reasoning_content` (their `summary_text` blocks joined with
+newlines). Non-reasoning responses leave `reasoning_content` as `None`.
 
 ## Stored-Response Chaining (`previous_response_id`)
 
@@ -93,7 +127,11 @@ whether the chain is actually sent:
    Responses WebSocket v2`). When a 400 blames the chain, the adapter retries
    the request once without it, logs a
    `responses_previous_response_id_rejected` warning, and stops sending the
-   chain for the lifetime of that model instance.
+   chain for the lifetime of that model instance. The 400 is attributed to the
+   parameter via the structured error body (`error.param` / `error.message` /
+   `error.code`), so an unrelated 400 that merely echoes the id elsewhere in
+   the payload does not trigger a spurious retry; a non-JSON body falls back to
+   a raw substring scan.
 
 Both degradations are lossless: the full message history is always sent in
 `input`, so dropping the chain never loses context. `store: true/false` itself
@@ -114,6 +152,9 @@ model = Model(
 ```
 
 The fallback is automatic and transparent — your code doesn't need to change.
+It covers both non-streaming and streaming calls: on a streaming 404 the
+adapter's `raise_for_status` fires before any delta is yielded, so the request
+is replayed against Chat Completions with no duplicated output.
 
 ## Response Metadata
 

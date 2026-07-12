@@ -100,6 +100,12 @@ class ReasoningSystem:
             responses_api_state = world.get_component(
                 entity_id, ResponsesAPIStateComponent
             )
+            # The last response id is tracked every turn (below) for
+            # inspection/serialization, but it is only *sent* as
+            # previous_response_id when the OpenAI provider was built with
+            # enable_store=True; otherwise OpenAIModel drops it and relies on
+            # the full history in "input". Passing it here is therefore always
+            # safe and lossless regardless of the provider.
             previous_response_id = (
                 responses_api_state.previous_response_id
                 if responses_api_state is not None
@@ -282,6 +288,11 @@ class ReasoningSystem:
                 if conversation is not None:
                     conversation.messages.append(result.message)
 
+                # Record the latest response id every turn (only OpenAI Responses
+                # returns one). Consumed next turn as previous_response_id — sent
+                # only when the provider enabled stored-response chaining, and
+                # otherwise useful for inspection/serialization. See the read
+                # site above.
                 if result.response_id is not None:
                     world.add_component(
                         entity_id,
