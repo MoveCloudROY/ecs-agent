@@ -2728,6 +2728,38 @@ def test_plan_interview_system_prompt_defines_interview_flow() -> None:
     )
 
 
+def test_plan_interview_system_prompt_is_proactive_not_interrogative() -> None:
+    """Draft phase must proactively propose/recommend per section, not ask the user everything.
+
+    Verifies fix for: draft agent being passive and interrogating the user for
+    every section instead of exploring options and recommending choices.
+    """
+    from examples.e2e.plan_and_task.prompts import PLAN_INTERVIEW_SYSTEM_PROMPT
+
+    prompt_lower = PLAN_INTERVIEW_SYSTEM_PROMPT.lower()
+    # Proactive stance: the agent recommends/proposes content, not merely questions.
+    assert any(
+        word in prompt_lower for word in ("propose", "recommend")
+    ), "Draft prompt must instruct the agent to propose/recommend content per section"
+    # Unconfirmed proposals must be tagged so advisor/QA can audit assumptions.
+    assert "(proposed)" in prompt_lower, (
+        "Draft prompt must tag unconfirmed proposals so reviewers can spot assumptions"
+    )
+    # Must NOT revert to the old passive one-question-at-a-time interrogation.
+    assert "ask one question at a time" not in prompt_lower, (
+        "Draft prompt must not instruct passive one-question-at-a-time interviewing"
+    )
+    # User still steers: a confirm / redirect loop must remain.
+    assert "confirm" in prompt_lower and (
+        "redirect" in prompt_lower or "tweak" in prompt_lower
+    ), "Draft prompt must keep a user confirm/redirect loop"
+    # Choices are presented via the structured ask_question tool, not free prose,
+    # so the recommendation + alternatives are selectable by the user.
+    assert "ask_question" in prompt_lower, (
+        "Draft prompt must route the confirm/choose step through the ask_question tool"
+    )
+
+
 async def test_draft_template_has_structured_sections(tmp_path: Path) -> None:
     """The initial draft template must have structured fillable sections.
 
