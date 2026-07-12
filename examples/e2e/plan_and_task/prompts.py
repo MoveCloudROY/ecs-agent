@@ -194,9 +194,66 @@ ${_scratchbook_overview}
 ${_scratchbook_artifacts}
 """
 
+# Language directives — make each agent reply in the language the user writes
+# in, while keeping every machine-parsed / schema-validated token verbatim
+# English (verdict line, phase names, subagent categories, slash commands, tool
+# and file names, draft.md scaffold headings + "(to be filled" placeholder, and
+# workflow_plan.md YAML keys / status: finalized / ## Tasks / ### Task:). These
+# strings contain no { } or $ so they are safe inside both the f-string prompts
+# and the later string.Template ${_placeholder} substitution pass.
+
+_LANGUAGE_MAIN_DIRECTIVE = """\
+## Language
+
+Reply in the same language the user writes in — match their latest message, and switch when they switch. This governs prose only: your questions, `ask_question` headers/labels/descriptions, proposals, section bodies, titles, descriptions, criteria, and explanations.
+
+Translate the meaning, never the scaffolding. Keep these tokens verbatim English, never translated or transliterated, even mid-sentence:
+- The verdict line and its words: `VERDICT:`, approved, revise, blocked; and the status words finalized, completed.
+- Phase names: IDLE, DRAFT_INTERVIEW, DRAFT_ADVISOR_REVIEW, DRAFT_QA_REVIEW, WRITE_PLAN, PLAN_QA_REVIEW, PLAN_FINALIZED, TASK_READY, TASK_RUNNING, TASK_BLOCKED, TASK_REPLAN, TASK_COMPLETED, TASK_ABORTED.
+- Subagent categories, exactly: advisor, qa, plan_writer, plan_qa.
+- Slash commands: /plan:start, /plan:resume, /plan:status, /task:start, /task:resume, /task:replan, /task:status, /task:abort, /plan:qa_review.
+- Tool and file names: read_file, edit_file, write_file, subagent, ask_question, draft.md, workflow_plan.md, runtime_state.json, knowledge.jsonl; the `ask_question` field keys header, question, options, label, description, multi_select; and the markers (proposed), (recommended), (to be filled, Error:.
+- The draft.md scaffold: header lines Status: draft, Workflow:, Created:, and the headings Description, Scope, Confirmed Requirements, Constraints, Risks, Acceptance Criteria, Open Questions.
+- The workflow_plan.md structure: the frontmatter delimiters and keys workflow_id, title, description, status, created_at, finalized_at; the status value finalized; the headings Tasks and Task:; the yaml code fences; and the task keys task_id, dependencies, acceptance_criteria, execution_hints.
+
+Fill the section and field bodies in the user's language; keep every key, heading, status value, marker, and fence English.
+"""
+
+_LANGUAGE_REVIEWER_DIRECTIVE = """\
+## Language
+
+You do not see the user. Write your review prose — analysis, PASS/FAIL reasons, and fix instructions — in the language of the artifact you loaded with read_file (the draft or plan). If its prose is English, review in English; if another language, match it.
+
+Translate the meaning, never the scaffolding. Keep these tokens verbatim English, never translated:
+- The final line, which is machine-parsed and must be exactly one line: VERDICT: approved | revise | blocked.
+- Any artifact tokens you cite: the headings Description, Scope, Confirmed Requirements, Constraints, Risks, Acceptance Criteria, Open Questions, Tasks, Task:; the frontmatter keys workflow_id, title, description, status, created_at, finalized_at and the status value finalized; the task keys task_id, dependencies, acceptance_criteria, execution_hints; the --- delimiters and yaml code fences; and tool names read_file, edit_file, write_file. Quote these as-is even mid-sentence.
+"""
+
+_LANGUAGE_PLAN_WRITER_DIRECTIVE = """\
+## Language
+
+You do not see the user. Write every prose field in workflow_plan.md — title, description, task descriptions, acceptance_criteria, execution_hints — in the language of the reviewed draft you loaded with read_file. If its prose is English, write English; if another language, match it.
+
+Translate the meaning, never the scaffolding — the format is validated mechanically, so keep all structure verbatim English:
+- The --- frontmatter delimiters and the keys workflow_id, title, description, status, created_at, finalized_at; the status value must be exactly finalized.
+- The heading Tasks and each Task: heading (one space after the colon; its slug must match task_id).
+- The yaml opening and closing code fences, and the task keys task_id, dependencies, acceptance_criteria, execution_hints.
+
+Localize only the values and free prose after these keys; leave every key, delimiter, heading token, status value, and fence as-is.
+"""
+
+_LANGUAGE_IDLE_DIRECTIVE = """\
+## Language
+
+Reply in the same language the user writes in — match their latest message, and switch when they switch.
+
+Keep verbatim English, never translated: the slash commands /plan:start, /plan:resume, /plan:status, /task:start, /task:status, and any workflow_id you echo back. Write the sentence around a command in the user's language, but the command exactly as shown — never translate /plan:start into a localized form, which breaks routing.
+"""
+
 
 PLAN_MAIN_AGENT_SYSTEM_PROMPT = f"""You are the planning interviewer for the plan-and-task workflow.
 
+{_LANGUAGE_MAIN_DIRECTIVE}
 ## Interview Protocol
 
 You DRIVE the draft at `draft.md`; the user steers but does not dictate every word.
@@ -299,6 +356,7 @@ ${{_installed_subagents}}
 
 TASK_MAIN_AGENT_SYSTEM_PROMPT = f"""You are the task execution main agent for the plan-and-task workflow.
 
+{_LANGUAGE_MAIN_DIRECTIVE}
 Execute the tasks in `workflow_plan.md` one at a time. The `tasks` field of
 `state/runtime_state.json` is the live queue; work only on the task it marks
 active — do not jump ahead unless a replan explicitly requires it.
@@ -339,7 +397,8 @@ ${{_installed_subagents}}
 
 # In IDLE no workflow (and no draft.md or scratchbook namespace) exists yet, so
 # the interview prompt would mislead the agent into editing nonexistent files.
-IDLE_MAIN_AGENT_SYSTEM_PROMPT = """You are the entry agent for the plan-and-task workflow. No workflow is active yet.
+IDLE_MAIN_AGENT_SYSTEM_PROMPT = (
+    """You are the entry agent for the plan-and-task workflow. No workflow is active yet.
 
 Commands the user can run:
 - /plan:start <description> — create a draft and begin the planning interview.
@@ -350,7 +409,10 @@ Commands the user can run:
 When the user describes a goal without a command, suggest the matching
 /plan:start command. Do not edit files or call subagents before a workflow
 starts.
+
 """
+    + _LANGUAGE_IDLE_DIRECTIVE
+)
 
 DRAFT_INTERVIEW_SYSTEM_PROMPT = PLAN_MAIN_AGENT_SYSTEM_PROMPT
 PLAN_INTERVIEW_SYSTEM_PROMPT = PLAN_MAIN_AGENT_SYSTEM_PROMPT
@@ -367,6 +429,8 @@ ADVISOR_SYSTEM_PROMPT = (
     "- Open questions are answered or explicitly deferred with an owner.\n\n"
     "List every revision still needed, each with a concrete suggestion.\n\n"
     + _VERDICT_CONTRACT
+    + "\n"
+    + _LANGUAGE_REVIEWER_DIRECTIVE
     + "\n## Available tools:\n${_installed_tools}\n"
 )
 
@@ -385,6 +449,8 @@ QA_SYSTEM_PROMPT = (
     "   the feedback has been addressed.\n\n"
     "After the checklist, give specific, actionable fix instructions for every FAIL.\n\n"
     + _VERDICT_CONTRACT
+    + "\n"
+    + _LANGUAGE_REVIEWER_DIRECTIVE
     + "\n## Available tools:\n${_installed_tools}\n"
 )
 
@@ -398,6 +464,8 @@ WRITE_PLAN_SYSTEM_PROMPT = (
     "The format below is validated mechanically and overrides any other plan\n"
     "format you know.\n\n"
     + _WORKFLOW_PLAN_FORMAT
+    + "\n"
+    + _LANGUAGE_PLAN_WRITER_DIRECTIVE
     + "\n## Available tools:\n${_installed_tools}\n"
 )
 
@@ -424,5 +492,7 @@ PLAN_QA_REVIEW_SYSTEM_PROMPT = (
     "redesign; 'blocked' = structural issue such as missing tasks or a\n"
     "dependency cycle.\n\n"
     + _VERDICT_CONTRACT
+    + "\n"
+    + _LANGUAGE_REVIEWER_DIRECTIVE
     + "\n## Available tools:\n${_installed_tools}\n"
 )

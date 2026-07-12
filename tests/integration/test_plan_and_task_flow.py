@@ -3967,6 +3967,40 @@ async def test_writing_plans_skill_registered_in_catalog(tmp_path: Path) -> None
     assert descriptor.name == "writing-plans"
 
 
+async def test_web_search_tool_installed_when_brave_key_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ecs_agent.components.definitions import ToolRegistryComponent
+    from ecs_agent.providers.fake_model import FakeModel
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    monkeypatch.setenv("BRAVE_API_KEY", "test-key")
+    model = FakeModel(responses=["ok"])
+    world, agent_id, _, _ = await build_plan_task_world(model=model, base_dir=tmp_path)
+
+    registry = world.get_component(agent_id, ToolRegistryComponent)
+    assert registry is not None
+    assert "web_search" in registry.tools
+
+
+async def test_web_search_tool_absent_without_brave_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ecs_agent.components.definitions import ToolRegistryComponent
+    from ecs_agent.providers.fake_model import FakeModel
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    model = FakeModel(responses=["ok"])
+    world, agent_id, _, _ = await build_plan_task_world(model=model, base_dir=tmp_path)
+
+    registry = world.get_component(agent_id, ToolRegistryComponent)
+    assert registry is not None
+    assert "web_search" not in registry.tools
+    # The always-on built-in webfetch stays available regardless of the key.
+    assert "webfetch" in registry.tools
+
+
 # ---------------------------------------------------------------------------
 # BillingSubscriber tests
 # ---------------------------------------------------------------------------
@@ -4766,6 +4800,71 @@ def test_plan_and_task_prompts_embed_scratchbook_context() -> None:
     for prompt in (PLAN_MAIN_AGENT_SYSTEM_PROMPT, TASK_MAIN_AGENT_SYSTEM_PROMPT):
         assert "${_scratchbook_overview}" in prompt
         assert "${_scratchbook_artifacts}" in prompt
+
+
+def test_user_facing_prompts_reply_in_user_language() -> None:
+    """PLAN / TASK / IDLE agents (which see the user) must reply in the user's language."""
+    from examples.e2e.plan_and_task.prompts import (
+        IDLE_MAIN_AGENT_SYSTEM_PROMPT,
+        PLAN_MAIN_AGENT_SYSTEM_PROMPT,
+        TASK_MAIN_AGENT_SYSTEM_PROMPT,
+    )
+
+    for prompt in (
+        PLAN_MAIN_AGENT_SYSTEM_PROMPT,
+        TASK_MAIN_AGENT_SYSTEM_PROMPT,
+        IDLE_MAIN_AGENT_SYSTEM_PROMPT,
+    ):
+        assert "## Language" in prompt, "user-facing prompt must carry a Language directive"
+        assert "same language the user writes in" in prompt, (
+            "user-facing prompt must instruct replying in the user's input language"
+        )
+
+
+def test_reviewer_and_writer_prompts_match_artifact_language() -> None:
+    """Reviewer / writer subagents never see the user, so they match the artifact's language."""
+    from examples.e2e.plan_and_task.prompts import (
+        ADVISOR_SYSTEM_PROMPT,
+        PLAN_QA_REVIEW_SYSTEM_PROMPT,
+        QA_SYSTEM_PROMPT,
+        WRITE_PLAN_SYSTEM_PROMPT,
+    )
+
+    for prompt in (
+        ADVISOR_SYSTEM_PROMPT,
+        QA_SYSTEM_PROMPT,
+        PLAN_QA_REVIEW_SYSTEM_PROMPT,
+        WRITE_PLAN_SYSTEM_PROMPT,
+    ):
+        assert "## Language" in prompt, "reviewer/writer prompt must carry a Language directive"
+        assert "You do not see the user" in prompt, (
+            "reviewer/writer prompt must key language off the artifact, not the user"
+        )
+        assert "read_file" in prompt
+
+
+def test_language_directives_preserve_machine_tokens() -> None:
+    """The Language directives must protect machine-parsed / schema tokens and stay template-safe."""
+    from examples.e2e.plan_and_task import prompts as p
+
+    # The verbatim-English guardrail names the load-bearing tokens.
+    main = p.PLAN_MAIN_AGENT_SYSTEM_PROMPT
+    assert "VERDICT:" in main
+    for token in ("TASK_RUNNING", "plan_writer", "/plan:start", "finalized"):
+        assert token in main, f"main Language directive must protect {token!r}"
+
+    # Reviewers must still be told to emit the exact machine-parsed verdict line.
+    assert "VERDICT: approved | revise | blocked" in p.ADVISOR_SYSTEM_PROMPT
+
+    # Directive constants must contain no $ / { } so they stay inert inside the
+    # f-string prompts and the later string.Template ${...} substitution pass.
+    for const in (
+        p._LANGUAGE_MAIN_DIRECTIVE,
+        p._LANGUAGE_REVIEWER_DIRECTIVE,
+        p._LANGUAGE_PLAN_WRITER_DIRECTIVE,
+        p._LANGUAGE_IDLE_DIRECTIVE,
+    ):
+        assert not (set("${}") & set(const)), "Language directive must not break template rendering"
 
 
 async def test_build_plan_task_world_uses_plan_main_agent_system_prompt(tmp_path: Path) -> None:
