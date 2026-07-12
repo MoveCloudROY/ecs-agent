@@ -83,5 +83,14 @@ class EventBus:
                 exception=str(result),
             )
 
+    def has_subscribers(self, event_type: type) -> bool:
+        """Return True when at least one handler is subscribed to ``event_type``.
+
+        Lets a publisher that blocks on a subscriber-resolved future (e.g. an
+        interactive tool awaiting user input) fail fast instead of hanging when
+        no listener is attached.
+        """
+        return bool(self._handlers.get(event_type))
+
     def clear(self) -> None:
         self._handlers.clear()

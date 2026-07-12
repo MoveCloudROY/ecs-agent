@@ -66,6 +66,7 @@ from ecs_agent.types import (
 )
 
 from ecs_agent.accounting import AccountingSubscriber
+from examples.e2e.plan_and_task.ask_tool import install_ask_question_tool
 from examples.e2e.plan_and_task.billing import BillingSubscriber
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
@@ -920,15 +921,30 @@ async def build_plan_task_world(
         "task_replan": _handle_task_replan,
         "task_abort": _handle_task_abort,
     }
+    command_hints: dict[str, str] = {
+        "plan_start": "<description> — start a new planning workflow",
+        "plan_resume": "<workflow_id> — resume a persisted workflow",
+        "plan_status": "show current plan status",
+        "plan_finalize": "finalize the reviewed plan",
+        "plan_write": "convert the approved draft into workflow_plan.md",
+        "plan_qa_review": "<approved|revise|blocked> [notes] — record plan QA verdict",
+        "task_start": "[workflow_id] — initialize the task queue and run",
+        "task_status": "show task queue status",
+        "task_resume": "[workflow_id] — resume task execution",
+        "task_replan": "<reason> — replan the remaining tasks",
+        "task_abort": "abort task execution",
+    }
     # Each command's slash pattern derives from its handler key by turning the
     # FIRST underscore into a colon: plan_start -> /plan:start, plan_qa_review
-    # -> /plan:qa_review. Keep new commands in script_handlers above only.
+    # -> /plan:qa_review. Keep new commands in script_handlers above only, with
+    # a matching completion hint in command_hints.
     triggers = [
         TriggerSpec(
             pattern="/" + name.replace("_", ":", 1),
             match_mode="prefix",
             action="script",
             content=name,
+            description=command_hints.get(name, ""),
         )
         for name in script_handlers
     ]
@@ -948,6 +964,9 @@ async def build_plan_task_world(
     world.register_system(subagent_system, priority=-1)
     subagent_system.install_subagent_tool(world, agent_id, tool_name="subagent")
     subagent_system.install_subagent_control_tools(world, agent_id)
+    # Interactive clarification tool: pauses the turn to put structured
+    # questions to the user (surfaced by the TUI modal or the stdin runtime).
+    install_ask_question_tool(world, agent_id)
     world.register_system(ReasoningSystem(priority=0), priority=0)
     # ISSUE-3: with the tool sink on, large tool outputs are written to
     # scratchbook/records/tool/<id> and only the record_path is kept inline, so

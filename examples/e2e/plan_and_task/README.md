@@ -5,7 +5,7 @@ This example demonstrates an interactive plan→review→execute workflow using 
 ## Overview
 
 The workflow follows a structured lifecycle:
-1. **Draft Interview**: The agent interviews the user to build a draft plan (`DRAFT_INTERVIEW`).
+1. **Draft Interview**: The agent proactively drafts the plan — proposing a recommended choice per section and asking the user to confirm or redirect — rather than interrogating them (`DRAFT_INTERVIEW`).
 2. **Draft Reviews**: The draft must be approved by both an Advisor (`DRAFT_ADVISOR_REVIEW`) and a QA subagent (`DRAFT_QA_REVIEW`).
 3. **Write Plan**: Once QA approves the draft, the `DRAFT_QA_REVIEW` phase's `ApprovalGate` **automatically** routes the workflow to `WRITE_PLAN` and triggers a dedicated `plan_writer` subagent (equipped with the `writing-plans` skill) to convert the approved draft into a structured `workflow_plan.md`. No manual command is needed.
 4. **Plan QA Review**: When the plan writer finishes, the system **automatically** advances to `PLAN_QA_REVIEW` where QA reviews the final plan document.
@@ -38,6 +38,16 @@ The lifecycle is declared once as a phase graph (`PLAN_TASK_PHASE_GRAPH` in `pha
 - **Task Execution**: `TaskExec` handles plan loading, dependency resolution, and subagent dispatch.
 - **Slash Commands**: Dispatched via ECS `TriggerSpec` script handlers on `UserPromptConfigComponent`. Commands appear as transformed messages in conversation history.
 - **System Execution Order**: `UserInputSystem` runs at priority **-15** (before `UserPromptNormalizationSystem` at -10). This ensures the user's message is already in `ConversationComponent` when script handlers fire, so slash commands like `/task:start` are matched in the same tick they are entered.
+
+## Interactive `ask_question` Tool
+
+`ask_tool.py` installs an `ask_question` tool on the main agent (via `install_ask_question_tool(world, agent_id)` in `build_plan_task_world`) that lets the agent pause mid-turn and put structured questions to the user. It is the interview flow's primary way to ask: the planner system prompt directs the agent to put every proposal's confirm/tweak/redirect choice — and any genuinely open question — through `ask_question` rather than plain prose.
+
+- **Shape** — the agent passes 1-4 questions, each with a short `header`, the full `question` text, an optional `multi_select` flag, and 2-4 `options` (`{label, description}`); omitting `options` makes it a free-text question. Payloads are validated in `parse_questions`; a bad call returns an `Error: ...` string the model can correct.
+- **Mechanism** — the tool is UI-agnostic. Its handler publishes a `UserQuestionRequestedEvent` carrying an `asyncio.Future` and blocks on it; a front end presents the questions and resolves the future with the collected `QuestionAnswer` list (or `None` if dismissed). The tool is **not** `concurrency_safe`, so the concurrent tool executor treats it as a barrier — it never overlaps sibling tool calls. If no front end is attached (e.g. a non-interactive run), the handler fails fast (`EventBus.has_subscribers`) instead of hanging.
+- **TUI front end** — `PlanTaskTuiBridge` captures the future and the view model folds the event into a `question` `UiChange`; the app opens `QuestionScreen` (a `ModalScreen`) with radio groups, selection lists, and free-text fields. Submitting resolves the future via `bridge.submit_answers`; `Ctrl+Q`/quit resolves any pending question as dismissed so the world tick can settle.
+- **stdin front end** — `runtime.setup_interactive_input` subscribes the same event and prompts for each answer on the terminal (numbered choices for option questions, free text otherwise), so `ask_question` works identically in the REPL.
+- **Result** — answers return to the model as JSON `{answers: [{header, question, answer}]}`, where `answer` flattens the chosen label(s) and any custom text; a dismissed prompt returns `{cancelled: true, ...}`.
 
 ## Supported Commands
 
@@ -120,7 +130,8 @@ What it renders, all driven by the ECS event bus (design notes: `docs/plans/2026
 - **Sidebar** — the 13-phase graph with the current `PhaseComponent` phase highlighted, recorded review verdicts, the live task queue table (current task marked), and recent subagent activity.
 - **Status bar** — while the agent is busy, an animated spinner line above the usage bar shows the current activity (`waiting for model` / `thinking` / `generating` / `tool <name>` / `subagent <name>`); on its right, the count of tokens generated in the current turn ticks live. During streaming the count is estimated from streamed characters (CJK ≈ 1 token/char, other ≈ 4 chars/token, marked with `~`) and reconciles to the real `completion_tokens` when each invocation's usage record arrives. The bar hides while the agent waits for input.
 - **Usage bar** — cumulative tokens, cache hit-rate, and cost from `LLMInvocationEvent` accounting.
-- **Input** — single-line prompt with slash-command suggestions (derived from the world's registered `TriggerSpec`s). `Enter` submits; `exit`/`quit` or `Ctrl+Q` ends the session; `Ctrl+L` clears the transcript.
+- **Input** — single-line prompt with slash-command completion. Typing `/` opens a completion list directly above the input showing every matching command with its hint (argument shape + purpose, from each `TriggerSpec.description`); further typing narrows the list by prefix. `↑`/`↓` move the highlight, `Tab` (or `Enter` on a partial command) fills the highlighted command into the input with a trailing space, clicking an entry does the same, and `Esc` closes the list. `Enter` on a fully-typed command submits it; the inline grey suggestion (accept with `→`) stays available. `exit`/`quit` or `Ctrl+Q` ends the session; `Ctrl+L` clears the transcript.
+- **Question modal** — when the agent calls the `ask_question` tool (see [Interactive `ask_question` Tool](#interactive-ask_question-tool)), a centered modal presents its 1-4 questions: a radio group (single choice), a selection list (multi-select), or a free-text field, plus a free-text field on option questions for a custom "other" answer. `Enter` submits, `Ctrl+S` submits, `Esc` cancels; the collected answers resolve the tool call and the agent resumes. The stdin REPL handles the same tool by prompting for each answer on the terminal.
 - **Copy-on-select** — mouse-selecting text (transcript, sidebar panels, live tail) automatically copies it to the system clipboard and shows a brief `clipboard` toast. Selection in the transcript is character-precise (double-width CJK included) and highlights with the theme selection background; dragging into the blank area below the text selects to the end of the content. The clipboard write uses the OSC 52 escape sequence via Textual's `App.copy_to_clipboard`, which requires a terminal that accepts OSC 52 (kitty, Alacritty, WezTerm, iTerm2, recent VTE/GNOME Terminal; over SSH it reaches the local clipboard). The `Input` field keeps its own native selection and shortcuts and is not auto-copied.
 
 Implementation layout (`examples/e2e/plan_and_task/tui/`):
@@ -128,8 +139,8 @@ Implementation layout (`examples/e2e/plan_and_task/tui/`):
 | Module | Role |
 |---|---|
 | `view_model.py` | Pure reducer: ECS events → renderable state (no textual imports; unit-testable) |
-| `bridge.py` | Event-bus subscriptions → view model; owns the pending `UserInputRequestedEvent` future; mirrors the REPL re-arm loop of `runtime.py` |
-| `app.py` | Textual `App`: widgets, CSS layout, key bindings; consumes `UiChange` messages. Includes `SelectableRichLog` (text selection over `RichLog`) and the `on_text_selected` copy-on-select handler |
+| `bridge.py` | Event-bus subscriptions → view model; owns the pending `UserInputRequestedEvent` and `UserQuestionRequestedEvent` futures; mirrors the REPL re-arm loop of `runtime.py` |
+| `app.py` | Textual `App`: widgets, CSS layout, key bindings; consumes `UiChange` messages. Includes `SelectableRichLog` (text selection over `RichLog`), the `on_text_selected` copy-on-select handler, and `QuestionScreen` (the `ask_question` modal) |
 | `session.py` | Wires view model + bridge + app over a built world (shared by `__main__` and tests) |
 | `__main__.py` | Entrypoint: builds the world via `build_plan_task_world(...)`, runs `Runner.run` and `App.run_async` concurrently on one asyncio loop |
 
@@ -173,6 +184,12 @@ TUI coverage lives in `tests/integration/test_plan_and_task_tui.py`: pure view-m
 
 ```bash
 uv run pytest tests/integration/test_plan_and_task_tui.py -v
+```
+
+`ask_question` coverage lives in `tests/integration/test_plan_and_task_ask_tool.py`: `parse_questions`/`format_answers` validation, the handler's publish-and-await path (including the no-front-end and dismissed cases), view-model folding into a `question` `UiChange`, bridge `submit_answers`, `QuestionScreen` modal interaction (free-text, radio, cancel), and a full handler → bridge → modal round trip:
+
+```bash
+uv run pytest tests/integration/test_plan_and_task_ask_tool.py -v
 ```
 
 - `uv run pytest tests/integration/test_plan_and_task_flow.py -k "subagent"` — verifies subagent component wiring
@@ -314,7 +331,7 @@ This example explicitly enables logging in `main.py` when `DEBUG=1`; the base `e
 - **Testable World Factory**: `build_plan_task_world(model, base_dir=None, *, compaction_threshold_tokens=..., compaction_method=...)` is a public function that returns `(world, agent_id, adapter_ref, runtime_state)`, enabling direct world setup in tests without running the CLI. `adapter_ref` is a `list[ArtifactAdapter | None]` — starts as `[None]` and is populated in-place by the `/plan:start` handler after the workflow ID is derived.
 - **Framework-Native Auto Compaction**: `build_plan_task_world(...)` accepts `compaction_threshold_tokens` and `compaction_method`, installs `CompactionConfigComponent`, initializes `ConversationArchiveComponent`, and registers `CompactionSystem()` at priority `-30`. The example reuses the shared framework compaction pipeline rather than maintaining a bespoke plan-and-task summarizer.
 - **workflow_id Auto-Derivation**: `/plan:start <description>` calls `derive_workflow_id_from_llm()` to ask the LLM to generate a short, meaningful English slug from the description (e.g., `"writing-assistant-multi-agent"`). Falls back to `slug_from_description()` on provider error or invalid output. The derived ID controls the scratchbook directory for all subsequent operations in that session.
-- **Progressive Draft Editing**: The planning interview fills `draft.md` one section at a time using clean `read_file` output plus snapshot-protected `edit_file(op="replace", pos="<line-number>", content=...)` calls. The LLM reads the file first so the framework has a fresh internal snapshot, then replaces exactly the placeholder line or range. Full-file rewrites via `write_file` are explicitly prohibited by the system prompt.
+- **Proactive Draft Editing**: The planning agent drives `draft.md` one section per turn: it explores 2-3 options for the active section, writes its recommendation in place tagged `(proposed)`, and puts the choice to the user via the `ask_question` tool (recommendation plus alternatives as selectable options), only asking a genuine open question when a decision is high-stakes and under-determined. Edits use clean `read_file` output plus snapshot-protected `edit_file(op="replace", pos="<line-number>", content=...)` calls — the LLM reads first so the framework has a fresh internal snapshot, then replaces exactly the placeholder line or range. Full-file rewrites via `write_file` are explicitly prohibited by the system prompt.
 - **Atomic Writes**: All artifact updates use atomic file operations to prevent corruption.
 - **Circuit Breaker**: `TaskExec` blocks tasks whose `TaskRecord.retry_count` reaches the retry limit, preventing infinite loops on failing tasks.
 - **Review Gating**: Finalization is strictly blocked until `DRAFT_ADVISOR_REVIEW`, `DRAFT_QA_REVIEW`, and `PLAN_QA_REVIEW` all have `approved` verdicts.

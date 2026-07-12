@@ -20,12 +20,37 @@ from ecs_agent.types import (
     ReasoningCompleteEvent,
     UserInputRequestedEvent,
 )
+from examples.e2e.plan_and_task.ask_tool import (
+    QuestionAnswer,
+    UserQuestionRequestedEvent,
+)
 
 if TYPE_CHECKING:
     from ecs_agent.core import World
     from ecs_agent.types import EntityId
 
 logger = get_logger(__name__)
+
+
+def _parse_choice_indices(
+    raw: str, count: int, multi_select: bool
+) -> list[int] | None:
+    """Interpret ``raw`` as 1-based option numbers, or None if it is free text.
+
+    Multi-select accepts comma-separated numbers; single-select accepts one.
+    Any non-numeric or out-of-range token makes the whole answer free text.
+    """
+    tokens = raw.split(",") if multi_select else [raw]
+    indices: list[int] = []
+    for token in tokens:
+        stripped = token.strip()
+        if not stripped.isdigit():
+            return None
+        number = int(stripped)
+        if not (1 <= number <= count):
+            return None
+        indices.append(number - 1)
+    return indices or None
 
 _MAX_SLUG_LENGTH = 50
 _SLUG_SEPARATOR = "-"
@@ -163,6 +188,51 @@ async def setup_interactive_input(
                 event.input_future.set_result(user_text)
             return
 
+    async def provide_question_answers(event: UserQuestionRequestedEvent) -> None:
+        if event.entity_id != agent_id:
+            return
+        loop = asyncio.get_running_loop()
+        answers: list[QuestionAnswer] = []
+        print("\n── The agent is asking ──")
+        for number, question in enumerate(event.questions, start=1):
+            print(f"\n[{number}] {question.header}: {question.question}")
+            selected: list[str] = []
+            custom: str | None = None
+            if question.options:
+                for opt_number, option in enumerate(question.options, start=1):
+                    suffix = f" — {option.description}" if option.description else ""
+                    print(f"    {opt_number}. {option.label}{suffix}")
+                hint = "comma-separated numbers" if question.multi_select else "a number"
+                prompt = f"Choose {hint}, or type a custom answer: "
+            else:
+                prompt = "Your answer: "
+            raw = (await loop.run_in_executor(None, input, prompt)).strip()
+            if question.options and raw:
+                picks = _parse_choice_indices(
+                    raw, len(question.options), question.multi_select
+                )
+                if picks is not None:
+                    selected = [question.options[idx].label for idx in picks]
+                else:
+                    custom = raw
+            elif raw:
+                custom = raw
+            answers.append(
+                QuestionAnswer(
+                    header=question.header,
+                    question=question.question,
+                    selected=selected,
+                    custom_text=custom,
+                )
+            )
+        logger.info(
+            "plan_task_question_answered",
+            entity_id=int(agent_id),
+            question_count=len(event.questions),
+        )
+        if not event.answer_future.done():
+            event.answer_future.set_result(answers)
+
     async def on_reasoning_complete(event: ReasoningCompleteEvent) -> None:
         if event.entity_id != agent_id:
             return
@@ -174,6 +244,9 @@ async def setup_interactive_input(
         world.add_component(agent_id, UserInputComponent(prompt="You> "))
 
     world.event_bus.subscribe(UserInputRequestedEvent, provide_input)
+    world.event_bus.subscribe(
+        UserQuestionRequestedEvent, provide_question_answers
+    )
     world.event_bus.subscribe(ReasoningCompleteEvent, on_reasoning_complete)
     world.register_system(
         TerminalCleanupSystem(priority=1, clear_reasons=("reasoning_complete",)),

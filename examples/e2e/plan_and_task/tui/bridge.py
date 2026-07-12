@@ -39,6 +39,10 @@ from ecs_agent.types import (
     UserInputReceivedEvent,
     UserInputRequestedEvent,
 )
+from examples.e2e.plan_and_task.ask_tool import (
+    QuestionAnswer,
+    UserQuestionRequestedEvent,
+)
 from examples.e2e.plan_and_task.tui.view_model import PlanTaskViewModel, UiChange
 
 if TYPE_CHECKING:
@@ -79,6 +83,7 @@ _ROUTED_EVENTS = (
     LLMInvocationEvent,
     CompactionCompleteEvent,
     ErrorOccurredEvent,
+    UserQuestionRequestedEvent,
 )
 
 
@@ -99,11 +104,20 @@ class PlanTaskTuiBridge:
         self._runtime_state_ref = runtime_state_ref
         self._on_change = on_change
         self._pending_future: asyncio.Future[str] | None = None
+        self._pending_question_future: (
+            asyncio.Future[list[QuestionAnswer] | None] | None
+        ) = None
 
     @property
     def input_pending(self) -> bool:
         """True while the world is waiting on user input."""
         future = self._pending_future
+        return future is not None and not future.done()
+
+    @property
+    def question_pending(self) -> bool:
+        """True while the agent is blocked on an ``ask_question`` answer."""
+        future = self._pending_question_future
         return future is not None and not future.done()
 
     def attach(self) -> None:
@@ -112,6 +126,9 @@ class PlanTaskTuiBridge:
             self._world.event_bus.subscribe(event_type, self._route_event)
         self._world.event_bus.subscribe(
             UserInputRequestedEvent, self._on_input_requested
+        )
+        self._world.event_bus.subscribe(
+            UserQuestionRequestedEvent, self._on_question_requested
         )
         self._world.event_bus.subscribe(
             ReasoningCompleteEvent, self._on_reasoning_complete
@@ -151,6 +168,22 @@ class PlanTaskTuiBridge:
         self._on_change(UiChange(section="input"))
         return True
 
+    def submit_answers(
+        self, answers: list[QuestionAnswer] | None
+    ) -> bool:
+        """Resolve a pending ``ask_question`` future with the user's answers.
+
+        ``None`` signals the user dismissed the prompt. Returns False when no
+        question is currently awaiting an answer.
+        """
+        future = self._pending_question_future
+        if future is None or future.done():
+            return False
+        future.set_result(answers)
+        self._pending_question_future = None
+        self._on_change(UiChange(section="input"))
+        return True
+
     def request_quit(self) -> None:
         """Terminate the session regardless of pending input state."""
         logger.info("plan_task_tui_quit_requested", entity_id=int(self._agent_id))
@@ -161,6 +194,12 @@ class PlanTaskTuiBridge:
         if future is not None and not future.done():
             future.set_result("exit")
         self._pending_future = None
+        question_future = self._pending_question_future
+        if question_future is not None and not question_future.done():
+            # Unblock the ask_question handler so the world tick can settle
+            # before the runner tears down; None reads as "dismissed".
+            question_future.set_result(None)
+        self._pending_question_future = None
 
     # -- event handlers ---------------------------------------------------
 
@@ -177,6 +216,15 @@ class PlanTaskTuiBridge:
             return
         self._pending_future = event.input_future
         self._on_change(UiChange(section="input"))
+
+    async def _on_question_requested(
+        self, event: UserQuestionRequestedEvent
+    ) -> None:
+        if event.entity_id != self._agent_id:
+            return
+        # The view model (routed alongside) emits the UiChange that drives the
+        # modal; this handler only captures the future the modal resolves.
+        self._pending_question_future = event.answer_future
 
     async def _on_reasoning_complete(self, event: ReasoningCompleteEvent) -> None:
         if event.entity_id != self._agent_id:
