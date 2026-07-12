@@ -48,7 +48,9 @@ def build_subagent_schema(tool_name: str, *, free_mode_enabled: bool) -> ToolSch
             "  stream             — when background=True, mirror child-world streaming events onto the "
             "                       parent EventBus as session-scoped SubagentStream* telemetry.\n"
             "  timeout            — max seconds to wait before aborting (null = no limit).\n\n"
-            "RETURNS (sync): final answer string from the subagent.\n"
+            "RETURNS (sync): final answer string from the subagent. This IS the complete "
+            "result. No session is created for synchronous calls, so never call "
+            "subagent_result/subagent_status for them.\n"
             "RETURNS (background): JSON {session_id, status, category, lifecycle_status}.\n\n"
             "EXAMPLES:\n"
             "  // Synchronous — block until done\n"
@@ -98,7 +100,8 @@ def build_status_schema() -> ToolSchema:
         name="subagent_status",
         description=(
             "Check the status of background subagent sessions. Use this to decide when "
-            "to call subagent_result.\n\n"
+            "to call subagent_result. Only background=True calls create sessions; "
+            "synchronous subagent calls return their answer directly and have no session.\n\n"
             "WHEN TO CALL:\n"
             "  - After launching one or more background subagents (background=True) to see "
             "    which have succeeded and which are still running.\n"
@@ -124,6 +127,7 @@ def build_status_schema() -> ToolSchema:
             },
             "required": [],
         },
+        concurrency_safe=True,
     )
 
 
@@ -172,7 +176,9 @@ def build_result_schema() -> ToolSchema:
     return ToolSchema(
         name="subagent_result",
         description=(
-            "Block until a background subagent session finishes, then return its result.\n\n"
+            "Block until a background subagent session finishes, then return its result. "
+            "Only background=True calls create sessions; a synchronous subagent call "
+            "already returned its complete answer — do not call this for it.\n\n"
             "WHEN TO CALL:\n"
             "  - After launching a subagent with background=True and you are ready to use "
             "    its output.\n"
