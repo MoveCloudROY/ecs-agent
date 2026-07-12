@@ -15,7 +15,8 @@ The lifecycle is declared once as a phase graph (`PLAN_TASK_PHASE_GRAPH` in `pha
 
 ## Architecture
 
-- **Built-in Tools** — The main agent has `read_file`, `write_file`, `edit_file`, `bash`, and `glob` tools pre-installed via `BuiltinToolsSkill`, workspace-bound to the example directory. `read_file` returns clean content, while `edit_file` keeps its original `op`/`pos`/`end`/`content` signature with `pos`/`end` as 1-based file line numbers validated against framework-managed internal snapshots. The main agent has unrestricted access to all these tools.
+- **Built-in Tools** — The main agent has `read_file`, `write_file`, `edit_file`, `bash`, `glob`, and `webfetch` tools pre-installed via `BuiltinToolsSkill`, workspace-bound to the example directory. `read_file` returns clean content, while `edit_file` keeps its original `op`/`pos`/`end`/`content` signature with `pos`/`end` as 1-based file line numbers validated against framework-managed internal snapshots. The main agent has unrestricted access to all these tools.
+- **Web Search (optional)** — When `BRAVE_API_KEY` is set, `build_plan_task_world` installs `WebSearchSkill` on the main agent, adding a `web_search` tool (Brave Search API) that is advertised to the interviewer through `${_installed_tools}` like any other built-in tool. It lets the planner ground its draft proposals — scope, requirements, constraints — in current facts, and stays available across every phase the main agent drives. Without the key the tool is simply omitted and the workflow runs unchanged (the always-on `webfetch` tool remains available for fetching a known URL).
 - **Subagent Tool Permissions** — `advisor`, `qa`, and `plan_qa` review subagents inherit only `read_file` and `glob` (read-only) via `InheritancePolicy(inherit_tools=["read_file", "glob"], inherit_permissions=True)`. They cannot write files or run shell commands. `plan_writer` inherits `read_file`, `write_file`, `edit_file`, and `glob` since it must produce the final plan document.
 - **Two Distinct QA Subagents** — Draft QA (`qa`) and Plan QA (`plan_qa`) are registered as separate subagents with separate system prompts and separate transition paths in the phase graph:
   - `qa` uses `QA_SYSTEM_PROMPT` (draft review lens) and routes `DelegationCompletedEvent` → `controller.handle_qa_review()` → `DRAFT_QA_REVIEW` verdict.
@@ -226,6 +227,7 @@ uv run pytest tests/live/test_plan_and_task_flow_live.py::test_anthropic_plan_ta
 ## Environment Variables
 
 - `LLM_API_KEY`: API key for the chosen provider.
+- `BRAVE_API_KEY`: Optional [Brave Search](https://brave.com/search/api/) API key. When set, the main agent gains a `web_search` tool for grounding draft proposals in current facts; when unset, the tool is omitted and the workflow runs unchanged.
 - `LLM_BASE_URL`: API base URL (defaults to DashScope Responses API: `https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1`).
 - `LLM_MODEL`: Model ID (defaults to `qwen3.5-flash`).
 - `LLM_API_FORMAT`: Provider/format selector. Accepted values:

@@ -46,6 +46,7 @@ from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.tools import BuiltinToolsSkill
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.discovery import discover_skills
+from ecs_agent.skills.web_search import WebSearchSkill
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
@@ -362,6 +363,14 @@ async def build_plan_task_world(
         agent_id,
         _FilteredBuiltinToolsSkill(_builtin_skill, excluded_tools={"explore"}),
     )
+
+    # Optional web search (Brave Search API). Gated on BRAVE_API_KEY so the
+    # example still runs without a key; when the key is present the `web_search`
+    # tool is advertised to the interviewer through `${_installed_tools}`, like
+    # any other built-in tool, and is available across every phase the main
+    # agent drives (interview, review orchestration, task execution).
+    if os.environ.get("BRAVE_API_KEY"):
+        SkillManager().install(world, agent_id, WebSearchSkill())
 
     world.add_component(agent_id, SubagentSessionTableComponent(sessions={}))
     world.add_component(
