@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
@@ -13,6 +14,7 @@ from ecs_agent.components import (
     PendingToolCallsComponent,
     PlanComponent,
     SandboxConfigComponent,
+    ToolExecutionConfigComponent,
     ToolRegistryComponent,
     ToolResultsComponent,
 )
@@ -31,9 +33,37 @@ from ecs_agent.types import (
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
     ToolResultCachedEvent,
+    ToolSchema,
 )
 
 logger = get_logger(__name__)
+
+
+def _plan_execution_groups(
+    tool_calls: list[ToolCall],
+    tools: dict[str, ToolSchema],
+) -> list[list[ToolCall]]:
+    """Split a batch into ordered groups; calls within a group may run concurrently.
+
+    Consecutive calls whose schema declares ``concurrency_safe`` share a group.
+    Every other call (mutating tools, unknown tools) forms a singleton group,
+    acting as a barrier: it starts only after earlier calls finished and blocks
+    later calls until it returns.
+    """
+    groups: list[list[ToolCall]] = []
+    safe_run: list[ToolCall] = []
+    for tool_call in tool_calls:
+        schema = tools.get(tool_call.name)
+        if schema is not None and schema.concurrency_safe:
+            safe_run.append(tool_call)
+            continue
+        if safe_run:
+            groups.append(safe_run)
+            safe_run = []
+        groups.append([tool_call])
+    if safe_run:
+        groups.append(safe_run)
+    return groups
 
 
 class ToolExecutionSystem:
@@ -74,93 +104,167 @@ class ToolExecutionSystem:
                     entity_id=entity_id,
                 )
 
-            for tool_call in pending.tool_calls:
-                start_time = time.monotonic()
-                tool_start_time = datetime.now(timezone.utc)
-                await world.event_bus.publish(
-                    ToolExecutionStartedEvent(
-                        entity_id=entity_id,
-                        tool_call=tool_call,
-                        start_time=tool_start_time,
-                    )
-                )
+            config = world.get_component(entity_id, ToolExecutionConfigComponent)
+            if config is None:
+                config = ToolExecutionConfigComponent()
+            max_concurrency = max(1, config.max_concurrency)
 
-                result = await self._execute_tool_call(
+            # Execute group by group: within a group calls run concurrently,
+            # groups are barriers.  Results land strictly in the original
+            # tool_calls order so conversation appends stay deterministic.
+            for group in _plan_execution_groups(pending.tool_calls, registry.tools):
+                group_results = await self._execute_group(
                     entity_id,
                     world,
-                    tool_call,
+                    group,
                     registry.handlers,
+                    max_concurrency,
                 )
-
-                success = not result.startswith("Error")
-                tool_end_time = datetime.now(timezone.utc)
-                await world.event_bus.publish(
-                    ToolExecutionCompletedEvent(
-                        entity_id=entity_id,
-                        tool_call_id=tool_call.id,
-                        result=result,
-                        success=success,
-                        tool_name=tool_call.name,
-                        duration_seconds=time.monotonic() - start_time,
-                        start_time=tool_start_time,
-                        end_time=tool_end_time,
-                    )
-                )
-
-                persisted_record_path: str | None = None
-                if self.tool_sink is not None:
-                    persist_result = self.tool_sink.persist_tool_result(
-                        tool_call_id=tool_call.id,
-                        tool_name=tool_call.name,
-                        result=result,
-                        arguments=tool_call.arguments,
-                    )
-                    persisted_record_path = persist_result.record_path
-                    results[tool_call.id] = persist_result.record_path
-                    conversation.messages.append(
-                        Message(
-                            role="tool",
-                            content=persist_result.record_path,
-                            tool_call_id=tool_call.id,
-                        )
-                    )
-                    await self._cache_overflowed_tool_result(
+                for tool_call, result in zip(group, group_results):
+                    await self._land_result(
                         world=world,
                         entity_id=entity_id,
                         conversation=conversation,
                         tool_call=tool_call,
                         result=result,
-                        artifact_path=persist_result.record_path,
+                        results=results,
+                        plan_name=plan_name,
                     )
-                else:
-                    results[tool_call.id] = result
-                    conversation.messages.append(
-                        Message(role="tool", content=result, tool_call_id=tool_call.id)
-                    )
-
-                if self._registry is not None and plan_name is not None:
-                    if success:
-                        updates: dict[str, str] = {
-                            "status": "running",
-                            "last_tool_call_id": tool_call.id,
-                        }
-                        if persisted_record_path is not None:
-                            updates["last_tool_record_path"] = persisted_record_path
-                        await self._registry.update_boulder(
-                            plan_name=plan_name, updates=updates
-                        )
-                    else:
-                        await self._registry.update_boulder(
-                            plan_name=plan_name,
-                            updates={
-                                "status": "tool_failed",
-                                "last_error": result,
-                            },
-                        )
 
             world.remove_component(entity_id, PendingToolCallsComponent)
             if results:
                 world.add_component(entity_id, ToolResultsComponent(results=results))
+
+    async def _execute_group(
+        self,
+        entity_id: EntityId,
+        world: World,
+        group: list[ToolCall],
+        handlers: dict[str, Callable[..., Awaitable[str]]],
+        max_concurrency: int,
+    ) -> list[str]:
+        """Execute one group, concurrently when it holds multiple safe calls."""
+        if len(group) == 1 or max_concurrency == 1:
+            return [
+                await self._execute_with_events(entity_id, world, tool_call, handlers)
+                for tool_call in group
+            ]
+
+        semaphore = asyncio.Semaphore(max_concurrency)
+
+        async def bounded(tool_call: ToolCall) -> str:
+            async with semaphore:
+                return await self._execute_with_events(
+                    entity_id, world, tool_call, handlers
+                )
+
+        async with asyncio.TaskGroup() as task_group:
+            tasks = [task_group.create_task(bounded(tool_call)) for tool_call in group]
+        return [task.result() for task in tasks]
+
+    async def _execute_with_events(
+        self,
+        entity_id: EntityId,
+        world: World,
+        tool_call: ToolCall,
+        handlers: dict[str, Callable[..., Awaitable[str]]],
+    ) -> str:
+        start_monotonic = time.monotonic()
+        tool_start_time = datetime.now(timezone.utc)
+        await world.event_bus.publish(
+            ToolExecutionStartedEvent(
+                entity_id=entity_id,
+                tool_call=tool_call,
+                start_time=tool_start_time,
+            )
+        )
+
+        result = await self._execute_tool_call(
+            entity_id,
+            world,
+            tool_call,
+            handlers,
+        )
+
+        success = not result.startswith("Error")
+        tool_end_time = datetime.now(timezone.utc)
+        await world.event_bus.publish(
+            ToolExecutionCompletedEvent(
+                entity_id=entity_id,
+                tool_call_id=tool_call.id,
+                result=result,
+                success=success,
+                tool_name=tool_call.name,
+                duration_seconds=time.monotonic() - start_monotonic,
+                start_time=tool_start_time,
+                end_time=tool_end_time,
+            )
+        )
+        return result
+
+    async def _land_result(
+        self,
+        *,
+        world: World,
+        entity_id: EntityId,
+        conversation: ConversationComponent,
+        tool_call: ToolCall,
+        result: str,
+        results: dict[str, str],
+        plan_name: str | None,
+    ) -> None:
+        """Record one result: persistence, conversation append, plan updates."""
+        success = not result.startswith("Error")
+        persisted_record_path: str | None = None
+        if self.tool_sink is not None:
+            persist_result = self.tool_sink.persist_tool_result(
+                tool_call_id=tool_call.id,
+                tool_name=tool_call.name,
+                result=result,
+                arguments=tool_call.arguments,
+            )
+            persisted_record_path = persist_result.record_path
+            results[tool_call.id] = persist_result.record_path
+            conversation.messages.append(
+                Message(
+                    role="tool",
+                    content=persist_result.record_path,
+                    tool_call_id=tool_call.id,
+                )
+            )
+            await self._cache_overflowed_tool_result(
+                world=world,
+                entity_id=entity_id,
+                conversation=conversation,
+                tool_call=tool_call,
+                result=result,
+                artifact_path=persist_result.record_path,
+            )
+        else:
+            results[tool_call.id] = result
+            conversation.messages.append(
+                Message(role="tool", content=result, tool_call_id=tool_call.id)
+            )
+
+        if self._registry is not None and plan_name is not None:
+            if success:
+                updates: dict[str, str] = {
+                    "status": "running",
+                    "last_tool_call_id": tool_call.id,
+                }
+                if persisted_record_path is not None:
+                    updates["last_tool_record_path"] = persisted_record_path
+                await self._registry.update_boulder(
+                    plan_name=plan_name, updates=updates
+                )
+            else:
+                await self._registry.update_boulder(
+                    plan_name=plan_name,
+                    updates={
+                        "status": "tool_failed",
+                        "last_error": result,
+                    },
+                )
 
     async def _execute_tool_call(
         self,

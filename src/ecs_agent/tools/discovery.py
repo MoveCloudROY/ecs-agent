@@ -118,6 +118,7 @@ def _create_async_handler(fn: Callable[..., Any]) -> Callable[..., Awaitable[str
 def tool(
     name: str | None = None,
     description: str | None = None,
+    concurrency_safe: bool = False,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         tool_name = name or fn.__name__
@@ -128,6 +129,7 @@ def tool(
             name=tool_name,
             description=tool_description,
             parameters=_build_parameters_schema(fn),
+            concurrency_safe=concurrency_safe,
         )
         handler = _create_async_handler(fn)
 

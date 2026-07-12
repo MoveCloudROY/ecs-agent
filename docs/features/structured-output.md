@@ -76,6 +76,15 @@ if __name__ == "__main__":
 
 - **Pydantic**: Requires `pydantic >= 2.0.0` for model validation and schema generation.
 
+## Responses API
+
+The same `response_format` value also works with `ApiFormat.OPENAI_RESPONSES`.
+The `/v1/responses` endpoint does not accept the top-level `response_format`
+parameter, so the adapter translates it into the Responses-native
+`text.format` block (and flattens the `json_schema` nesting) automatically —
+see [Responses API › Structured Output](./responses-api.md#structured-output).
+You pass the exact same helper output regardless of `api_format`.
+
 ## Caveats
 
 - **Streaming**: Structured output is **NOT** compatible with streaming (`stream=True`). If you need JSON-formatted responses, you must wait for the full completion to finish.

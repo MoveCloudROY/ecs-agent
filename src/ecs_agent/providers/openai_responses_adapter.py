@@ -116,12 +116,15 @@ class OpenAIResponsesAdapter:
             msg = error.get("message", "unknown error")
             raise ValueError(f"Responses API returned failed status: [{code}] {msg}")
 
-        message = self._parse_responses_output(response_data.get("output", []))
+        output_items = response_data.get("output", [])
+        message = self._parse_responses_output(output_items)
+        reasoning_content = self._extract_reasoning_summary(output_items)
         usage = self._facade._usage_from_raw(response_data.get("usage"))
         return CompletionResult(
             message=message,
             usage=usage,
             response_id=resolved_response_id,
+            reasoning_content=reasoning_content,
         )
 
     async def stream(
@@ -231,6 +234,10 @@ class OpenAIResponsesAdapter:
                         "id": item.get("call_id") or item.get("id"),
                         "name": item.get("name"),
                         "arguments": "",
+                        # Tracks whether any text delta was streamed for this
+                        # item so the done handler can recover text from
+                        # gateways that omit deltas without duplicating it.
+                        "text_emitted": False,
                     }
                     continue
 
@@ -246,6 +253,7 @@ class OpenAIResponsesAdapter:
                     if delta_type == "content_delta":
                         text = delta.get("text")
                         if isinstance(text, str) and text:
+                            item_data["text_emitted"] = True
                             yield StreamDelta(content=text)
                     elif delta_type == "arguments_delta":
                         arguments = delta.get("arguments")
@@ -256,9 +264,21 @@ class OpenAIResponsesAdapter:
                 # Standard OpenAI Responses dialect: "delta" is a plain string
                 # (the block above handles the object-shaped legacy dialect).
                 if event_type == "response.output_text.delta":
+                    output_index = event_data.get("output_index", 0)
                     text_delta = event_data.get("delta")
                     if isinstance(text_delta, str) and text_delta:
+                        if output_index in output_items:
+                            output_items[output_index]["text_emitted"] = True
                         yield StreamDelta(content=text_delta)
+                    continue
+
+                # Reasoning models stream their summary as a separate channel;
+                # surface it as reasoning_content so callers can split it from
+                # the user-facing answer (mirrors Chat's reasoning_content).
+                if event_type == "response.reasoning_summary_text.delta":
+                    reasoning_delta = event_data.get("delta")
+                    if isinstance(reasoning_delta, str) and reasoning_delta:
+                        yield StreamDelta(reasoning_content=reasoning_delta)
                     continue
 
                 if event_type == "response.function_call_arguments.delta":
@@ -314,6 +334,17 @@ class OpenAIResponsesAdapter:
                                     )
                                 ]
                             )
+                    elif (
+                        item_data.get("type") == "message"
+                        and not item_data.get("text_emitted")
+                        and isinstance(done_item, dict)
+                    ):
+                        # No text deltas streamed: recover the message text from
+                        # the terminal item so delta-less gateways aren't silent.
+                        done_text = self._done_item_text(done_item)
+                        if done_text:
+                            item_data["text_emitted"] = True
+                            yield StreamDelta(content=done_text)
                     continue
 
                 if event_type in ("response.done", "response.completed"):
@@ -331,6 +362,25 @@ class OpenAIResponsesAdapter:
                         response_id=current_response_id,
                     )
                     break
+
+    def _done_item_text(self, done_item: dict[str, Any]) -> str:
+        """Concatenate the text of a message output_item.done payload.
+
+        Used only when a message arrives without any streamed text deltas, so
+        the accumulated content can be recovered from the terminal item.
+        """
+        content = done_item.get("content")
+        if not isinstance(content, list):
+            return ""
+        texts: list[str] = []
+        for content_item in content:
+            if not isinstance(content_item, dict):
+                continue
+            if content_item.get("type") in {"output_text", "text"}:
+                text = content_item.get("text")
+                if isinstance(text, str) and text:
+                    texts.append(text)
+        return "".join(texts)
 
     def _build_request_body(
         self,
@@ -351,7 +401,9 @@ class OpenAIResponsesAdapter:
         if tools is not None:
             request_body["tools"] = self._facade._convert_tools_to_responses(tools)
         if response_format is not None:
-            request_body["response_format"] = response_format
+            text_format = self._response_format_to_text(response_format)
+            if text_format is not None:
+                request_body["text"] = text_format
         # Only chain to a prior response when storage is enabled: with
         # store=false the referenced response was never persisted server-side,
         # and providers reject previous_response_id for unstored responses.
@@ -364,6 +416,66 @@ class OpenAIResponsesAdapter:
         ):
             request_body["previous_response_id"] = previous_response_id
         return request_body
+
+    def _response_format_to_text(
+        self, response_format: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Translate a Chat-Completions response_format into a Responses text block.
+
+        The Responses API configures structured output via ``text.format``, not
+        the top-level ``response_format`` parameter. The ``json_schema`` variant
+        is also flattened: Chat nests ``{name, schema, strict}`` under a
+        ``json_schema`` key, while Responses expects them alongside ``type``
+        inside ``format``. A format already in the flattened Responses shape (or
+        a bare ``json_object`` / ``text``) passes through unchanged.
+        """
+        format_type = response_format.get("type")
+        if not isinstance(format_type, str):
+            return None
+
+        if format_type == "json_schema":
+            inner = response_format.get("json_schema")
+            if isinstance(inner, dict):
+                flattened: dict[str, Any] = {"type": "json_schema"}
+                name = inner.get("name")
+                if isinstance(name, str):
+                    flattened["name"] = name
+                if "schema" in inner:
+                    flattened["schema"] = inner["schema"]
+                if "strict" in inner:
+                    flattened["strict"] = inner["strict"]
+                return {"format": flattened}
+
+        return {"format": dict(response_format)}
+
+    def _extract_reasoning_summary(self, output_items: Any) -> str | None:
+        """Join the summary_text of any reasoning output items, or None.
+
+        The Responses API returns model reasoning as ``type: "reasoning"``
+        output items whose ``summary`` is a list of ``summary_text`` blocks.
+        Chat Completions surfaces the same signal via ``reasoning_content``, so
+        callers see it uniformly on ``CompletionResult.reasoning_content``.
+        """
+        if not isinstance(output_items, list):
+            return None
+
+        texts: list[str] = []
+        for output_item in output_items:
+            if not isinstance(output_item, dict):
+                continue
+            if output_item.get("type") != "reasoning":
+                continue
+            summary = output_item.get("summary")
+            if not isinstance(summary, list):
+                continue
+            for entry in summary:
+                if not isinstance(entry, dict):
+                    continue
+                text = entry.get("text")
+                if isinstance(text, str) and text:
+                    texts.append(text)
+
+        return "\n".join(texts) if texts else None
 
     def _should_retry_without_previous_response_id(
         self, exc: httpx.HTTPStatusError, request_body: dict[str, Any]
@@ -379,7 +491,33 @@ class OpenAIResponsesAdapter:
             return False
         if exc.response.status_code != 400:
             return False
-        return "previous_response_id" in exc.response.text
+        return self._blames_previous_response_id(exc.response.text)
+
+    def _blames_previous_response_id(self, body_text: str) -> bool:
+        """True when a 400 body attributes the failure to previous_response_id.
+
+        Prefers the structured OpenAI error shape (``error.param`` /
+        ``error.message`` / ``error.code``) so an unrelated 400 that merely
+        echoes the id elsewhere in the payload does not trigger a needless
+        retry. Falls back to a raw substring scan only for gateways that return
+        a non-JSON error body.
+        """
+        token = "previous_response_id"
+        try:
+            parsed = json.loads(body_text)
+        except (json.JSONDecodeError, ValueError):
+            return token in body_text
+
+        error = parsed.get("error") if isinstance(parsed, dict) else None
+        if not isinstance(error, dict):
+            return token in body_text
+
+        if error.get("param") == token:
+            return True
+        return any(
+            isinstance(error.get(field), str) and token in error[field]
+            for field in ("message", "code")
+        )
 
     def _request_body_without_previous_response_id(
         self, request_body: dict[str, Any], exc: httpx.HTTPStatusError

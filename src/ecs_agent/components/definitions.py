@@ -227,6 +227,17 @@ class SandboxConfigComponent:
 
 
 @dataclass(slots=True)
+class ToolExecutionConfigComponent:
+    """Concurrency limits for one entity's tool call batches.
+
+    ``max_concurrency`` bounds how many concurrency-safe tool calls run
+    at once; 1 restores fully serial execution.
+    """
+
+    max_concurrency: int = 8
+
+
+@dataclass(slots=True)
 class PlanSearchComponent:
     """MCTS tree search configuration."""
 

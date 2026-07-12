@@ -1276,3 +1276,16 @@ def test_file_tool_schemas_accept_numeric_strings_and_numbers() -> None:
     edit_props = edit_schema.parameters.get("properties", {})
     assert edit_props["pos"]["type"] == ["integer", "string"]
     assert edit_props["end"]["type"] == ["integer", "string", "null"]
+
+
+def test_builtin_read_only_tools_are_concurrency_safe(tmp_path: Path) -> None:
+    skill = BuiltinToolsSkill().bind_workspace(str(tmp_path / "workspace"))
+    tools = {name: schema for name, (schema, _handler) in skill.tools().items()}
+
+    read_only = ("read_file", "grep", "glob", "explore", "webfetch")
+    for name in read_only:
+        assert tools[name].concurrency_safe is True, name
+
+    mutating = ("write_file", "edit_file", "bash", "interactive_bash", "code_execution")
+    for name in mutating:
+        assert tools[name].concurrency_safe is False, name

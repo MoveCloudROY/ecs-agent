@@ -30,7 +30,8 @@ def _validate_path(file_path: str, workspace_root: str) -> Path:
     description=(
         "Read clean UTF-8 file content from workspace. "
         "Always specify offset and limit to avoid reading oversized files."
-    )
+    ),
+    concurrency_safe=True,
 )
 async def read_file(
     file_path: Annotated[str, "Workspace-relative path to the file to read."],

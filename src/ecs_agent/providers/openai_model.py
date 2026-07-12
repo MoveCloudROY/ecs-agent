@@ -72,6 +72,43 @@ class OpenAIModel:
             return self._chat_adapter.stream(messages, tools, response_format)
         return await self._chat_adapter.complete(messages, tools, response_format)
 
+    async def _responses_stream_with_fallback(
+        self,
+        messages: list[Message],
+        tools: list[ToolSchema] | None,
+        response_format: dict[str, Any] | None,
+        thread_response_id: str | None,
+    ) -> AsyncIterator[StreamDelta]:
+        """Stream via the Responses API, falling back to Chat on a 404.
+
+        Mirrors the non-streaming path: the adapter's ``raise_for_status``
+        fires before any delta is yielded, so a 404 (endpoint does not
+        implement Responses) latches the format off and replays the request
+        against Chat Completions. The ``started`` guard refuses to fall back
+        once real output has flowed, so partial responses are never duplicated.
+        """
+        stream = self._responses_adapter.stream(
+            messages, tools, response_format, thread_response_id
+        )
+        started = False
+        try:
+            async for delta in stream:
+                started = True
+                yield delta
+        except httpx.HTTPStatusError as exc:
+            if started or not self._should_fallback_from_responses(exc):
+                raise
+            self._responses_api_available = False
+            logger.info(
+                "responses_api_fallback",
+                status_code=exc.response.status_code,
+                endpoint=f"{self._base_url}/responses",
+            )
+            async for delta in self._chat_adapter.stream(
+                messages, tools, response_format
+            ):
+                yield delta
+
     async def complete(
         self,
         messages: list[Message],
@@ -89,7 +126,7 @@ class OpenAIModel:
                 )
 
             if stream:
-                return self._responses_adapter.stream(
+                return self._responses_stream_with_fallback(
                     messages,
                     tools,
                     response_format,

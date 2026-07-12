@@ -159,6 +159,20 @@ async def test_publish_unsubscribed_event_type_is_silent_noop() -> None:
     await bus.publish(OtherEvent(name="unused"))
 
 
+def test_has_subscribers_reflects_registration() -> None:
+    bus = EventBus()
+
+    async def handler(event: SampleEvent) -> None:
+        _ = event
+
+    assert not bus.has_subscribers(SampleEvent)
+    bus.subscribe(SampleEvent, handler)
+    assert bus.has_subscribers(SampleEvent)
+    assert not bus.has_subscribers(OtherEvent)
+    bus.unsubscribe(SampleEvent, handler)
+    assert not bus.has_subscribers(SampleEvent)
+
+
 @pytest.mark.asyncio
 async def test_clear_removes_all_subscriptions() -> None:
     bus = EventBus()

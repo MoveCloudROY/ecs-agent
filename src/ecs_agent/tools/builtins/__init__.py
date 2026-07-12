@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
@@ -27,15 +28,13 @@ logger = get_logger(__name__)
 
 def _hide_internal_schema_params(schema: ToolSchema) -> ToolSchema:
     params = schema.parameters
-    return ToolSchema(
-        name=schema.name,
-        description=schema.description,
+    return replace(
+        schema,
         parameters={
             "type": params.get("type", "object"),
             "properties": dict(params.get("properties", {})),
             "required": list(params.get("required", [])),
         },
-        sandbox_compatible=schema.sandbox_compatible,
     )
 
 
@@ -96,15 +95,13 @@ class BuiltinToolsSkill(ScriptSkill):
                 for r in params.get("required", [])
                 if r != "workspace_root"
             ]
-            new_schema = ToolSchema(
-                name=schema.name,
-                description=schema.description,
+            new_schema = replace(
+                schema,
                 parameters={
                     "type": params.get("type", "object"),
                     "properties": filtered_props,
                     "required": filtered_required,
                 },
-                sandbox_compatible=schema.sandbox_compatible,
             )
 
             if has_workspace_root or uses_snapshot_state:

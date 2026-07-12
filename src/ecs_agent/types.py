@@ -136,12 +136,19 @@ class ConversationBranch:
 
 @dataclass(slots=True)
 class ToolSchema:
-    """Describes the schema of a tool."""
+    """Describes the schema of a tool.
+
+    ``concurrency_safe`` declares that the tool has no side effects that
+    conflict with other tools in the same batch (read-only file access,
+    pure lookups).  ToolExecutionSystem runs consecutive concurrency-safe
+    calls concurrently; unsafe calls act as barriers and run alone.
+    """
 
     name: str
     description: str
     parameters: dict[str, Any]
     sandbox_compatible: bool = False
+    concurrency_safe: bool = False
 
 
 TodoStatus = Literal["pending", "in_progress", "completed"]

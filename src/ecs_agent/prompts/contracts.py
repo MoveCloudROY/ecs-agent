@@ -52,6 +52,9 @@ class TriggerSpec:
     action: Literal["replace", "inject", "script"]
     content: str
     priority: int = 0
+    # Human-facing hint for the trigger (e.g. argument shape + purpose of a
+    # slash command), surfaced by frontends such as completion lists.
+    description: str = ""
 
 
 @dataclass(slots=True)

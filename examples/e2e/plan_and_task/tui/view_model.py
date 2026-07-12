@@ -35,6 +35,10 @@ from ecs_agent.types import (
     UserInputReceivedEvent,
     UserInputRequestedEvent,
 )
+from examples.e2e.plan_and_task.ask_tool import (
+    AskQuestion,
+    UserQuestionRequestedEvent,
+)
 
 if TYPE_CHECKING:
     from examples.e2e.plan_and_task.state_models import RuntimeState
@@ -63,6 +67,7 @@ Section = Literal[
     "notify",
     "input",
     "status",
+    "question",
 ]
 
 Activity = Literal["idle", "waiting", "thinking", "generating", "tool", "subagent"]
@@ -107,6 +112,7 @@ class UiChange:
     entries: list[TranscriptEntry] = field(default_factory=list)
     notification: str | None = None
     severity: Literal["information", "warning", "error"] = "information"
+    questions: list[AskQuestion] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -230,6 +236,17 @@ class PlanTaskViewModel:
             case UserInputRequestedEvent() if event.entity_id == self.agent_id:
                 self.busy = False
                 return self._set_activity("idle")
+            case UserQuestionRequestedEvent() if event.entity_id == self.agent_id:
+                headers = ", ".join(q.header for q in event.questions)
+                changes = self._append(
+                    TranscriptEntry(
+                        kind="system", text=f"asking you: {headers}"
+                    )
+                )
+                changes.append(
+                    UiChange(section="question", questions=list(event.questions))
+                )
+                return changes
             case PromptReplacementEvent() if (
                 event.entity_id == self.agent_id
                 and event.prompt_kind == "user"

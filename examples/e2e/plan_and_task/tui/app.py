@@ -8,6 +8,7 @@ updates arrive through :meth:`PlanTaskTuiApp.dispatch_change`, which posts a
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Protocol
 
 from rich.cells import cell_len
@@ -18,13 +19,29 @@ from rich.style import Style as RichStyle
 from rich.text import Text
 from textual import events, on
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.message import Message
+from textual.screen import ModalScreen
 from textual.selection import Selection
 from textual.strip import Strip
 from textual.suggester import SuggestFromList
-from textual.widgets import DataTable, Footer, Header, Input, RichLog, Static
+from textual.widgets import (
+    Button,
+    DataTable,
+    Footer,
+    Header,
+    Input,
+    OptionList,
+    RadioSet,
+    RichLog,
+    SelectionList,
+    Static,
+)
+from textual.widgets.option_list import Option
+from textual.widgets.selection_list import Selection as ListSelection
 
+from examples.e2e.plan_and_task.ask_tool import AskQuestion, QuestionAnswer
 from examples.e2e.plan_and_task.tui.view_model import (
     PlanTaskViewModel,
     TranscriptEntry,
@@ -37,11 +54,26 @@ class InputSink(Protocol):
 
     def submit_input(self, text: str) -> bool: ...
 
+    def submit_answers(self, answers: list[QuestionAnswer] | None) -> bool: ...
+
     def request_quit(self) -> None: ...
 
 
 class CommandInput(Input):
-    """Single-line prompt with slash-command suggestions."""
+    """Single-line prompt with slash-command suggestions and completion.
+
+    Completion-list navigation keys (up/down/tab/enter/escape) are offered to
+    the app first; anything the completion list does not consume falls through
+    to the regular ``Input`` behavior.
+    """
+
+    async def _on_key(self, event: events.Key) -> None:
+        app = self.app
+        if isinstance(app, PlanTaskTuiApp) and app.handle_completion_key(event.key):
+            event.stop()
+            event.prevent_default()
+            return
+        await super()._on_key(event)
 
 
 class SelectableRichLog(RichLog):
@@ -115,6 +147,210 @@ class SelectableRichLog(RichLog):
             selected.cell_length,
         )
         return Strip.join([before, highlighted, after])
+
+
+class QuestionScreen(ModalScreen[list[QuestionAnswer] | None]):
+    """Modal that puts the agent's ``ask_question`` questions to the user.
+
+    Renders each question as either a radio group (single choice), a selection
+    list (multi-select), or a free-text field, plus a free-text field on option
+    questions so the user can add an "other" answer. Dismisses with the list of
+    :class:`QuestionAnswer` on submit, or ``None`` when cancelled.
+    """
+
+    CSS = """
+    QuestionScreen {
+        align: center middle;
+    }
+    #question-dialog {
+        width: 80;
+        max-width: 95%;
+        height: auto;
+        max-height: 90%;
+        border: round $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #question-title {
+        height: auto;
+        text-style: bold;
+        color: $accent;
+        margin-bottom: 1;
+    }
+    /* The body is the only flexible region: it takes the space left between the
+       title and the pinned footer/buttons and scrolls when content overflows,
+       so the Submit/Cancel buttons are always on screen. */
+    #question-body {
+        height: 1fr;
+        min-height: 3;
+    }
+    .question-header {
+        height: auto;
+        text-style: bold;
+        color: $accent;
+        margin-top: 1;
+    }
+    .question-text {
+        height: auto;
+        margin-bottom: 1;
+    }
+    /* Option descriptions render here as full, wrapping text (radio/selection
+       labels are single-line and would truncate long descriptions). */
+    .option-legend {
+        height: auto;
+        color: $text-muted;
+        margin: 0 0 1 1;
+    }
+    #question-body RadioSet, #question-body SelectionList {
+        height: auto;
+        width: 1fr;
+    }
+    #question-body Input {
+        margin-bottom: 1;
+    }
+    #question-hint {
+        height: auto;
+        color: $text-muted;
+        margin-top: 1;
+    }
+    #question-buttons {
+        height: auto;
+        align-horizontal: right;
+    }
+    #question-buttons Button {
+        margin-left: 2;
+    }
+    """
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+        ("ctrl+s", "submit", "Submit"),
+    ]
+
+    def __init__(self, questions: list[AskQuestion]) -> None:
+        super().__init__()
+        self._questions = questions
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="question-dialog"):
+            yield Static("The agent needs your input", id="question-title")
+            with VerticalScroll(id="question-body"):
+                for index, question in enumerate(self._questions):
+                    yield Static(question.header, classes="question-header")
+                    yield Static(question.question, classes="question-text")
+                    if question.options and question.multi_select:
+                        yield SelectionList[int](
+                            *[
+                                ListSelection(option.label, opt_index)
+                                for opt_index, option in enumerate(question.options)
+                            ],
+                            id=f"q{index}-select",
+                        )
+                        yield from self._option_legend(question)
+                    elif question.options:
+                        yield RadioSet(
+                            *[option.label for option in question.options],
+                            id=f"q{index}-radio",
+                        )
+                        yield from self._option_legend(question)
+                    yield Input(
+                        placeholder=(
+                            "type a custom answer…"
+                            if question.options
+                            else "type your answer…"
+                        ),
+                        id=f"q{index}-input",
+                    )
+            yield Static(
+                "Submit button or Ctrl+S to send · Esc to cancel", id="question-hint"
+            )
+            with Horizontal(id="question-buttons"):
+                yield Button("Cancel", id="cancel")
+                yield Button("Submit", variant="primary", id="submit")
+
+    @staticmethod
+    def _option_legend(question: AskQuestion) -> Iterator[Static]:
+        """Full, wrapping descriptions for a question's options.
+
+        Radio/selection labels are single-line and truncate, so descriptions
+        are shown here in a wrapping ``Static`` legend instead of on the
+        control itself. Yields nothing when no option has a description.
+        """
+        if not any(option.description for option in question.options):
+            return
+        legend = Text()
+        for option in question.options:
+            if not option.description:
+                continue
+            legend.append(f"• {option.label}: ", style="bold")
+            legend.append(f"{option.description}\n")
+        yield Static(legend, classes="option-legend")
+
+    def on_mount(self) -> None:
+        # Focus the first interactive control so keyboard use works immediately
+        # (arrows to pick options, Enter to submit); fall back to the input.
+        focusables = self.query("RadioSet, SelectionList, Input")
+        if focusables:
+            focusables.first().focus()
+
+    @on(Button.Pressed, "#submit")
+    def _on_submit_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_submit()
+
+    @on(Button.Pressed, "#cancel")
+    def _on_cancel_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.action_cancel()
+
+    @on(Input.Submitted)
+    def _on_input_submitted(self, event: Input.Submitted) -> None:
+        # Enter inside a field submits the whole form; keep it from bubbling to
+        # the main command input underneath the modal.
+        event.stop()
+        self.action_submit()
+
+    def action_submit(self) -> None:
+        # Always dismiss, even if answer collection hits an unexpected widget
+        # error: a modal that fails to dismiss would leave the ask_question
+        # future unresolved and hang the agent loop forever.
+        self.dismiss(self._collect_answers())
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def _collect_answers(self) -> list[QuestionAnswer]:
+        answers: list[QuestionAnswer] = []
+        for index, question in enumerate(self._questions):
+            selected = self._collect_selection(index, question)
+            try:
+                custom = self.query_one(f"#q{index}-input", Input).value.strip()
+            except NoMatches:
+                custom = ""
+            answers.append(
+                QuestionAnswer(
+                    header=question.header,
+                    question=question.question,
+                    selected=selected,
+                    custom_text=custom or None,
+                )
+            )
+        return answers
+
+    def _collect_selection(self, index: int, question: AskQuestion) -> list[str]:
+        try:
+            if question.options and question.multi_select:
+                widget = self.query_one(f"#q{index}-select", SelectionList)
+                return [
+                    question.options[value].label for value in sorted(widget.selected)
+                ]
+            if question.options:
+                radio = self.query_one(f"#q{index}-radio", RadioSet)
+                if radio.pressed_index >= 0:
+                    return [question.options[radio.pressed_index].label]
+        except (NoMatches, IndexError):
+            return []
+        return []
 
 
 class VmChanged(Message):
@@ -206,6 +442,13 @@ class PlanTaskTuiApp(App[None]):
         background: $surface;
         color: $text-muted;
     }
+    #command-list {
+        display: none;
+        height: auto;
+        max-height: 8;
+        border: round $accent 50%;
+        background: $surface;
+    }
     CommandInput {
         border: round $accent;
     }
@@ -220,8 +463,9 @@ class PlanTaskTuiApp(App[None]):
         self,
         view_model: PlanTaskViewModel,
         sink: InputSink,
-        commands: tuple[str, ...] = (),
+        commands: tuple[tuple[str, str], ...] = (),
     ) -> None:
+        """``commands`` holds ``(pattern, hint)`` pairs for the completion list."""
         super().__init__()
         self._vm = view_model
         self._sink = sink
@@ -249,10 +493,10 @@ class PlanTaskTuiApp(App[None]):
             yield Static(id="status-label")
             yield Static(id="status-tokens")
         yield Static(id="usage-bar")
+        yield OptionList(id="command-list")
+        patterns = [pattern for pattern, _ in self._commands]
         suggester = (
-            SuggestFromList(self._commands, case_sensitive=False)
-            if self._commands
-            else None
+            SuggestFromList(patterns, case_sensitive=False) if patterns else None
         )
         yield CommandInput(
             placeholder=_WAITING_PLACEHOLDER,
@@ -263,6 +507,9 @@ class PlanTaskTuiApp(App[None]):
     def on_mount(self) -> None:
         table = self.query_one("#task-table", DataTable)
         table.add_columns("task", "status", "retry")
+        # The list is driven from the input; keeping it unfocusable stops tab
+        # cycling and option clicks from stealing focus from the prompt.
+        self.query_one("#command-list", OptionList).can_focus = False
         self._render_phases()
         self._render_reviews()
         self._render_subagents()
@@ -307,6 +554,8 @@ class PlanTaskTuiApp(App[None]):
                 self._render_input_state()
             case "status":
                 self._render_status()
+            case "question":
+                self._push_question(change.questions)
             case "notify":
                 if change.notification is not None:
                     self.notify(change.notification, severity=change.severity)
@@ -316,6 +565,101 @@ class PlanTaskTuiApp(App[None]):
         if self._sink.submit_input(event.value):
             field = self.query_one(CommandInput)
             field.value = ""
+
+    # -- ask_question modal --------------------------------------------------
+
+    def _push_question(self, questions: list[AskQuestion]) -> None:
+        """Open the question modal; its result flows back to the sink."""
+        if not questions:
+            return
+        self.push_screen(QuestionScreen(questions), self._on_question_answered)
+
+    def _on_question_answered(self, answers: list[QuestionAnswer] | None) -> None:
+        self._sink.submit_answers(answers)
+
+    # -- slash-command completion ---------------------------------------------
+
+    @on(Input.Changed)
+    def _handle_input_changed(self, event: Input.Changed) -> None:
+        self._refresh_command_list(event.value)
+
+    @on(OptionList.OptionSelected, "#command-list")
+    def _handle_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_id is not None:
+            self._accept_completion(event.option_id)
+
+    def handle_completion_key(self, key: str) -> bool:
+        """Handle a navigation key for the completion list.
+
+        Returns True when the key was consumed. Called by ``CommandInput``
+        before its own key handling so enter can complete instead of submit.
+        """
+        option_list = self.query_one("#command-list", OptionList)
+        if not option_list.display:
+            return False
+        if key == "escape":
+            option_list.display = False
+            return True
+        if key in ("down", "up"):
+            if option_list.option_count:
+                step = 1 if key == "down" else -1
+                current = option_list.highlighted or 0
+                option_list.highlighted = (
+                    current + step
+                ) % option_list.option_count
+            return True
+        if key in ("tab", "enter"):
+            pattern = self._highlighted_command(option_list)
+            if pattern is None:
+                option_list.display = False
+                return key == "tab"
+            if key == "enter" and self.query_one(CommandInput).value.strip() == pattern:
+                # The command is already fully typed: let the submit proceed.
+                option_list.display = False
+                return False
+            self._accept_completion(pattern)
+            return True
+        return False
+
+    def _matching_commands(self, text: str) -> list[tuple[str, str]]:
+        if not text.startswith("/"):
+            return []
+        lowered = text.lower()
+        return [
+            (pattern, hint)
+            for pattern, hint in self._commands
+            if pattern.startswith(lowered)
+        ]
+
+    def _refresh_command_list(self, text: str) -> None:
+        option_list = self.query_one("#command-list", OptionList)
+        matches = self._matching_commands(text)
+        option_list.clear_options()
+        if not matches:
+            option_list.display = False
+            return
+        for pattern, hint in matches:
+            label = Text(pattern, style="bold")
+            if hint:
+                label.append(f"  {hint}", style="dim")
+            option_list.add_option(Option(label, id=pattern))
+        option_list.highlighted = 0
+        option_list.display = True
+
+    def _highlighted_command(self, option_list: OptionList) -> str | None:
+        index = option_list.highlighted
+        if index is None or not option_list.option_count:
+            return None
+        return option_list.get_option_at_index(index).id
+
+    def _accept_completion(self, pattern: str) -> None:
+        field = self.query_one(CommandInput)
+        # Trailing space so argument-taking commands are ready for input; the
+        # completed value is no longer a prefix of any pattern, which closes
+        # the list via the Input.Changed refresh.
+        field.value = f"{pattern} "
+        field.cursor_position = len(field.value)
+        field.focus()
 
     def on_text_selected(self, event: events.TextSelected) -> None:
         """Copy-on-select: mirror the selection to the clipboard (OSC 52).

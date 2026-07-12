@@ -30,11 +30,16 @@ class TuiSession:
     view_model: PlanTaskViewModel
 
 
-def _slash_commands(world: World, agent_id: EntityId) -> tuple[str, ...]:
+def _slash_commands(world: World, agent_id: EntityId) -> tuple[tuple[str, str], ...]:
     prompt_config = world.get_component(agent_id, UserPromptConfigComponent)
     if prompt_config is None:
         return ()
-    return tuple(sorted(trigger.pattern for trigger in prompt_config.triggers))
+    return tuple(
+        sorted(
+            (trigger.pattern, trigger.description)
+            for trigger in prompt_config.triggers
+        )
+    )
 
 
 def create_tui_session(

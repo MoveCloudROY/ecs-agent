@@ -182,3 +182,23 @@ def test_decorated_functions_are_registered_in_module_registry() -> None:
     schema = getattr(registry_tool, "_tool_schema")
     assert "registry_test" in _TOOL_REGISTRY
     assert _TOOL_REGISTRY["registry_test"] == schema
+
+
+def test_tool_decorator_sets_concurrency_safe_flag() -> None:
+    @tool(name="parallel_probe", description="Probe", concurrency_safe=True)
+    async def parallel_probe() -> str:
+        return "ok"
+
+    schema = getattr(parallel_probe, "_tool_schema")
+    assert isinstance(schema, ToolSchema)
+    assert schema.concurrency_safe is True
+
+
+def test_tool_decorator_defaults_to_serial_execution() -> None:
+    @tool(name="serial_probe", description="Probe")
+    async def serial_probe() -> str:
+        return "ok"
+
+    schema = getattr(serial_probe, "_tool_schema")
+    assert isinstance(schema, ToolSchema)
+    assert schema.concurrency_safe is False

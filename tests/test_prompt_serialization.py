@@ -75,6 +75,40 @@ def test_prompt_config_component_roundtrip() -> None:
     assert config2.context_pool_max_chars == 16384
 
 
+def test_trigger_spec_description_defaults_empty_and_roundtrips() -> None:
+    assert TriggerSpec(
+        pattern="/x", match_mode="prefix", action="script", content="x"
+    ).description == ""
+
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        UserPromptConfigComponent(
+            triggers=[
+                TriggerSpec(
+                    pattern="/plan:start",
+                    match_mode="prefix",
+                    action="script",
+                    content="plan_start",
+                    description="<description> — start a new planning workflow",
+                )
+            ]
+        ),
+    )
+
+    data = WorldSerializer.to_dict(world)
+    world2 = WorldSerializer.from_dict(
+        data, providers={"default": DummyProvider()}, tool_handlers={}
+    )
+
+    config2 = world2.get_component(entity, UserPromptConfigComponent)
+    assert config2 is not None
+    assert config2.triggers[0].description == (
+        "<description> — start a new planning workflow"
+    )
+
+
 def test_prompt_context_queue_component_roundtrip() -> None:
     world = World()
     entity = world.create_entity()

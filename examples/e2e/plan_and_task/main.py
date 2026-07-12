@@ -66,6 +66,7 @@ from ecs_agent.types import (
 )
 
 from ecs_agent.accounting import AccountingSubscriber
+from examples.e2e.plan_and_task.ask_tool import install_ask_question_tool
 from examples.e2e.plan_and_task.billing import BillingSubscriber
 from examples.e2e.plan_and_task.scratchbook_adapter import (
     PlanTaskScratchbookAdapter as ArtifactAdapter,
@@ -98,6 +99,13 @@ logger = get_logger(__name__)
 
 _VERDICT_PATTERN = _re.compile(
     r"\b(" + "|".join(REVIEW_VERDICTS) + r")\b", _re.IGNORECASE
+)
+# Reviewer prompts end replies with a `VERDICT: <token>` line. Prose may
+# legitimately contain verdict words (e.g. "blocked by a missing mitigation"
+# in a FAIL reason), so the marker line takes precedence over a bare-word scan.
+_VERDICT_LINE_PATTERN = _re.compile(
+    r"^[ \t]*verdict[ \t]*:[ \t]*(" + "|".join(REVIEW_VERDICTS) + r")\b",
+    _re.IGNORECASE | _re.MULTILINE,
 )
 
 _WORKFLOW_BASE_DIR = Path(__file__).parent
@@ -164,6 +172,9 @@ async def install_plan_task_langfuse_observability(
 
 
 def _extract_verdict_from_result(result: str) -> str:
+    marker_matches: list[str] = _VERDICT_LINE_PATTERN.findall(result)
+    if marker_matches:
+        return marker_matches[-1].lower()
     match = _VERDICT_PATTERN.search(result)
     if match is None:
         logger.warning(
@@ -910,15 +921,30 @@ async def build_plan_task_world(
         "task_replan": _handle_task_replan,
         "task_abort": _handle_task_abort,
     }
+    command_hints: dict[str, str] = {
+        "plan_start": "<description> — start a new planning workflow",
+        "plan_resume": "<workflow_id> — resume a persisted workflow",
+        "plan_status": "show current plan status",
+        "plan_finalize": "finalize the reviewed plan",
+        "plan_write": "convert the approved draft into workflow_plan.md",
+        "plan_qa_review": "<approved|revise|blocked> [notes] — record plan QA verdict",
+        "task_start": "[workflow_id] — initialize the task queue and run",
+        "task_status": "show task queue status",
+        "task_resume": "[workflow_id] — resume task execution",
+        "task_replan": "<reason> — replan the remaining tasks",
+        "task_abort": "abort task execution",
+    }
     # Each command's slash pattern derives from its handler key by turning the
     # FIRST underscore into a colon: plan_start -> /plan:start, plan_qa_review
-    # -> /plan:qa_review. Keep new commands in script_handlers above only.
+    # -> /plan:qa_review. Keep new commands in script_handlers above only, with
+    # a matching completion hint in command_hints.
     triggers = [
         TriggerSpec(
             pattern="/" + name.replace("_", ":", 1),
             match_mode="prefix",
             action="script",
             content=name,
+            description=command_hints.get(name, ""),
         )
         for name in script_handlers
     ]
@@ -938,6 +964,9 @@ async def build_plan_task_world(
     world.register_system(subagent_system, priority=-1)
     subagent_system.install_subagent_tool(world, agent_id, tool_name="subagent")
     subagent_system.install_subagent_control_tools(world, agent_id)
+    # Interactive clarification tool: pauses the turn to put structured
+    # questions to the user (surfaced by the TUI modal or the stdin runtime).
+    install_ask_question_tool(world, agent_id)
     world.register_system(ReasoningSystem(priority=0), priority=0)
     # ISSUE-3: with the tool sink on, large tool outputs are written to
     # scratchbook/records/tool/<id> and only the record_path is kept inline, so
@@ -989,11 +1018,19 @@ def build_model_from_env() -> LLMModel:
         api_format = ApiFormat.OPENAI_CHAT_COMPLETIONS
     logger.info("using_model", model_name=model_name, api_format=api_format)
     print(f"Using model: {model_name}")
-    # LLM_ENABLE_STORE=0 disables stored-response chaining (previous_response_id)
-    # for gateways that reject it over plain HTTP Responses API.
-    store_enabled = os.environ.get("LLM_ENABLE_STORE", "1").lower() not in (
-        "0",
-        "false",
+    # Stored-response chaining (previous_response_id) is OFF by default.
+    # This workflow is human-in-the-loop: `ask_question` and the input prompt
+    # can pause a turn for minutes, during which a server-side stored response
+    # can expire. The Responses stream sets no read timeout, so a gateway that
+    # then stalls on the stale chain hangs the turn indefinitely (the loop
+    # appears to abort after the user finally answers). Chaining saves no tokens
+    # here — the adapter always sends the full history in `input` — so it stays
+    # off unless a gateway is known to benefit. Set LLM_ENABLE_STORE=1 to opt in.
+    store_enabled = os.environ.get("LLM_ENABLE_STORE", "0").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
     )
     return Model(
         model_name,

@@ -2484,6 +2484,39 @@ def test_extract_verdict_defaults_to_revise_on_no_match() -> None:
     assert result == "revise"
 
 
+def test_extract_verdict_prefers_verdict_marker_line_over_earlier_prose() -> None:
+    """A `VERDICT: <token>` line wins over verdict words appearing in prose.
+
+    Reviewer checklists legitimately contain words like "blocked" in FAIL
+    reasons; only the marker line is the machine-readable decision.
+    """
+    from examples.e2e.plan_and_task.main import _extract_verdict_from_result
+
+    result = _extract_verdict_from_result(
+        "2. RISKS — FAIL: progress is blocked by a missing mitigation.\n"
+        "All other items PASS.\n"
+        "VERDICT: revise"
+    )
+    assert result == "revise"
+
+
+def test_extract_verdict_uses_last_marker_line() -> None:
+    from examples.e2e.plan_and_task.main import _extract_verdict_from_result
+
+    result = _extract_verdict_from_result(
+        "Earlier draft said VERDICT: revise\n"
+        "After re-checking the fixes:\n"
+        "verdict: approved"
+    )
+    assert result == "approved"
+
+
+def test_extract_verdict_marker_is_case_insensitive() -> None:
+    from examples.e2e.plan_and_task.main import _extract_verdict_from_result
+
+    assert _extract_verdict_from_result("Verdict: Blocked") == "blocked"
+
+
 @pytest.mark.asyncio
 async def test_delegation_completed_event_records_advisor_verdict(
     tmp_path: Path,
@@ -2692,6 +2725,38 @@ def test_plan_interview_system_prompt_defines_interview_flow() -> None:
     # Must reference the draft.md file specifically
     assert "draft.md" in PLAN_INTERVIEW_SYSTEM_PROMPT, (
         "System prompt must reference draft.md as the file to edit progressively"
+    )
+
+
+def test_plan_interview_system_prompt_is_proactive_not_interrogative() -> None:
+    """Draft phase must proactively propose/recommend per section, not ask the user everything.
+
+    Verifies fix for: draft agent being passive and interrogating the user for
+    every section instead of exploring options and recommending choices.
+    """
+    from examples.e2e.plan_and_task.prompts import PLAN_INTERVIEW_SYSTEM_PROMPT
+
+    prompt_lower = PLAN_INTERVIEW_SYSTEM_PROMPT.lower()
+    # Proactive stance: the agent recommends/proposes content, not merely questions.
+    assert any(
+        word in prompt_lower for word in ("propose", "recommend")
+    ), "Draft prompt must instruct the agent to propose/recommend content per section"
+    # Unconfirmed proposals must be tagged so advisor/QA can audit assumptions.
+    assert "(proposed)" in prompt_lower, (
+        "Draft prompt must tag unconfirmed proposals so reviewers can spot assumptions"
+    )
+    # Must NOT revert to the old passive one-question-at-a-time interrogation.
+    assert "ask one question at a time" not in prompt_lower, (
+        "Draft prompt must not instruct passive one-question-at-a-time interviewing"
+    )
+    # User still steers: a confirm / redirect loop must remain.
+    assert "confirm" in prompt_lower and (
+        "redirect" in prompt_lower or "tweak" in prompt_lower
+    ), "Draft prompt must keep a user confirm/redirect loop"
+    # Choices are presented via the structured ask_question tool, not free prose,
+    # so the recommendation + alternatives are selectable by the user.
+    assert "ask_question" in prompt_lower, (
+        "Draft prompt must route the confirm/choose step through the ask_question tool"
     )
 
 

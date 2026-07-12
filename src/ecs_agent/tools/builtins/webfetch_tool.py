@@ -12,7 +12,10 @@ from ecs_agent.tools.discovery import tool
 logger = get_logger(__name__)
 
 
-@tool(description="Fetch content from a URL and return the response body as text.")
+@tool(
+    description="Fetch content from a URL and return the response body as text.",
+    concurrency_safe=True,
+)
 async def webfetch(
     url: Annotated[str, "The URL to fetch."],
     timeout: Annotated[float, "Request timeout in seconds."] = 30.0,

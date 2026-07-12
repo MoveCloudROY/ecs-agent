@@ -40,22 +40,30 @@ The `scan_module` function automatically discovers tool-decorated functions in a
 
 ### The `@tool` Decorator
 
+The parameters schema is derived from the function signature and type hints
+(`Annotated[str, "description"]` adds per-parameter descriptions).
+
 ```python
+from typing import Annotated
+
 from ecs_agent.tools import tool
 
-@tool(
-    name="calculate",
-    description="Perform arithmetic calculations",
-    parameters={
-        "type": "object",
-        "properties": {
-            "expression": {"type": "string", "description": "Math expression to evaluate"}
-        },
-        "required": ["expression"]
-    }
-)
-async def calculate(expression: str) -> str:
+@tool(name="calculate", description="Perform arithmetic calculations")
+async def calculate(
+    expression: Annotated[str, "Math expression to evaluate"],
+) -> str:
     return str(eval(expression))
+```
+
+Tools without conflicting side effects (pure lookups, read-only access) can opt
+into concurrent execution. `ToolExecutionSystem` runs consecutive
+`concurrency_safe` calls of one batch in parallel and lands results in the
+original order; unmarked tools stay serial barriers.
+
+```python
+@tool(description="Look up a city's weather.", concurrency_safe=True)
+async def lookup_weather(city: Annotated[str, "City name."]) -> str:
+    ...
 ```
 
 ### Scanning a Module

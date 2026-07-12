@@ -34,6 +34,17 @@ Tool results from `BuiltinToolsSkill` are automatically collected into the **One
 This keeps the agent's skill list clean: `BuiltinToolsSkill` is infrastructure,
 not a user-facing capability the LLM should reason about.
 
+## Concurrency
+
+The read-only tools — `read_file`, `grep`, `glob`, `explore`, `webfetch` — are
+declared `concurrency_safe` in their schemas. When the model batches several of
+them in one response, `ToolExecutionSystem` executes them concurrently and lands
+the results in the original call order. Mutating tools (`write_file`,
+`edit_file`, `bash`, `interactive_bash`, `code_execution`) stay serial and act
+as barriers within a batch. See the ToolExecutionSystem section in
+[`docs/systems.md`](../systems.md) for the grouping rules and the
+`ToolExecutionConfigComponent(max_concurrency=...)` bound.
+
 
 ## Installation
 

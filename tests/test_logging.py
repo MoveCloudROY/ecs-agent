@@ -1008,7 +1008,7 @@ class TestToolExecutionLogging:
             ConversationComponent,
         )
         from ecs_agent.systems.tool_execution import ToolExecutionSystem
-        from ecs_agent.types import ToolCall, Message
+        from ecs_agent.types import ToolCall, Message, ToolSchema
 
         world = World()
         entity = world.create_entity()
@@ -1027,7 +1027,14 @@ class TestToolExecutionLogging:
         world.add_component(
             entity,
             ToolRegistryComponent(
-                tools={"test_tool": {}}, handlers={"test_tool": test_tool}
+                tools={
+                    "test_tool": ToolSchema(
+                        name="test_tool",
+                        description="Test tool",
+                        parameters={"type": "object"},
+                    )
+                },
+                handlers={"test_tool": test_tool},
             ),
         )
         world.add_component(entity, ConversationComponent(messages=[]))
@@ -1064,7 +1071,7 @@ class TestToolExecutionLogging:
             ConversationComponent,
         )
         from ecs_agent.systems.tool_execution import ToolExecutionSystem
-        from ecs_agent.types import ToolCall, Message
+        from ecs_agent.types import ToolCall, Message, ToolSchema
 
         world = World()
         entity = world.create_entity()
@@ -1083,7 +1090,14 @@ class TestToolExecutionLogging:
         world.add_component(
             entity,
             ToolRegistryComponent(
-                tools={"test_tool": {}}, handlers={"test_tool": test_tool}
+                tools={
+                    "test_tool": ToolSchema(
+                        name="test_tool",
+                        description="Test tool",
+                        parameters={"type": "object"},
+                    )
+                },
+                handlers={"test_tool": test_tool},
             ),
         )
         world.add_component(entity, ConversationComponent(messages=[]))
@@ -1125,7 +1139,7 @@ class TestToolExecutionLogging:
             ConversationComponent,
         )
         from ecs_agent.systems.tool_execution import ToolExecutionSystem
-        from ecs_agent.types import ToolCall, Message
+        from ecs_agent.types import ToolCall, Message, ToolSchema
 
         world = World()
         entity = world.create_entity()
@@ -1144,7 +1158,14 @@ class TestToolExecutionLogging:
         world.add_component(
             entity,
             ToolRegistryComponent(
-                tools={"failing_tool": {}}, handlers={"failing_tool": failing_tool}
+                tools={
+                    "failing_tool": ToolSchema(
+                        name="failing_tool",
+                        description="Failing tool",
+                        parameters={"type": "object"},
+                    )
+                },
+                handlers={"failing_tool": failing_tool},
             ),
         )
         world.add_component(entity, ConversationComponent(messages=[]))
@@ -1183,7 +1204,7 @@ class TestToolExecutionLogging:
             ConversationComponent,
         )
         from ecs_agent.systems.tool_execution import ToolExecutionSystem
-        from ecs_agent.types import ToolCall, Message
+        from ecs_agent.types import ToolCall, Message, ToolSchema
 
         world = World()
         entity = world.create_entity()
@@ -1703,7 +1724,7 @@ class TestLoggingLevelPolicy:
             ConversationComponent,
         )
         from ecs_agent.systems.tool_execution import ToolExecutionSystem
-        from ecs_agent.types import ToolCall, Message
+        from ecs_agent.types import ToolCall, Message, ToolSchema
 
         world = World()
         entity = world.create_entity()
