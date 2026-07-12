@@ -940,6 +940,41 @@ async def test_streaming_timeout_uses_read_none_and_custom_values() -> None:
     assert timeout.pool == 6.0
 
 
+@pytest.mark.asyncio
+async def test_streaming_read_timeout_opt_in_bounds_the_stall_window() -> None:
+    """stream_read_timeout, when set, is the streaming per-chunk read timeout.
+
+    Mirrors OpenAIModel: a stall detector that resets on every byte (so a live
+    stream is never cut off) yet fails a silently dead connection instead of
+    hanging the turn forever — independent of the whole-request read_timeout.
+    """
+    lines: list[str] = []
+    lines.extend(_anthropic_sse("message_start", {"type": "message_start"}))
+    lines.extend(_anthropic_sse("message_stop", {"type": "message_stop"}))
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(
+        return_value=_MockStreamContext(_MockStreamResponse(lines))
+    )
+
+    model = ClaudeModel(
+        config=_anthropic_config(api_key="test-key"),
+        read_timeout=90.0,
+        stream_read_timeout=30.0,
+    )
+    model._client = mock_client
+
+    stream_iter = await model.complete(
+        messages=[Message(role="user", content="hello")],
+        stream=True,
+    )
+    _ = [delta async for delta in stream_iter]
+
+    timeout = mock_client.stream.call_args[1]["timeout"]
+    # The stall window is the opt-in value, not the 90s whole-request read.
+    assert timeout.read == 30.0
+
+
 # ---------------------------------------------------------------------------
 # ISSUE-1: Anthropic prompt-caching breakpoints
 # ---------------------------------------------------------------------------

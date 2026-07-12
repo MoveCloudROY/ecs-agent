@@ -32,6 +32,7 @@ class _OpenAIModelFacade(Protocol):
     _model: str
     _client: httpx.AsyncClient
     _timeout: httpx.Timeout
+    _stream_read_timeout: float | None
     _responses_api_available: bool | None
     _provider_config: ProviderConfig
 
@@ -143,9 +144,16 @@ class OpenAIResponsesAdapter:
         request_body["stream"] = True
 
         url = f"{self._facade._base_url}/responses"
+        # read defaults to None (unbounded) so a legitimately slow stream is
+        # never cut off. When stream_read_timeout is set it acts as a stall
+        # detector: httpx's read timeout is per-chunk and resets whenever any
+        # byte arrives, so it only fires when the connection goes silent for the
+        # whole window — turning a gateway that stalls (e.g. on a resumed turn
+        # after a long ask_question pause) from an unrecoverable hang into a
+        # normal error the caller can surface.
         timeout = httpx.Timeout(
             connect=self._facade._timeout.connect,
-            read=None,
+            read=self._facade._stream_read_timeout,
             write=self._facade._timeout.write,
             pool=self._facade._timeout.pool,
         )

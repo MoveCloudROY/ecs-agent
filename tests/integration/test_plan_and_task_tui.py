@@ -161,6 +161,19 @@ class TestViewModelTranscript:
         assert "boom" in vm.transcript[0].text
         assert any(c.section == "notify" for c in changes)
 
+    def test_error_event_clears_busy_spinner(self) -> None:
+        # A failed turn hands control back to the user, so the spinner must stop
+        # now rather than animate for a tick until the prompt re-arm fires.
+        vm = make_vm()
+        vm.busy = True
+        vm.activity = "generating"
+        changes = vm.apply_event(
+            ErrorOccurredEvent(entity_id=AGENT, error="boom", system_name="Reasoning")
+        )
+        assert not vm.busy
+        assert vm.activity == "idle"
+        assert any(c.section == "status" for c in changes)
+
 
 class TestViewModelTools:
     def test_tool_lifecycle_appends_call_and_result(self) -> None:

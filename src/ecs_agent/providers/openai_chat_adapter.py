@@ -28,6 +28,7 @@ class _OpenAIModelFacade(Protocol):
     _model: str
     _client: httpx.AsyncClient
     _timeout: httpx.Timeout
+    _stream_read_timeout: float | None
 
     def _build_headers(self) -> dict[str, str]: ...
 
@@ -88,9 +89,13 @@ class OpenAIChatAdapter:
         # counts incl. cached_tokens) when explicitly requested.
         stream_body["stream_options"] = {"include_usage": True}
 
+        # read defaults to None (unbounded); an opt-in stream_read_timeout acts
+        # as a stall detector that resets on every chunk, so a live stream is
+        # never cut off while a silently stalled connection fails instead of
+        # hanging forever. See the matching note in OpenAIResponsesAdapter.stream.
         timeout = httpx.Timeout(
             connect=self._facade._timeout.connect,
-            read=None,
+            read=self._facade._stream_read_timeout,
             write=self._facade._timeout.write,
             pool=self._facade._timeout.pool,
         )

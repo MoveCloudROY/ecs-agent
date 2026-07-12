@@ -297,6 +297,53 @@ class TestBridgeQuestion:
         assert future.done()
         assert future.result() is None
 
+    async def test_agent_error_rearms_input_prompt(self) -> None:
+        """A failed turn re-arms the prompt so the user regains control.
+
+        Without this the resumed call would be silently re-invoked every tick
+        (spinner forever) because a reasoning error fires no
+        ReasoningCompleteEvent and leaves no pending tool calls.
+        """
+        from ecs_agent.components import UserInputComponent
+        from ecs_agent.types import ErrorOccurredEvent
+
+        world, agent_id, _vm, _bridge, _seen = await self._build()
+        # Mark the current prompt consumed: the agent is mid-turn, not idle.
+        consumed = world.get_component(agent_id, UserInputComponent)
+        assert consumed is not None
+        consumed.result = "hi"
+
+        await world.event_bus.publish(
+            ErrorOccurredEvent(
+                entity_id=agent_id, error="boom", system_name="ReasoningSystem"
+            )
+        )
+
+        rearmed = world.get_component(agent_id, UserInputComponent)
+        assert rearmed is not None
+        assert rearmed.result is None
+
+    async def test_agent_error_for_other_entity_ignored(self) -> None:
+        from ecs_agent.components import UserInputComponent
+        from ecs_agent.types import ErrorOccurredEvent
+
+        world, agent_id, _vm, _bridge, _seen = await self._build()
+        consumed = world.get_component(agent_id, UserInputComponent)
+        assert consumed is not None
+        consumed.result = "hi"
+
+        await world.event_bus.publish(
+            ErrorOccurredEvent(
+                entity_id=EntityId(999), error="boom", system_name="ReasoningSystem"
+            )
+        )
+
+        # An error on a different entity (e.g. a subagent) must not re-arm the
+        # main prompt or clobber the consumed marker.
+        untouched = world.get_component(agent_id, UserInputComponent)
+        assert untouched is not None
+        assert untouched.result == "hi"
+
 
 class _CapturingSink:
     input_pending = True
@@ -675,3 +722,64 @@ class TestInteractiveModelStoreDefault:
         monkeypatch.setenv("LLM_ENABLE_STORE", "1")
         model = build_model_from_env()
         assert model._provider_config.enable_store is True
+
+
+class TestInteractiveStreamReadTimeout:
+    """A streaming read timeout is on by default so a stalled resume can't hang.
+
+    ``ask_question`` can pause a turn for minutes; the resumed streaming call
+    then sometimes lands on a dead gateway connection. Without a read timeout
+    that hangs forever and the session looks frozen right after the user
+    answered. The interactive builder bounds the stall window by default (the
+    timeout resets on every streamed byte, so a live stream is never cut off)
+    and lets it be disabled with ``LLM_STREAM_READ_TIMEOUT=0``.
+    """
+
+    def test_stream_read_timeout_on_by_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from examples.e2e.plan_and_task.main import build_model_from_env
+
+        monkeypatch.setenv("LLM_API_KEY", "sk-test")
+        monkeypatch.setenv("LLM_API_FORMAT", "openai_responses")
+        monkeypatch.delenv("LLM_STREAM_READ_TIMEOUT", raising=False)
+        model = build_model_from_env()
+        assert model._stream_read_timeout == 120.0
+
+    def test_stream_read_timeout_disabled_with_zero(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from examples.e2e.plan_and_task.main import build_model_from_env
+
+        monkeypatch.setenv("LLM_API_KEY", "sk-test")
+        monkeypatch.setenv("LLM_API_FORMAT", "openai_responses")
+        monkeypatch.setenv("LLM_STREAM_READ_TIMEOUT", "0")
+        model = build_model_from_env()
+        assert model._stream_read_timeout is None
+
+    def test_stream_read_timeout_also_applies_to_anthropic(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from examples.e2e.plan_and_task.main import build_model_from_env
+
+        monkeypatch.setenv("LLM_API_KEY", "sk-test")
+        monkeypatch.setenv("LLM_API_FORMAT", "anthropic_messages")
+        monkeypatch.delenv("LLM_STREAM_READ_TIMEOUT", raising=False)
+        model = build_model_from_env()
+        # Same hang class exists on the Anthropic streaming path, so the guard
+        # must reach ClaudeModel too — not just the OpenAI adapters.
+        assert model._stream_read_timeout == 120.0
+
+    @pytest.mark.parametrize("raw", ["abc", "60s", "  ", ""])
+    def test_stream_read_timeout_malformed_falls_back_to_default(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        from examples.e2e.plan_and_task.main import build_model_from_env
+
+        monkeypatch.setenv("LLM_API_KEY", "sk-test")
+        monkeypatch.setenv("LLM_API_FORMAT", "openai_responses")
+        monkeypatch.setenv("LLM_STREAM_READ_TIMEOUT", raw)
+        # A malformed knob must never crash startup or silently disable the
+        # guard — it falls back to the 120s default.
+        model = build_model_from_env()
+        assert model._stream_read_timeout == 120.0

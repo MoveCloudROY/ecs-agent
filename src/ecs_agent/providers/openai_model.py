@@ -29,6 +29,7 @@ class OpenAIModel:
         read_timeout: float = 120.0,
         write_timeout: float = 10.0,
         pool_timeout: float = 10.0,
+        stream_read_timeout: float | None = None,
     ) -> None:
         timeout_override = config.timeout
         if timeout_override is not None:
@@ -48,6 +49,12 @@ class OpenAIModel:
             write=write_timeout,
             pool=pool_timeout,
         )
+        # Per-chunk read timeout for streaming only. None (the default) leaves
+        # streams unbounded so a slow model is never cut off; a value turns it
+        # into a stall detector — see the adapters' stream() timeout note. It is
+        # deliberately independent of read_timeout/config.timeout so bounding
+        # whole-request time never silently caps streaming reasoning.
+        self._stream_read_timeout = stream_read_timeout
         self._client = httpx.AsyncClient(trust_env=False, timeout=self._timeout)
         self._chat_adapter = OpenAIChatAdapter(self)
         self._responses_adapter = OpenAIResponsesAdapter(self)

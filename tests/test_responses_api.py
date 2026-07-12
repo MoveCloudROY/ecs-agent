@@ -744,6 +744,49 @@ async def test_responses_api_streaming_retries_without_previous_response_id_on_4
     assert retry_body["stream"] is True
 
 
+@pytest.mark.asyncio
+async def test_responses_api_streaming_propagates_read_timeout_stall() -> None:
+    """A stalled gateway surfaces as an error instead of hanging the turn.
+
+    With stream_read_timeout set, httpx raises ReadTimeout once the connection
+    goes silent for the whole window. The adapter must propagate it (it is a
+    RequestError, not a 400 to de-chain) so ReasoningSystem records the failure
+    and the interactive frontend can return control to the user — rather than
+    the read=None behaviour where the turn hangs forever.
+    """
+    stalled_response = AsyncMock()
+    stalled_response.is_error = False
+    stalled_response.raise_for_status = Mock()
+
+    async def stalling_aiter_lines():
+        raise httpx.ReadTimeout("stream went silent")
+        yield ""  # pragma: no cover — only marks this an async generator
+
+    stalled_response.aiter_lines = stalling_aiter_lines
+    cm = MagicMock()
+    cm.__aenter__.return_value = stalled_response
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = MagicMock(return_value=cm)
+
+    model = OpenAIModel(
+        config=_openai_config(
+            api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES
+        ),
+        stream_read_timeout=30.0,
+    )
+    model._client = mock_client
+
+    stream_result = await model.complete(
+        [Message(role="user", content="hi")], stream=True
+    )
+    with pytest.raises(httpx.ReadTimeout):
+        async for _ in stream_result:
+            pass
+    # The stall window was actually applied to the streaming request.
+    assert mock_client.stream.call_args[1]["timeout"].read == 30.0
+
+
 def _streaming_model(lines: list[str]) -> tuple[OpenAIModel, AsyncMock]:
     mock_response = AsyncMock()
     mock_response.is_error = False

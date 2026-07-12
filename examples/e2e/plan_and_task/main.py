@@ -990,6 +990,32 @@ async def build_plan_task_world(
     return world, agent_id, adapter_ref, runtime_state
 
 
+_DEFAULT_STREAM_READ_TIMEOUT = 120.0
+
+
+def _resolve_stream_read_timeout() -> float | None:
+    """Read ``LLM_STREAM_READ_TIMEOUT`` into a streaming stall-detector value.
+
+    Unset, empty, whitespace, or non-numeric all fall back to the 120s default
+    (a malformed knob must never crash startup or silently disable the guard).
+    A non-positive value (``0``) is the explicit opt-out that restores the
+    unbounded ``read=None`` behavior.
+    """
+    raw = os.environ.get("LLM_STREAM_READ_TIMEOUT")
+    if raw is None or not raw.strip():
+        return _DEFAULT_STREAM_READ_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "plan_task_invalid_stream_read_timeout",
+            value=raw,
+            fallback=_DEFAULT_STREAM_READ_TIMEOUT,
+        )
+        return _DEFAULT_STREAM_READ_TIMEOUT
+    return value if value > 0 else None
+
+
 def build_model_from_env() -> LLMModel:
     """Construct the LLM model from ``LLM_*`` environment variables.
 
@@ -1012,6 +1038,18 @@ def build_model_from_env() -> LLMModel:
         )
         sys.exit(1)
 
+    # Bound the streaming read as a stall detector (TUI entrypoint only — it is
+    # the streaming path; the stdin REPL uses non-streaming complete(), already
+    # bounded by the client read timeout). A turn can pause for minutes on
+    # ask_question, so the resumed streaming call sometimes lands on a gateway
+    # connection that has gone dead; with no read timeout that hangs the turn
+    # forever and the session looks frozen right after the user answered. The
+    # timeout resets on every streamed byte, so a live-but-slow model is never
+    # cut off; only true silence for the whole window fails the call, which then
+    # returns control to the user. Applies to both providers below. Set
+    # LLM_STREAM_READ_TIMEOUT=0 to restore the unbounded behavior.
+    stream_read_timeout = _resolve_stream_read_timeout()
+
     if api_format_str == ApiFormat.ANTHROPIC_MESSAGES:
         logger.info("using_model", model_name=model_name, api_format="anthropic_messages")
         print(f"Using Anthropic Messages API with model: {model_name}")
@@ -1020,6 +1058,7 @@ def build_model_from_env() -> LLMModel:
             base_url=base_url,
             api_key=api_key,
             api_format=ApiFormat.ANTHROPIC_MESSAGES,
+            stream_read_timeout=stream_read_timeout,
         )
 
     api_format = ApiFormat.OPENAI_RESPONSES
@@ -1030,11 +1069,9 @@ def build_model_from_env() -> LLMModel:
     # Stored-response chaining (previous_response_id) is OFF by default.
     # This workflow is human-in-the-loop: `ask_question` and the input prompt
     # can pause a turn for minutes, during which a server-side stored response
-    # can expire. The Responses stream sets no read timeout, so a gateway that
-    # then stalls on the stale chain hangs the turn indefinitely (the loop
-    # appears to abort after the user finally answers). Chaining saves no tokens
-    # here — the adapter always sends the full history in `input` — so it stays
-    # off unless a gateway is known to benefit. Set LLM_ENABLE_STORE=1 to opt in.
+    # can expire. Chaining saves no tokens here — the adapter always sends the
+    # full history in `input` — so it stays off unless a gateway is known to
+    # benefit. Set LLM_ENABLE_STORE=1 to opt in.
     store_enabled = os.environ.get("LLM_ENABLE_STORE", "0").lower() in (
         "1",
         "true",
@@ -1047,6 +1084,7 @@ def build_model_from_env() -> LLMModel:
         api_key=api_key,
         api_format=api_format,
         enable_store=api_format == ApiFormat.OPENAI_RESPONSES and store_enabled,
+        stream_read_timeout=stream_read_timeout,
     )
 
 

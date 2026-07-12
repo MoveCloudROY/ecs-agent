@@ -465,6 +465,41 @@ async def test_streaming_timeout_uses_provider_custom_timeout() -> None:
     assert timeout.pool == 3.0
 
 
+@pytest.mark.asyncio
+async def test_streaming_read_timeout_opt_in_bounds_the_stall_window() -> None:
+    """stream_read_timeout, when set, becomes the per-chunk read timeout.
+
+    It is a stall detector: httpx resets it on every streamed byte, so a live
+    stream is never cut off, but a silently stalled connection fails instead of
+    hanging forever. It stays independent of the whole-request read_timeout so
+    bounding request time never caps streaming reasoning.
+    """
+    stream_lines = [
+        _sse_data({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        "data: [DONE]",
+    ]
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(
+        return_value=_MockStreamContext(_MockStreamResponse(stream_lines))
+    )
+
+    model = OpenAIModel(
+        config=_openai_config(api_key="test-key"),
+        read_timeout=90.0,
+        stream_read_timeout=30.0,
+    )
+    model._client = mock_client
+
+    stream_iter = await model.complete(
+        [Message(role="user", content="x")], stream=True
+    )
+    _ = [delta async for delta in stream_iter]
+
+    timeout = mock_client.stream.call_args[1]["timeout"]
+    # The stall window is the opt-in value, not the 90s whole-request read.
+    assert timeout.read == 30.0
+
+
 # FakeModel Streaming Tests
 
 

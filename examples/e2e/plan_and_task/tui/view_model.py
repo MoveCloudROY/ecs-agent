@@ -399,6 +399,11 @@ class PlanTaskViewModel:
                         section="notify", notification=message, severity="error"
                     )
                 )
+                # A failed turn hands control back to the user (the bridge
+                # re-arms the prompt), so drop the busy spinner now rather than a
+                # tick later when UserInputRequestedEvent fires.
+                self.busy = False
+                changes.extend(self._set_activity("idle"))
                 return changes
             case _:
                 return []

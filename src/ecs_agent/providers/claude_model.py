@@ -37,6 +37,7 @@ class ClaudeModel:
         write_timeout: float = 60.0,
         pool_timeout: float = 60.0,
         supports_vision: bool = False,
+        stream_read_timeout: float | None = None,
     ) -> None:
         if config.api_format is not ApiFormat.ANTHROPIC_MESSAGES:
             raise ValueError("ProviderConfig.api_format must be ANTHROPIC_MESSAGES")
@@ -54,6 +55,12 @@ class ClaudeModel:
         self._model = model
         self._max_tokens = max_tokens
         self._supports_vision = supports_vision
+        # Per-chunk read timeout for streaming only; None (default) keeps the
+        # stream unbounded. A value turns it into a stall detector — it resets on
+        # every streamed byte, so a live-but-slow model is never cut off, but a
+        # silently dead connection fails instead of hanging the turn forever
+        # (matches OpenAIModel.stream_read_timeout).
+        self._stream_read_timeout = stream_read_timeout
         self._messages_adapter = AnthropicMessagesAdapter(
             AnthropicMessagesAdapterConfig(
                 provider=self._provider_config,
@@ -102,7 +109,7 @@ class ClaudeModel:
         stream_body["stream"] = True
         timeout = httpx.Timeout(
             connect=self._timeout.connect,
-            read=None,
+            read=self._stream_read_timeout,
             write=self._timeout.write,
             pool=self._timeout.pool,
         )

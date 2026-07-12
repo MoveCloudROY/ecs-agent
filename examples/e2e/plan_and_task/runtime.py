@@ -16,6 +16,7 @@ from ecs_agent.systems import TerminalCleanupSystem
 from ecs_agent.systems.user_input import UserInputSystem
 from ecs_agent.types import (
     CompletionResult,
+    ErrorOccurredEvent,
     Message,
     ReasoningCompleteEvent,
     UserInputRequestedEvent,
@@ -243,11 +244,27 @@ async def setup_interactive_input(
         )
         world.add_component(agent_id, UserInputComponent(prompt="You> "))
 
+    async def on_error(event: ErrorOccurredEvent) -> None:
+        if event.entity_id != agent_id:
+            return
+        # A failed turn (the model call errored or stalled past its read
+        # timeout) fires no ReasoningCompleteEvent and leaves no pending tool
+        # calls, so ReasoningSystem would silently re-invoke the same failing
+        # call every tick. Re-arm the prompt so control returns to the user —
+        # but not while input is already being awaited, which would publish a
+        # second, duplicate prompt on stdin.
+        existing = world.get_component(agent_id, UserInputComponent)
+        if existing is not None and existing.future is not None and existing.result is None:
+            return
+        logger.info("plan_task_reasoning_error", entity_id=int(agent_id))
+        world.add_component(agent_id, UserInputComponent(prompt="You> "))
+
     world.event_bus.subscribe(UserInputRequestedEvent, provide_input)
     world.event_bus.subscribe(
         UserQuestionRequestedEvent, provide_question_answers
     )
     world.event_bus.subscribe(ReasoningCompleteEvent, on_reasoning_complete)
+    world.event_bus.subscribe(ErrorOccurredEvent, on_error)
     world.register_system(
         TerminalCleanupSystem(priority=1, clear_reasons=("reasoning_complete",)),
         priority=1,

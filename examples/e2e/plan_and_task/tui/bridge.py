@@ -133,6 +133,9 @@ class PlanTaskTuiBridge:
         self._world.event_bus.subscribe(
             ReasoningCompleteEvent, self._on_reasoning_complete
         )
+        self._world.event_bus.subscribe(
+            ErrorOccurredEvent, self._on_agent_error
+        )
         # Same wiring as runtime.setup_interactive_input: input runs before
         # normalization (-15 < -10) and reasoning_complete terminals are
         # cleared so the interactive session keeps ticking.
@@ -228,6 +231,23 @@ class PlanTaskTuiBridge:
 
     async def _on_reasoning_complete(self, event: ReasoningCompleteEvent) -> None:
         if event.entity_id != self._agent_id:
+            return
+        self._world.add_component(
+            self._agent_id, UserInputComponent(prompt=_INPUT_PROMPT)
+        )
+
+    async def _on_agent_error(self, event: ErrorOccurredEvent) -> None:
+        if event.entity_id != self._agent_id:
+            return
+        # A turn that failed (the model call errored or stalled past its read
+        # timeout) leaves no PendingToolCallsComponent and fires no
+        # ReasoningCompleteEvent, so ReasoningSystem would silently re-invoke the
+        # same failing call every tick — the session looks frozen with the
+        # spinner spinning forever right after the user answered an
+        # ask_question. Re-arm the input prompt so control returns to the user,
+        # exactly as a completed turn does. Skip when input/question is already
+        # pending so an active prompt or open modal is never clobbered.
+        if self.input_pending or self.question_pending:
             return
         self._world.add_component(
             self._agent_id, UserInputComponent(prompt=_INPUT_PROMPT)
