@@ -121,6 +121,7 @@ class ToolExecutionSystem:
                     max_concurrency,
                 )
                 for tool_call, result in zip(group, group_results):
+                    schema = registry.tools.get(tool_call.name)
                     await self._land_result(
                         world=world,
                         entity_id=entity_id,
@@ -129,6 +130,7 @@ class ToolExecutionSystem:
                         result=result,
                         results=results,
                         plan_name=plan_name,
+                        inline_result=bool(schema and schema.inline_result),
                     )
 
             world.remove_component(entity_id, PendingToolCallsComponent)
@@ -212,11 +214,18 @@ class ToolExecutionSystem:
         result: str,
         results: dict[str, str],
         plan_name: str | None,
+        inline_result: bool = False,
     ) -> None:
-        """Record one result: persistence, conversation append, plan updates."""
+        """Record one result: persistence, conversation append, plan updates.
+
+        ``inline_result`` tools (e.g. ``ask_question``) keep their result
+        verbatim in the conversation even when the sink is externalizing other
+        results — the model must always see them, so they are never replaced by
+        an artifact path it might not fetch.
+        """
         success = not result.startswith("Error")
         persisted_record_path: str | None = None
-        if self.tool_sink is not None:
+        if self.tool_sink is not None and not inline_result:
             persist_result = self.tool_sink.persist_tool_result(
                 tool_call_id=tool_call.id,
                 tool_name=tool_call.name,

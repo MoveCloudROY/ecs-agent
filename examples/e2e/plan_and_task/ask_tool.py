@@ -94,6 +94,10 @@ def build_ask_question_schema(tool_name: str = "ask_question") -> ToolSchema:
     """Declarative schema for the interactive ``ask_question`` tool."""
     return ToolSchema(
         name=tool_name,
+        # The answer is the user speaking, not bulk tool output: keep it inline
+        # so it is never externalized to a scratchbook path the model may not
+        # read back (which silently drops custom/free-text answers).
+        inline_result=True,
         description=(
             "Ask the user one or more questions and block until they answer. Use "
             "this to resolve a genuine decision that is the user's to make and that "

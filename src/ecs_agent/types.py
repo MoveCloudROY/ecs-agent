@@ -142,6 +142,13 @@ class ToolSchema:
     conflict with other tools in the same batch (read-only file access,
     pure lookups).  ToolExecutionSystem runs consecutive concurrency-safe
     calls concurrently; unsafe calls act as barriers and run alone.
+
+    ``inline_result`` keeps the tool's result verbatim in the conversation even
+    when a tool-results sink is externalizing other results to artifact paths.
+    Use it for small, must-see outputs the model has to read every time —
+    notably interactive user answers (``ask_question``), which are conversation
+    input rather than bulk tool output and would be lost if hidden behind a
+    path the model may not fetch.
     """
 
     name: str
@@ -149,6 +156,7 @@ class ToolSchema:
     parameters: dict[str, Any]
     sandbox_compatible: bool = False
     concurrency_safe: bool = False
+    inline_result: bool = False
 
 
 TodoStatus = Literal["pending", "in_progress", "completed"]
