@@ -39,6 +39,33 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+_UNKNOWN_SESSION_HINT = (
+    "No such session. Sessions exist only for background=True subagent calls; "
+    "their ids (format 'ses_...') are returned in that call's JSON payload and "
+    "listed by subagent_status(). A synchronous subagent call already returned "
+    "its complete answer directly — do not query a session for it."
+)
+
+
+def _unknown_session_payload(
+    world: World, parent_entity_id: EntityId, session_id: str
+) -> dict[str, Any]:
+    """Corrective error payload for a session id that does not exist.
+
+    Models sometimes hallucinate session ids after synchronous calls (which
+    create no session); a bare "not found" invites blind retries, so the
+    payload states the sync/background contract and grounds the model with
+    the ids that actually exist.
+    """
+    table = world.get_component(parent_entity_id, SubagentSessionTableComponent)
+    known = sorted(table.sessions) if table is not None else []
+    return {
+        "error": f"Session not found: {session_id}",
+        "session_id": session_id,
+        "hint": _UNKNOWN_SESSION_HINT,
+        "known_session_ids": known,
+    }
+
 
 def install_subagent_tool(
     system: SubagentSystem,
@@ -145,10 +172,7 @@ def make_status_handler(
         session = table.sessions.get(session_id)
         if session is None:
             return json.dumps(
-                {
-                    "error": f"Session not found: {session_id}",
-                    "session_id": session_id,
-                }
+                _unknown_session_payload(world, parent_entity_id, session_id)
             )
 
         logger.debug(
@@ -243,10 +267,7 @@ def make_result_handler(
         session = await system._runtime_manager.get_session(session_id)
         if session is None:
             return json.dumps(
-                {
-                    "error": f"Session not found: {session_id}",
-                    "session_id": session_id,
-                }
+                _unknown_session_payload(world, parent_entity_id, session_id)
             )
 
         if session.status in ("failed", "timed_out", "cancelled"):
@@ -357,10 +378,7 @@ def make_cancel_handler(
         session = await system._runtime_manager.get_session(session_id)
         if session is None:
             return json.dumps(
-                {
-                    "error": f"Session not found: {session_id}",
-                    "session_id": session_id,
-                }
+                _unknown_session_payload(world, parent_entity_id, session_id)
             )
 
         if session.status in ("failed", "timed_out", "cancelled", "succeeded"):
@@ -408,6 +426,10 @@ def make_resume_handler(
                 world, parent_entity_id, session_id
             )
         except ValueError as exc:
+            if str(exc).startswith("Session not found"):
+                return json.dumps(
+                    _unknown_session_payload(world, parent_entity_id, session_id)
+                )
             return json.dumps({"error": str(exc), "session_id": session_id})
 
         new_session = await system._runtime_manager.get_session(new_session_id)

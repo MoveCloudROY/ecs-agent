@@ -5986,3 +5986,119 @@ def test_build_background_child_prompt_template_appends_background_result_envelo
     assert "<subagent_background_result>" in result
     assert "<summary>" in result
     assert "<full_result>" in result
+
+
+def test_subagent_status_schema_is_concurrency_safe() -> None:
+    """subagent_status is read-only and may run alongside other safe tools."""
+    from ecs_agent.systems.subagent.tool_schemas import build_status_schema
+
+    assert build_status_schema().concurrency_safe is True
+
+
+# ---------------------------------------------------------------------------
+# Unknown-session error UX (regression: hallucinated ids after sync calls)
+# ---------------------------------------------------------------------------
+
+
+async def test_runtime_manager_create_session_ids_match_documented_format() -> None:
+    """Session ids must match the 'ses_...' shape shown in the tool schemas.
+
+    Regression: ids were bare 16-hex while the schemas documented 'ses_abc123',
+    teaching models to hallucinate prefixed ids that could never exist.
+    """
+    import re
+    from ecs_agent.systems.subagent_runtime import SubagentRuntimeManager
+
+    manager = SubagentRuntimeManager()
+    for _ in range(5):
+        assert re.fullmatch(r"ses_[0-9a-f]{16}", manager.create_session())
+
+
+def _build_control_tools_world() -> tuple[World, Any, Any]:
+    world = World()
+    parent_entity = world.create_entity()
+    known = SubagentSessionRecord(
+        session_id="ses_1111222233334444",
+        category="advisor",
+        prompt="review the draft",
+        parent_entity_id=parent_entity,
+        created_at="2026-07-12T00:00:00+00:00",
+        updated_at="2026-07-12T00:00:00+00:00",
+        background=True,
+        status="succeeded",
+    )
+    world.add_component(
+        parent_entity,
+        SubagentSessionTableComponent(sessions={known.session_id: known}),
+    )
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    system = SubagentSystem()
+    system.install_subagent_control_tools(world, parent_entity)
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    return world, parent_entity, tool_registry
+
+
+async def test_subagent_result_unknown_session_returns_corrective_hint() -> None:
+    _world, _parent, tool_registry = _build_control_tools_world()
+    payload = json.loads(
+        await tool_registry.handlers["subagent_result"](
+            session_id="ses_5c5e03fcc2d74ebd"
+        )
+    )
+    assert "Session not found" in payload["error"]
+    assert "background" in payload["hint"]
+    assert payload["known_session_ids"] == ["ses_1111222233334444"]
+
+
+async def test_subagent_status_unknown_session_returns_corrective_hint() -> None:
+    _world, _parent, tool_registry = _build_control_tools_world()
+    payload = json.loads(
+        await tool_registry.handlers["subagent_status"](
+            session_id="ses_5c5e03fcc2d74ebd"
+        )
+    )
+    assert "Session not found" in payload["error"]
+    assert "background" in payload["hint"]
+    assert payload["known_session_ids"] == ["ses_1111222233334444"]
+
+
+async def test_subagent_cancel_unknown_session_returns_corrective_hint() -> None:
+    _world, _parent, tool_registry = _build_control_tools_world()
+    payload = json.loads(
+        await tool_registry.handlers["subagent_cancel"](
+            session_id="ses_5c5e03fcc2d74ebd"
+        )
+    )
+    assert "Session not found" in payload["error"]
+    assert "background" in payload["hint"]
+    assert payload["known_session_ids"] == ["ses_1111222233334444"]
+
+
+async def test_subagent_tool_schema_states_sync_creates_no_session() -> None:
+    """The sync contract must be explicit so models do not query sessions."""
+    world = World()
+    parent_entity = world.create_entity()
+    world.add_component(
+        parent_entity,
+        SubagentRegistryComponent(subagents={}),
+    )
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+    system = SubagentSystem()
+    system.install_subagent_tool(world, parent_entity)
+    tool_registry = world.get_component(parent_entity, ToolRegistryComponent)
+    assert tool_registry is not None
+    description = tool_registry.tools["subagent"].description
+    assert "No session is created" in description
+
+
+async def test_subagent_resume_unknown_session_returns_corrective_hint() -> None:
+    _world, _parent, tool_registry = _build_control_tools_world()
+    payload = json.loads(
+        await tool_registry.handlers["subagent_resume"](
+            session_id="ses_5c5e03fcc2d74ebd"
+        )
+    )
+    assert "Session not found" in payload["error"]
+    assert "background" in payload["hint"]
+    assert payload["known_session_ids"] == ["ses_1111222233334444"]

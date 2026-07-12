@@ -372,6 +372,15 @@ The `subagent` tool enables parent agents to delegate subtasks with support for 
 
 ### Background Control Usage
 
+Sessions exist **only** for `background: true` calls: the runtime manager mints a
+session id of the form `ses_<16 hex>` (e.g. `ses_5c5e03fcc2d74ebd`) and returns it
+in the launch payload. A synchronous call (`background: false`) returns its final
+answer string directly and creates **no** session — the control tools do not apply
+to it. Querying an unknown session id returns a corrective JSON payload:
+`{"error": "Session not found: ...", "hint": <sync/background contract>,
+"known_session_ids": [...]}` so a model that guessed an id can re-ground itself
+instead of retrying blindly.
+
 When running in `background: true` mode, use control tools to manage the session:
 
 1. **Check Status**: `subagent_status(session_id="session_123")` returns current lifecycle state (including `queue_position` if `queued`) and a summary table if `session_id` is omitted.

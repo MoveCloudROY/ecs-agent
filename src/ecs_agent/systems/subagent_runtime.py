@@ -153,7 +153,9 @@ class SubagentRuntimeManager:
         self._scheduler = get_global_scheduler(max_background_concurrency)
 
     def create_session(self) -> str:
-        return uuid.uuid4().hex[:16]
+        # The 'ses_' prefix matches the id shape documented in the subagent
+        # tool schemas; a bare hex id teaches models to invent prefixed ones.
+        return f"ses_{uuid.uuid4().hex[:16]}"
 
     def get_or_create_session_event(self, session_id: str) -> asyncio.Event:
         """Return the per-session terminal Event, creating an unset one if needed."""
