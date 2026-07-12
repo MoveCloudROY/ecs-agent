@@ -2484,6 +2484,39 @@ def test_extract_verdict_defaults_to_revise_on_no_match() -> None:
     assert result == "revise"
 
 
+def test_extract_verdict_prefers_verdict_marker_line_over_earlier_prose() -> None:
+    """A `VERDICT: <token>` line wins over verdict words appearing in prose.
+
+    Reviewer checklists legitimately contain words like "blocked" in FAIL
+    reasons; only the marker line is the machine-readable decision.
+    """
+    from examples.e2e.plan_and_task.main import _extract_verdict_from_result
+
+    result = _extract_verdict_from_result(
+        "2. RISKS — FAIL: progress is blocked by a missing mitigation.\n"
+        "All other items PASS.\n"
+        "VERDICT: revise"
+    )
+    assert result == "revise"
+
+
+def test_extract_verdict_uses_last_marker_line() -> None:
+    from examples.e2e.plan_and_task.main import _extract_verdict_from_result
+
+    result = _extract_verdict_from_result(
+        "Earlier draft said VERDICT: revise\n"
+        "After re-checking the fixes:\n"
+        "verdict: approved"
+    )
+    assert result == "approved"
+
+
+def test_extract_verdict_marker_is_case_insensitive() -> None:
+    from examples.e2e.plan_and_task.main import _extract_verdict_from_result
+
+    assert _extract_verdict_from_result("Verdict: Blocked") == "blocked"
+
+
 @pytest.mark.asyncio
 async def test_delegation_completed_event_records_advisor_verdict(
     tmp_path: Path,

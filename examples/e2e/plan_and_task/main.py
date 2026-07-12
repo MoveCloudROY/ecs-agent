@@ -99,6 +99,13 @@ logger = get_logger(__name__)
 _VERDICT_PATTERN = _re.compile(
     r"\b(" + "|".join(REVIEW_VERDICTS) + r")\b", _re.IGNORECASE
 )
+# Reviewer prompts end replies with a `VERDICT: <token>` line. Prose may
+# legitimately contain verdict words (e.g. "blocked by a missing mitigation"
+# in a FAIL reason), so the marker line takes precedence over a bare-word scan.
+_VERDICT_LINE_PATTERN = _re.compile(
+    r"^[ \t]*verdict[ \t]*:[ \t]*(" + "|".join(REVIEW_VERDICTS) + r")\b",
+    _re.IGNORECASE | _re.MULTILINE,
+)
 
 _WORKFLOW_BASE_DIR = Path(__file__).parent
 _SKILLS_DIR = Path(__file__).parent / ".claude" / "skills"
@@ -164,6 +171,9 @@ async def install_plan_task_langfuse_observability(
 
 
 def _extract_verdict_from_result(result: str) -> str:
+    marker_matches: list[str] = _VERDICT_LINE_PATTERN.findall(result)
+    if marker_matches:
+        return marker_matches[-1].lower()
     match = _VERDICT_PATTERN.search(result)
     if match is None:
         logger.warning(
