@@ -3242,6 +3242,43 @@ async def test_controller_advisor_multiple_verdicts_upsert_keeps_latest_2(
     assert advisor_verdicts[0].verdict == "approved"
 
 
+async def test_controller_qa_verdict_blocked_while_advisor_revise_does_not_advance(
+    tmp_path: Path,
+) -> None:
+    """A QA verdict recorded while the advisor review is still on 'revise' must
+    not vault the workflow from DRAFT_ADVISOR_REVIEW into DRAFT_QA_REVIEW.
+
+    Regression: the 'enter the review phase to record its verdict' advance fired
+    unconditionally, so recording the next reviewer's verdict progressed the
+    phase past an un-approved advisor gate — a forward hop the state machine's
+    approval gates forbid.
+    """
+    from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter as ArtifactAdapter,
+    )
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="advisor-revise-then-qa")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "advisor revise then qa")
+
+    state = await controller.handle_advisor_review(state, adapter, "revise", notes="no")
+    assert state.phase == "DRAFT_ADVISOR_REVIEW"
+
+    # QA gets consulted before the advisor approved — the phase must hold and no
+    # QA verdict may be recorded.
+    with pytest.raises(ValueError, match="not approved"):
+        await controller.handle_qa_review(state, adapter, "revise", notes="also no")
+    assert controller.current_phase() == "DRAFT_ADVISOR_REVIEW"
+    assert all(v.phase != "DRAFT_QA_REVIEW" for v in state.review_verdicts)
+
+    # Once the advisor approves, QA may proceed and a 'revise' stays in QA.
+    state = await controller.handle_advisor_review(state, adapter, "approved")
+    state = await controller.handle_qa_review(state, adapter, "revise", notes="qa")
+    assert state.phase == "DRAFT_QA_REVIEW"
+
+
 async def test_controller_missing_approved_reviews_uses_last_verdict(
     tmp_path: Path,
 ) -> None:
@@ -3658,6 +3695,13 @@ async def test_handle_write_plan_transitions_to_write_plan(tmp_path: Path) -> No
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "DRAFT_QA_REVIEW"
+    state.review_verdicts = [
+        ReviewVerdict(
+            phase="DRAFT_QA_REVIEW",
+            verdict="approved",
+            decided_at="2026-01-01T00:00:00",
+        )
+    ]
     adapter.write_state(state)
     world, eid = await _bound_world_at(state.phase)
     ctrl = PlanController(world, eid)
@@ -3665,6 +3709,30 @@ async def test_handle_write_plan_transitions_to_write_plan(tmp_path: Path) -> No
     result = await ctrl.handle_write_plan(state, adapter)
 
     assert result.phase == "WRITE_PLAN"
+
+
+async def test_handle_write_plan_rejects_unapproved_qa(tmp_path: Path) -> None:
+    """/plan:write mirrors the QA gate: it must refuse while QA is on 'revise'."""
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "DRAFT_QA_REVIEW"
+    state.review_verdicts = [
+        ReviewVerdict(
+            phase="DRAFT_QA_REVIEW",
+            verdict="revise",
+            decided_at="2026-01-01T00:00:00",
+        )
+    ]
+    adapter.write_state(state)
+    world, eid = await _bound_world_at(state.phase)
+    ctrl = PlanController(world, eid)
+
+    with pytest.raises(ValueError, match="not approved"):
+        await ctrl.handle_write_plan(state, adapter)
+    # The rejected call must not move the workflow forward.
+    assert ctrl.current_phase() == "DRAFT_QA_REVIEW"
 
 
 async def test_handle_write_plan_rejects_wrong_phase(tmp_path: Path) -> None:
@@ -3687,6 +3755,13 @@ async def test_handle_write_plan_persists_state(tmp_path: Path) -> None:
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
     state = _make_runtime_state()
     state.phase = "DRAFT_QA_REVIEW"
+    state.review_verdicts = [
+        ReviewVerdict(
+            phase="DRAFT_QA_REVIEW",
+            verdict="approved",
+            decided_at="2026-01-01T00:00:00",
+        )
+    ]
     adapter.write_state(state)
     adapter.plan_dir.mkdir(parents=True, exist_ok=True)
     (adapter.plan_dir / "draft.md").write_text("# Draft\n", encoding="utf-8")
@@ -3803,6 +3878,13 @@ async def test_plan_write_command_transitions_phase(tmp_path: Path) -> None:
     state = _make_runtime_state()
     state.workflow_id = workflow_id
     state.phase = "DRAFT_QA_REVIEW"
+    state.review_verdicts = [
+        ReviewVerdict(
+            phase="DRAFT_QA_REVIEW",
+            verdict="approved",
+            decided_at="2026-01-01T00:00:00",
+        )
+    ]
     adapter.write_state(state)
     runtime_state[0] = state
     await force(world, agent_id, state.phase, reason="test setup")
@@ -3999,6 +4081,52 @@ async def test_web_search_tool_absent_without_brave_key(
     assert "web_search" not in registry.tools
     # The always-on built-in webfetch stays available regardless of the key.
     assert "webfetch" in registry.tools
+
+
+async def test_gh_skill_installed_and_listed_when_gh_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shutil
+
+    from ecs_agent.components.definitions import ToolRegistryComponent
+    from ecs_agent.prompts.provider import InventoryPlaceholderProvider
+    from ecs_agent.providers.fake_model import FakeModel
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    # Force the gh binary to look installed so the test is deterministic in CI.
+    monkeypatch.setattr(
+        shutil, "which", lambda name: "/usr/bin/gh" if name == "gh" else None
+    )
+    model = FakeModel(responses=["ok"])
+    world, agent_id, _, _ = await build_plan_task_world(model=model, base_dir=tmp_path)
+
+    # Progressive disclosure: the skill is listed by name/description...
+    skills = InventoryPlaceholderProvider().resolve_placeholders(world, agent_id)
+    assert "gh:" in skills["_installed_skills"]
+
+    # ...and its full instructions load on demand via load_skill_details.
+    registry = world.get_component(agent_id, ToolRegistryComponent)
+    assert registry is not None
+    details = await registry.handlers["load_skill_details"](skill_name="gh")
+    assert details.startswith("Skill: gh")
+    assert "gh api" in details  # a marker from the skill body
+
+
+async def test_gh_skill_absent_when_gh_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shutil
+
+    from ecs_agent.prompts.provider import InventoryPlaceholderProvider
+    from ecs_agent.providers.fake_model import FakeModel
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    model = FakeModel(responses=["ok"])
+    world, agent_id, _, _ = await build_plan_task_world(model=model, base_dir=tmp_path)
+
+    skills = InventoryPlaceholderProvider().resolve_placeholders(world, agent_id)
+    assert "gh:" not in skills["_installed_skills"]
 
 
 # ---------------------------------------------------------------------------

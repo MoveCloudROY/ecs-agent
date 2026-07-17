@@ -257,24 +257,40 @@ class PlanController:
         """Shared review flow: gate, record, persist, and route a review verdict.
 
         Order matters: validate the verdict string, reject review phases that
-        are neither current nor adjacent (reachability gate), upsert into the
-        state ledger (sticky approvals win), and only then write the verdict
-        artifact and route via the phase's gate. A verdict discarded by the
-        sticky-approval rule leaves no trace: no artifact write, no approval
-        ledger append, no phase change, no state persist.
+        are neither current nor adjacent (reachability gate), refuse to advance
+        forward out of a review phase whose own verdict is not yet approved
+        (approval gate), upsert into the state ledger (sticky approvals win),
+        and only then write the verdict artifact and route via the phase's
+        gate. A verdict discarded by the sticky-approval rule leaves no trace:
+        no artifact write, no approval ledger append, no phase change, no state
+        persist.
 
         Raises:
-            ValueError: invalid verdict string, or review_phase unreachable
-                from the current phase.
+            ValueError: invalid verdict string; review_phase unreachable from
+                the current phase; or advancing into review_phase would leave a
+                current review phase that is not approved.
         """
         if verdict_str not in REVIEW_VERDICTS:
             raise ValueError(f"Invalid verdict: {verdict_str!r}")
         current = self.current_phase()
-        allowed = PLAN_TASK_PHASE_GRAPH.phases_by_id[current].to
-        if current != review_phase and review_phase not in allowed:
-            raise ValueError(
-                f"Cannot record {review_phase} verdict while in phase {current!r}"
-            )
+        current_spec = PLAN_TASK_PHASE_GRAPH.phases_by_id[current]
+        allowed = current_spec.to
+        if current != review_phase:
+            if review_phase not in allowed:
+                raise ValueError(
+                    f"Cannot record {review_phase} verdict while in phase {current!r}"
+                )
+            # Forward progression out of a review phase is gated on that phase's
+            # own approval. Entering the next review phase to record its verdict
+            # must not vault the workflow past an advisor/QA review still sitting
+            # on a 'revise'/'blocked' verdict — only an 'approved' review yields.
+            if current_spec.approval is not None and not self._review_approved(
+                state, current
+            ):
+                raise ValueError(
+                    f"Cannot record {review_phase} verdict while {current} "
+                    "is not approved"
+                )
         timestamp = self._utcnow_isoformat()
         verdict = ReviewVerdict(
             phase=review_phase,
@@ -314,11 +330,21 @@ class PlanController:
     async def handle_write_plan(
         self, state: RuntimeState, adapter: ArtifactAdapter
     ) -> RuntimeState:
-        """Transition to WRITE_PLAN so the planner can produce workflow_plan.md."""
+        """Transition to WRITE_PLAN so the planner can produce workflow_plan.md.
+
+        The manual counterpart to the DRAFT_QA_REVIEW ApprovalGate: it mirrors
+        the gate's contract, so it only yields to WRITE_PLAN once QA approved the
+        draft. Invoked while QA is still on 'revise'/'blocked', it must refuse —
+        never bypass the gate and vault a rejected draft into the writer.
+        """
         current = self.current_phase()
         if current != "DRAFT_QA_REVIEW":
             raise ValueError(
                 f"handle_write_plan requires DRAFT_QA_REVIEW phase, got {current}"
+            )
+        if not self._review_approved(state, "DRAFT_QA_REVIEW"):
+            raise ValueError(
+                "Cannot write plan while DRAFT_QA_REVIEW is not approved"
             )
         timestamp = self._utcnow_isoformat()
         await self._advance("WRITE_PLAN", reason="plan:write")
@@ -426,6 +452,18 @@ class PlanController:
 
     def _missing_approved_reviews(self, verdicts: list[ReviewVerdict]) -> list[str]:
         return missing_approvals(verdicts)
+
+    def _review_approved(self, state: RuntimeState, phase: str) -> bool:
+        """True when the latest recorded verdict for `phase` is 'approved'.
+
+        The state ledger holds at most one verdict per phase (upsert), so the
+        last match is the effective verdict; approvals are sticky.
+        """
+        latest: str | None = None
+        for verdict in state.review_verdicts:
+            if verdict.phase == phase:
+                latest = verdict.verdict
+        return latest == "approved"
 
     def _build_draft_markdown(
         self, *, description: str, workflow_id: str, timestamp: str
