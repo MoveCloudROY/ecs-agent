@@ -676,6 +676,96 @@ async def test_subagent_background_stream_false_keeps_bridge_dormant() -> None:
     assert child_world.event_bus._handlers == {}
 
 
+async def test_subagent_sync_stream_true_bridges_using_correlation_id() -> None:
+    """A synchronous subagent (no session id) streams keyed by correlation id."""
+    world = World()
+    parent_entity = world.create_entity()
+    model = ReasoningAndContentStreamingFakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
+    config = SubagentConfig(name="research", model=model)
+
+    system = SubagentSystem()
+    captured: dict[str, Any] = {}
+    original_assemble_child_world = system._assemble_child_world
+
+    def capture_child_world(
+        parent_world: World,
+        parent_entity_id: EntityId,
+        config_snapshot: SubagentConfig,
+        parent_child_entity: EntityId | None = None,
+    ) -> tuple[World, EntityId]:
+        child_world, child_entity_id = original_assemble_child_world(
+            parent_world,
+            parent_entity_id,
+            config_snapshot,
+            parent_child_entity,
+        )
+        captured["child_world"] = child_world
+        captured["child_entity_id"] = child_entity_id
+        return child_world, child_entity_id
+
+    system._assemble_child_world = capture_child_world  # type: ignore[method-assign]
+
+    received: list[
+        SubagentStreamStartEvent | SubagentStreamDeltaEvent | SubagentStreamEndEvent
+    ] = []
+
+    async def on_start(event: SubagentStreamStartEvent) -> None:
+        received.append(event)
+
+    async def on_delta(event: SubagentStreamDeltaEvent) -> None:
+        received.append(event)
+
+    async def on_end(event: SubagentStreamEndEvent) -> None:
+        received.append(event)
+
+    world.event_bus.subscribe(SubagentStreamStartEvent, on_start)
+    world.event_bus.subscribe(SubagentStreamDeltaEvent, on_delta)
+    world.event_bus.subscribe(SubagentStreamEndEvent, on_end)
+
+    result, success, error = await system._execute_subagent_core(
+        world,
+        parent_entity,
+        "research",
+        "Investigate",
+        "corr-sync",
+        "trace-sync",
+        config,
+        session_id=None,
+        stream=True,
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert success is True
+    assert error is None
+    assert result == "done"
+
+    assert [type(event) for event in received] == [
+        SubagentStreamStartEvent,
+        SubagentStreamDeltaEvent,
+        SubagentStreamDeltaEvent,
+        SubagentStreamEndEvent,
+    ]
+    # No session id, so the correlation id becomes the stream key.
+    assert all(event.session_id == "corr-sync" for event in received)
+    assert received[1].delta == ""
+    assert received[1].reasoning_delta == "thinking"
+    assert received[2].delta == "done"
+
+    child_world = captured["child_world"]
+    child_entity_id = captured["child_entity_id"]
+    assert child_world.get_component(child_entity_id, StreamingComponent) is not None
+    assert child_world.event_bus._handlers == {}
+
+
+def test_subagent_system_stream_subagents_flag_defaults_false() -> None:
+    """The sync-streaming opt-in is off unless explicitly enabled."""
+    assert SubagentSystem()._stream_subagents is False
+    assert SubagentSystem(stream_subagents=True)._stream_subagents is True
+
+
 async def test_subagent_background_parent_event_bus_bridge_cleans_up_after_failure() -> (
     None
 ):
@@ -1947,6 +2037,50 @@ async def test_category_mapping_exact_match() -> None:
     assert resolved.model is model
 
 
+async def test_subagent_tool_sync_streams_when_stream_subagents_enabled() -> None:
+    """The ``stream_subagents`` flag threads through the synchronous tool call.
+
+    A registered subagent invoked via the installed tool (not the private core)
+    must bridge its reasoning/content stream to the parent bus when the system
+    was constructed with ``stream_subagents=True``.
+    """
+    world = World()
+    parent_entity = world.create_entity()
+    model = ReasoningAndContentStreamingFakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content="done"))]
+    )
+    config = SubagentConfig(name="quick", model=model)
+    world.add_component(
+        parent_entity, SubagentRegistryComponent(subagents={"quick": config})
+    )
+    world.add_component(parent_entity, ToolRegistryComponent(tools={}, handlers={}))
+
+    system = SubagentSystem(stream_subagents=True)
+    system.install_subagent_tool(world, parent_entity)
+
+    received: list[SubagentStreamDeltaEvent] = []
+
+    async def on_delta(event: SubagentStreamDeltaEvent) -> None:
+        received.append(event)
+
+    world.event_bus.subscribe(SubagentStreamDeltaEvent, on_delta)
+
+    handler = world.get_component(parent_entity, ToolRegistryComponent).handlers[
+        "subagent"
+    ]
+    result = await handler(category="quick", prompt="investigate this")
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert result == "done"
+    assert [event.reasoning_delta for event in received] == ["thinking", None]
+    assert received[1].delta == "done"
+    # Sync tool call has no session id, so the stream is keyed by correlation id.
+    assert received[0].session_id and all(
+        event.session_id == received[0].session_id for event in received
+    )
+
+
 async def test_category_mapping_unknown_category() -> None:
     """SubagentSystem._resolve_subagent_config raises ValueError for unknown subagent."""
     system = SubagentSystem()
@@ -1981,7 +2115,10 @@ async def test_subagent_tool_sync_happy_path() -> None:
         correlation_id: str,
         traceparent: str,
         config_snapshot: SubagentConfig,
+        *,
+        stream: bool = False,
     ) -> tuple[str, bool, str | None]:
+        _ = stream
         assert world_arg is world
         assert parent_entity_id == parent_entity
         assert subagent_name == "quick"
@@ -2058,7 +2195,10 @@ async def test_subagent_tool_free_mode_allows_unregistered_category_from_parent_
         correlation_id: str,
         traceparent: str,
         config_snapshot: SubagentConfig,
+        *,
+        stream: bool = False,
     ) -> tuple[str, bool, str | None]:
+        _ = stream
         assert world_arg is world
         assert parent_entity_id == parent_entity
         assert subagent_name == "security-reviewer"

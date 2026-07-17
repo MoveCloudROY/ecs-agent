@@ -85,8 +85,14 @@ class SubagentSystem:
         max_background_concurrency: int = 5,
         allow_unregistered_subagents: bool = False,
         free_subagent_config: FreeSubagentConfig | None = None,
+        stream_subagents: bool = False,
     ) -> None:
         self.priority = priority
+        # When enabled, synchronous subagents also bridge their reasoning/content
+        # stream to the parent event bus (background sessions can already opt in
+        # per call via ``stream=True``); off by default so existing behavior and
+        # locked streaming tests are untouched.
+        self._stream_subagents = stream_subagents
         self._runtime_manager = SubagentRuntimeManager(
             max_background_concurrency=max_background_concurrency
         )
@@ -530,6 +536,7 @@ class SubagentSystem:
                     correlation_id,
                     traceparent,
                     effective_config,
+                    stream=self._stream_subagents,
                 )
 
             if not background:
@@ -662,7 +669,14 @@ class SubagentSystem:
             finally:
                 _BACKGROUND_RESULT_ENVELOPE_ENABLED.reset(background_result_token)
             bridge_cleanup: Any = None
-            if stream and session_id is not None:
+            if stream:
+                # Background sessions key their stream on the session id; a
+                # synchronous subagent has none, so fall back to the correlation
+                # id — the DelegationStartedEvent carries the same child world
+                # name, letting a consumer tie the two together.
+                stream_session_id = (
+                    session_id if session_id is not None else correlation_id
+                )
                 child_world_name = child_world.name or subagent_name
                 child_world.add_component(
                     child_world_entity_id,
@@ -672,7 +686,7 @@ class SubagentSystem:
                     parent_world=world,
                     child_world=child_world,
                     parent_entity_id=parent_entity_id,
-                    session_id=session_id,
+                    session_id=stream_session_id,
                     category=subagent_name,
                     child_world_name=child_world_name,
                 )
