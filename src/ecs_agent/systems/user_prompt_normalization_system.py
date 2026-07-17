@@ -69,6 +69,12 @@ class UserPromptNormalizationSystem:
                 continue
             last_user_index, raw_user_text = last_user_message
 
+            self._freeze_superseded_render(
+                world=world,
+                entity_id=entity_id,
+                last_user_index=last_user_index,
+            )
+
             prompt_config = world.get_component(entity_id, UserPromptConfigComponent)
 
             trigger_specs = (
@@ -325,6 +331,65 @@ class UserPromptNormalizationSystem:
     @staticmethod
     def _fingerprint_text(text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _freeze_superseded_render(
+        self,
+        *,
+        world: World,
+        entity_id: EntityId,
+        last_user_index: int,
+    ) -> None:
+        """Persist a superseded transient render into the flat conversation.
+
+        The rendered user prompt (trigger injection / script replacement) is
+        substituted at call time, so the stored history keeps the raw text
+        while the model saw the rendered text. Once a *newer* user message
+        exists, the old slot would silently revert to its raw bytes in the
+        next outbound prompt — flipping a mid-history message and forfeiting
+        the provider prompt cache for everything after it, every turn.
+        Freezing the rendered text into the message the moment it stops being
+        the last user message keeps outbound prompts append-only.
+
+        Tree conversations are not writable here and keep the transient
+        behaviour.
+        """
+        rendered = world.get_component(entity_id, RenderedUserPromptComponent)
+        if (
+            rendered is None
+            or rendered.source_message_index is None
+            or rendered.source_message_index == last_user_index
+            or rendered.source_fingerprint is None
+        ):
+            return
+        conversation = world.get_component(entity_id, ConversationComponent)
+        if conversation is None:
+            return
+        index = rendered.source_message_index
+        if not 0 <= index < len(conversation.messages):
+            return
+        message = conversation.messages[index]
+        if message.role != "user":
+            return
+        # Only freeze the exact message the render was produced from —
+        # compaction or trimming may have rewritten the slot since.
+        if self._fingerprint_text(message.content) != rendered.source_fingerprint:
+            return
+        if message.content == rendered.text:
+            return
+        conversation.messages[index] = Message(
+            role="user",
+            content=rendered.text,
+            parts=message.parts,
+            tool_calls=message.tool_calls,
+            tool_call_id=message.tool_call_id,
+            compaction_metadata=message.compaction_metadata,
+        )
+        logger.debug(
+            "user_prompt_render_frozen",
+            entity_id=entity_id,
+            message_index=index,
+            rendered_length=len(rendered.text),
+        )
 
     @staticmethod
     def _resolve_conversation_messages(

@@ -251,12 +251,14 @@ def test_budget_prunes_tool_result_context_entries() -> None:
         ),
     )
 
-    assert len(reduced) == 1
-    assert reduced[0].role == "user"
-    assert "source: tool:call-1" not in reduced[0].content
-    assert "durable/path.md" not in reduced[0].content
-    assert "source: reasoning" in reduced[0].content
-    assert reduced[0].content.endswith("Need answer")
+    # The pool block is its own trailing user message now; the user's message
+    # keeps its original text.
+    assert len(reduced) == 2
+    assert reduced[0].content == "Need answer"
+    assert reduced[1].role == "user"
+    assert "source: tool:call-1" not in reduced[1].content
+    assert "durable/path.md" not in reduced[1].content
+    assert "source: reasoning" in reduced[1].content
 
 
 def test_budget_reducer_prune_order_tool_before_reasoning() -> None:
@@ -310,8 +312,9 @@ def test_budget_reducer_prune_order_tool_before_reasoning() -> None:
     )
 
     assert reservation is not None
-    assert [message.role for message in outbound_messages] == ["user", "user"]
+    assert [message.role for message in outbound_messages] == ["user", "user", "user"]
     assert "reasoning notes stay" in outbound_messages[-1].content
+    assert outbound_messages[-2].content == "final question"
 
 
 def test_budget_protected_overflow_raises_error() -> None:
@@ -557,10 +560,12 @@ def test_prepare_outbound_messages_reserves_reuses_and_commits_context_pool() ->
 
     assert first_reservation is not None
     world.add_component(entity_id, first_reservation)
-    first_user_text = first_messages[-1].content
-    assert "[PROMPT_INJECT:@code]" in first_user_text
-    assert "[PROMPT_CONTEXT_POOL]" in first_user_text
-    assert "source: tool" in first_user_text
+    # Trigger injection transforms the user message; the pool block rides the
+    # trailing context message.
+    assert "[PROMPT_INJECT:@code]" in first_messages[-2].content
+    first_pool_text = first_messages[-1].content
+    assert "[PROMPT_CONTEXT_POOL]" in first_pool_text
+    assert "source: tool" in first_pool_text
 
     queue.entries.append(
         ContextEntry(
@@ -580,7 +585,7 @@ def test_prepare_outbound_messages_reserves_reuses_and_commits_context_pool() ->
 
     assert second_reservation is not None
     assert second_reservation.reservation_id == first_reservation.reservation_id
-    assert second_messages[-1].content == first_user_text
+    assert second_messages[-1].content == first_pool_text
     assert "source: subagent" not in second_messages[-1].content
 
     commit_prompt_context_reservation(queue=queue, reservation=second_reservation)
@@ -702,14 +707,15 @@ async def test_retry_uses_reserved_payload_then_commit_clears_once_on_success() 
 
     await ReasoningSystem().process(world)
 
-    first_user = model.calls[0][-1].content
-    second_user = model.calls[1][-1].content
-    assert first_user == second_user
+    first_pool = model.calls[0][-1].content
+    second_pool = model.calls[1][-1].content
+    assert first_pool == second_pool
+    assert first_pool.startswith("[PROMPT_CONTEXT_POOL]")
+    assert "source: tool" in first_pool
+    assert "source: subagent" not in second_pool
+    first_user = model.calls[0][-2].content
     assert first_user.startswith("[PROMPT_INJECT:@code]\nUse code-first reasoning")
-    assert "[PROMPT_CONTEXT_POOL]" in first_user
     assert first_user.endswith("@code Need summary")
-    assert first_user.index("source: tool") < first_user.index("@code Need summary")
-    assert "source: subagent" not in second_user
 
     assert [entry.entry_id for entry in queue.entries] == ["entry-subagent-1"]
     assert world.get_component(entity_id, PromptContextReservationComponent) is None
@@ -781,15 +787,14 @@ async def test_event_collector_feeds_keyword_and_context_injection_end_to_end() 
 
     await ReasoningSystem().process(world)
 
-    sent_user = model.calls[0][-1].content
+    sent_pool = model.calls[0][-1].content
+    sent_user = model.calls[0][-2].content
     assert sent_user.startswith("[PROMPT_INJECT:@code]\nUse code-first reasoning")
-    assert sent_user.index("Use code-first reasoning") < sent_user.index(
-        "[PROMPT_CONTEXT_POOL]"
-    )
-    assert sent_user.index("source: tool:tool-1") < sent_user.index(
+    assert sent_user.endswith("Please @code summarize findings")
+    assert sent_pool.startswith("[PROMPT_CONTEXT_POOL]")
+    assert sent_pool.index("source: tool:tool-1") < sent_pool.index(
         "source: subagent:researcher"
     )
-    assert sent_user.endswith("Please @code summarize findings")
 
     sent_system = model.calls[0][0]
     assert sent_system.role == "system"
@@ -866,17 +871,16 @@ async def test_keyword_trigger_injection_with_context_pool_preserves_user_tail()
 
     await ReasoningSystem().process(world)
 
-    sent_user = model.calls[0][-1].content
+    sent_pool = model.calls[0][-1].content
+    sent_user = model.calls[0][-2].content
     assert sent_user.startswith(
         "[PROMPT_INJECT:summary]\nPrefer successful tool context"
     )
-    assert sent_user.index("[PROMPT_INJECT:summary]") < sent_user.index(
-        "[PROMPT_CONTEXT_POOL]"
-    )
-    assert sent_user.index("source: tool:search") < sent_user.index(
+    assert sent_user.endswith("Need concise summary")
+    assert sent_pool.startswith("[PROMPT_CONTEXT_POOL]")
+    assert sent_pool.index("source: tool:search") < sent_pool.index(
         "source: subagent:researcher"
     )
-    assert sent_user.endswith("Need concise summary")
 
 
 @pytest.mark.asyncio
@@ -970,13 +974,13 @@ async def test_overflow_footer_is_injected_when_context_pool_entries_are_dropped
     await collector.process(world)
     await ReasoningSystem().process(world)
 
-    sent_user = model.calls[0][-1].content
-    assert "[PROMPT_CONTEXT_POOL]" in sent_user
-    assert "source: tool:keep" in sent_user
-    assert "source: subagent:drop" not in sent_user
-    assert "structured_output:result-1" not in sent_user
-    assert footer in sent_user
-    assert sent_user.endswith("Need summary")
+    sent_pool = model.calls[0][-1].content
+    assert sent_pool.startswith("[PROMPT_CONTEXT_POOL]")
+    assert "source: tool:keep" in sent_pool
+    assert "source: subagent:drop" not in sent_pool
+    assert "structured_output:result-1" not in sent_pool
+    assert footer in sent_pool
+    assert model.calls[0][-2].content == "Need summary"
 
 
 @pytest.mark.asyncio
@@ -1246,15 +1250,17 @@ def test_slash_skill_context_injected_via_prepare_outbound_messages() -> None:
         current_tick=1,
     )
 
-    assert reservation is None
-    # RED ASSERTION: The slash context WILL be injected
-    user_msg = messages[-1]
-    assert "调用 skill: helpskill" in user_msg.content, (
-        "Slash skill context should be injected once feature is implemented"
+    # Slash injection now carries a reservation so the sent block can be
+    # persisted on commit (cache-prefix stability).
+    assert reservation is not None
+    assert "调用 skill: helpskill" in reservation.rendered_block
+    context_msg = messages[-1]
+    assert "调用 skill: helpskill" in context_msg.content, (
+        "Slash skill context should ride the trailing context message"
     )
-    # RED ASSERTION: Original text WILL be preserved
-    assert user_msg.content.endswith(original_text), (
-        f"Final message should end with original text '{original_text}'"
+    user_msg = messages[-2]
+    assert user_msg.content == original_text, (
+        "the user's own message must stay unmodified"
     )
 
 
@@ -1336,9 +1342,9 @@ def test_context_pool_injection_is_call_time_not_normalization_time() -> None:
     )
 
     assert reservation is not None
-    user_msg = messages[-1]
-    assert "source: tool:one" in user_msg.content
-    assert user_msg.content.endswith("Need summary")
+    pool_msg = messages[-1]
+    assert "source: tool:one" in pool_msg.content
+    assert messages[-2].content == "Need summary"
 
 
 def test_slash_context_is_transient_not_persisted_to_queue() -> None:
@@ -1410,16 +1416,16 @@ def test_slash_context_is_transient_not_persisted_to_queue() -> None:
         current_tick=1,
     )
 
-    # Verify slash context IS in the outbound message
-    user_msg = messages[-1]
-    assert "调用 skill: docskill" in user_msg.content, (
-        "Slash context should be injected in outbound message"
+    # Verify slash context IS in the outbound trailing context message
+    context_msg = messages[-1]
+    assert "调用 skill: docskill" in context_msg.content, (
+        "Slash context should be injected in the trailing context message"
     )
-    assert "RESERVED_CONTEXT_DATA" in user_msg.content, (
+    assert "RESERVED_CONTEXT_DATA" in context_msg.content, (
         "Reserved context should also be present"
     )
-    assert original_text in user_msg.content, (
-        "Original slash command text should be preserved"
+    assert messages[-2].content == original_text, (
+        "The user's slash command message must stay unmodified"
     )
 
     # HARDENING: Verify slash context is NOT persisted in the queue component
@@ -1548,6 +1554,6 @@ def test_repeated_prepare_outbound_messages_with_slash_produces_stable_context()
             "Repeated calls should reuse the same reservation ID"
         )
 
-    # Verify both messages end with the original text
-    assert first_user_msg.content.endswith(original_text)
-    assert second_user_msg.content.endswith(original_text)
+    # The user's own message stays unmodified right before the context block.
+    assert first_messages[-2].content == original_text
+    assert second_messages[-2].content == original_text

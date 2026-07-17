@@ -359,9 +359,13 @@ async def test_prompt_context_injection_is_transient_for_replanning_provider_cal
     await ReplanningSystem().process(world)
 
     sent = model.calls[0]
+    # Pool entries ride the trailing user message; the replanning prompt
+    # itself stays untouched right before it.
     assert sent[-1].role == "user"
-    assert "[PROMPT_CONTEXT_POOL]" in sent[-1].content
+    assert sent[-1].content.startswith("[PROMPT_CONTEXT_POOL]")
     assert "source: tool" in sent[-1].content
+    assert sent[-2].role == "user"
+    assert "[PROMPT_CONTEXT_POOL]" not in sent[-2].content
 
     conversation = world.get_component(entity_id, ConversationComponent)
     assert conversation is not None
@@ -472,8 +476,11 @@ async def test_event_trigger_injection_is_transient_for_replanning_provider_call
     await ReplanningSystem().process(world)
 
     sent = model.calls[0]
+    # Trigger injection stays on the replanning prompt; the pool entry rides
+    # the trailing context message.
     assert sent[-1].role == "user"
-    assert sent[-1].content.startswith(
+    assert sent[-1].content.startswith("[PROMPT_CONTEXT_POOL]")
+    assert sent[-2].content.startswith(
         "[PROMPT_INJECT:objective]\nPrefer successful tool context"
     )
 

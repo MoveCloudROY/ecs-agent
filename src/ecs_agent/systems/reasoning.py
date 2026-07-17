@@ -277,10 +277,15 @@ class ReasoningSystem:
                 )
                 invocation_event_published = True
 
-                if context_queue is not None and context_reservation is not None:
+                if context_reservation is not None:
+                    # Persisting the sent context block into the conversation
+                    # keeps the next call's prompt an append-only extension of
+                    # this one (prompt-cache stability). Tree conversations are
+                    # read-only here, so they keep the transient behaviour.
                     commit_prompt_context_reservation(
                         queue=context_queue,
                         reservation=context_reservation,
+                        conversation=conversation,
                     )
                     world.remove_component(entity_id, PromptContextReservationComponent)
 

@@ -3,9 +3,12 @@ from ecs_agent.prompts.message_assembly import assemble_messages, build_keyword_
 from ecs_agent.types import Message
 
 
-def test_assemble_messages_orders_keyword_block_then_context_pool_then_original_text() -> (
+def test_assemble_messages_keeps_keyword_in_user_message_and_pool_as_tail_message() -> (
     None
 ):
+    """Trigger injection transforms the last user message; the context-pool
+    block rides a separate trailing user message so previously-sent history
+    bytes never change (prompt-cache prefix stability)."""
     registry = build_keyword_registry({"@code": "KEYWORD_TEMPLATE_BLOCK"})
     assembled = assemble_messages(
         conversation_messages=[Message(role="user", content="Need @code help")],
@@ -26,8 +29,13 @@ def test_assemble_messages_orders_keyword_block_then_context_pool_then_original_
     assert user_message.content.startswith(
         "[PROMPT_INJECT:@code]\nKEYWORD_TEMPLATE_BLOCK"
     )
-    assert "\n\n[PROMPT_CONTEXT_POOL]\n" in user_message.content
     assert user_message.content.endswith("Need @code help")
+    assert "[PROMPT_CONTEXT_POOL]" not in user_message.content
+
+    pool_message = assembled[-1]
+    assert pool_message.role == "user"
+    assert pool_message.content.startswith("[PROMPT_CONTEXT_POOL]\n")
+    assert "source: tool\nresult: facts" in pool_message.content
 
 
 async def test_load_skill_details_returns_full_context_directly() -> None:
@@ -127,15 +135,16 @@ async def test_slash_command_injects_skill_context_into_outbound_message() -> No
         current_tick=1,
     )
 
-    # RED ASSERTION: Once implemented, message WILL contain slash skill context
-    user_msg = messages[-1]
-    assert "调用 skill: testskill" in user_msg.content, (
-        "Once slash context injection is implemented, skill context should be injected"
+    # The skill context rides a trailing user message (cache-prefix safe);
+    # the user's own message is left untouched.
+    context_msg = messages[-1]
+    assert context_msg.role == "user"
+    assert "调用 skill: testskill" in context_msg.content, (
+        "slash skill context should be injected as the trailing context message"
     )
-    # RED ASSERTION: Original text WILL be preserved
-    assert user_msg.content.endswith(original_text), (
-        f"Final message should end with original text '{original_text}', "
-        f"but got: {user_msg.content[-50:]}"
+    user_msg = messages[-2]
+    assert user_msg.content == original_text, (
+        f"the user's message must stay unmodified, got: {user_msg.content[-50:]}"
     )
 
 
@@ -208,20 +217,18 @@ async def test_slash_command_with_context_pool_renders_order() -> None:
         current_tick=1,
     )
 
-    # RED ASSERTION: Message should contain skill context
-    user_msg = messages[-1]
-    assert "调用 skill: queryskill" in user_msg.content, (
+    # Both slash context and pool entries ride one trailing user message;
+    # the user's own message is untouched (cache-prefix safe).
+    context_msg = messages[-1]
+    assert "调用 skill: queryskill" in context_msg.content, (
         "Slash skill context should be injected"
     )
-    # RED ASSERTION: Message should contain context pool
-    assert "CONTEXT_POOL_DATA" in user_msg.content, "Context pool should be present"
-    # RED ASSERTION: Original text should be at the end
-    assert user_msg.content.endswith(original_text), (
-        f"Final message should end with original text '{original_text}'"
-    )
-    # RED ASSERTION: Render order should be skill context BEFORE context pool
-    skill_context_pos = user_msg.content.find("调用 skill: queryskill")
-    context_pool_pos = user_msg.content.find("CONTEXT_POOL_DATA")
+    assert "CONTEXT_POOL_DATA" in context_msg.content, "Context pool should be present"
+    user_msg = messages[-2]
+    assert user_msg.content == original_text
+    # Render order inside the block: skill context BEFORE context pool
+    skill_context_pos = context_msg.content.find("调用 skill: queryskill")
+    context_pool_pos = context_msg.content.find("CONTEXT_POOL_DATA")
     assert skill_context_pos < context_pool_pos, (
         "Skill context should render before context pool"
     )
@@ -275,11 +282,14 @@ async def test_prepare_outbound_messages_overlap_prefers_longest_slash_match() -
 
     messages, reservation = prepare_outbound_messages(world, entity, current_tick=1)
 
-    assert reservation is None
-    user_message = messages[-1]
-    assert "调用 skill: ui-design" in user_message.content
-    assert "调用 skill: ui\n" not in user_message.content
-    assert user_message.content.endswith(original_text)
+    # Slash-only injection now carries a reservation so the sent block can be
+    # persisted on commit (cache-prefix stability).
+    assert reservation is not None
+    assert "调用 skill: ui-design" in reservation.rendered_block
+    context_message = messages[-1]
+    assert "调用 skill: ui-design" in context_message.content
+    assert "调用 skill: ui\n" not in context_message.content
+    assert messages[-2].content == original_text
 
 
 async def test_prepare_outbound_messages_skips_non_invocable_slash_skill() -> None:
@@ -406,7 +416,7 @@ async def test_prepare_outbound_messages_retry_reuses_identical_slash_context() 
     assert first_messages[-1].content == second_messages[-1].content
     assert "调用 skill: retryskill" in first_messages[-1].content
     assert "调用 skill: retryskill" in second_messages[-1].content
-    assert first_messages[-1].content.endswith(original_text)
+    assert first_messages[-2].content == original_text
 
 
 async def test_multiple_skill_manager_facades_share_world_state() -> None:

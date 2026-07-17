@@ -129,7 +129,14 @@ class AnthropicMessagesAdapter:
         caching = self._config.provider.enable_prompt_caching
         system_value = self._build_system_value(system_entries, caching=caching)
         if caching and anthropic_messages:
-            self._mark_cache_breakpoint(anthropic_messages[-1])
+            flagged_system = sum(1 for _, cache_control in system_entries if cache_control)
+            self._mark_message_cache_breakpoints(
+                anthropic_messages,
+                # Anthropic allows 4 breakpoints per request; one is reserved
+                # for the tool block, the rest go to flagged system entries
+                # and message markers.
+                budget=max(1, 4 - 1 - flagged_system),
+            )
         return system_value, anthropic_messages
 
     @staticmethod
@@ -148,6 +155,55 @@ class AnthropicMessagesAdapter:
                 block["cache_control"] = {"type": "ephemeral"}
             blocks.append(block)
         return blocks
+
+    # Anthropic checks ~20 content blocks behind each breakpoint for an
+    # existing cache entry. Keeping the ladder marker at most this many blocks
+    # ahead of the tail guarantees it can bridge back to the previous
+    # request's tail entry for turns that append up to (window + ladder gap)
+    # blocks — e.g. wide parallel tool batches.
+    _LOOKBACK_WINDOW_BLOCKS = 20
+
+    @classmethod
+    def _mark_message_cache_breakpoints(
+        cls, messages: list[dict[str, Any]], *, budget: int
+    ) -> None:
+        """Mark the trailing breakpoint plus, when the history is long enough
+        and the budget allows, one intermediate "ladder" marker.
+
+        A single trailing marker strands the previous request's cache entry
+        whenever one turn appends more than the ~20-block lookback window
+        (each tool_use / tool_result is its own block, so a wide parallel
+        batch easily exceeds it). The ladder marker sits at the last message
+        boundary within the window, extending the reachable span to roughly
+        twice the window per request.
+        """
+        if not messages or budget <= 0:
+            return
+        cls._mark_cache_breakpoint(messages[-1])
+        if budget < 2:
+            return
+
+        total_blocks = sum(cls._block_count(message) for message in messages)
+        if total_blocks <= cls._LOOKBACK_WINDOW_BLOCKS:
+            # The whole message list fits in one lookback window; a ladder
+            # marker would only add cache-write cost.
+            return
+
+        blocks_behind_tail = 0
+        ladder_candidate: dict[str, Any] | None = None
+        for message in reversed(messages[:-1]):
+            gap = blocks_behind_tail + cls._block_count(messages[-1])
+            if gap > cls._LOOKBACK_WINDOW_BLOCKS:
+                break
+            ladder_candidate = message
+            blocks_behind_tail += cls._block_count(message)
+        if ladder_candidate is not None and ladder_candidate is not messages[-1]:
+            cls._mark_cache_breakpoint(ladder_candidate)
+
+    @staticmethod
+    def _block_count(message: dict[str, Any]) -> int:
+        content = message.get("content")
+        return len(content) if isinstance(content, list) else 1
 
     @staticmethod
     def _mark_cache_breakpoint(message: dict[str, Any]) -> None:

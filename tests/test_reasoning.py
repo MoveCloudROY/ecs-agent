@@ -619,17 +619,22 @@ async def test_prompt_context_injection_is_transient_for_reasoning_provider_call
     await ReasoningSystem().process(world)
 
     sent_messages, _ = model.calls[0]
-    transient_user = sent_messages[-1]
-    assert transient_user.role == "user"
-    assert "[PROMPT_CONTEXT_POOL]" in transient_user.content
-    assert transient_user.content.index("source: tool") < transient_user.content.index(
+    pool_message = sent_messages[-1]
+    assert pool_message.role == "user"
+    assert pool_message.content.startswith("[PROMPT_CONTEXT_POOL]")
+    assert pool_message.content.index("source: tool") < pool_message.content.index(
         "source: subagent"
     )
-    assert transient_user.content.endswith("Need summary")
+    # The user's own message stays untouched right before the pool block.
+    assert sent_messages[-2].content == "Need summary"
 
     conversation = world.get_component(entity_id, ConversationComponent)
     assert conversation is not None
     assert conversation.messages[0].content == "Need summary"
+    # The sent block is persisted on commit so the next call's prompt replays
+    # the same bytes (prompt-cache prefix stability).
+    assert conversation.messages[1].content == pool_message.content
+    assert conversation.messages[2].role == "assistant"
 
 
 @pytest.mark.asyncio
@@ -679,7 +684,11 @@ async def test_event_trigger_injection_is_transient_for_reasoning_provider_call(
     await ReasoningSystem().process(world)
 
     sent_messages, _ = model.calls[0]
-    transient_user = sent_messages[-1]
+    # Trigger injection transforms the user's message in place (transient);
+    # the pool entry rides the trailing context message.
+    pool_message = sent_messages[-1]
+    assert pool_message.content.startswith("[PROMPT_CONTEXT_POOL]")
+    transient_user = sent_messages[-2]
     assert transient_user.role == "user"
     assert transient_user.content.startswith(
         "[PROMPT_INJECT:summary]\nPrefer using successful tool evidence"

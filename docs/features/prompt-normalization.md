@@ -26,7 +26,21 @@ RenderedSystemPromptComponent  RenderedUserPromptComponent
 2. **UserPromptNormalizationSystem** (priority -10) reads `UserPromptConfigComponent`, injects keyword/event triggers into the last user message, and writes a `RenderedUserPromptComponent`. Context entries from `PromptContextQueueComponent` are injected later at call-time by `prepare_outbound_messages()`.
 3. **LLM callers** (`ReasoningSystem`, `PlanningSystem`, `ReplanningSystem`) read the rendered components instead of assembling prompts themselves.
 
-Stored conversation history is never mutated. User prompt injections are transient and scoped to the current tick, while rendered system prompts are frozen after the first successful render-system pass.
+Injections are transient within a turn, then frozen into history so every
+outbound prompt is an append-only extension of the previous one (the invariant
+provider prompt caches require — see
+[prompt-caching.md](prompt-caching.md)):
+
+- The rendered user prompt substitutes the last user message at call time.
+  The moment a newer user message arrives, `UserPromptNormalizationSystem`
+  persists the rendered text into that slot — the bytes the model saw stay in
+  the prompt prefix instead of reverting to the raw text.
+- The context-pool block (and slash-skill context) is sent as its own
+  trailing user message and persisted into the conversation when the
+  reservation commits after a successful call.
+
+Rendered system prompts are frozen after the first successful render-system
+pass.
 
 ## Quick Start
 
@@ -334,7 +348,7 @@ world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
 
 ### UserPromptNormalizationSystem
 
-Injects trigger templates into the last user message without mutating stored conversation history. Context pool entries are NOT injected by this system; they are applied at call-time in `prepare_outbound_messages()` when LLM callers assemble outbound messages.
+Injects trigger templates into the last user message. The render is transient while that message is still the latest user turn; once a newer user message arrives, the rendered text is frozen into the conversation slot it was produced from (prompt-cache prefix stability). Context pool entries are NOT injected by this system; they are appended as a trailing context message at call-time in `prepare_outbound_messages()` and persisted on reservation commit.
 
 **Constructor:** `UserPromptNormalizationSystem(priority: int = 0)`
 **Recommended priority:** `-10`

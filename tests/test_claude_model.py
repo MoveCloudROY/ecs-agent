@@ -1056,6 +1056,115 @@ def test_caching_disabled_keeps_plain_system_string_and_no_breakpoints() -> None
     assert "cache_control" not in anthropic_tools[-1]
 
 
+def test_caching_adds_ladder_breakpoint_for_wide_tool_batches() -> None:
+    """A wide parallel tool batch appends more content blocks in one request
+    than Anthropic's ~20-block lookback can bridge from the single trailing
+    breakpoint. The adapter must place one intermediate "ladder" marker within
+    the window so the previous request's tail entry stays reachable."""
+    model = _caching_model()
+    width = 12
+    messages = [
+        Message(role="system", content="STABLE", cache_control=True),
+        Message(role="user", content="weather for twelve cities"),
+        Message(
+            role="assistant",
+            content="",
+            tool_calls=[
+                ToolCall(id=f"c{i}", name="lookup", arguments={"city": str(i)})
+                for i in range(width)
+            ],
+        ),
+        *[
+            Message(role="tool", content=f"r{i}", tool_call_id=f"c{i}")
+            for i in range(width)
+        ],
+        Message(role="assistant", content="done"),
+        Message(role="user", content="next question"),
+    ]
+
+    _, anthropic_messages = model._build_messages(messages)
+
+    marked_indexes = [
+        index
+        for index, message in enumerate(anthropic_messages)
+        if any("cache_control" in block for block in message["content"])
+    ]
+    assert anthropic_messages[-1]["content"][-1]["cache_control"] == {
+        "type": "ephemeral"
+    }
+    assert len(marked_indexes) == 2, marked_indexes
+    ladder_index = marked_indexes[0]
+    blocks_between = sum(
+        len(message["content"])
+        for message in anthropic_messages[ladder_index + 1 :]
+    )
+    # The ladder marker must sit within the documented lookback window of the
+    # tail so consecutive wide turns keep a reachable entry chain.
+    assert 0 < blocks_between <= 20, blocks_between
+
+
+def test_caching_keeps_single_message_breakpoint_for_short_history() -> None:
+    """Short conversations stay within one lookback window — no ladder marker
+    (and no extra cache-write cost)."""
+    model = _caching_model()
+    messages = [
+        Message(role="system", content="STABLE", cache_control=True),
+        Message(role="user", content="first"),
+        Message(role="assistant", content="answer"),
+        Message(role="user", content="latest"),
+    ]
+
+    _, anthropic_messages = model._build_messages(messages)
+
+    marked = [
+        index
+        for index, message in enumerate(anthropic_messages)
+        if any("cache_control" in block for block in message["content"])
+    ]
+    assert marked == [len(anthropic_messages) - 1]
+
+
+def test_caching_ladder_respects_four_breakpoint_budget() -> None:
+    """tools(1) + flagged system entries + message markers must not exceed
+    Anthropic's 4-breakpoint budget: with two flagged system entries only the
+    tail message marker fits."""
+    model = _caching_model()
+    width = 12
+    messages = [
+        Message(role="system", content="STABLE A", cache_control=True),
+        Message(role="system", content="STABLE B", cache_control=True),
+        Message(role="user", content="weather for twelve cities"),
+        Message(
+            role="assistant",
+            content="",
+            tool_calls=[
+                ToolCall(id=f"c{i}", name="lookup", arguments={"city": str(i)})
+                for i in range(width)
+            ],
+        ),
+        *[
+            Message(role="tool", content=f"r{i}", tool_call_id=f"c{i}")
+            for i in range(width)
+        ],
+        Message(role="user", content="next question"),
+    ]
+
+    system, anthropic_messages = model._build_messages(messages)
+
+    flagged_system = sum(
+        1 for block in system if isinstance(block, dict) and "cache_control" in block
+    )
+    message_markers = sum(
+        1
+        for message in anthropic_messages
+        if any("cache_control" in block for block in message["content"])
+    )
+    assert flagged_system == 2
+    assert message_markers == 1  # tail only; no room for the ladder
+    # 1 (tools) + 2 (system) + 1 (tail) == 4
+    assert 1 + flagged_system + message_markers <= 4
+
+
 def test_caching_headers_have_no_beta_header() -> None:
     # Anthropic prompt caching is GA; no anthropic-beta header is required.
     model = _caching_model()

@@ -32,6 +32,7 @@ The Entity-Component-System (ECS) pattern makes LLM agents composable and testab
     *   [Prometheus Metrics](features/metrics.md)
     *   [Langfuse Observability](features/langfuse.md)
     *   [Structured Output](features/structured-output.md)
+    *   [Prompt Caching](features/prompt-caching.md)
 *   [Context Management](features/context-management.md)
 *   [Tool Discovery & Approval](features/tool-discovery.md)
 *   [Todo List](features/todo-list.md) — Agent-maintained session checklist.

@@ -27,6 +27,7 @@ if TYPE_CHECKING:
         ContextTrimConfig,
         ContextCacheComponent,
         ContextEntry,
+        ConversationComponent,
     )
     from ecs_agent.core import World
     from ecs_agent.types import DroppableContextKind
@@ -222,11 +223,21 @@ def assemble_messages(
     1) optional system prompt (cache-stable prefix, marked as a cache breakpoint)
     2) optional volatile system suffix (compaction summary / workflow state)
     3) optional prefix/system context messages
-    4) conversation messages (with transient final-user injection when enabled)
+    4) conversation messages (with transient trigger injection on the last
+       user message)
+    5) optional context-pool block as a trailing user message
 
     The stable system prompt carries ``cache_control=True`` so caching-capable
     adapters place a prompt-cache breakpoint after it; the volatile suffix sits
     after the breakpoint and is never marked.
+
+    The context-pool block is appended as its own final user message — never
+    merged into an earlier message. Rewriting a message that previous calls
+    already sent (the last *user* message sits mid-history during a tool loop)
+    would invalidate the provider prompt cache for everything after it on
+    every call. Tail placement keeps all previously-sent bytes intact;
+    ``commit_prompt_context_reservation`` persists the block into the
+    conversation so later calls replay the same bytes.
     """
     assembled: list[Message] = []
     if system_prompt is not None:
@@ -243,10 +254,13 @@ def assemble_messages(
         conversation_messages,
         keyword_registry=keyword_registry,
         trigger_specs=trigger_specs,
-        enable_context_pool=enable_context_pool,
-        context_pool_items=context_pool_items,
     )
     assembled.extend(transient_conversation)
+
+    if enable_context_pool:
+        context_block = _render_context_pool_block(context_pool_items)
+        if context_block:
+            assembled.append(Message(role="user", content=context_block))
     return assembled
 
 
@@ -270,16 +284,29 @@ def reserve_prompt_context_reservation(
 
 def commit_prompt_context_reservation(
     *,
-    queue: PromptContextQueueComponent,
+    queue: PromptContextQueueComponent | None,
     reservation: PromptContextReservationComponent,
+    conversation: ConversationComponent | None = None,
 ) -> None:
-    reserved_ids = {entry.entry_id for entry in reservation.reserved_entries}
-    if not reserved_ids:
-        return
+    """Consume reserved queue entries and persist the sent context block.
 
-    queue.entries = [
-        entry for entry in queue.entries if entry.entry_id not in reserved_ids
-    ]
+    When ``conversation`` is given and the reservation carries a rendered
+    block, the block is appended to the history as the user message the model
+    just saw. Leaving it transient would make the next call's prompt diverge
+    at the block's position, invalidating the provider prompt cache for every
+    later token; persisting keeps outbound requests append-only.
+    """
+    if queue is not None:
+        reserved_ids = {entry.entry_id for entry in reservation.reserved_entries}
+        if reserved_ids:
+            queue.entries = [
+                entry for entry in queue.entries if entry.entry_id not in reserved_ids
+            ]
+
+    if conversation is not None and reservation.rendered_block:
+        conversation.messages.append(
+            Message(role="user", content=reservation.rendered_block)
+        )
 
 
 def resolve_system_prompt_parts(
@@ -476,6 +503,24 @@ def prepare_outbound_messages(
             cache_component=world.get_component(entity_id, ContextCacheComponent),
         )
 
+    # Record the context block exactly as sent (post-trim) so the commit step
+    # can persist it into the conversation. A reservation is created even
+    # without a queue (e.g. slash-skill context only) — otherwise the block
+    # would vanish from the next call's prompt and break the cache prefix.
+    sent_block = ""
+    if messages and messages[-1].role == "user":
+        tail_content = messages[-1].content or ""
+        if tail_content.startswith(CONTEXT_POOL_MARKER):
+            sent_block = tail_content
+    if sent_block:
+        if context_reservation is None:
+            context_reservation = PromptContextReservationComponent(
+                reservation_id=uuid.uuid4().hex,
+                created_at_tick=current_tick,
+                reserved_entries=[],
+            )
+        context_reservation.rendered_block = sent_block
+
     logger.debug(
         "outbound_messages_assembled",
         world_name=world.name,
@@ -496,10 +541,8 @@ def _with_transient_user_injection(
     *,
     keyword_registry: PromptRegistry | None,
     trigger_specs: list[TriggerSpec] | None,
-    enable_context_pool: bool,
-    context_pool_items: Sequence[ContextEntryProtocol] | None,
 ) -> list[Message]:
-    """Apply transient trigger + context-pool injection to the last user message.
+    """Apply transient trigger injection to the last user message.
 
     Trigger injection is performed via one of two paths:
     * **trigger_specs** (preferred) — delegates to ``render_user_prompt_text``.
@@ -534,15 +577,6 @@ def _with_transient_user_injection(
             transformed_text,
             trigger_specs=trigger_specs,
         )
-
-    if enable_context_pool:
-        context_block = _render_context_pool_block(context_pool_items)
-        if context_block:
-            transformed_text = _inject_context_block(
-                text_with_keyword=transformed_text,
-                original_user_text=original_text,
-                context_block=context_block,
-            )
 
     if transformed_text == original_text:
         return list(conversation_messages)
@@ -795,6 +829,11 @@ def _replace_context_pool_block(
         if not remaining_block:
             updated_content = updated_content.replace("\n\n\n\n", "\n\n")
             updated_content = updated_content.replace(f"{CONTEXT_POOL_MARKER}\n", "", 1)
+        if not updated_content.strip():
+            # The block was the whole message (tail-injected pool message):
+            # drop it rather than sending an empty user turn.
+            del replaced_messages[index]
+            break
         replaced_messages[index] = Message(
             role=message.role,
             content=updated_content,
@@ -838,18 +877,6 @@ def _cached_artifact_path_for_entry(
         if cached_result.tool_call_id == tool_call_id:
             return cached_result.artifact_path
     return None
-
-
-def _inject_context_block(
-    *, text_with_keyword: str, original_user_text: str, context_block: str
-) -> str:
-    if text_with_keyword != original_user_text and text_with_keyword.endswith(
-        original_user_text
-    ):
-        prefix = text_with_keyword[: -len(original_user_text)].rstrip("\n")
-        return f"{prefix}\n\n{context_block}\n\n{original_user_text}"
-
-    return f"{context_block}\n\n{text_with_keyword}"
 
 
 __all__ = [

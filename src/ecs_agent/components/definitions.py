@@ -538,6 +538,11 @@ class PromptContextReservationComponent:
     reservation_id: str
     created_at_tick: int
     reserved_entries: list[ContextEntry] = field(default_factory=list)
+    # The exact context block sent to the model this call (context-pool
+    # entries + slash-skill context, already rendered). Persisted into the
+    # conversation on commit so the bytes the model saw stay in the prompt
+    # prefix instead of vanishing next call (prompt-cache stability).
+    rendered_block: str = ""
 
 
 @dataclass(slots=True)

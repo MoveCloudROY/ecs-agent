@@ -330,8 +330,11 @@ async def test_prompt_context_injection_is_transient_for_planning_provider_call(
     )
     assert sent[1] == Message(role="system", content="Step 1/1: inspect state")
     assert sent[2].role == "user"
-    assert "[PROMPT_CONTEXT_POOL]" in sent[2].content
     assert sent[2].content.endswith("Plan this")
+    assert "[PROMPT_CONTEXT_POOL]" not in sent[2].content
+    # Pool entries ride a trailing user message (cache-prefix safe).
+    assert sent[3].role == "user"
+    assert sent[3].content.startswith("[PROMPT_CONTEXT_POOL]")
 
     conversation = world.get_component(entity_id, ConversationComponent)
     assert conversation is not None
