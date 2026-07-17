@@ -351,6 +351,12 @@ ${{_installed_tools}}
 ## Available subagents:
 ${{_installed_subagents}}
 
+## Available skills:
+${{_installed_skills}}
+Skills above are listed by name and description only. Before using one for the
+first time, call `load_skill_details(skill_name="<name>")` to pull its full
+instructions.
+
 {_SCRATCHBOOK_CONTEXT_SECTION}
 """
 
@@ -391,6 +397,12 @@ ${{_installed_tools}}
 
 ## Available subagents:
 ${{_installed_subagents}}
+
+## Available skills:
+${{_installed_skills}}
+Skills above are listed by name and description only. Before using one for the
+first time, call `load_skill_details(skill_name="<name>")` to pull its full
+instructions.
 
 {_SCRATCHBOOK_CONTEXT_SECTION}
 """

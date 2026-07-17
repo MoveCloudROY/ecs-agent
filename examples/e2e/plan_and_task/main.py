@@ -7,6 +7,7 @@ import datetime
 import json
 import os
 import re as _re
+import shutil
 import sys
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
@@ -46,6 +47,7 @@ from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.tools import BuiltinToolsSkill
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.discovery import discover_skills
+from ecs_agent.skills.skill import Skill
 from ecs_agent.skills.web_search import WebSearchSkill
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.subagent import SubagentSystem
@@ -371,6 +373,15 @@ async def build_plan_task_world(
     # agent drives (interview, review orchestration, task execution).
     if os.environ.get("BRAVE_API_KEY"):
         SkillManager().install(world, agent_id, WebSearchSkill())
+
+    # Optional GitHub CLI skill (github.com/cli/cli/tree/trunk/skills/gh).
+    # A pure-instruction markdown skill: it has no tools of its own — the agent
+    # runs `gh` through the built-in `bash` tool — so it only earns its keep
+    # when the `gh` binary is installed. Gated on that; when present it is
+    # listed under `${_installed_skills}` and the model pulls the full usage
+    # guide on demand via `load_skill_details("gh")` before touching GitHub.
+    if shutil.which("gh"):
+        SkillManager().install(world, agent_id, Skill(_SKILLS_DIR / "gh" / "SKILL.md"))
 
     world.add_component(agent_id, SubagentSessionTableComponent(sessions={}))
     world.add_component(
