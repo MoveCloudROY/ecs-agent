@@ -30,6 +30,7 @@ from ecs_agent.types import (
     StreamStartEvent,
     SubagentStreamDeltaEvent,
     SubagentStreamEndEvent,
+    SubagentStreamStartEvent,
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
     UserInputReceivedEvent,
@@ -117,13 +118,29 @@ class UiChange:
 
 @dataclass(slots=True)
 class SubagentRun:
-    """Lifecycle of one delegated subagent, keyed by correlation id."""
+    """Lifecycle of one delegated subagent, keyed by correlation id.
+
+    Beyond the sidebar summary fields, the run accumulates the child's streamed
+    ``reasoning`` and ``content`` and its full final ``result``/``error`` so the
+    subagent inspector can replay the whole thinking process, not just a preview.
+    """
 
     correlation_id: str
     name: str
     task_preview: str
     status: Literal["running", "completed", "failed"] = "running"
     stream_chars: int = 0
+    child_world_name: str = ""
+    task: str = ""
+    reasoning: str = ""
+    content: str = ""
+    result: str = ""
+    error: str = ""
+
+    @property
+    def has_detail(self) -> bool:
+        """True once there is any streamed thinking or a final result to show."""
+        return bool(self.reasoning or self.content or self.result or self.error)
 
 
 @dataclass(slots=True)
@@ -299,6 +316,8 @@ class PlanTaskViewModel:
                         correlation_id=event.correlation_id,
                         name=event.subagent_name,
                         task_preview=_preview(event.task, 80),
+                        task=event.task,
+                        child_world_name=event.child_world_name or "",
                     )
                 )
                 changes = self._append(
@@ -320,6 +339,8 @@ class PlanTaskViewModel:
                 run = self._find_run(event.correlation_id, event.subagent_name)
                 if run is not None:
                     run.status = status
+                    run.result = event.result
+                    run.error = event.error or ""
                 marker = "✓" if event.success else "✗"
                 summary = event.result if event.success else (event.error or "failed")
                 changes = self._append(
@@ -333,14 +354,23 @@ class PlanTaskViewModel:
                 if self.busy:
                     changes.extend(self._set_activity("thinking"))
                 return changes
+            case SubagentStreamStartEvent() if (
+                event.parent_entity_id == self.agent_id
+            ):
+                # Nothing to fold yet; refresh so an open inspector reflects the
+                # run flipping into an actively-streaming state.
+                return [UiChange(section="subagents")]
             case SubagentStreamDeltaEvent() if (
                 event.parent_entity_id == self.agent_id
             ):
-                run = self._latest_running(event.category)
+                run = self._run_for_stream(
+                    event.child_world_name, event.category
+                )
                 if run is not None:
-                    run.stream_chars += len(event.delta) + len(
-                        event.reasoning_delta or ""
-                    )
+                    reasoning_delta = event.reasoning_delta or ""
+                    run.reasoning += reasoning_delta
+                    run.content += event.delta
+                    run.stream_chars += len(event.delta) + len(reasoning_delta)
                     return [UiChange(section="subagents")]
                 return []
             case SubagentStreamEndEvent() if (
@@ -464,3 +494,18 @@ class PlanTaskViewModel:
             if run.name == category and run.status == "running":
                 return run
         return None
+
+    def _run_for_stream(
+        self, child_world_name: str, category: str
+    ) -> SubagentRun | None:
+        """Locate the run a stream delta belongs to.
+
+        The child world name is the precise key (it disambiguates concurrent
+        subagents of the same category); when the delegation event carried no
+        world name, fall back to the latest still-running run of that category.
+        """
+        if child_world_name:
+            for run in reversed(self.subagent_runs):
+                if run.child_world_name == child_world_name:
+                    return run
+        return self._latest_running(category)

@@ -38,12 +38,13 @@ from textual.widgets import (
     Static,
     TextArea,
 )
-from textual.widgets.option_list import Option
+from textual.widgets.option_list import Option, OptionDoesNotExist
 from textual.widgets.selection_list import Selection as ListSelection
 
 from examples.e2e.plan_and_task.ask_tool import AskQuestion, QuestionAnswer
 from examples.e2e.plan_and_task.tui.view_model import (
     PlanTaskViewModel,
+    SubagentRun,
     TranscriptEntry,
     UiChange,
 )
@@ -425,6 +426,222 @@ class QuestionScreen(ModalScreen[list[QuestionAnswer] | None]):
         return []
 
 
+class SubagentInspectorScreen(ModalScreen[None]):
+    """Read-only inspector for delegated subagents.
+
+    Lists every subagent run on the left and, for the selected run, shows its
+    streamed reasoning, streamed content, and full final result on the right.
+    The screen reads the live :class:`PlanTaskViewModel` directly, so while it
+    stays open :meth:`refresh` repaints the currently-streaming run token by
+    token — this is where a subagent's *thinking process* becomes visible,
+    which the one-line transcript summary can never show.
+    """
+
+    CSS = """
+    SubagentInspectorScreen {
+        align: center middle;
+    }
+    #inspector-dialog {
+        width: 96;
+        max-width: 96%;
+        height: 90%;
+        border: round $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #inspector-title {
+        height: auto;
+        text-style: bold;
+        color: $accent;
+        margin-bottom: 1;
+    }
+    #inspector-body {
+        height: 1fr;
+    }
+    #inspector-list {
+        width: 32;
+        height: 1fr;
+        border: round $primary 30%;
+        margin-right: 1;
+    }
+    #inspector-detail {
+        width: 1fr;
+        height: 1fr;
+        border: round $primary 30%;
+        padding: 0 1;
+    }
+    #inspector-detail Static {
+        height: auto;
+        margin-bottom: 1;
+    }
+    #inspector-hint {
+        height: auto;
+        color: $text-muted;
+        margin-top: 1;
+    }
+    """
+
+    BINDINGS = [("escape", "close", "Close")]
+
+    def __init__(
+        self, view_model: PlanTaskViewModel, initial_id: str | None = None
+    ) -> None:
+        super().__init__()
+        self._vm = view_model
+        self._selected_id = initial_id
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="inspector-dialog"):
+            yield Static("Subagent inspector", id="inspector-title")
+            with Horizontal(id="inspector-body"):
+                run_list: OptionList = OptionList(id="inspector-list")
+                yield run_list
+                with VerticalScroll(id="inspector-detail"):
+                    yield Static(id="inspector-reasoning")
+                    yield Static(id="inspector-content")
+            yield Static(
+                "↑↓ pick a subagent · Esc to close", id="inspector-hint"
+            )
+
+    def on_mount(self) -> None:
+        self._rebuild_list()
+
+    @staticmethod
+    def _run_id(index: int, run: SubagentRun) -> str:
+        # Correlation ids are unique per delegation; fall back to the index for
+        # the rare run created without one so option ids never collide.
+        return run.correlation_id or f"idx-{index}"
+
+    def _selected_run(self) -> SubagentRun | None:
+        for index, run in enumerate(self._vm.subagent_runs):
+            if self._run_id(index, run) == self._selected_id:
+                return run
+        return None
+
+    def _default_selection(self) -> str | None:
+        """Prefer the latest running run, else the most recent one."""
+        runs = self._vm.subagent_runs
+        if not runs:
+            return None
+        for index in range(len(runs) - 1, -1, -1):
+            if runs[index].status == "running":
+                return self._run_id(index, runs[index])
+        return self._run_id(len(runs) - 1, runs[-1])
+
+    def _rebuild_list(self) -> None:
+        option_list = self.query_one("#inspector-list", OptionList)
+        highlighted_before = self._selected_id
+        option_list.clear_options()
+        for index, run in enumerate(self._vm.subagent_runs):
+            option_list.add_option(
+                Option(self._run_label(run), id=self._run_id(index, run))
+            )
+        if not self._vm.subagent_runs:
+            self._render_detail()
+            return
+        target = highlighted_before or self._default_selection()
+        self._select(option_list, target)
+
+    def _select(self, option_list: OptionList, run_id: str | None) -> None:
+        if run_id is None:
+            return
+        try:
+            index = option_list.get_option_index(run_id)
+        except OptionDoesNotExist:
+            index = 0
+        self._selected_id = run_id
+        option_list.highlighted = index
+        self._render_detail()
+
+    @staticmethod
+    def _run_label(run: SubagentRun) -> Text:
+        icon = _RUN_ICONS.get(run.status, "?")
+        style = _RUN_STYLES.get(run.status, "")
+        label = Text(f"{icon} {run.name}\n", style=style)
+        detail = (
+            f"  {_fmt_tokens(run.stream_chars)} chars"
+            if run.status == "running"
+            else f"  {run.status}"
+        )
+        label.append(detail, style="dim")
+        return label
+
+    @on(OptionList.OptionHighlighted, "#inspector-list")
+    def _on_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        event.stop()
+        if event.option_id is not None:
+            self._selected_id = event.option_id
+            self._render_detail()
+
+    @on(OptionList.OptionSelected, "#inspector-list")
+    def _on_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        if event.option_id is not None:
+            self._selected_id = event.option_id
+            self._render_detail()
+
+    def _render_detail(self) -> None:
+        reasoning_widget = self.query_one("#inspector-reasoning", Static)
+        content_widget = self.query_one("#inspector-content", Static)
+        run = self._selected_run()
+        if run is None:
+            reasoning_widget.update(
+                Text("No subagents have run yet.", style="dim italic")
+            )
+            content_widget.update("")
+            return
+        reasoning_widget.update(self._reasoning_block(run))
+        content_widget.update(self._content_block(run))
+        if run.status == "running":
+            # Follow the live stream to the newest tokens.
+            self.query_one("#inspector-detail", VerticalScroll).scroll_end(
+                animate=False
+            )
+
+    @staticmethod
+    def _reasoning_block(run: SubagentRun) -> Text:
+        header = Text()
+        header.append(f"{run.name}", style="bold magenta")
+        header.append(f"  ({run.status})\n", style="dim")
+        if run.task:
+            header.append(f"task: {run.task}\n", style="dim")
+        header.append("\n")
+        if run.reasoning:
+            header.append("Reasoning\n", style="bold")
+            header.append(run.reasoning, style="dim italic")
+        else:
+            header.append(
+                "No reasoning streamed"
+                if run.status != "running"
+                else "waiting for the subagent to think…",
+                style="dim italic",
+            )
+        return header
+
+    @staticmethod
+    def _content_block(run: SubagentRun) -> Text:
+        block = Text()
+        if run.content:
+            block.append("\nOutput\n", style="bold")
+            block.append(run.content)
+        # The final result may be an envelope distinct from the raw stream, so
+        # show it explicitly once the delegation reports back.
+        if run.result and run.result != run.content:
+            block.append("\n\nResult\n", style="bold green")
+            block.append(run.result)
+        if run.error:
+            block.append("\n\nError\n", style="bold red")
+            block.append(run.error, style="red")
+        return block
+
+    def refresh_runs(self) -> None:
+        """Repaint the list and detail from the live view model (app-driven)."""
+        self._rebuild_list()
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class VmChanged(Message):
     """A view-model section changed and should be re-rendered."""
 
@@ -532,6 +749,7 @@ class PlanTaskTuiApp(App[None]):
     BINDINGS = [
         ("ctrl+q", "quit_session", "Quit"),
         ("ctrl+l", "clear_transcript", "Clear log"),
+        ("ctrl+o", "inspect_subagents", "Subagents"),
     ]
 
     def __init__(
@@ -548,6 +766,7 @@ class PlanTaskTuiApp(App[None]):
         self._backlog: list[UiChange] = []
         self._last_copied: str | None = None
         self._spinner_frame = 0
+        self._inspector: SubagentInspectorScreen | None = None
 
     # -- layout -----------------------------------------------------------
 
@@ -618,6 +837,8 @@ class PlanTaskTuiApp(App[None]):
                 self._render_usage()
             case "subagents":
                 self._render_subagents()
+                if self._inspector is not None:
+                    self._inspector.refresh_runs()
             case "input":
                 self._render_input_state()
             case "status":
@@ -759,6 +980,26 @@ class PlanTaskTuiApp(App[None]):
     def action_clear_transcript(self) -> None:
         self.query_one("#transcript", SelectableRichLog).clear()
 
+    def action_inspect_subagents(self, initial_id: str | None = None) -> None:
+        """Open the subagent inspector (no-op with a hint when none have run)."""
+        if not self._vm.subagent_runs:
+            self.notify("No subagents have run yet.", timeout=2.0)
+            return
+        if self._inspector is not None:
+            return
+        inspector = SubagentInspectorScreen(self._vm, initial_id=initial_id)
+        self._inspector = inspector
+        self.push_screen(inspector, self._on_inspector_closed)
+
+    def _on_inspector_closed(self, _result: None) -> None:
+        self._inspector = None
+
+    @on(events.Click, "#subagent-panel")
+    def _handle_subagent_click(self, event: events.Click) -> None:
+        """Clicking the sidebar subagent summary opens the inspector."""
+        event.stop()
+        self.action_inspect_subagents()
+
     # -- renderers ----------------------------------------------------------
 
     def _write_entry(self, log: RichLog, entry: TranscriptEntry) -> None:
@@ -853,6 +1094,7 @@ class PlanTaskTuiApp(App[None]):
                 else ""
             )
             lines.append(f"{icon} {run.name}{suffix}\n", style=style)
+        lines.append("^O / click to inspect", style="dim")
         panel.update(lines)
 
     def _render_usage(self) -> None:
@@ -889,7 +1131,13 @@ class PlanTaskTuiApp(App[None]):
         return f"▲ {marker}{self._vm.turn_output_tokens} tok"
 
     def _render_status(self) -> None:
-        bar = self.query_one("#status-bar")
+        try:
+            bar = self.query_one("#status-bar")
+        except NoMatches:
+            # A modal (e.g. the subagent inspector) can cover the base screen
+            # while a subagent is still running; the recurring status tick must
+            # not crash when the status bar is transiently unreachable.
+            return
         bar.display = self._vm.busy
         if not self._vm.busy:
             return

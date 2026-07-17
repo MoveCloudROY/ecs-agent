@@ -23,6 +23,7 @@ from ecs_agent.types import (
     StreamReasoningEndEvent,
     StreamStartEvent,
     SubagentStreamDeltaEvent,
+    SubagentStreamStartEvent,
     ToolCall,
     ToolExecutionCompletedEvent,
     ToolExecutionStartedEvent,
@@ -262,6 +263,103 @@ class TestViewModelSubagents:
         assert "subagent" in transcript_kinds(vm)
         assert "subagents" in sections(changes)
 
+    def test_subagent_stream_accumulates_reasoning_content_and_result(self) -> None:
+        vm = make_vm()
+        vm.apply_event(
+            DelegationStartedEvent(
+                entity_id=AGENT,
+                subagent_name="advisor",
+                task="review the draft plan",
+                correlation_id="c-1",
+                traceparent="",
+                child_world_name="advisor-world",
+            )
+        )
+        vm.apply_event(
+            SubagentStreamStartEvent(
+                session_id="c-1",
+                parent_entity_id=AGENT,
+                category="advisor",
+                child_world_name="advisor-world",
+                seq=0,
+                timestamp="2026-07-13T00:00:00Z",
+            )
+        )
+        vm.apply_event(
+            SubagentStreamDeltaEvent(
+                session_id="c-1",
+                parent_entity_id=AGENT,
+                category="advisor",
+                child_world_name="advisor-world",
+                seq=1,
+                timestamp="2026-07-13T00:00:01Z",
+                delta="",
+                reasoning_delta="weighing the tradeoffs",
+            )
+        )
+        vm.apply_event(
+            SubagentStreamDeltaEvent(
+                session_id="c-1",
+                parent_entity_id=AGENT,
+                category="advisor",
+                child_world_name="advisor-world",
+                seq=2,
+                timestamp="2026-07-13T00:00:02Z",
+                delta="looks good",
+            )
+        )
+        run = vm.subagent_runs[0]
+        assert run.reasoning == "weighing the tradeoffs"
+        assert run.content == "looks good"
+        assert run.has_detail
+
+        vm.apply_event(
+            DelegationCompletedEvent(
+                entity_id=AGENT,
+                subagent_name="advisor",
+                result="APPROVED: the plan is sound",
+                success=True,
+                correlation_id="c-1",
+                traceparent="",
+            )
+        )
+        assert run.status == "completed"
+        assert run.result == "APPROVED: the plan is sound"
+        # The one-line transcript summary still truncates; the run keeps the
+        # full reasoning + result for the inspector.
+        assert run.reasoning == "weighing the tradeoffs"
+
+    def test_subagent_stream_routes_by_child_world_name(self) -> None:
+        """Concurrent runs of different worlds keep their streams separate."""
+        vm = make_vm()
+        for name, world in (("advisor", "advisor-world"), ("qa", "qa-world")):
+            vm.apply_event(
+                DelegationStartedEvent(
+                    entity_id=AGENT,
+                    subagent_name=name,
+                    task=f"{name} task",
+                    correlation_id=f"c-{name}",
+                    traceparent="",
+                    child_world_name=world,
+                )
+            )
+        vm.apply_event(
+            SubagentStreamDeltaEvent(
+                session_id="c-qa",
+                parent_entity_id=AGENT,
+                category="qa",
+                child_world_name="qa-world",
+                seq=1,
+                timestamp="2026-07-13T00:00:01Z",
+                delta="",
+                reasoning_delta="qa is thinking",
+            )
+        )
+        advisor = next(r for r in vm.subagent_runs if r.name == "advisor")
+        qa = next(r for r in vm.subagent_runs if r.name == "qa")
+        assert qa.reasoning == "qa is thinking"
+        assert advisor.reasoning == ""
+
     def test_failed_delegation_marks_run_failed(self) -> None:
         vm = make_vm()
         vm.apply_event(
@@ -285,6 +383,92 @@ class TestViewModelSubagents:
             )
         )
         assert vm.subagent_runs[0].status == "failed"
+        assert vm.subagent_runs[0].error == "timeout"
+
+
+class TestSubagentInspector:
+    """The subagent inspector modal shows a run's live reasoning and result."""
+
+    def _make_app(self, vm: PlanTaskViewModel) -> object:
+        from examples.e2e.plan_and_task.tui.app import PlanTaskTuiApp
+
+        class StubSink:
+            input_pending = True
+
+            def submit_input(self, text: str) -> bool:
+                return True
+
+            def request_quit(self) -> None:
+                return None
+
+        return PlanTaskTuiApp(view_model=vm, sink=StubSink())
+
+    @staticmethod
+    def _seed_run(vm: PlanTaskViewModel) -> None:
+        vm.apply_event(
+            DelegationStartedEvent(
+                entity_id=AGENT,
+                subagent_name="advisor",
+                task="review the draft plan",
+                correlation_id="c-1",
+                traceparent="",
+                child_world_name="advisor-world",
+            )
+        )
+        vm.apply_event(
+            SubagentStreamDeltaEvent(
+                session_id="c-1",
+                parent_entity_id=AGENT,
+                category="advisor",
+                child_world_name="advisor-world",
+                seq=1,
+                timestamp="2026-07-13T00:00:01Z",
+                delta="",
+                reasoning_delta="weighing the tradeoffs",
+            )
+        )
+
+    async def test_inspector_shows_reasoning_and_result(self) -> None:
+        from textual.widgets import OptionList, Static
+
+        vm = make_vm()
+        self._seed_run(vm)
+        app = self._make_app(vm)
+        async with app.run_test(size=(120, 40)) as pilot:  # type: ignore[attr-defined]
+            app.action_inspect_subagents()  # type: ignore[attr-defined]
+            await pilot.pause()
+            screen = app.screen  # type: ignore[attr-defined]
+            options = screen.query_one("#inspector-list", OptionList)
+            assert options.option_count == 1
+            reasoning = str(screen.query_one("#inspector-reasoning", Static).content)
+            assert "weighing the tradeoffs" in reasoning
+
+            # A late completion flows into the open inspector.
+            changes = vm.apply_event(
+                DelegationCompletedEvent(
+                    entity_id=AGENT,
+                    subagent_name="advisor",
+                    result="APPROVED: sound plan",
+                    success=True,
+                    correlation_id="c-1",
+                    traceparent="",
+                )
+            )
+            for change in changes:
+                app.dispatch_change(change)  # type: ignore[attr-defined]
+            await pilot.pause()
+            content = str(screen.query_one("#inspector-content", Static).content)
+            assert "APPROVED: sound plan" in content
+
+    async def test_inspector_noop_without_runs(self) -> None:
+        from examples.e2e.plan_and_task.tui.app import SubagentInspectorScreen
+
+        vm = make_vm()
+        app = self._make_app(vm)
+        async with app.run_test(size=(120, 40)) as pilot:  # type: ignore[attr-defined]
+            app.action_inspect_subagents()  # type: ignore[attr-defined]
+            await pilot.pause()
+            assert not isinstance(app.screen, SubagentInspectorScreen)  # type: ignore[attr-defined]
 
 
 class TestViewModelPhasesAndUsage:

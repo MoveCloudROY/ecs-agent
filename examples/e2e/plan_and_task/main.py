@@ -969,7 +969,10 @@ async def build_plan_task_world(
     )
     world.register_system(UserPromptNormalizationSystem(priority=-10), priority=-10)
     world.register_system(SystemPromptRenderSystem(priority=-5), priority=-5)
-    subagent_system = SubagentSystem(priority=-1)
+    # stream_subagents bridges each synchronous reviewer/writer subagent's
+    # reasoning + content stream to the parent event bus so the TUI can show
+    # its thinking live and its full result in the subagent inspector.
+    subagent_system = SubagentSystem(priority=-1, stream_subagents=True)
     world.register_system(subagent_system, priority=-1)
     subagent_system.install_subagent_tool(world, agent_id, tool_name="subagent")
     subagent_system.install_subagent_control_tools(world, agent_id)
