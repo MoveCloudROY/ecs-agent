@@ -107,6 +107,34 @@ class BackgroundSessionRunner:
                 _BACKGROUND_LAUNCH_OBSERVABILITY_CONTEXT.reset(launch_context_token)
                 _PUBLISH_COMPLETION_EVENT.reset(token)
 
+        async def publish_failure_events(error_msg: str) -> None:
+            await publish_events(
+                world,
+                parent_entity_id,
+                category,
+                correlation_id=metadata.correlation_id,
+                traceparent=metadata.traceparent,
+                task=metadata.prompt,
+                result=error_msg,
+                success=False,
+                error=error_msg,
+                trace_id=metadata.launch_trace_id,
+                run_id=metadata.launch_run_id,
+                parent_observation_id=metadata.launch_parent_observation_id,
+                observation_id=metadata.correlation_id,
+                publish_started=False,
+            )
+
+        async def finalize_failure(error_msg: str) -> None:
+            metadata.status = "failed"
+            metadata.error = error_msg
+            metadata.finished_at = _utc_now_iso()
+            metadata.updated_at = metadata.finished_at
+            await runtime_manager.update_status(session_id, metadata.status)
+            await runtime_manager.sync_to_component(world, parent_entity_id)
+            notification_coordinator.enqueue_parent_notification(world, metadata)
+            await publish_failure_events(error_msg)
+
         async def run_in_background() -> None:
             metadata.status = "running"
             metadata.started_at = _utc_now_iso()
@@ -121,9 +149,18 @@ class BackgroundSessionRunner:
                 else:
                     result, success, error = await execute_with_config()
             except asyncio.CancelledError:
+                # Reached via task.cancel(). cancel_session() normally set the
+                # status already; force it for cancellations that bypassed it
+                # (e.g. event-loop teardown) so the session cannot stay parked
+                # in "running".
+                if metadata.status in ("queued", "running"):
+                    metadata.status = "cancelled"
                 metadata.finished_at = _utc_now_iso()
                 metadata.updated_at = metadata.finished_at
                 await runtime_manager.sync_to_component(world, parent_entity_id)
+                # Cancellation is a terminal status: waiters (subagent_wait
+                # futures) must wake, exactly like success/failure/timeout.
+                notification_coordinator.enqueue_parent_notification(world, metadata)
                 raise
             except asyncio.TimeoutError:
                 error_msg = f"Error: Subagent timeout after {resolved_timeout}s"
@@ -137,74 +174,51 @@ class BackgroundSessionRunner:
                 await runtime_manager.update_timeout(session_id, error_msg)
                 await runtime_manager.sync_to_component(world, parent_entity_id)
                 notification_coordinator.enqueue_parent_notification(world, metadata)
-                await publish_events(
-                    world,
-                    parent_entity_id,
-                    category,
-                    correlation_id=metadata.correlation_id,
-                    traceparent=metadata.traceparent,
-                    task=metadata.prompt,
-                    result=error_msg,
-                    success=False,
-                    error=error_msg,
-                    trace_id=metadata.launch_trace_id,
-                    run_id=metadata.launch_run_id,
-                    parent_observation_id=metadata.launch_parent_observation_id,
-                    observation_id=metadata.correlation_id,
-                    publish_started=False,
-                )
+                await publish_failure_events(error_msg)
                 return
             except Exception as exc:
-                error_msg = str(exc)
-                metadata.status = "failed"
-                metadata.error = error_msg
-                metadata.finished_at = _utc_now_iso()
-                metadata.updated_at = metadata.finished_at
-                await runtime_manager.update_status(session_id, metadata.status)
-                await runtime_manager.sync_to_component(world, parent_entity_id)
-                notification_coordinator.enqueue_parent_notification(world, metadata)
-                await publish_events(
-                    world,
-                    parent_entity_id,
-                    category,
-                    correlation_id=metadata.correlation_id,
-                    traceparent=metadata.traceparent,
-                    task=metadata.prompt,
-                    result=error_msg,
-                    success=False,
-                    error=error_msg,
-                    trace_id=metadata.launch_trace_id,
-                    run_id=metadata.launch_run_id,
-                    parent_observation_id=metadata.launch_parent_observation_id,
-                    observation_id=metadata.correlation_id,
-                    publish_started=False,
-                )
+                await finalize_failure(str(exc))
                 return
 
-            metadata.updated_at = _utc_now_iso()
-            if success:
-                parsed_result = parse_background_result_envelope(result)
-                if parsed_result is None:
-                    metadata.result_summary = None
-                    full_result = result
+            try:
+                metadata.updated_at = _utc_now_iso()
+                if success:
+                    parsed_result = parse_background_result_envelope(result)
+                    if parsed_result is None:
+                        metadata.result_summary = None
+                        full_result = result
+                    else:
+                        metadata.result_summary, full_result = parsed_result
+                    metadata.status = "succeeded"
+                    metadata.finished_at = metadata.updated_at
+                    metadata.result_excerpt = full_result[:200]
+                    if len(full_result.encode("utf-8")) <= 8192:
+                        metadata.artifact_inline_content = full_result
+                    persisted = persist_result(full_result)
+                    if persisted is not None:
+                        artifact_id, record_path, inline_content = persisted
+                        metadata.artifact_id = artifact_id
+                        metadata.artifact_record_path = record_path
+                        metadata.artifact_inline_content = inline_content
                 else:
-                    metadata.result_summary, full_result = parsed_result
-                metadata.status = "succeeded"
-                metadata.finished_at = metadata.updated_at
-                metadata.result_excerpt = full_result[:200]
-                if len(full_result.encode("utf-8")) <= 8192:
-                    metadata.artifact_inline_content = full_result
-                persisted = persist_result(full_result)
-                if persisted is not None:
-                    artifact_id, record_path, inline_content = persisted
-                    metadata.artifact_id = artifact_id
-                    metadata.artifact_record_path = record_path
-                    metadata.artifact_inline_content = inline_content
-            else:
-                metadata.status = "failed"
-                metadata.finished_at = metadata.updated_at
-                metadata.error = error
-            await runtime_manager.update_status(session_id, metadata.status)
+                    metadata.status = "failed"
+                    metadata.finished_at = metadata.updated_at
+                    metadata.error = error
+                await runtime_manager.update_status(session_id, metadata.status)
+            except Exception as exc:
+                # Finalization itself failed (persist IO error, status-update
+                # race, ...). Without this the exception escapes the task,
+                # the session stays parked in "running", and every waiter
+                # hangs forever.
+                logger.error(
+                    "subagent_background_finalization_failed",
+                    session_id=session_id,
+                    category=category,
+                    exception=str(exc),
+                )
+                await finalize_failure(f"finalization failed: {exc}")
+                return
+
             logger.info(
                 "subagent_background_finished",
                 session_id=session_id,

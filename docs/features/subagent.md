@@ -410,12 +410,12 @@ The `subagent_wait` tool puts the parent agent into a future-based wait state un
 - **`timeout`**: Optional per-period timeout in seconds. If sessions are still running when the timeout fires, the deadline is extended. If any sessions have failed, a failure notification is injected for the LLM to act on.
 - **`auto_restart_budget`**: Maximum automatic restarts per failed session (default 0 = disabled). When >0 and the wait system has a `resume_callback`, failed sessions are automatically restarted up to this budget before surfacing to the LLM.
 - **Behavior**: The parent agent is woken only when **all** sessions in the wait scope reach a terminal state (wait-all semantics). On timeout with running sessions, the wait deadline is extended. On timeout with failed sessions, a `role="user"` failure notification is injected so the LLM can call `subagent_resume` to restart failed sessions.
+- **Defensive re-check**: While blocked, the wait re-evaluates its scope at a bounded interval (`SubagentWaitSystem(defensive_recheck_interval=5.0)`). Terminal transitions normally wake the future immediately through the notification path; the re-check covers transitions that bypass it (e.g. a session cancelled directly on the runtime manager from a TUI inspector), so a `timeout=null` wait can never hang forever.
 
 ### Durable Notification Semantics
 
-When a background session completes, the system enqueues a durable unread notification for the parent:
-- **Wake-worthy states**: `succeeded`, `failed`, and `timed_out` sessions generate notifications.
-- **Non-wake-worthy states**: `cancelled` sessions do NOT generate notifications.
+When a background session reaches a terminal state, the system enqueues a durable unread notification for the parent:
+- **Wake-worthy states**: every terminal state — `succeeded`, `failed`, `timed_out`, and `cancelled` — generates a notification and wakes a matching `subagent_wait`. (Cancellation still publishes no `DelegationCompletedEvent`: the delegation never completed.)
 - **Persistence**: Notifications survive world save/load (restore-safe).
 
 ### Wake Notification Delivery

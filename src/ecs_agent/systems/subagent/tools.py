@@ -394,6 +394,14 @@ def make_cancel_handler(
         await system._runtime_manager.sync_to_component(world, parent_entity_id)
 
         session = await system._runtime_manager.get_session(session_id)
+        if session is not None:
+            # Wake any pending subagent_wait on this scope. The background
+            # task's CancelledError path covers running sessions, but a
+            # still-queued session has no task — without this the waiter's
+            # future is never resolved.
+            system._notification_coordinator.enqueue_parent_notification(
+                world, session
+            )
 
         logger.info(
             "subagent_cancel_completed",

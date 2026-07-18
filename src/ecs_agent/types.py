@@ -751,7 +751,13 @@ FAILED_SUBAGENT_STATUSES: frozenset[SubagentLifecycleStatus] = frozenset(
 
 
 def is_wake_worthy(status: SubagentLifecycleStatus) -> bool:
-    return status in {"succeeded", "failed", "timed_out"}
+    """True when a status transition should notify/wake the waiting parent.
+
+    Every terminal status is wake-worthy — including "cancelled": a parent
+    blocked in subagent_wait must wake when a waited session is cancelled,
+    otherwise the wait (and the whole world tick) hangs forever.
+    """
+    return status in COMPLETED_SUBAGENT_STATUSES
 
 
 def _normalize_subagent_lifecycle_status(status: str) -> SubagentLifecycleStatus:
@@ -818,7 +824,7 @@ class SubagentNotificationRecord:
     notification_id: str
     session_id: str
     parent_entity_id: int
-    terminal_status: Literal["succeeded", "failed", "timed_out"]
+    terminal_status: Literal["succeeded", "failed", "timed_out", "cancelled"]
     summary: str | None
     error: str | None
     created_at: str

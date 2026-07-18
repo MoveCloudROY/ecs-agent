@@ -1289,3 +1289,53 @@ def test_builtin_read_only_tools_are_concurrency_safe(tmp_path: Path) -> None:
     mutating = ("write_file", "edit_file", "bash", "interactive_bash", "code_execution")
     for name in mutating:
         assert tools[name].concurrency_safe is False, name
+
+
+@pytest.mark.asyncio
+async def test_interactive_bash_times_out_on_blocking_subcommand() -> None:
+    """A blocking tmux subcommand must not hang the run forever."""
+    if interactive_bash is None:
+        pytest.skip("interactive_bash not implemented yet")
+    import shutil
+
+    if shutil.which("tmux") is None:
+        pytest.skip("tmux not installed")
+
+    # wait-for only blocks when a tmux server is running; without one it
+    # errors out immediately.
+    session_name = "ecs-ib-timeout-test"
+    await interactive_bash(f"new-session -d -s {session_name}")
+    try:
+        with pytest.raises(ValueError, match="timed out"):
+            await interactive_bash("wait-for ecs-test-never-signalled", timeout=0.3)
+    finally:
+        await interactive_bash(f"kill-session -t {session_name}")
+
+
+@pytest.mark.asyncio
+async def test_communicate_with_timeout_kills_hanging_process() -> None:
+    """The shared timeout helper terminates the process group on expiry."""
+    import asyncio as _asyncio
+
+    from ecs_agent.tools.builtins.bash_tool import _communicate_with_timeout
+
+    process = await _asyncio.create_subprocess_exec(
+        "sleep",
+        "30",
+        stdout=_asyncio.subprocess.PIPE,
+        stderr=_asyncio.subprocess.PIPE,
+        start_new_session=True,
+    )
+    with pytest.raises(ValueError, match="timed out after 0.2s"):
+        await _communicate_with_timeout(process, 0.2, "sleep 30")
+    assert process.returncode is not None
+
+
+def test_interactive_bash_schema_has_optional_timeout() -> None:
+    """timeout is exposed in the tool schema but optional (has a default)."""
+    if interactive_bash is None:
+        pytest.skip("interactive_bash not implemented yet")
+
+    schema = interactive_bash._tool_schema  # type: ignore[attr-defined]
+    assert "timeout" in schema.parameters["properties"]
+    assert "timeout" not in schema.parameters.get("required", [])

@@ -316,7 +316,7 @@ def test_invalid_lifecycle_transition_raises_value_error(
         ("succeeded", True),
         ("failed", True),
         ("timed_out", True),
-        ("cancelled", False),
+        ("cancelled", True),
     ],
 )
 def test_is_wake_worthy_returns_expected_terminal_wake_policy(
@@ -3016,7 +3016,7 @@ async def test_timed_out_background_session_enqueues_parent_notification(
     assert "timeout" in completed_events[0].error.lower()
 
 
-async def test_cancelled_background_session_does_not_enqueue_notification(
+async def test_cancelled_background_session_enqueues_cancellation_notification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _reset_global_scheduler(monkeypatch)
@@ -3071,7 +3071,11 @@ async def test_cancelled_background_session_does_not_enqueue_notification(
 
     queue = world.get_component(parent_entity, SubagentNotificationQueueComponent)
     assert queue is not None
-    assert queue.notifications == []
+    # Cancellation is wake-worthy: exactly one "cancelled" notification so a
+    # parent blocked in subagent_wait wakes up. It still publishes no
+    # DelegationCompletedEvent (the delegation never completed).
+    assert [n.terminal_status for n in queue.notifications] == ["cancelled"]
+    assert [n.session_id for n in queue.notifications] == [session_id]
     assert completed_events == []
 
 

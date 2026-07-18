@@ -135,7 +135,7 @@ Finds files matching a glob pattern in the workspace.
 - **Output**: Sorted, newline-delimited workspace-relative paths. Empty string if no matches.
 - **Security**: Restricted to the workspace root.
 
-### `interactive_bash(tmux_command) -> str`
+### `interactive_bash(tmux_command, timeout=30.0) -> str`
 Executes a tmux subcommand for persistent interactive sessions. Pass the subcommand **without** the leading `tmux` prefix:
 
 ```python
@@ -143,6 +143,8 @@ await interactive_bash("new-session -d -s train")
 await interactive_bash("send-keys -t train 'python train.py' Enter")
 await interactive_bash("capture-pane -t train -p")
 ```
+
+- **Timeout**: the tmux subcommand itself is bounded by `timeout` seconds (default 30). Control subcommands return immediately; blocking ones (e.g. `wait-for`, a mistaken `attach-session`) are killed at the bound and raise `ValueError` instead of hanging the run. The long-running program inside the tmux session is unaffected — only the tmux client call is bounded.
 
 ---
 

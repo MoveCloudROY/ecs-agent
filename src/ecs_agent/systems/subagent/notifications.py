@@ -73,11 +73,13 @@ class NotificationCoordinator:
         if not metadata.background or not is_wake_worthy(metadata.status):
             return
 
-        terminal_status: Literal["succeeded", "failed", "timed_out"]
+        terminal_status: Literal["succeeded", "failed", "timed_out", "cancelled"]
         if metadata.status == "succeeded":
             terminal_status = "succeeded"
         elif metadata.status == "failed":
             terminal_status = "failed"
+        elif metadata.status == "cancelled":
+            terminal_status = "cancelled"
         else:
             terminal_status = "timed_out"
 

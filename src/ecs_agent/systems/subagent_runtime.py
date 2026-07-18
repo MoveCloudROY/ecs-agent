@@ -204,8 +204,36 @@ class SubagentRuntimeManager:
     ) -> None:
         try:
             await coroutine_factory()
+        except Exception as exc:
+            # Last-resort net: an exception escaping the session coroutine
+            # would otherwise die unobserved on the task while the session
+            # stays parked in a pending status and waiters hang forever.
+            logger.error(
+                "subagent_session_escaped_exception",
+                session_id=session_id,
+                exception=str(exc),
+            )
+            await self._force_fail_session(session_id, f"internal error: {exc}")
         finally:
             await self.release_slot(session_id)
+
+    async def _force_fail_session(self, session_id: str, error: str) -> None:
+        """Force a session into 'failed' and signal its terminal event.
+
+        Bypasses lifecycle-transition validation on purpose: this is the
+        recovery path for sessions whose normal finalization already broke.
+        Idempotent and never raises.
+        """
+        async with self._lock:
+            metadata = self._sessions.get(session_id)
+            if metadata is not None and metadata.status not in _TERMINAL_STATUSES:
+                metadata.status = "failed"
+                metadata.error = error
+                metadata.updated_at = _utc_now_iso()
+                if metadata.finished_at is None:
+                    metadata.finished_at = metadata.updated_at
+
+        self._signal_session_terminal(session_id)
 
     async def _try_admit(self) -> None:
         admitted = await self._scheduler.reserve_admissions()
@@ -362,6 +390,18 @@ class SubagentRuntimeManager:
             metadata = self._sessions.get(session_id)
             if metadata is None:
                 logger.warning("timeout_update_missing_session", session_id=session_id)
+                return
+
+            if metadata.status in _TERMINAL_STATUSES:
+                # Lost the race against a concurrent terminal transition
+                # (typically cancel_session). Keep the winner's status; raising
+                # here would escape the timeout path and park the session.
+                logger.info(
+                    "timeout_update_after_terminal",
+                    session_id=session_id,
+                    status=metadata.status,
+                )
+                self._signal_session_terminal(session_id)
                 return
 
             validate_subagent_lifecycle_transition(metadata.status, "timed_out")

@@ -35,6 +35,32 @@ async def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
         await asyncio.wait_for(process.wait(), timeout=1.0)
 
 
+async def _communicate_with_timeout(
+    process: asyncio.subprocess.Process,
+    timeout: float,
+    describe: str,
+) -> tuple[bytes, bytes]:
+    """communicate() bounded by a timeout, killing the process group on expiry.
+
+    The process must have been spawned with ``start_new_session=True`` so the
+    group kill cannot reach the caller's own process group.
+
+    Raises:
+        ValueError: When the timeout expires (after terminating the process).
+    """
+    try:
+        return await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        await _terminate_process_group(process)
+        raise ValueError(f"{describe} timed out after {timeout}s") from exc
+    except asyncio.CancelledError:
+        await _terminate_process_group(process)
+        raise
+    finally:
+        if process.returncode is None:
+            await _terminate_process_group(process)
+
+
 @tool(description="Execute shell command in workspace with timeout.")
 async def bash(
     command: Annotated[str, "Shell command to execute."],
@@ -53,17 +79,7 @@ async def bash(
         start_new_session=True,
     )
 
-    try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-    except asyncio.TimeoutError as exc:
-        await _terminate_process_group(process)
-        raise ValueError(f"Command timed out after {timeout}s") from exc
-    except asyncio.CancelledError:
-        await _terminate_process_group(process)
-        raise
-    finally:
-        if process.returncode is None:
-            await _terminate_process_group(process)
+    stdout, stderr = await _communicate_with_timeout(process, timeout, "Command")
 
     stdout_text = stdout.decode("utf-8", errors="replace")
     stderr_text = stderr.decode("utf-8", errors="replace")
@@ -88,15 +104,24 @@ async def interactive_bash(
         "tmux subcommand and arguments without the leading 'tmux' prefix. "
         "Example: 'new-session -d -s myapp' or 'send-keys -t myapp \"ls\" Enter'.",
     ],
+    timeout: Annotated[
+        float,
+        "Maximum seconds to wait for the tmux subcommand before killing it. "
+        "tmux control subcommands normally return immediately; blocking "
+        "subcommands (e.g. 'wait-for') are cut off at this bound.",
+    ] = 30.0,
 ) -> str:
     process = await asyncio.create_subprocess_exec(
         "tmux",
         *_split_tmux_args(tmux_command),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
     )
 
-    stdout, stderr = await process.communicate()
+    stdout, stderr = await _communicate_with_timeout(
+        process, timeout, f"tmux {tmux_command}"
+    )
     stdout_text = stdout.decode("utf-8", errors="replace")
     stderr_text = stderr.decode("utf-8", errors="replace")
     logger.info(

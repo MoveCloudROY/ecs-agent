@@ -115,9 +115,16 @@ class SubagentWaitSystem:
         self,
         priority: int = -5,
         resume_callback: ResumeCallback | None = None,
+        defensive_recheck_interval: float = 5.0,
     ) -> None:
         self.priority = priority
         self._resume_callback = resume_callback
+        # Upper bound on how long the wait blocks without re-evaluating its
+        # scope. Terminal transitions normally resolve the future through the
+        # NotificationCoordinator; this cap covers transitions that bypass it
+        # (e.g. a session cancelled directly on the runtime manager from a TUI
+        # inspector), which would otherwise hang a timeout=None wait forever.
+        self._defensive_recheck_interval = defensive_recheck_interval
 
     async def process(self, world: World) -> None:
         for entity_id, components in world.query(SubagentWaitComponent):
@@ -164,18 +171,34 @@ class SubagentWaitSystem:
         if component.future is None:
             component.future = asyncio.get_running_loop().create_future()
 
-        timeout = self._remaining_timeout(component)
-        if timeout is not None and timeout <= 0:
-            await self._handle_wait_timeout(world, entity_id, component)
-            return
+        while True:
+            timeout = self._remaining_timeout(component)
+            if timeout is not None and timeout <= 0:
+                await self._handle_wait_timeout(world, entity_id, component)
+                return
 
-        try:
-            await asyncio.wait_for(asyncio.shield(component.future), timeout=timeout)
-        except asyncio.TimeoutError:
-            await self._handle_wait_timeout(world, entity_id, component)
-            return
+            if timeout is None:
+                interval = self._defensive_recheck_interval
+            else:
+                interval = min(timeout, self._defensive_recheck_interval)
 
-        self._resolve_wait(world, entity_id, component)
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(component.future), timeout=interval
+                )
+            except asyncio.TimeoutError:
+                if timeout is not None and interval >= timeout:
+                    # The configured deadline (not just the re-check cap)
+                    # actually elapsed.
+                    await self._handle_wait_timeout(world, entity_id, component)
+                    return
+                if self._all_waited_sessions_terminal(world, entity_id, component):
+                    self._resolve_wait(world, entity_id, component)
+                    return
+                continue
+
+            self._resolve_wait(world, entity_id, component)
+            return
 
     def _maybe_snapshot_session_ids(
         self,
@@ -301,7 +324,10 @@ class SubagentWaitSystem:
                 )
             return base + "."
 
-        error_text = notification.error or "Unknown error"
+        if notification.terminal_status == "cancelled":
+            error_text = notification.error or "session was cancelled"
+        else:
+            error_text = notification.error or "Unknown error"
         return (
             f"- {notification.session_id} {notification.terminal_status}: {error_text}. "
             f'Call subagent_result(session_id="{notification.session_id}") '
