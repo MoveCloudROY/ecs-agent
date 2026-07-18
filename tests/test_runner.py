@@ -913,3 +913,89 @@ async def test_runner_tick_log_includes_world_name(capsys: pytest.CaptureFixture
     assert len(tick_events) > 0
     for e in tick_events:
         assert e["world_name"] == "tick-world"
+
+
+@pytest.mark.asyncio
+async def test_inband_interruption_does_not_swallow_system_completion() -> None:
+    """In-band interruption must not self-cancel the system task.
+
+    A system task that raises CancelledError on its own is silently ignored
+    by the runner's TaskGroup: no SystemExecutionCompletedEvent, unreachable
+    runner interruption handling, and a busy-loop with max_ticks=None.
+    """
+    from ecs_agent.types import SystemExecutionCompletedEvent
+
+    world = World()
+    model = ChunkedStreamingFakeModel(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="ignored"))
+        ],
+        chunks=["A", "B", "C"],
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Hello")]),
+    )
+    world.add_component(entity_id, StreamingComponent(enabled=True))
+
+    async def interrupt_on_first_delta(event: StreamContentDeltaEvent) -> None:
+        if event.entity_id == entity_id and event.delta == "A":
+            world.add_component(
+                entity_id,
+                InterruptionComponent(reason=InterruptionReason.USER_REQUESTED),
+            )
+
+    completed: list[SystemExecutionCompletedEvent] = []
+
+    async def on_completed(event: SystemExecutionCompletedEvent) -> None:
+        completed.append(event)
+
+    world.event_bus.subscribe(StreamContentDeltaEvent, interrupt_on_first_delta)
+    world.event_bus.subscribe(SystemExecutionCompletedEvent, on_completed)
+    world.register_system(ReasoningSystem(), priority=0)
+
+    await Runner().run(world, max_ticks=2)
+
+    reasoning_completions = [
+        event for event in completed if event.system.endswith("ReasoningSystem")
+    ]
+    assert reasoning_completions
+    assert all(event.status == "success" for event in reasoning_completions)
+
+
+class _SlowSystem:
+    async def process(self, world: World) -> None:
+        _ = world
+        await asyncio.sleep(0.3)
+
+
+@pytest.mark.asyncio
+async def test_runner_uncancels_after_swallowing_intentional_cancellation() -> None:
+    """Swallowing the interruption handshake must reset the cancelling count.
+
+    Without task.uncancel() the task stays in a cancelling state after the
+    runner returns gracefully, which corrupts the caller's structured
+    concurrency (outer wait_for/TaskGroup semantics).
+    """
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        InterruptionComponent(reason=InterruptionReason.USER_REQUESTED),
+    )
+    world.register_system(_SlowSystem(), priority=0)
+
+    async def driver() -> int:
+        await Runner().run(world, max_ticks=3)
+        current = asyncio.current_task()
+        assert current is not None
+        return current.cancelling()
+
+    task = asyncio.create_task(driver())
+    await asyncio.sleep(0.05)  # let the slow system start
+    task.cancel()
+
+    cancelling_count = await task
+    assert cancelling_count == 0

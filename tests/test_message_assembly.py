@@ -491,3 +491,110 @@ def test_assemble_messages_omits_volatile_suffix_when_absent() -> None:
     system_messages = [m for m in assembled if m.role == "system"]
     assert len(system_messages) == 1
     assert system_messages[0].cache_control is True
+
+
+# ---------------------------------------------------------------------------
+# Dangling tool-call span repair (interrupted turns / restored checkpoints)
+# ---------------------------------------------------------------------------
+
+
+def test_repair_inserts_synthetic_results_for_dangling_tool_calls() -> None:
+    from ecs_agent.prompts.message_assembly import repair_dangling_tool_spans
+    from ecs_agent.types import ToolCall
+
+    messages = [
+        Message(role="user", content="check the weather"),
+        Message(
+            role="assistant",
+            content="",
+            tool_calls=[ToolCall(id="call-1", name="get_weather", arguments={})],
+        ),
+        Message(role="user", content="continue please"),
+    ]
+
+    repaired = repair_dangling_tool_spans(messages)
+
+    assert [m.role for m in repaired] == ["user", "assistant", "tool", "user"]
+    synthetic = repaired[2]
+    assert synthetic.tool_call_id == "call-1"
+    assert "interrupted" in synthetic.content
+
+
+def test_repair_leaves_complete_spans_untouched() -> None:
+    from ecs_agent.prompts.message_assembly import repair_dangling_tool_spans
+    from ecs_agent.types import ToolCall
+
+    messages = [
+        Message(role="user", content="q"),
+        Message(
+            role="assistant",
+            content="",
+            tool_calls=[ToolCall(id="call-1", name="lookup", arguments={})],
+        ),
+        Message(role="tool", content="result", tool_call_id="call-1"),
+        Message(role="assistant", content="answer"),
+    ]
+
+    repaired = repair_dangling_tool_spans(messages)
+
+    assert repaired == messages
+
+
+def test_repair_fills_only_missing_ids_in_partial_spans() -> None:
+    from ecs_agent.prompts.message_assembly import repair_dangling_tool_spans
+    from ecs_agent.types import ToolCall
+
+    messages = [
+        Message(
+            role="assistant",
+            content="",
+            tool_calls=[
+                ToolCall(id="call-1", name="a", arguments={}),
+                ToolCall(id="call-2", name="b", arguments={}),
+            ],
+        ),
+        Message(role="tool", content="done-1", tool_call_id="call-1"),
+    ]
+
+    repaired = repair_dangling_tool_spans(messages)
+
+    assert [m.role for m in repaired] == ["assistant", "tool", "tool"]
+    assert repaired[1].tool_call_id == "call-1"
+    assert repaired[1].content == "done-1"
+    assert repaired[2].tool_call_id == "call-2"
+    assert "interrupted" in repaired[2].content
+
+
+def test_prepare_outbound_messages_repairs_dangling_spans() -> None:
+    from ecs_agent.components import ConversationComponent
+    from ecs_agent.core import World
+    from ecs_agent.prompts.message_assembly import prepare_outbound_messages
+    from ecs_agent.types import ToolCall
+
+    world = World()
+    entity_id = world.create_entity()
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[
+                Message(role="user", content="check"),
+                Message(
+                    role="assistant",
+                    content="",
+                    tool_calls=[ToolCall(id="call-9", name="probe", arguments={})],
+                ),
+                Message(role="user", content="anything?"),
+            ]
+        ),
+    )
+
+    messages, _ = prepare_outbound_messages(
+        world, entity_id, system_prompt="sys", current_tick=0
+    )
+
+    tool_replies = [m for m in messages if m.role == "tool"]
+    assert [m.tool_call_id for m in tool_replies] == ["call-9"]
+    assistant_index = next(
+        i for i, m in enumerate(messages) if m.role == "assistant" and m.tool_calls
+    )
+    assert messages[assistant_index + 1].role == "tool"

@@ -195,7 +195,7 @@ class ReasoningSystem:
             try:
                 attach_retry_event_bus(active_model, world.event_bus)
                 if streaming_enabled:
-                    result = await self._process_streaming(
+                    stream_outcome = await self._process_streaming(
                         world,
                         entity_id,
                         active_model,
@@ -206,6 +206,32 @@ class ReasoningSystem:
                         non_blocking_delta_publish,
                         previous_response_id,
                     )
+                    if stream_outcome is None:
+                        # In-band interruption: the partial turn is already
+                        # persisted and StreamEnd emitted. Ending the turn
+                        # normally (instead of self-raising CancelledError,
+                        # which the runner's TaskGroup silently ignores for
+                        # self-cancelled tasks) keeps sibling systems alive
+                        # and the runner's lifecycle events intact. The entity
+                        # stays parked behind its InterruptionComponent.
+                        await self._publish_cancelled_turn_events(
+                            world=world,
+                            entity_id=entity_id,
+                            provider_id=provider_id,
+                            model_id=active_model.model_id,
+                            messages=messages,
+                            tools=tools,
+                            streaming_enabled=streaming_enabled,
+                            model_parameters=model_parameters,
+                            invocation_started_at=invocation_started_at,
+                            invocation_start_time=invocation_start_time,
+                            observation_event_published=observation_event_published,
+                            invocation_event_published=invocation_event_published,
+                        )
+                        observation_event_published = True
+                        invocation_event_published = True
+                        continue
+                    result = stream_outcome
                 else:
                     # Pass the thread id only when one was recorded: chaining
                     # is provider-agnostic (LLMModel protocol), while models
@@ -381,45 +407,22 @@ class ReasoningSystem:
                     TerminalComponent(reason="provider_exhausted"),
                 )
             except asyncio.CancelledError:
-                if not observation_event_published:
-                    invocation_end_time = datetime.now(timezone.utc)
-                    await publish_llm_observation_completed_event(
-                        event_bus=world.event_bus,
-                        entity_id=entity_id,
-                        provider_id=provider_id,
-                        model=active_model.model_id,
-                        operation="reasoning",
-                        messages=messages,
-                        tools=tools,
-                        streaming=streaming_enabled,
-                        model_parameters=model_parameters,
-                        status="cancelled",
-                        duration_seconds=time.monotonic() - invocation_started_at,
-                        start_time=invocation_start_time,
-                        end_time=invocation_end_time,
-                    )
-                    observation_event_published = True
-                if not invocation_event_published:
-                    stream_completeness = StreamCompleteness.UNKNOWN
-                    interruption = world.get_component(entity_id, InterruptionComponent)
-                    if interruption is not None:
-                        partial_chunks = interruption.metadata.get("partial_chunks")
-                        if isinstance(partial_chunks, int) and partial_chunks > 0:
-                            stream_completeness = StreamCompleteness.PARTIAL
-                    await self._publish_llm_invocation_event(
-                        world=world,
-                        entity_id=entity_id,
-                        provider_id=provider_id,
-                        model=active_model.model_id,
-                        usage=None,
-                        stream_completeness=stream_completeness,
-                        request_id=None,
-                        operation="reasoning",
-                        status="cancelled",
-                        streaming=streaming_enabled,
-                        duration_seconds=time.monotonic() - invocation_started_at,
-                    )
-                    invocation_event_published = True
+                await self._publish_cancelled_turn_events(
+                    world=world,
+                    entity_id=entity_id,
+                    provider_id=provider_id,
+                    model_id=active_model.model_id,
+                    messages=messages,
+                    tools=tools,
+                    streaming_enabled=streaming_enabled,
+                    model_parameters=model_parameters,
+                    invocation_started_at=invocation_started_at,
+                    invocation_start_time=invocation_start_time,
+                    observation_event_published=observation_event_published,
+                    invocation_event_published=invocation_event_published,
+                )
+                observation_event_published = True
+                invocation_event_published = True
                 if world.get_component(entity_id, InterruptionComponent) is None:
                     world.add_component(
                         entity_id,
@@ -591,6 +594,66 @@ class ReasoningSystem:
             len(conversation.messages) if conversation is not None else -1
         )
 
+    async def _publish_cancelled_turn_events(
+        self,
+        *,
+        world: World,
+        entity_id: EntityId,
+        provider_id: str,
+        model_id: str,
+        messages: list[Message],
+        tools: list[ToolSchema] | None,
+        streaming_enabled: bool,
+        model_parameters: dict[str, Any] | None,
+        invocation_started_at: float,
+        invocation_start_time: datetime,
+        observation_event_published: bool,
+        invocation_event_published: bool,
+    ) -> None:
+        """Publish the cancelled-turn observability pair (observation + invocation).
+
+        Shared by the in-band interruption path (turn ends normally) and the
+        external-cancellation path (CancelledError re-raised); the flags skip
+        whichever event the caller already published.
+        """
+        if not observation_event_published:
+            invocation_end_time = datetime.now(timezone.utc)
+            await publish_llm_observation_completed_event(
+                event_bus=world.event_bus,
+                entity_id=entity_id,
+                provider_id=provider_id,
+                model=model_id,
+                operation="reasoning",
+                messages=messages,
+                tools=tools,
+                streaming=streaming_enabled,
+                model_parameters=model_parameters,
+                status="cancelled",
+                duration_seconds=time.monotonic() - invocation_started_at,
+                start_time=invocation_start_time,
+                end_time=invocation_end_time,
+            )
+        if not invocation_event_published:
+            stream_completeness = StreamCompleteness.UNKNOWN
+            interruption = world.get_component(entity_id, InterruptionComponent)
+            if interruption is not None:
+                partial_chunks = interruption.metadata.get("partial_chunks")
+                if isinstance(partial_chunks, int) and partial_chunks > 0:
+                    stream_completeness = StreamCompleteness.PARTIAL
+            await self._publish_llm_invocation_event(
+                world=world,
+                entity_id=entity_id,
+                provider_id=provider_id,
+                model=model_id,
+                usage=None,
+                stream_completeness=stream_completeness,
+                request_id=None,
+                operation="reasoning",
+                status="cancelled",
+                streaming=streaming_enabled,
+                duration_seconds=time.monotonic() - invocation_started_at,
+            )
+
     async def _process_streaming(
         self,
         world: World,
@@ -602,7 +665,14 @@ class ReasoningSystem:
         tools: list[ToolSchema] | None,
         non_blocking_delta_publish: bool,
         previous_response_id: str | None,
-    ) -> CompletionResult:
+    ) -> CompletionResult | None:
+        """Consume the model stream and build the turn result.
+
+        Returns ``None`` when an in-band interruption (InterruptionComponent
+        observed mid-stream) ended the turn early: the partial content is
+        already persisted and StreamEnd emitted; the caller publishes the
+        cancelled observability events and skips normal turn completion.
+        """
         # Same conditional as the non-streaming path: the thread id is passed
         # whenever recorded, regardless of the concrete model class.
         if previous_response_id is not None:
@@ -635,6 +705,7 @@ class ReasoningSystem:
         reasoning_signature: str | None = None
         response_id: str | None = None
         stream_status = "success"
+        interrupted = False
 
         await world.event_bus.publish(
             StreamStartEvent(
@@ -650,7 +721,8 @@ class ReasoningSystem:
         try:
             async for delta in stream:
                 if world.get_component(entity_id, InterruptionComponent) is not None:
-                    raise asyncio.CancelledError()
+                    interrupted = True
+                    break
 
                 if not first_sse_seen:
                     first_sse_seen = True
@@ -787,23 +859,52 @@ class ReasoningSystem:
                     response_id = delta.response_id
 
                 if world.get_component(entity_id, InterruptionComponent) is not None:
-                    raise asyncio.CancelledError()
+                    interrupted = True
+                    break
+
+            if interrupted:
+                # In-band interruption: end the turn without raising. A
+                # self-raised CancelledError would mark this system task
+                # cancelled, and the runner's TaskGroup silently ignores
+                # self-cancelled children — swallowing the interruption and
+                # leaking the system-completed event. Partial tool calls are
+                # dropped: they would never execute, and salvaging them
+                # leaves dangling assistant tool_calls that strict providers
+                # reject on the next request.
+                stream_status = "cancelled"
+                tool_call_buffers.clear()
+                partial_content = "".join(content_chunks)
+                if partial_content and conversation is not None:
+                    conversation.messages.append(
+                        Message(role="assistant", content=partial_content)
+                    )
+                interruption = world.get_component(entity_id, InterruptionComponent)
+                if interruption is not None:
+                    interruption.metadata.update(
+                        {
+                            "partial_chunks": len(content_chunks),
+                            "partial_content": partial_content,
+                            "partial_content_length": len(partial_content),
+                        }
+                    )
+                return None
         except asyncio.CancelledError:
+            # Genuine (external) cancellation delivered at an await point:
+            # salvage the partial content, mark the interruption, re-raise.
+            # Tool calls are dropped for the same dangling-span reason as the
+            # in-band path.
             stream_status = "cancelled"
-            partial_message = Message(
-                role="assistant",
-                content="".join(content_chunks),
-                tool_calls=self._finalize_tool_calls(tool_call_buffers),
-            )
-            if partial_message.content or partial_message.tool_calls:
-                if conversation is not None:
-                    conversation.messages.append(partial_message)
+            partial_content = "".join(content_chunks)
+            if partial_content and conversation is not None:
+                conversation.messages.append(
+                    Message(role="assistant", content=partial_content)
+                )
 
             interruption = world.get_component(entity_id, InterruptionComponent)
             partial_metadata = {
                 "partial_chunks": len(content_chunks),
-                "partial_content": partial_message.content,
-                "partial_content_length": len(partial_message.content),
+                "partial_content": partial_content,
+                "partial_content_length": len(partial_content),
             }
 
             if interruption is None:
@@ -820,14 +921,11 @@ class ReasoningSystem:
             raise
         except Exception:
             stream_status = "error"
-            partial_message = Message(
-                role="assistant",
-                content="".join(content_chunks),
-                tool_calls=self._finalize_tool_calls(tool_call_buffers),
-            )
-            if partial_message.content or partial_message.tool_calls:
-                if conversation is not None:
-                    conversation.messages.append(partial_message)
+            partial_content = "".join(content_chunks)
+            if partial_content and conversation is not None:
+                conversation.messages.append(
+                    Message(role="assistant", content=partial_content)
+                )
             raise
         finally:
             await world.event_bus.publish(

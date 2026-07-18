@@ -318,3 +318,31 @@ async def test_wait_recheck_unblocks_on_untracked_terminal_transition() -> None:
 
     await asyncio.wait_for(process_task, timeout=2.0)
     assert world.get_component(parent, SubagentWaitComponent) is None
+
+
+async def test_subagent_result_propagates_external_cancellation() -> None:
+    """External task cancellation must not be misreported as a session cancel.
+
+    The only CancelledError that can reach the result handler's await is an
+    external cancel of the parent task (session cancellation wakes the wait
+    via event.set()). Swallowing it loses the cancellation and keeps the run
+    going.
+    """
+    from ecs_agent.systems.subagent.tools import make_result_handler
+
+    world = World()
+    parent = world.create_entity()
+    manager = SubagentRuntimeManager()
+    record = _record("ses_ext_cancel", parent, status="running")
+    await manager.restore_session_metadata(record)
+
+    class _FakeSystem:
+        _runtime_manager = manager
+
+    handler = make_result_handler(cast(Any, _FakeSystem()), world, parent)
+    task = asyncio.create_task(handler(session_id=record.session_id))
+    await asyncio.sleep(0.05)  # reach the event wait
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task

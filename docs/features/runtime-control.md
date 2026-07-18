@@ -153,10 +153,28 @@ Component-driven agent stopping with partial content preservation.
 
 ### Behavior
 
-- `Runner` detects `InterruptionComponent` and raises `asyncio.CancelledError`
-- `ReasoningSystem` catches `CancelledError`, preserves **partial content** in conversation, then re-raises
-- Streaming: in-loop checks before/after delta processing for mid-generation interruption
-- Metadata enriched with partial stream telemetry: `partial_content`, `partial_chunks`, `partial_content_length`
+Two distinct paths:
+
+- **In-band interruption** (the component appears mid-stream, e.g. a stop
+  button handler): `ReasoningSystem` detects it at its in-loop checks
+  (before/after each delta), ends the turn **normally** — partial content is
+  preserved in the conversation, partial tool calls are dropped (they would
+  never execute and would leave a dangling span), `StreamEnd(status=
+  "cancelled")` and the cancelled observability events are published, and the
+  entity stays parked behind its `InterruptionComponent`. No exception is
+  raised: a self-raised `CancelledError` would be silently ignored by the
+  runner's system TaskGroup, swallowing the interruption. Other entities in
+  the same world keep running.
+- **External cancellation** (`task.cancel()` on the run): the
+  `CancelledError` delivered at the await point is caught, partial content is
+  preserved, an `InterruptionComponent` is attached if absent, and the
+  exception is **re-raised** so cancellation propagates. When the `Runner`
+  swallows it as an intentional stop (interruption present before the tick),
+  it calls `task.uncancel()` to rebalance the cancelling count before
+  returning gracefully.
+
+Metadata is enriched with partial stream telemetry in both paths:
+`partial_content`, `partial_chunks`, `partial_content_length`.
 
 ### Example
 
@@ -177,7 +195,7 @@ world.add_component(agent, InterruptionComponent(
     metadata={"source": "web_ui"}
 ))
 
-# Next tick: Runner raises CancelledError, ReasoningSystem saves partial response
+# Next tick: ReasoningSystem ends the turn early and saves the partial response
 await runner.run(world, max_ticks=1)
 
 # Check partial content
@@ -188,8 +206,8 @@ if conv and conv.messages:
 
 ### Constraints
 
-- `CancelledError` **must be re-raised** after cleanup (or task won't be marked as cancelled)
-- Partial content preserved **before** re-raise
+- External `CancelledError` **must be re-raised** after cleanup so cancellation propagates; in-band interruption must NOT raise
+- Partial content preserved in both paths; partial tool calls are dropped (dangling spans are additionally repaired at send time by `repair_dangling_tool_spans`)
 - Interruption state not overwritten if already present (metadata enriched instead)
 
 ## Constraints
@@ -197,7 +215,7 @@ if conv and conv.messages:
 - **Entity Registry**: Names must be unique (ValueError on duplicate), tags and metadata are optional
 - **System Lifecycle**: Operations queued until tick boundary, applied in FIFO order
 - **Model Switching**: Takes effect at next request start, sampled values stable for entire request
-- **Graceful Interruption**: CancelledError must be re-raised after partial content preservation
+- **Graceful Interruption**: in-band interruption ends the turn without raising; external CancelledError is re-raised after partial content preservation
 ## Prompt Normalization & Injection
 
 Dynamic prompt enhancement via trigger template injection and structured context queuing.

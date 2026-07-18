@@ -774,8 +774,8 @@ async def test_streaming_metrics_capture_first_delta_duration_and_interruption()
         LLMComponent(model=InterruptingStreamingModel(interrupted_world, interrupted_entity)),
     )
 
-    with pytest.raises(asyncio.CancelledError):
-        await ReasoningSystem().process(interrupted_world)
+    # In-band interruption ends the turn normally (no CancelledError escapes).
+    await ReasoningSystem().process(interrupted_world)
 
     interrupted_registry = interrupted_metrics.registry
     interrupted_labels = {"provider": "InterruptingStreamingModel", "model": "interrupt-model", "operation": "reasoning", "status": "cancelled"}

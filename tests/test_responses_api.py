@@ -1439,8 +1439,8 @@ async def test_responses_api_streaming_previous_response_id_preserved_on_interru
 
     world.add_component(entity, StreamingComponent(enabled=True))
 
-    with pytest.raises(asyncio.CancelledError):
-        await ReasoningSystem().process(world)
+    # In-band interruption ends the turn normally (no CancelledError escapes).
+    await ReasoningSystem().process(world)
 
     state = world.get_component(entity, ResponsesAPIStateComponent)
     assert state is not None

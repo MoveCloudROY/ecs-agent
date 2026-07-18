@@ -127,7 +127,15 @@ class Runner:
                     await world.process()
                 except asyncio.CancelledError:
                     if interrupted_before_tick:
-                        # Pre-existing interruption — intentional stop, swallow CancelledError
+                        # Pre-existing interruption — intentional stop, swallow
+                        # the CancelledError. uncancel() rebalances the task's
+                        # cancelling count (PEP 654 / 3.11 semantics): without
+                        # it the task stays in a cancelling state after this
+                        # graceful return, corrupting the caller's outer
+                        # wait_for/TaskGroup behavior.
+                        current_task = asyncio.current_task()
+                        if current_task is not None:
+                            current_task.uncancel()
                         logger.info(
                             STANDARD_EVENT_NAMES["RUN_COMPLETE"],
                             reason="interruption_component",

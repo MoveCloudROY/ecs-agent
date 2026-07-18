@@ -332,18 +332,12 @@ def make_result_handler(
                     "timeout": timeout,
                 }
             )
-        except asyncio.CancelledError:
-            logger.warning(
-                "subagent_result_cancelled",
-                parent_entity=parent_entity_id,
-                session_id=session_id,
-            )
-            return json.dumps(
-                {
-                    "error": f"Session was cancelled: {session_id}",
-                    "session_id": session_id,
-                }
-            )
+        # No `except CancelledError` here on purpose: a *session* cancellation
+        # wakes this wait through the terminal Event (set by cancel_session),
+        # so any CancelledError reaching this await is an external cancel of
+        # the parent task and must propagate — converting it into a "session
+        # was cancelled" payload would swallow the cancellation and keep the
+        # run going (and bypass outer wait_for timeouts on 3.12+).
 
         session = await system._runtime_manager.get_session(session_id)
         if session is None:

@@ -880,8 +880,10 @@ async def test_streaming_interrupt_mid_generation_preserves_partial_and_emits_st
     world.event_bus.subscribe(StreamContentDeltaEvent, on_delta)
     world.event_bus.subscribe(StreamEndEvent, on_end)
 
-    with pytest.raises(asyncio.CancelledError):
-        await ReasoningSystem().process(world)
+    # In-band interruption ends the turn normally: no CancelledError escapes
+    # (a self-cancelled system task would be silently swallowed by the
+    # runner's TaskGroup, leaking the interruption).
+    await ReasoningSystem().process(world)
 
     conversation = world.get_component(entity_id, ConversationComponent)
     interruption = world.get_component(entity_id, InterruptionComponent)
@@ -893,6 +895,11 @@ async def test_streaming_interrupt_mid_generation_preserves_partial_and_emits_st
     assert interruption.reason == InterruptionReason.SYSTEM_PAUSE
     assert error is None
     assert seen_events == ["start", "delta:A", "end"]
+    # The interrupted turn is parked, not completed: no terminal marker.
+    from ecs_agent.components import PendingToolCallsComponent, TerminalComponent
+
+    assert world.get_component(entity_id, TerminalComponent) is None
+    assert world.get_component(entity_id, PendingToolCallsComponent) is None
 
 
 @pytest.mark.asyncio
@@ -935,3 +942,63 @@ async def test_streaming_interrupt_component_preexisting_skips_streaming_safely(
     assert conversation is not None
     assert conversation.messages == [Message(role="user", content="hello")]
     assert seen_events == []
+
+
+class _ToolCallThenHangStreamingFakeModel(FakeModel):
+    """Streams a tool-call delta, then content the test interrupts on."""
+
+    async def _stream_complete(self, result):
+        _ = result
+        from ecs_agent.types import ToolCall
+
+        yield StreamDelta(
+            tool_calls=[
+                ToolCall(id="call-1", name="lookup", arguments={"_partial": '{"q": "x'})
+            ]
+        )
+        yield StreamDelta(content="thinking about it")
+        yield StreamDelta(content="never delivered")
+        yield StreamDelta(finish_reason="tool_calls")
+
+
+@pytest.mark.asyncio
+async def test_inband_interruption_drops_partial_tool_calls() -> None:
+    """An interrupted turn must not leave dangling assistant tool_calls.
+
+    Tool calls salvaged into the history would never execute, so the next
+    request ships assistant tool_calls without tool replies — a hard 400 on
+    strict providers.
+    """
+    world = World()
+    model = _ToolCallThenHangStreamingFakeModel(
+        responses=[
+            CompletionResult(message=Message(role="assistant", content="ignored"))
+        ]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="hello")]),
+    )
+    world.add_component(entity_id, StreamingComponent(enabled=True))
+
+    async def interrupt_on_first_content(event: StreamContentDeltaEvent) -> None:
+        if event.entity_id == entity_id:
+            world.add_component(
+                entity_id,
+                InterruptionComponent(reason=InterruptionReason.USER_REQUESTED),
+            )
+
+    world.event_bus.subscribe(StreamContentDeltaEvent, interrupt_on_first_content)
+
+    await ReasoningSystem().process(world)
+
+    from ecs_agent.components import PendingToolCallsComponent
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    last_message = conversation.messages[-1]
+    assert last_message.content == "thinking about it"
+    assert last_message.tool_calls is None
+    assert world.get_component(entity_id, PendingToolCallsComponent) is None

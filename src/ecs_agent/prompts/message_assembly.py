@@ -22,6 +22,49 @@ logger = get_logger(__name__)
 CONTEXT_POOL_DELIMITER = "\n\n---\n\n"
 CONTEXT_POOL_MARKER = "[PROMPT_CONTEXT_POOL]"
 
+INTERRUPTED_TOOL_RESULT = (
+    "[tool call was interrupted before a result was produced]"
+)
+
+
+def repair_dangling_tool_spans(messages: list[Message]) -> list[Message]:
+    """Insert synthetic results for assistant tool calls that have no reply.
+
+    Interrupted turns and restored checkpoints can leave an assistant message
+    whose ``tool_calls`` were never answered by ``role="tool"`` messages.
+    Strict providers reject such histories outright (HTTP 400), so every
+    outbound message list gets its spans completed with a placeholder result
+    before it is sent. Complete spans pass through untouched.
+    """
+    repaired: list[Message] = []
+    index = 0
+    total = len(messages)
+    while index < total:
+        message = messages[index]
+        repaired.append(message)
+        index += 1
+        if message.role != "assistant" or not message.tool_calls:
+            continue
+
+        answered_ids: set[str] = set()
+        while index < total and messages[index].role == "tool":
+            reply = messages[index]
+            repaired.append(reply)
+            if reply.tool_call_id is not None:
+                answered_ids.add(reply.tool_call_id)
+            index += 1
+
+        for tool_call in message.tool_calls:
+            if tool_call.id not in answered_ids:
+                repaired.append(
+                    Message(
+                        role="tool",
+                        content=INTERRUPTED_TOOL_RESULT,
+                        tool_call_id=tool_call.id,
+                    )
+                )
+    return repaired
+
 if TYPE_CHECKING:
     from ecs_agent.components.definitions import (
         ContextTrimConfig,
@@ -491,6 +534,10 @@ def prepare_outbound_messages(
         context_pool_items=context_pool_items_for_assembly,
         trigger_specs=trigger_specs,
     )
+
+    # Complete any dangling tool spans BEFORE trimming so the synthetic
+    # replies participate in token accounting like real ones.
+    messages = repair_dangling_tool_spans(messages)
 
     if budget_config is not None and tree is None:
         from ecs_agent.components.definitions import ContextCacheComponent
