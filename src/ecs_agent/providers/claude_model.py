@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 import structlog
 
+from ecs_agent.accounting.normalization import normalize_anthropic_usage
 from ecs_agent.providers.anthropic_messages_adapter import (
     AnthropicMessagesAdapter,
     AnthropicMessagesAdapterConfig,
@@ -115,6 +116,10 @@ class ClaudeModel:
         )
 
         tool_use_state: dict[int, dict[str, str]] = {}
+        signature_state: dict[int, str] = {}
+        # Raw usage merged across events: message_start carries input/cache
+        # tokens, message_delta carries the cumulative output tokens.
+        usage_state: dict[str, Any] = {}
 
         async def handle_event(
             event_type: str | None,
@@ -125,6 +130,12 @@ class ClaudeModel:
 
             event_data = json.loads(payload_data)
             resolved_event_type = event_type or event_data.get("type")
+
+            if resolved_event_type == "message_start":
+                message_usage = event_data.get("message", {}).get("usage")
+                if isinstance(message_usage, dict):
+                    usage_state.update(message_usage)
+                return
 
             if resolved_event_type == "content_block_start":
                 index = event_data.get("index")
@@ -148,6 +159,20 @@ class ClaudeModel:
                         yield StreamDelta(content=text)
                     return
 
+                if delta_type == "thinking_delta":
+                    thinking = delta.get("thinking")
+                    if isinstance(thinking, str):
+                        yield StreamDelta(reasoning_content=thinking)
+                    return
+
+                if delta_type == "signature_delta" and isinstance(index, int):
+                    signature = delta.get("signature")
+                    if isinstance(signature, str):
+                        signature_state[index] = (
+                            signature_state.get(index, "") + signature
+                        )
+                    return
+
                 if delta_type == "input_json_delta" and isinstance(index, int):
                     partial_json = delta.get("partial_json")
                     if isinstance(partial_json, str):
@@ -165,6 +190,12 @@ class ClaudeModel:
             if resolved_event_type == "content_block_stop":
                 index = event_data.get("index")
                 if not isinstance(index, int):
+                    return
+
+                if index in signature_state:
+                    yield StreamDelta(
+                        reasoning_signature=signature_state.pop(index)
+                    )
                     return
 
                 if index not in tool_use_state:
@@ -191,8 +222,21 @@ class ClaudeModel:
             if resolved_event_type == "message_delta":
                 delta = event_data.get("delta", {})
                 stop_reason = delta.get("stop_reason")
-                if isinstance(stop_reason, str):
-                    yield StreamDelta(finish_reason=stop_reason)
+                if not isinstance(stop_reason, str):
+                    stop_reason = None
+
+                delta_usage = event_data.get("usage")
+                if isinstance(delta_usage, dict):
+                    usage_state.update(delta_usage)
+
+                usage = None
+                if usage_state:
+                    usage = normalize_anthropic_usage(usage_state)
+                    usage.provider_id = self._provider_config.provider_id
+                    usage.model = self._model
+
+                if stop_reason is not None or usage is not None:
+                    yield StreamDelta(finish_reason=stop_reason, usage=usage)
                 return
 
         try:
@@ -272,7 +316,11 @@ class ClaudeModel:
         tools: list[ToolSchema] | None = None,
         stream: bool = False,
         response_format: dict[str, Any] | None = None,
+        thread_response_id: str | None = None,
     ) -> CompletionResult | AsyncIterator[StreamDelta]:
+        # Anthropic has no stored-response chaining; accepted per the LLMModel
+        # protocol and ignored.
+        del thread_response_id
         request = AnthropicMessagesRequest(
             messages=messages,
             tools=tools,

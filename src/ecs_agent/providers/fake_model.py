@@ -16,6 +16,7 @@ class FakeModel:
         self._model_id = model_id
         self._index = 0
         self.last_response_format: dict[str, Any] | None = None
+        self.last_thread_response_id: str | None = None
         self._tool_responses: dict[str, str] = {}
 
     @property
@@ -48,12 +49,15 @@ class FakeModel:
         tools: list[ToolSchema] | None = None,
         stream: bool = False,
         response_format: dict[str, Any] | None = None,
+        thread_response_id: str | None = None,
     ) -> CompletionResult | AsyncIterator[StreamDelta]:
         """Return next response from the list or async generator of deltas.
 
         Args:
             messages: Ignored (not used by fake provider).
             tools: Ignored (not used by fake provider).
+            thread_response_id: Recorded on ``last_thread_response_id`` for
+                test assertions; otherwise ignored.
 
         Returns:
             CompletionResult if stream=False, else AsyncIterator[StreamDelta].
@@ -61,6 +65,7 @@ class FakeModel:
         Raises:
             IndexError: When all responses have been consumed.
         """
+        self.last_thread_response_id = thread_response_id
         if self._index >= len(self._responses):
             raise IndexError("No more responses available")
         self.last_response_format = response_format
@@ -89,5 +94,11 @@ class FakeModel:
         for char in content:
             yield StreamDelta(content=char)
 
-        # Final chunk with finish_reason and usage info
-        yield StreamDelta(finish_reason="stop", usage=result.usage)
+        # Final chunk carries tool calls (complete, emitted exactly once —
+        # mirroring the real adapters), finish_reason, and usage info
+        tool_calls = result.message.tool_calls
+        yield StreamDelta(
+            tool_calls=tool_calls,
+            finish_reason="tool_calls" if tool_calls else "stop",
+            usage=result.usage,
+        )

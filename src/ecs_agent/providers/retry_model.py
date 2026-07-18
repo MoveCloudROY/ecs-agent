@@ -59,13 +59,22 @@ class RetryModel:
         tools: list[ToolSchema] | None = None,
         stream: bool = False,
         response_format: dict[str, Any] | None = None,
+        thread_response_id: str | None = None,
     ) -> CompletionResult | AsyncIterator[StreamDelta]:
+        # Forward the thread id only when set, mirroring the caller-side
+        # contract: wrapped models predating the parameter keep working in
+        # non-chaining sessions.
+        extra_kwargs: dict[str, Any] = {}
+        if thread_response_id is not None:
+            extra_kwargs["thread_response_id"] = thread_response_id
+
         if stream:
             return await self._model.complete(
                 messages=messages,
                 tools=tools,
                 stream=True,
                 response_format=response_format,
+                **extra_kwargs,
             )
 
         retry_condition = retry_if_exception_type(
@@ -89,6 +98,7 @@ class RetryModel:
                     tools=tools,
                     stream=False,
                     response_format=response_format,
+                    **extra_kwargs,
                 )
 
         raise RuntimeError("Retry loop exited unexpectedly")

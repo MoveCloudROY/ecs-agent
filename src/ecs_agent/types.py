@@ -318,6 +318,7 @@ class StreamDelta:
 
     content: str | None = None
     reasoning_content: str | None = None
+    reasoning_signature: str | None = None
     tool_calls: list[ToolCall] | None = None
     finish_reason: str | None = None
     usage: Usage | None = None

@@ -90,6 +90,60 @@ class ToolCallStreamingFakeModel(FakeModel):
         yield StreamDelta(finish_reason="tool_calls")
 
 
+class FullPrefixSnapshotStreamingFakeModel(FakeModel):
+    """Mimics adapters that re-send the full accumulated prefix per chunk.
+
+    The final chunk carries the completely parsed arguments dict, as the
+    OpenAI chat adapter did once the argument stream became valid JSON.
+    """
+
+    async def _stream_complete(
+        self, result: CompletionResult
+    ) -> AsyncIterator[StreamDelta]:
+        _ = result
+        yield StreamDelta(
+            tool_calls=[
+                ToolCall(
+                    id="call-1",
+                    name="get_weather",
+                    arguments={"_partial": '{"city": "Par'},
+                )
+            ]
+        )
+        yield StreamDelta(
+            tool_calls=[
+                ToolCall(
+                    id="call-1",
+                    name="get_weather",
+                    arguments={"city": "Paris"},
+                )
+            ]
+        )
+        yield StreamDelta(finish_reason="tool_calls")
+
+
+class FragmentsWithoutIdStreamingFakeModel(FakeModel):
+    """Mimics providers whose continuation fragments omit the tool-call id."""
+
+    async def _stream_complete(
+        self, result: CompletionResult
+    ) -> AsyncIterator[StreamDelta]:
+        _ = result
+        yield StreamDelta(
+            tool_calls=[
+                ToolCall(
+                    id="call-1",
+                    name="get_weather",
+                    arguments={"_partial": '{"city":"Par'},
+                )
+            ]
+        )
+        yield StreamDelta(
+            tool_calls=[ToolCall(id="", name="", arguments={"_partial": 'is"}'})]
+        )
+        yield StreamDelta(finish_reason="tool_calls")
+
+
 class FailingStreamingFakeModel(FakeModel):
     async def _stream_complete(
         self, result: CompletionResult
@@ -107,6 +161,20 @@ class ReasoningContentStreamingFakeModel(FakeModel):
         yield StreamDelta(reasoning_content="thinking")
         yield StreamDelta(content="done")
         yield StreamDelta(finish_reason="stop")
+
+
+class SignedReasoningStreamingFakeModel(FakeModel):
+    """Streams thinking deltas plus a signature, like Claude extended thinking."""
+
+    async def _stream_complete(
+        self, result: CompletionResult
+    ) -> AsyncIterator[StreamDelta]:
+        _ = result
+        yield StreamDelta(reasoning_content="Let me ")
+        yield StreamDelta(reasoning_content="think")
+        yield StreamDelta(reasoning_signature="sig-abc")
+        yield StreamDelta(content="Answer")
+        yield StreamDelta(finish_reason="end_turn")
 
 
 @pytest.mark.asyncio
@@ -218,6 +286,122 @@ async def test_streaming_tool_call_deltas_accumulate_into_pending_tool_calls() -
     ]
     assert conversation is not None
     assert conversation.messages[-1].tool_calls == pending.tool_calls
+
+
+@pytest.mark.asyncio
+async def test_streaming_parsed_arguments_supersede_stale_partial_snapshot() -> None:
+    """A fully parsed arguments dict wins over stale ``_partial`` prefix snapshots.
+
+    Regression for the confirmed bug where the leftover snapshot buffer shadowed
+    the correctly parsed arguments in ``_finalize_tool_calls``.
+    """
+    world = World()
+    model = FullPrefixSnapshotStreamingFakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content=""))]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[Message(role="user", content="Weather in Paris")]
+        ),
+    )
+    world.add_component(entity_id, StreamingComponent(enabled=True))
+
+    await ReasoningSystem().process(world)
+
+    pending = world.get_component(entity_id, PendingToolCallsComponent)
+    assert pending is not None
+    assert pending.tool_calls == [
+        ToolCall(id="call-1", name="get_weather", arguments={"city": "Paris"})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_fragments_without_id_merge_into_previous_tool_call() -> None:
+    """Continuation fragments with an empty id extend the previous tool call."""
+    world = World()
+    model = FragmentsWithoutIdStreamingFakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content=""))]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[Message(role="user", content="Weather in Paris")]
+        ),
+    )
+    world.add_component(entity_id, StreamingComponent(enabled=True))
+
+    await ReasoningSystem().process(world)
+
+    pending = world.get_component(entity_id, PendingToolCallsComponent)
+    assert pending is not None
+    assert pending.tool_calls == [
+        ToolCall(id="call-1", name="get_weather", arguments={"city": "Paris"})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_final_message_carries_reasoning_content_and_signature() -> None:
+    """Streamed turns keep thinking + signature on the message (non-streaming parity).
+
+    Without them, providers requiring signed thinking replay (Claude extended
+    thinking with tool use) cannot rebuild the assistant turn.
+    """
+    world = World()
+    model = SignedReasoningStreamingFakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content=""))]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="Question")]),
+    )
+    world.add_component(entity_id, StreamingComponent(enabled=True))
+
+    await ReasoningSystem().process(world)
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    final_message = conversation.messages[-1]
+    assert final_message.content == "Answer"
+    assert final_message.reasoning_content == "Let me think"
+    assert final_message.reasoning_signature == "sig-abc"
+
+
+@pytest.mark.asyncio
+async def test_fake_model_streams_tool_calls_from_scripted_result() -> None:
+    """FakeModel's streaming path must not drop scripted tool calls."""
+    world = World()
+    scripted_call = ToolCall(id="call-1", name="get_weather", arguments={"city": "Paris"})
+    model = FakeModel(
+        responses=[
+            CompletionResult(
+                message=Message(
+                    role="assistant", content="", tool_calls=[scripted_call]
+                )
+            )
+        ]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(
+            messages=[Message(role="user", content="Weather in Paris")]
+        ),
+    )
+    world.add_component(entity_id, StreamingComponent(enabled=True))
+
+    await ReasoningSystem().process(world)
+
+    pending = world.get_component(entity_id, PendingToolCallsComponent)
+    assert pending is not None
+    assert pending.tool_calls == [scripted_call]
 
 
 @pytest.mark.asyncio

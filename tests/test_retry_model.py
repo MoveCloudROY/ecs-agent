@@ -63,6 +63,59 @@ class SequencedProvider:
         return outcome
 
 
+class ThreadRecordingProvider:
+    """Records the thread_response_id received on each complete() call."""
+
+    def __init__(self) -> None:
+        self.received_thread_response_ids: list[str | None] = []
+
+    @property
+    def model_id(self) -> str:
+        return "thread-recorder"
+
+    async def complete(
+        self,
+        messages: list[Message],
+        tools=None,
+        stream: bool = False,
+        response_format=None,
+        thread_response_id: str | None = None,
+    ):
+        self.received_thread_response_ids.append(thread_response_id)
+        if stream:
+            return _stream_delta_iter()
+        return _result("ok")
+
+
+@pytest.mark.asyncio
+async def test_retry_model_forwards_thread_response_id_non_streaming() -> None:
+    """Wrapping a chaining-capable model must not drop the thread id."""
+    inner = ThreadRecordingProvider()
+    retry_model = RetryModel(inner)
+
+    await retry_model.complete(
+        [Message(role="user", content="hello")],
+        thread_response_id="resp_prev_1",
+    )
+
+    assert inner.received_thread_response_ids == ["resp_prev_1"]
+
+
+@pytest.mark.asyncio
+async def test_retry_model_forwards_thread_response_id_streaming() -> None:
+    inner = ThreadRecordingProvider()
+    retry_model = RetryModel(inner)
+
+    stream = await retry_model.complete(
+        [Message(role="user", content="hello")],
+        stream=True,
+        thread_response_id="resp_prev_2",
+    )
+    _ = [delta async for delta in stream]
+
+    assert inner.received_thread_response_ids == ["resp_prev_2"]
+
+
 @pytest.mark.asyncio
 async def test_successful_call_no_retry() -> None:
     model = SequencedProvider(outcomes=[_result("done")])

@@ -631,6 +631,158 @@ async def test_complete_streaming_returns_async_iterator() -> None:
 
 
 @pytest.mark.asyncio
+async def test_streaming_yields_thinking_deltas_signature_and_usage() -> None:
+    """Streaming parity with the non-streaming path for extended thinking.
+
+    Regression: the streaming handler used to drop thinking_delta /
+    signature_delta events and never surfaced usage, so streamed Claude calls
+    reported zero tokens and lost reasoning content.
+    """
+    lines: list[str] = []
+    lines.extend(
+        _anthropic_sse(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_1",
+                    "type": "message",
+                    "usage": {
+                        "input_tokens": 25,
+                        "cache_creation_input_tokens": 5,
+                        "cache_read_input_tokens": 10,
+                        "output_tokens": 1,
+                    },
+                },
+            },
+        )
+    )
+    lines.extend(
+        _anthropic_sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "thinking", "thinking": ""},
+            },
+        )
+    )
+    lines.extend(
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": "Let me "},
+            },
+        )
+    )
+    lines.extend(
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": "think"},
+            },
+        )
+    )
+    lines.extend(
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "signature_delta", "signature": "sig-abc"},
+            },
+        )
+    )
+    lines.extend(
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+    )
+    lines.extend(
+        _anthropic_sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "text", "text": ""},
+            },
+        )
+    )
+    lines.extend(
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "text_delta", "text": "Answer"},
+            },
+        )
+    )
+    lines.extend(
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 1})
+    )
+    lines.extend(
+        _anthropic_sse(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 40},
+            },
+        )
+    )
+    lines.extend(_anthropic_sse("message_stop", {"type": "message_stop"}))
+    stream_response = _MockStreamResponse(lines)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
+
+    model = ClaudeModel(
+        config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
+    )
+    model._client = mock_client
+
+    stream_iter = await model.complete(
+        messages=[Message(role="user", content="hello")],
+        stream=True,
+    )
+    deltas = [delta async for delta in stream_iter]
+
+    reasoning_deltas = [
+        delta.reasoning_content
+        for delta in deltas
+        if delta.reasoning_content is not None
+    ]
+    assert reasoning_deltas == ["Let me ", "think"]
+
+    signature_deltas = [
+        delta.reasoning_signature
+        for delta in deltas
+        if delta.reasoning_signature is not None
+    ]
+    assert signature_deltas == ["sig-abc"]
+
+    assert [delta.content for delta in deltas if delta.content is not None] == [
+        "Answer"
+    ]
+
+    final_deltas = [delta for delta in deltas if delta.finish_reason is not None]
+    assert len(final_deltas) == 1
+    final = final_deltas[0]
+    assert final.finish_reason == "end_turn"
+    assert final.usage is not None
+    assert final.usage.prompt_tokens == 25
+    assert final.usage.completion_tokens == 40
+    assert final.usage.total_tokens == 65
+    assert final.usage.cache_creation_tokens == 5
+    assert final.usage.cache_read_tokens == 10
+    assert final.usage.provider_id == "anthropic"
+    assert final.usage.model == "claude-3-haiku-20240307"
+
+
+@pytest.mark.asyncio
 async def test_complete_streaming_uses_stream_request_with_stream_true() -> None:
     lines: list[str] = []
     lines.extend(_anthropic_sse("message_start", {"type": "message_start"}))

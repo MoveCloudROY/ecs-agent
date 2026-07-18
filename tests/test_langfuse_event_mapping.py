@@ -419,7 +419,11 @@ async def test_streaming_deltas_are_ordered_without_final_output_duplication() -
     assert all(record.parent_observation_id == generation.observation_id for record in stream_records)
     assert [record.metadata["seq"] for record in stream_records] == list(range(8))
     assert generation.output == {
-        "message": Message(role="assistant", content="answer-1answer-2"),
+        "message": Message(
+            role="assistant",
+            content="answer-1answer-2",
+            reasoning_content="thinking-1thinking-2",
+        ),
         "reasoning_content": "thinking-1thinking-2",
         "response_id": "resp-stream-ordered",
     }

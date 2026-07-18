@@ -116,8 +116,14 @@ newlines). Non-reasoning responses leave `reasoning_content` as `None`.
 ## Stored-Response Chaining (`previous_response_id`)
 
 `ReasoningSystem` records each `response_id` in `ResponsesAPIStateComponent`
-and passes it to the next request as `previous_response_id`. Two gates decide
-whether the chain is actually sent:
+and passes it to the next request via the `LLMModel` protocol's
+`thread_response_id` parameter. The call site is provider-agnostic: any model
+whose completions return a `response_id` participates, wrapper models such as
+`RetryModel` forward the parameter, and providers without stored-response
+chaining accept and ignore it. The parameter is only passed when a previous
+response id was actually recorded, so custom models predating it keep working
+in non-chaining sessions. Two gates decide whether the chain is actually sent
+on the wire:
 
 1. **`enable_store`** — the chain is only included when the model was built
    with `Model(..., enable_store=True)`. With `store=false` the referenced

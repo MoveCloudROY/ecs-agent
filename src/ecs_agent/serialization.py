@@ -9,6 +9,7 @@ from typing import Any
 
 from ecs_agent.components import (
     CheckpointComponent,
+    ChildStubComponent,
     CompactionConfigComponent,
     ContextTrimConfig,
     ContextCacheComponent,
@@ -18,7 +19,9 @@ from ecs_agent.components import (
     ConversationComponent,
     ConversationTreeComponent,
     EmbeddingComponent,
+    EntityRegistryComponent,
     ErrorComponent,
+    InterruptionComponent,
     KVStoreComponent,
     LLMComponent,
     MessageBusConfigComponent,
@@ -26,6 +29,7 @@ from ecs_agent.components import (
     MessageBusSubscriptionComponent,
     OwnerComponent,
     PendingToolCallsComponent,
+    PermissionComponent,
     PhaseApprovalsComponent,
     PhaseComponent,
     PhaseDefinitionComponent,
@@ -42,6 +46,8 @@ from ecs_agent.components import (
     SandboxConfigComponent,
     ScratchbookIndexComponent,
     ScratchbookRefComponent,
+    SkillComponent,
+    SkillMetadata,
     StreamingComponent,
     SubagentNotificationQueueComponent,
     SystemPromptComponent,
@@ -51,13 +57,19 @@ from ecs_agent.components import (
     TerminalComponent,
     TodoItem,
     TodoListComponent,
+    TokenUsageComponent,
     ToolApprovalComponent,
     ToolExecutionConfigComponent,
     ToolRegistryComponent,
     ToolResultsComponent,
+    ToolRuntimeStateComponent,
+    ToolStateNamespace,
+    UserInputComponent,
     VectorStoreComponent,
+    WorkspaceBindingComponent,
 )
 from ecs_agent.core.world import World
+from ecs_agent.logging import get_logger
 from ecs_agent.prompts.contracts import (
     PlaceholderSpec,
     SystemPromptConfigSpec,
@@ -78,10 +90,37 @@ from ecs_agent.types import (
     ToolSchema,
 )
 
+logger = get_logger(__name__)
+
 NON_SERIALIZABLE_PLACEHOLDER = "<non-serializable>"
 LEGACY_COMPACTION_SUMMARY_PREFIX = "Previous conversation summary: "
 
-EPHEMERAL_COMPONENT_TYPES: tuple[type[Any], ...] = ()
+# Bumped whenever the checkpoint payload shape changes incompatibly.
+# Loading a payload with a NEWER version than this fails loudly instead of
+# silently dropping data it does not understand.
+CHECKPOINT_SCHEMA_VERSION = 1
+
+# Runtime signals that are intentionally NOT serialized. Every component
+# dataclass must appear in exactly one of COMPONENT_REGISTRY,
+# EPHEMERAL_COMPONENT_TYPES, or NON_COMPONENT_VALUE_TYPES — enforced by
+# tests/test_serialization.py::test_component_registry_and_ephemeral_partition_cover_all_components.
+EPHEMERAL_COMPONENT_TYPES: tuple[type[Any], ...] = (
+    # Transient interrupt signal; a resumed world must not re-interrupt.
+    InterruptionComponent,
+    # Internal tool runtime state with arbitrary object values; tools
+    # rebuild it lazily (e.g. re-read before edit) after resume.
+    ToolRuntimeStateComponent,
+    # Definitions are re-bound at resume time (bind_phase_graph).
+    PhaseDefinitionComponent,
+)
+
+# Dataclasses in components.definitions that are nested value objects,
+# never attached to entities directly.
+NON_COMPONENT_VALUE_TYPES: tuple[type[Any], ...] = (
+    SkillMetadata,
+    ToolStateNamespace,
+    TodoItem,
+)
 
 COMPONENT_REGISTRY: dict[str, type[Any]] = {
     LLMComponent.__name__: LLMComponent,
@@ -131,6 +170,13 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
     PhaseComponent.__name__: PhaseComponent,
     PhaseApprovalsComponent.__name__: PhaseApprovalsComponent,
     TodoListComponent.__name__: TodoListComponent,
+    ChildStubComponent.__name__: ChildStubComponent,
+    EntityRegistryComponent.__name__: EntityRegistryComponent,
+    PermissionComponent.__name__: PermissionComponent,
+    SkillComponent.__name__: SkillComponent,
+    TokenUsageComponent.__name__: TokenUsageComponent,
+    UserInputComponent.__name__: UserInputComponent,
+    WorkspaceBindingComponent.__name__: WorkspaceBindingComponent,
 }
 
 
@@ -152,16 +198,16 @@ class WorldSerializer:
                     continue
                 if isinstance(component, EPHEMERAL_COMPONENT_TYPES):
                     continue
-                if isinstance(component, PhaseDefinitionComponent):
-                    # Definitions are skipped: re-bound at resume time
-                    # (bind_phase_graph).
-                    continue
                 serialized_components[component_type.__name__] = (
                     WorldSerializer._serialize_component(component)
                 )
             entities[str(entity_id)] = serialized_components
 
         next_entity_id = world._entity_gen._counter + 1
+
+        # All known entities, including component-less ones — has_entity()
+        # must keep answering correctly after a restore.
+        all_entity_ids = set(world._entity_ids) | entity_ids
 
         # Serialize entity registry
         entity_registry = {
@@ -173,8 +219,10 @@ class WorldSerializer:
         }
 
         return {
+            "schema_version": CHECKPOINT_SCHEMA_VERSION,
             "next_entity_id": next_entity_id,
             "entities": entities,
+            "entity_ids": sorted(int(eid) for eid in all_entity_ids),
             "_entity_registry": entity_registry,
             "_entity_tags": entity_tags,
             "world_name": world._name,
@@ -186,6 +234,20 @@ class WorldSerializer:
         providers: dict[str, Any],
         tool_handlers: dict[str, Any],
     ) -> World:
+        """Rebuild a World from a serialized payload.
+
+        Raises:
+            ValueError: If the payload's schema_version is newer than this
+                build supports (loading it would silently drop data).
+        """
+        version = int(data.get("schema_version", 1))
+        if version > CHECKPOINT_SCHEMA_VERSION:
+            raise ValueError(
+                f"Checkpoint schema_version {version} is newer than the "
+                f"supported version {CHECKPOINT_SCHEMA_VERSION}; refusing to "
+                "load it partially"
+            )
+
         world = World(name=data.get("world_name"))
 
         entities_data = data.get("entities", {})
@@ -194,6 +256,11 @@ class WorldSerializer:
             for component_name, component_data in serialized_components.items():
                 component_type = COMPONENT_REGISTRY.get(component_name)
                 if component_type is None:
+                    logger.warning(
+                        "serialization_unknown_component",
+                        component=component_name,
+                        entity_id=int(entity_id),
+                    )
                     continue
 
                 current_summary: str | None = None
@@ -234,6 +301,17 @@ class WorldSerializer:
             tag: set(EntityId(int(eid)) for eid in eids)
             for tag, eids in entity_tags_data.items()
         }
+
+        # Restore entity tracking. Older payloads without "entity_ids" fall
+        # back to every id observable in components and the registry.
+        restored_entity_ids = {
+            EntityId(int(eid)) for eid in data.get("entity_ids", [])
+        }
+        restored_entity_ids.update(
+            EntityId(int(eid)) for eid in entities_data.keys()
+        )
+        restored_entity_ids.update(world._entity_registry.values())
+        world._entity_ids = restored_entity_ids
 
         return world
 
@@ -293,7 +371,32 @@ class WorldSerializer:
                 ]
             }
 
+        if isinstance(component, UserInputComponent):
+            # Built by hand: asdict() would deepcopy the pending Future.
+            return {
+                "prompt": component.prompt,
+                "future": None,
+                "timeout": component.timeout,
+                "result": component.result,
+            }
+
+        if isinstance(component, EntityRegistryComponent):
+            # Built by hand: metadata may carry live objects (e.g. a provider
+            # registry) that asdict()'s deepcopy or json.dumps would choke on.
+            return {
+                "entity_id": int(component.entity_id),
+                "name": component.name,
+                "tags": sorted(component.tags),
+                "metadata": {
+                    key: WorldSerializer._json_safe_or_placeholder(value)
+                    for key, value in component.metadata.items()
+                },
+            }
+
         serialized = asdict(component)
+
+        if isinstance(component, WorkspaceBindingComponent):
+            serialized["workspace_root"] = str(component.workspace_root)
 
         if isinstance(component, LLMComponent):
             serialized["model"] = getattr(component.model, "model_id", "default")
@@ -391,6 +494,15 @@ class WorldSerializer:
             serialized["sessions"] = sessions_dict
 
         return serialized
+
+    @staticmethod
+    def _json_safe_or_placeholder(value: Any) -> Any:
+        """Return the value if JSON-encodable, else the placeholder marker."""
+        try:
+            json.dumps(value)
+        except (TypeError, ValueError):
+            return NON_SERIALIZABLE_PLACEHOLDER
+        return value
 
     @staticmethod
     def _normalize_component_data(
@@ -634,6 +746,28 @@ class WorldSerializer:
 
         if component_name == SubagentWaitComponent.__name__:
             normalized_data["future"] = None
+
+        if component_name == UserInputComponent.__name__:
+            normalized_data["future"] = None
+
+        if component_name == WorkspaceBindingComponent.__name__:
+            workspace_root = normalized_data.get("workspace_root")
+            if isinstance(workspace_root, str):
+                normalized_data["workspace_root"] = Path(workspace_root)
+
+        if component_name == EntityRegistryComponent.__name__:
+            normalized_data["entity_id"] = EntityId(
+                int(normalized_data["entity_id"])
+            )
+            normalized_data["tags"] = set(normalized_data.get("tags", []))
+
+        if component_name == SkillComponent.__name__:
+            normalized_data["skills"] = {
+                name: SkillMetadata(**metadata)
+                if isinstance(metadata, dict)
+                else metadata
+                for name, metadata in normalized_data.get("skills", {}).items()
+            }
 
         if component_name == PromptContextQueueComponent.__name__:
             entries_data = normalized_data.get("entries", [])

@@ -1827,3 +1827,309 @@ def test_serialization_roundtrip_todo_list_component() -> None:
         ("Add unit tests for both new modules", "in_progress"),
         ("Update docs and README", "pending"),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Entity tracking, schema version, registry coverage (review B2/B3/B4)
+# ---------------------------------------------------------------------------
+
+
+def test_round_trip_preserves_entity_tracking() -> None:
+    """Restored worlds must still know their entities (has_entity, counts)."""
+    world = World()
+    tracked = world.create_entity()
+    world.add_component(tracked, RunnerStateComponent(current_tick=3))
+    componentless = world.create_entity()
+
+    data = WorldSerializer.to_dict(world)
+    restored = WorldSerializer.from_dict(data, providers={}, tool_handlers={})
+
+    assert restored.has_entity(tracked)
+    assert restored.has_entity(componentless)
+
+
+def test_round_trip_preserves_entity_tracking_from_legacy_payload() -> None:
+    """Checkpoints written before entity_ids was serialized still restore tracking."""
+    world = World()
+    tracked = world.create_entity()
+    world.add_component(tracked, RunnerStateComponent(current_tick=3))
+
+    data = WorldSerializer.to_dict(world)
+    data.pop("entity_ids", None)
+    restored = WorldSerializer.from_dict(data, providers={}, tool_handlers={})
+
+    assert restored.has_entity(tracked)
+
+
+def test_workspace_binding_component_round_trips_through_json() -> None:
+    """A Path-bearing component must survive json.dumps (checkpoint on disk)."""
+    import json
+    from pathlib import Path as _Path
+
+    from ecs_agent.components import WorkspaceBindingComponent
+
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity, WorkspaceBindingComponent(workspace_root=_Path("/tmp/ws"))
+    )
+
+    payload = json.dumps(WorldSerializer.to_dict(world))
+    restored = WorldSerializer.from_dict(
+        json.loads(payload), providers={}, tool_handlers={}
+    )
+
+    component = restored.get_component(entity, WorkspaceBindingComponent)
+    assert component is not None
+    assert _Path(component.workspace_root) == _Path("/tmp/ws")
+
+
+def test_schema_version_written_and_future_version_rejected() -> None:
+    import pytest
+
+    world = World()
+    data = WorldSerializer.to_dict(world)
+    assert data["schema_version"] == 1
+
+    data["schema_version"] = 99
+    with pytest.raises(ValueError, match="schema_version"):
+        WorldSerializer.from_dict(data, providers={}, tool_handlers={})
+
+
+def test_unknown_component_is_skipped_with_warning(monkeypatch: Any) -> None:
+    """Unknown component names must not silently vanish."""
+    import ecs_agent.serialization as serialization_module
+
+    class _RecordingLogger:
+        def __init__(self) -> None:
+            self.warnings: list[tuple[str, dict[str, Any]]] = []
+
+        def warning(self, event: str, **kwargs: Any) -> None:
+            self.warnings.append((event, kwargs))
+
+    recording_logger = _RecordingLogger()
+    monkeypatch.setattr(serialization_module, "logger", recording_logger)
+
+    data = {
+        "schema_version": 1,
+        "next_entity_id": 2,
+        "entities": {
+            "1": {
+                "NoSuchComponent": {"field": 1},
+                "RunnerStateComponent": {"current_tick": 5},
+            }
+        },
+        "entity_ids": [1],
+        "_entity_registry": {},
+        "_entity_tags": {},
+        "world_name": None,
+    }
+    restored = WorldSerializer.from_dict(data, providers={}, tool_handlers={})
+
+    state = restored.get_component(EntityId(1), RunnerStateComponent)
+    assert state is not None
+    assert state.current_tick == 5
+    assert any(
+        event == "serialization_unknown_component"
+        and kwargs.get("component") == "NoSuchComponent"
+        for event, kwargs in recording_logger.warnings
+    )
+
+
+def test_component_registry_and_ephemeral_partition_cover_all_components() -> None:
+    """Every dataclass in components.definitions must be explicitly classified.
+
+    A component missing from all three sets would serialize on save but be
+    silently dropped on load — the failure mode behind lost permissions and
+    resurrected delegation stubs.
+    """
+    import dataclasses
+
+    import ecs_agent.components.definitions as definitions
+    from ecs_agent.serialization import (
+        COMPONENT_REGISTRY,
+        EPHEMERAL_COMPONENT_TYPES,
+        NON_COMPONENT_VALUE_TYPES,
+    )
+
+    component_classes = [
+        obj
+        for obj in vars(definitions).values()
+        if isinstance(obj, type)
+        and dataclasses.is_dataclass(obj)
+        and obj.__module__ == definitions.__name__
+    ]
+    assert component_classes, "expected dataclasses in components.definitions"
+
+    registered = set(COMPONENT_REGISTRY.values())
+    ephemeral = set(EPHEMERAL_COMPONENT_TYPES)
+    value_objects = set(NON_COMPONENT_VALUE_TYPES)
+
+    uncovered = sorted(
+        cls.__name__
+        for cls in component_classes
+        if cls not in registered | ephemeral | value_objects
+    )
+    assert uncovered == [], f"unclassified components: {uncovered}"
+
+    double_classified = sorted(
+        cls.__name__ for cls in registered & (ephemeral | value_objects)
+    )
+    assert double_classified == [], f"components in two sets: {double_classified}"
+
+
+def test_permission_token_usage_child_stub_round_trip() -> None:
+    import json
+
+    from ecs_agent.components import (
+        ChildStubComponent,
+        PermissionComponent,
+        TokenUsageComponent,
+    )
+
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        PermissionComponent(allowed_tools=["read"], denied_tools=["bash"]),
+    )
+    world.add_component(
+        entity,
+        TokenUsageComponent(last_prompt_tokens=10, total_prompt_tokens=30),
+    )
+    world.add_component(entity, ChildStubComponent())
+
+    payload = json.dumps(WorldSerializer.to_dict(world))
+    restored = WorldSerializer.from_dict(
+        json.loads(payload), providers={}, tool_handlers={}
+    )
+
+    permission = restored.get_component(entity, PermissionComponent)
+    assert permission is not None
+    assert permission.allowed_tools == ["read"]
+    assert permission.denied_tools == ["bash"]
+
+    token_usage = restored.get_component(entity, TokenUsageComponent)
+    assert token_usage is not None
+    assert token_usage.last_prompt_tokens == 10
+    assert token_usage.total_prompt_tokens == 30
+
+    assert restored.get_component(entity, ChildStubComponent) is not None
+
+
+async def test_user_input_component_round_trips_with_future_stripped() -> None:
+    import asyncio
+    import json
+
+    from ecs_agent.components import UserInputComponent
+
+    world = World()
+    entity = world.create_entity()
+    future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+    world.add_component(
+        entity,
+        UserInputComponent(prompt="Continue?", future=future, timeout=30.0),
+    )
+
+    payload = json.dumps(WorldSerializer.to_dict(world))
+    restored = WorldSerializer.from_dict(
+        json.loads(payload), providers={}, tool_handlers={}
+    )
+
+    component = restored.get_component(entity, UserInputComponent)
+    assert component is not None
+    assert component.prompt == "Continue?"
+    assert component.timeout == 30.0
+    assert component.future is None
+
+
+def test_entity_registry_component_round_trips_and_sanitizes_live_metadata() -> None:
+    import json
+
+    from ecs_agent.components import EntityRegistryComponent
+
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        EntityRegistryComponent(
+            entity_id=entity,
+            name="main",
+            tags={"b", "a"},
+            metadata={"note": "keep", "provider_registry": object()},
+        ),
+    )
+
+    payload = json.dumps(WorldSerializer.to_dict(world))
+    restored = WorldSerializer.from_dict(
+        json.loads(payload), providers={}, tool_handlers={}
+    )
+
+    component = restored.get_component(entity, EntityRegistryComponent)
+    assert component is not None
+    assert component.entity_id == entity
+    assert component.tags == {"a", "b"}
+    assert component.metadata["note"] == "keep"
+    assert component.metadata["provider_registry"] == NON_SERIALIZABLE_PLACEHOLDER
+
+
+def test_skill_component_round_trips() -> None:
+    import json
+
+    from ecs_agent.components import SkillComponent, SkillMetadata
+
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        SkillComponent(
+            skills={
+                "search": SkillMetadata(
+                    name="search",
+                    description="Web search",
+                    tool_names=["web_search"],
+                    has_system_prompt=False,
+                )
+            }
+        ),
+    )
+
+    payload = json.dumps(WorldSerializer.to_dict(world))
+    restored = WorldSerializer.from_dict(
+        json.loads(payload), providers={}, tool_handlers={}
+    )
+
+    component = restored.get_component(entity, SkillComponent)
+    assert component is not None
+    metadata = component.skills["search"]
+    assert isinstance(metadata, SkillMetadata)
+    assert metadata.tool_names == ["web_search"]
+
+
+def test_transient_signal_components_are_not_serialized() -> None:
+    """Interruption and tool-runtime state are runtime signals, not state."""
+    import json
+
+    from ecs_agent.components import (
+        InterruptionComponent,
+        ToolRuntimeStateComponent,
+    )
+    from ecs_agent.types import InterruptionReason
+
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity, InterruptionComponent(reason=InterruptionReason.USER_REQUESTED)
+    )
+    world.add_component(entity, ToolRuntimeStateComponent())
+    world.add_component(entity, RunnerStateComponent(current_tick=1))
+
+    payload = json.dumps(WorldSerializer.to_dict(world))
+    restored = WorldSerializer.from_dict(
+        json.loads(payload), providers={}, tool_handlers={}
+    )
+
+    assert restored.get_component(entity, InterruptionComponent) is None
+    assert restored.get_component(entity, ToolRuntimeStateComponent) is None
+    assert restored.get_component(entity, RunnerStateComponent) is not None
+    assert restored.has_entity(entity)

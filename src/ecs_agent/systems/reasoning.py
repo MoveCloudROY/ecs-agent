@@ -42,7 +42,6 @@ from ecs_agent.components import (
 )
 from ecs_agent.core.world import World
 from ecs_agent.providers.protocol import LLMModel
-from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.prompts.message_assembly import (
     commit_prompt_context_reservation,
     prepare_outbound_messages,
@@ -208,7 +207,11 @@ class ReasoningSystem:
                         previous_response_id,
                     )
                 else:
-                    if isinstance(active_model, OpenAIModel):
+                    # Pass the thread id only when one was recorded: chaining
+                    # is provider-agnostic (LLMModel protocol), while models
+                    # predating the parameter keep working in non-chaining
+                    # sessions.
+                    if previous_response_id is not None:
                         non_stream_result = await active_model.complete(
                             messages,
                             tools=tools,
@@ -233,7 +236,7 @@ class ReasoningSystem:
 
                 invocation_duration_seconds = time.monotonic() - invocation_started_at
                 invocation_end_time = datetime.now(timezone.utc)
-                if result.response_id is not None and isinstance(active_model, OpenAIModel):
+                if result.response_id is not None:
                     await world.event_bus.publish(
                         ResponsesAPICallEvent(
                             entity_id=entity_id,
@@ -600,7 +603,9 @@ class ReasoningSystem:
         non_blocking_delta_publish: bool,
         previous_response_id: str | None,
     ) -> CompletionResult:
-        if isinstance(active_model, OpenAIModel):
+        # Same conditional as the non-streaming path: the thread id is passed
+        # whenever recorded, regardless of the concrete model class.
+        if previous_response_id is not None:
             stream_result = await active_model.complete(
                 messages,
                 tools=tools,
@@ -627,6 +632,7 @@ class ReasoningSystem:
         first_delta_seconds: float | None = None
         reasoning_phase_active = False
         reasoning_end_emitted = False
+        reasoning_signature: str | None = None
         response_id: str | None = None
         stream_status = "success"
 
@@ -771,6 +777,9 @@ class ReasoningSystem:
 
                 self._merge_stream_tool_calls(tool_call_buffers, delta.tool_calls)
 
+                if delta.reasoning_signature is not None:
+                    reasoning_signature = delta.reasoning_signature
+
                 if delta.usage is not None:
                     usage = delta.usage
 
@@ -839,6 +848,11 @@ class ReasoningSystem:
                 role="assistant",
                 content="".join(content_chunks),
                 tool_calls=self._finalize_tool_calls(tool_call_buffers),
+                # Parity with the non-streaming path: thinking and its
+                # signature stay on the message so providers that require
+                # signed thinking replay can rebuild the assistant turn.
+                reasoning_content="".join(reasoning_chunks) or None,
+                reasoning_signature=reasoning_signature,
             ),
             usage=usage,
             response_id=response_id,
@@ -986,7 +1000,14 @@ class ReasoningSystem:
             return
 
         for tool_call in delta_tool_calls:
-            tool_call_id = tool_call.id or f"tool_call_{len(buffers)}"
+            if tool_call.id:
+                tool_call_id = tool_call.id
+            elif buffers:
+                # Continuation fragments from providers that omit the id
+                # extend the most recently started tool call.
+                tool_call_id = next(reversed(buffers))
+            else:
+                tool_call_id = f"tool_call_{len(buffers)}"
             current = buffers.setdefault(
                 tool_call_id,
                 {
@@ -1004,7 +1025,10 @@ class ReasoningSystem:
             if isinstance(partial, str):
                 current["arguments_buffer"] += partial
             elif tool_call.arguments:
+                # A fully parsed dict supersedes any partial snapshots
+                # buffered earlier for the same call.
                 current["arguments"] = tool_call.arguments
+                current["arguments_buffer"] = ""
 
     def _finalize_tool_calls(
         self, buffers: dict[str, dict[str, Any]]
@@ -1018,7 +1042,10 @@ class ReasoningSystem:
             arguments_buffer = buffered["arguments_buffer"]
             arguments = buffered["arguments"]
 
-            if arguments_buffer:
+            if isinstance(arguments, dict):
+                # A complete parsed dict always wins over the fragment buffer.
+                parsed_arguments = arguments
+            elif arguments_buffer:
                 try:
                     loaded_arguments = json.loads(arguments_buffer)
                 except json.JSONDecodeError:
@@ -1028,8 +1055,6 @@ class ReasoningSystem:
                     parsed_arguments = loaded_arguments
                 else:
                     parsed_arguments = {"_partial": arguments_buffer}
-            elif isinstance(arguments, dict):
-                parsed_arguments = arguments
             else:
                 parsed_arguments = {}
 

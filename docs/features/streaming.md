@@ -22,7 +22,15 @@ Each chunk emitted by the iterator is a `StreamDelta` object with the following 
 
 - `content: str | None`: The partial text content of the response.
 - `reasoning_content: str | None`: The streamed reasoning/thinking text when provider exposes it.
-- `tool_calls: list[ToolCall] | None`: Partial tool calls (accumulated by `OpenAIModel`).
+- `reasoning_signature: str | None`: The provider's signature over the thinking
+  block (Anthropic extended thinking), emitted once when the thinking block
+  closes. Kept on the final assistant `Message` so signed thinking can be
+  replayed on later turns.
+- `tool_calls: list[ToolCall] | None`: Completed tool calls with fully parsed
+  arguments, emitted exactly once per stream — when the argument streams
+  finish (at the `finish_reason` chunk, or at stream end for gateways that
+  omit it). Arguments that never became valid JSON are preserved under a
+  `{"_partial": "<raw text>"}` placeholder.
 - `finish_reason: str | None`: The reason why the generation stopped (e.g., `"stop"`, `"tool_calls"`).
 - `usage: Usage | None`: Usage statistics, typically only provided in the final delta.
 
@@ -70,16 +78,19 @@ async for delta in delta_iterator:
 ## Provider Implementation Details
 
 ### OpenAIModel
-`OpenAIModel` uses real Server-Sent Events (SSE) streaming. It automatically accumulates partial tool call arguments from the stream, allowing you to see the full tool call in the final delta when the `finish_reason` is `"tool_calls"`.
+`OpenAIModel` uses real Server-Sent Events (SSE) streaming. It accumulates partial tool call arguments internally and emits the completed tool calls exactly once, on the delta whose `finish_reason` is `"tool_calls"`; partially accumulated arguments are never re-emitted per chunk.
+
+### ClaudeModel
+`ClaudeModel` parses the Anthropic SSE event stream: `text_delta` → `content`, `thinking_delta` → `reasoning_content`, `signature_delta` → `reasoning_signature` (emitted at the thinking block's `content_block_stop`), and tool calls once per `content_block_stop`. Usage from `message_start` (input/cache tokens) and `message_delta` (output tokens) is merged and emitted on the final delta together with the stop reason.
 
 ### FakeModel
-`FakeModel` simulates streaming by emitting the full response character-by-character (or chunk-by-chunk) with small delays, which is useful for testing UI/UX without consuming API credits.
+`FakeModel` simulates streaming by emitting the full response character-by-character, with the final chunk carrying tool calls (if any), `finish_reason`, and usage — mirroring the real adapters' contract so streaming + tool-call paths are testable without API credits.
 
 ## Caveats
 
 - **Structured Output**: Streaming is NOT compatible with `response_format` (JSON mode). If you need structured output, you must use non-streaming calls.
 - **RetryModel**: `RetryModel` does NOT retry streaming calls. If a streaming connection fails halfway, the error is passed through to the consumer.
-- **Tool Calls**: While tool calls are streamed, they are usually only useful once the full arguments have been accumulated.
+- **Tool Calls**: Tool calls arrive on a single delta with fully parsed arguments once their argument streams complete; there is no per-chunk partial emission to accumulate on the consumer side.
 See [`examples/streaming_system_agent.py`](../../examples/streaming_system_agent.py) for a complete demo.
 
 ## System-Level Streaming

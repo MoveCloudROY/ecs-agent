@@ -18,7 +18,7 @@ from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import ResponsesAPICallEvent, EntityId
-from ecs_agent.types import InterruptionReason, Message, ToolSchema
+from ecs_agent.types import CompletionResult, InterruptionReason, Message, ToolSchema
 
 
 def _openai_config(
@@ -434,6 +434,110 @@ async def test_responses_api_complete_non_streaming_state_component_updates_on_s
     state = world.get_component(entity, ResponsesAPIStateComponent)
     assert state is not None
     assert state.previous_response_id == "resp_state_123"
+
+
+class _ThreadRecordingModel:
+    """Chaining-capable fake that records received thread_response_id values."""
+
+    def __init__(self, response_id: str = "resp_new_1") -> None:
+        self._response_id = response_id
+        self.received_thread_response_ids: list[str | None] = []
+
+    @property
+    def model_id(self) -> str:
+        return "thread-recorder"
+
+    async def complete(
+        self,
+        messages,
+        tools=None,
+        stream=False,
+        response_format=None,
+        thread_response_id=None,
+    ):
+        self.received_thread_response_ids.append(thread_response_id)
+        return CompletionResult(
+            message=Message(role="assistant", content="ok"),
+            response_id=self._response_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_reasoning_passes_thread_response_id_through_wrapper_models() -> None:
+    """Response chaining must survive wrapper models such as RetryModel.
+
+    Regression: reasoning used to sniff ``isinstance(model, OpenAIModel)``, so
+    any wrapper silently disabled previous_response_id chaining and the
+    ResponsesAPICallEvent.
+    """
+    from ecs_agent.providers.retry_model import RetryModel
+
+    inner = _ThreadRecordingModel(response_id="resp_new_1")
+    model = RetryModel(inner)
+
+    world = World()
+    entity = world.create_entity()
+    world.add_component(entity, LLMComponent(model=model))
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content="hello")]),
+    )
+    world.add_component(
+        entity,
+        ResponsesAPIStateComponent(previous_response_id="resp_state_old"),
+    )
+
+    api_events: list[ResponsesAPICallEvent] = []
+
+    async def on_api_call(event: ResponsesAPICallEvent) -> None:
+        api_events.append(event)
+
+    world.event_bus.subscribe(ResponsesAPICallEvent, on_api_call)
+
+    await ReasoningSystem().process(world)
+
+    assert inner.received_thread_response_ids == ["resp_state_old"]
+    state = world.get_component(entity, ResponsesAPIStateComponent)
+    assert state is not None
+    assert state.previous_response_id == "resp_new_1"
+    assert [event.response_id for event in api_events] == ["resp_new_1"]
+
+
+@pytest.mark.asyncio
+async def test_reasoning_omits_thread_response_id_without_state_component() -> None:
+    """Models keep receiving plain complete() calls when no thread is tracked.
+
+    Custom LLMModel implementations predating the thread_response_id parameter
+    must not break in the common non-chaining case.
+    """
+
+    class _LegacySignatureModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        @property
+        def model_id(self) -> str:
+            return "legacy"
+
+        async def complete(self, messages, tools=None, stream=False, response_format=None):
+            self.calls += 1
+            return CompletionResult(message=Message(role="assistant", content="ok"))
+
+    model = _LegacySignatureModel()
+    world = World()
+    entity = world.create_entity()
+    world.add_component(entity, LLMComponent(model=model))
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content="hello")]),
+    )
+
+    await ReasoningSystem().process(world)
+
+    assert model.calls == 1
+    conversation = world.get_component(entity, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages[-1].content == "ok"
 
 
 @pytest.mark.asyncio

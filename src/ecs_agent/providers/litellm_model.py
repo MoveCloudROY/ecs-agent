@@ -79,6 +79,7 @@ class LiteLLMModel:
         tools: list[ToolSchema] | None = None,
         stream: bool = False,
         response_format: dict[str, Any] | None = None,
+        thread_response_id: str | None = None,
     ) -> CompletionResult | AsyncIterator[StreamDelta]:
         """Get completion from LLM via litellm.
 
@@ -87,10 +88,13 @@ class LiteLLMModel:
             tools: Available tools for the LLM to call
             stream: Whether to stream response
             response_format: OpenAI response_format dict (e.g., {"type": "json_object"})
+            thread_response_id: Accepted per the LLMModel protocol; litellm has
+                no stored-response chaining, so it is ignored
 
         Returns:
             CompletionResult or AsyncIterator[StreamDelta]
         """
+        del thread_response_id
         # Build kwargs for litellm.acompletion
         kwargs: dict[str, Any] = {
             "model": self._model,

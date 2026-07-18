@@ -77,6 +77,7 @@ class CheckpointSystem:
             world._components = restored_world._components
             world._entity_registry = restored_world._entity_registry
             world._entity_tags = restored_world._entity_tags
+            world._entity_ids = restored_world._entity_ids
             world._query = Query(world._components)
 
             restored_checkpoint = world.get_component(entity_id, CheckpointComponent)

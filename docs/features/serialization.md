@@ -15,10 +15,41 @@ The `WorldSerializer` class offers several methods for serializing and deseriali
 
 The serialization process relies on the `COMPONENT_REGISTRY`, which maps component class names to their corresponding types for correct deserialization.
 
+Every component dataclass is classified into exactly one of three sets
+(enforced by a partition test in `tests/test_serialization.py`):
+
+- **`COMPONENT_REGISTRY`** — serialized on save and restored on load.
+- **`EPHEMERAL_COMPONENT_TYPES`** — intentionally not serialized: transient
+  runtime signals (`InterruptionComponent`, `ToolRuntimeStateComponent`) and
+  `PhaseDefinitionComponent`, which is re-bound at resume time via
+  `bind_phase_graph`.
+- **`NON_COMPONENT_VALUE_TYPES`** — nested value objects never attached to
+  entities directly (`SkillMetadata`, `ToolStateNamespace`, `TodoItem`).
+
+A component name present in a payload but missing from the registry is skipped
+with a `serialization_unknown_component` warning — never a silent drop.
+
+### Schema Version
+
+Payloads carry a `schema_version` field (`CHECKPOINT_SCHEMA_VERSION`, currently
+`1`). Loading a payload with a *newer* version than the running build supports
+raises `ValueError` instead of partially loading it. Payloads without the field
+are treated as version 1.
+
+### Entity Tracking
+
+The payload's `entity_ids` list preserves every entity known to the world —
+including component-less ones — so `world.has_entity()` keeps answering
+correctly after a restore. Older payloads without the field fall back to the
+ids observable in components and the entity registry.
+
 ### Non-Serializable Fields
 Some fields within components are naturally non-serializable, such as live LLM model instances or tool handler callables.
-- `LLMComponent.model`: Replaced with `"<non-serializable>"` during serialization.
+- `LLMComponent.model`: Replaced with the model id string; re-resolved from `providers` on load.
 - `ToolRegistryComponent.handlers`: Replaced with `"<non-serializable>"` during serialization.
+- `UserInputComponent.future` / `SubagentWaitComponent.future`: Stored as `null`; a pending request is re-issued after resume.
+- `WorkspaceBindingComponent.workspace_root`: Stored as a string, restored as a `Path`.
+- `EntityRegistryComponent.metadata`: Values that are not JSON-encodable are replaced with `"<non-serializable>"`.
 
 ### Re-Injection on Load
 When loading a `World`, you must provide a dictionary of `providers` (mapping model names to `LLMModel` instances) and `tool_handlers` (mapping tool names to their corresponding callable functions). The `WorldSerializer` uses these to re-inject the necessary live objects back into the components.

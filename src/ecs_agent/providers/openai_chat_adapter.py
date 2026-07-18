@@ -100,6 +100,7 @@ class OpenAIChatAdapter:
             pool=self._facade._timeout.pool,
         )
         accumulated_tool_calls: dict[int, dict[str, str]] = {}
+        tool_calls_flushed = False
 
         try:
             async with self._facade._client.stream(
@@ -157,7 +158,6 @@ class OpenAIChatAdapter:
                     usage = self._facade._usage_from_raw(response_json.get("usage"))
 
                     tool_calls_delta = delta.get("tool_calls")
-                    stream_tool_calls: list[ToolCall] | None = None
                     if tool_calls_delta:
                         for tool_call_delta in tool_calls_delta:
                             index = tool_call_delta.get("index", 0)
@@ -178,24 +178,20 @@ class OpenAIChatAdapter:
                             ):
                                 accumulated["arguments"] += function_delta["arguments"]
 
-                        stream_tool_calls = []
-                        for index in sorted(accumulated_tool_calls):
-                            accumulated = accumulated_tool_calls[index]
-                            parsed_arguments: dict[str, Any]
-                            try:
-                                parsed_arguments = json.loads(accumulated["arguments"])
-                            except json.JSONDecodeError:
-                                parsed_arguments = {
-                                    "_partial": accumulated["arguments"]
-                                }
-
-                            stream_tool_calls.append(
-                                ToolCall(
-                                    id=accumulated["id"] or f"index_{index}",
-                                    name=accumulated["name"] or "",
-                                    arguments=parsed_arguments,
-                                )
-                            )
+                    # Tool calls surface exactly once, when their argument
+                    # streams are complete (at the finish_reason chunk).
+                    # Re-emitting partially accumulated arguments per chunk
+                    # is both wasteful and ambiguous for consumers.
+                    stream_tool_calls: list[ToolCall] | None = None
+                    if (
+                        finish_reason is not None
+                        and accumulated_tool_calls
+                        and not tool_calls_flushed
+                    ):
+                        stream_tool_calls = self._finalize_tool_calls(
+                            accumulated_tool_calls
+                        )
+                        tool_calls_flushed = True
 
                     if (
                         content is None
@@ -213,12 +209,53 @@ class OpenAIChatAdapter:
                         finish_reason=finish_reason,
                         usage=usage,
                     )
+
+                if accumulated_tool_calls and not tool_calls_flushed:
+                    # Some gateways end the stream without a finish_reason
+                    # chunk; flush the completed tool calls before closing.
+                    yield StreamDelta(
+                        tool_calls=self._finalize_tool_calls(accumulated_tool_calls)
+                    )
         except httpx.HTTPStatusError as exc:
             self._facade._handle_http_error(exc)
             raise
         except httpx.RequestError as exc:
             self._facade._handle_request_error(exc)
             raise
+
+    def _finalize_tool_calls(
+        self, accumulated_tool_calls: dict[int, dict[str, str]]
+    ) -> list[ToolCall]:
+        """Parse accumulated tool calls once their argument streams are complete.
+
+        Arguments that never became valid JSON are preserved under a
+        ``{"_partial": ...}`` placeholder so consumers can surface the raw text.
+        """
+        completed: list[ToolCall] = []
+        for index in sorted(accumulated_tool_calls):
+            accumulated = accumulated_tool_calls[index]
+            raw_arguments = accumulated["arguments"]
+            parsed_arguments: dict[str, Any]
+            if not raw_arguments:
+                parsed_arguments = {}
+            else:
+                try:
+                    loaded = json.loads(raw_arguments)
+                except json.JSONDecodeError:
+                    loaded = None
+                parsed_arguments = (
+                    loaded if isinstance(loaded, dict) else {"_partial": raw_arguments}
+                )
+
+            completed.append(
+                ToolCall(
+                    id=accumulated["id"] or f"index_{index}",
+                    name=accumulated["name"] or "",
+                    arguments=parsed_arguments,
+                )
+            )
+
+        return completed
 
     def _build_request_body(
         self,

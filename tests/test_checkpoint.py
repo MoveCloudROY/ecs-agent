@@ -213,3 +213,27 @@ async def test_process_skips_entities_without_checkpoint_component() -> None:
     await CheckpointSystem().process(world)
 
     assert seen == []
+
+
+async def test_undo_restores_entity_tracking() -> None:
+    """Undo must transplant entity-id tracking along with the component store.
+
+    Without the transplant the world keeps its stale pre-undo entity set:
+    entities created after the snapshot still report has_entity() == True.
+    """
+    from ecs_agent.components import CheckpointComponent, RunnerStateComponent
+
+    world = World()
+    entity = world.create_entity()
+    world.add_component(entity, RunnerStateComponent(current_tick=0))
+    world.add_component(entity, CheckpointComponent())
+
+    system = CheckpointSystem()
+    await system.process(world)
+
+    post_snapshot_entity = world.create_entity()
+
+    await CheckpointSystem.undo(world, providers={}, tool_handlers={})
+
+    assert world.has_entity(entity)
+    assert not world.has_entity(post_snapshot_entity)

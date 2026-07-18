@@ -122,6 +122,187 @@ async def test_streaming_returns_stream_delta_objects() -> None:
 
 
 @pytest.mark.asyncio
+async def test_streaming_tool_call_arguments_spanning_chunks_yield_once_parsed() -> None:
+    """Tool-call arguments split across SSE chunks surface exactly once, fully parsed.
+
+    Regression: the adapter used to re-emit the full accumulated prefix on every
+    chunk as ``{"_partial": ...}``, which downstream merging concatenated into
+    garbage that shadowed the correctly parsed arguments.
+    """
+    stream_lines = [
+        _sse_data(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "function": {"name": "get_weather", "arguments": ""},
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ]
+            }
+        ),
+        _sse_data(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {"index": 0, "function": {"arguments": '{"city": "Par'}}
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ]
+            }
+        ),
+        _sse_data(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {"index": 0, "function": {"arguments": 'is"}'}}
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ]
+            }
+        ),
+        _sse_data({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+        "data: [DONE]",
+    ]
+    stream_response = _MockStreamResponse(stream_lines)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
+
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
+
+    stream_iter = await model.complete(
+        [Message(role="user", content="weather?")], stream=True
+    )
+    deltas = [delta async for delta in stream_iter]
+
+    tool_deltas = [delta for delta in deltas if delta.tool_calls is not None]
+    assert len(tool_deltas) == 1
+    (tool_call,) = tool_deltas[0].tool_calls
+    assert tool_call.id == "call_1"
+    assert tool_call.name == "get_weather"
+    assert tool_call.arguments == {"city": "Paris"}
+    assert tool_deltas[0].finish_reason == "tool_calls"
+
+
+@pytest.mark.asyncio
+async def test_streaming_tool_calls_flush_at_stream_end_without_finish_reason() -> None:
+    """Gateways that omit the finish_reason chunk still get their tool calls."""
+    stream_lines = [
+        _sse_data(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "function": {
+                                        "name": "lookup",
+                                        "arguments": '{"q": ',
+                                    },
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ]
+            }
+        ),
+        _sse_data(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [{"index": 0, "function": {"arguments": '"x"}'}}]
+                        },
+                        "finish_reason": None,
+                    }
+                ]
+            }
+        ),
+        "data: [DONE]",
+    ]
+    stream_response = _MockStreamResponse(stream_lines)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
+
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
+
+    stream_iter = await model.complete(
+        [Message(role="user", content="q")], stream=True
+    )
+    deltas = [delta async for delta in stream_iter]
+
+    tool_deltas = [delta for delta in deltas if delta.tool_calls is not None]
+    assert len(tool_deltas) == 1
+    (tool_call,) = tool_deltas[0].tool_calls
+    assert tool_call.arguments == {"q": "x"}
+
+
+@pytest.mark.asyncio
+async def test_streaming_tool_call_without_arguments_parses_to_empty_dict() -> None:
+    """No-argument tool calls yield ``{}``, not a ``{"_partial": ""}`` placeholder."""
+    stream_lines = [
+        _sse_data(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "function": {"name": "ping", "arguments": ""},
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ]
+            }
+        ),
+        _sse_data({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+        "data: [DONE]",
+    ]
+    stream_response = _MockStreamResponse(stream_lines)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = Mock(return_value=_MockStreamContext(stream_response))
+
+    model = OpenAIModel(config=_openai_config(api_key="test-key"))
+    model._client = mock_client
+
+    stream_iter = await model.complete([Message(role="user", content="p")], stream=True)
+    deltas = [delta async for delta in stream_iter]
+
+    tool_deltas = [delta for delta in deltas if delta.tool_calls is not None]
+    assert len(tool_deltas) == 1
+    (tool_call,) = tool_deltas[0].tool_calls
+    assert tool_call.name == "ping"
+    assert tool_call.arguments == {}
+
+
+@pytest.mark.asyncio
 async def test_streaming_request_includes_usage_stream_options() -> None:
     """Streaming requests opt into the final usage chunk (OpenAI spec)."""
     stream_lines = [
@@ -353,13 +534,12 @@ async def test_streaming_accumulates_tool_call_chunks_by_index() -> None:
     )
     deltas = [delta async for delta in stream_iter]
 
-    assert deltas[0].tool_calls is not None
-    assert deltas[0].tool_calls[0].id == "call_1"
-    assert deltas[0].tool_calls[0].name == "get_weather"
-    assert deltas[0].tool_calls[0].arguments == {"_partial": '{"city":"'}
-
-    assert deltas[1].tool_calls is not None
-    assert deltas[1].tool_calls[0].arguments == {"city": "NYC"}
+    tool_deltas = [delta for delta in deltas if delta.tool_calls is not None]
+    assert len(tool_deltas) == 1
+    (tool_call,) = tool_deltas[0].tool_calls
+    assert tool_call.id == "call_1"
+    assert tool_call.name == "get_weather"
+    assert tool_call.arguments == {"city": "NYC"}
 
 
 @pytest.mark.asyncio
@@ -553,7 +733,8 @@ async def test_fake_model_streaming_with_tool_calls() -> None:
     final_delta = deltas[5]
 
     assert [d.content for d in char_deltas] == ["F", "o", "u", "n", "d"]
-    assert final_delta.finish_reason == "stop"
+    assert final_delta.tool_calls == [tool_call]
+    assert final_delta.finish_reason == "tool_calls"
     assert final_delta.usage == usage
 
 
