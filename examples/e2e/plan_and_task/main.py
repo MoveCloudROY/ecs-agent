@@ -49,6 +49,7 @@ from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.discovery import discover_skills
 from ecs_agent.skills.skill import Skill
 from ecs_agent.skills.web_search import WebSearchSkill
+from ecs_agent.systems import TerminalCleanupSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
@@ -92,6 +93,11 @@ from examples.e2e.plan_and_task.runtime import (
     setup_interactive_input,
     derive_workflow_id_from_llm,
 )
+from examples.e2e.plan_and_task.status_command import (
+    STATUS_SHOWN_REASON,
+    StatusCommandSystem,
+)
+from examples.e2e.plan_and_task.task_tools import install_complete_task_tool
 from examples.e2e.plan_and_task.state_models import RuntimeState
 
 if TYPE_CHECKING:
@@ -792,7 +798,17 @@ async def build_plan_task_world(
         _world: World, _entity_id: EntityId, user_text: str
     ) -> str | None:
         parts = user_text.strip().split(None, 1)
-        reason = parts[1].strip() if len(parts) > 1 else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        # `--scope-changed` (or `--scope`) forces a fresh advisor/QA re-review
+        # by clearing verdicts and routing to DRAFT_ADVISOR_REVIEW; without it a
+        # replan is same-scope and returns straight to TASK_RUNNING.
+        scope_changed = False
+        for flag in ("--scope-changed", "--scope"):
+            if rest == flag or rest.startswith(flag + " "):
+                scope_changed = True
+                rest = rest[len(flag):].strip()
+                break
+        reason = rest
         if not reason:
             return "Error: /task:replan requires a non-empty reason."
         try:
@@ -800,6 +816,7 @@ async def build_plan_task_world(
                 _require_state(runtime_state[0]),
                 _require_adapter(adapter_ref[0]),
                 reason,
+                scope_changed=scope_changed,
             )
             s = _require_state(runtime_state[0])
             logger.info(
@@ -951,7 +968,7 @@ async def build_plan_task_world(
         "task_start": "[workflow_id] — initialize the task queue and run",
         "task_status": "show task queue status",
         "task_resume": "[workflow_id] — resume task execution",
-        "task_replan": "<reason> — replan the remaining tasks",
+        "task_replan": "[--scope-changed] <reason> — replan; --scope-changed forces advisor/QA re-review",
         "task_abort": "abort task execution",
     }
     # Each command's slash pattern derives from its handler key by turning the
@@ -980,6 +997,23 @@ async def build_plan_task_world(
     )
     world.register_system(UserPromptNormalizationSystem(priority=-10), priority=-10)
     world.register_system(SystemPromptRenderSystem(priority=-5), priority=-5)
+    # Read-only slash commands (the `_status` handlers) are shown directly and
+    # complete the turn without an LLM round-trip. StatusCommandSystem runs after
+    # render (so the handler's result exists) and before reasoning (so its skip
+    # lands); TerminalCleanupSystem clears the transient skip marker post-reason.
+    readonly_command_prefixes = [
+        "/" + name.replace("_", ":", 1)
+        for name in script_handlers
+        if name.endswith("_status")
+    ]
+    world.register_system(
+        StatusCommandSystem(agent_id, readonly_command_prefixes, priority=-3),
+        priority=-3,
+    )
+    world.register_system(
+        TerminalCleanupSystem(priority=3, clear_reasons=(STATUS_SHOWN_REASON,)),
+        priority=3,
+    )
     # stream_subagents bridges each synchronous reviewer/writer subagent's
     # reasoning + content stream to the parent event bus so the TUI can show
     # its thinking live and its full result in the subagent inspector.
@@ -990,6 +1024,10 @@ async def build_plan_task_world(
     # Interactive clarification tool: pauses the turn to put structured
     # questions to the user (surfaced by the TUI modal or the stdin runtime).
     install_ask_question_tool(world, agent_id)
+    # Task-execution completion tool: records the active task as done and
+    # advances the queue (TASK_RUNNING → next task / TASK_COMPLETED). Without it
+    # the execution phase can build a queue but never complete or advance it.
+    install_complete_task_tool(world, agent_id, runtime_state, adapter_ref)
     world.register_system(ReasoningSystem(priority=0), priority=0)
     # ISSUE-3: with the tool sink on, large tool outputs are written to
     # scratchbook/records/tool/<id> and only the record_path is kept inline, so

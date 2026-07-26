@@ -137,7 +137,14 @@ class PlanController:
     async def handle_plan_finalize(
         self, state: RuntimeState, adapter: ArtifactAdapter
     ) -> RuntimeState:
-        """Validate advisor+qa+plan-qa approvals, write plan, walk to TASK_READY."""
+        """Validate advisor+qa+plan-qa approvals, confirm the plan, walk to TASK_READY.
+
+        The ``plan_writer`` subagent produces ``workflow_plan.md`` during the
+        WRITE_PLAN phase; finalization must **not** rewrite it (doing so would
+        clobber the real multi-task plan with a stub). It only gates on the three
+        approvals, confirms the finalized plan artifact exists, and walks the
+        phase forward — the task queue is built from that plan by ``TaskExec``.
+        """
         missing_phases = self._missing_approved_reviews(state.review_verdicts)
         if missing_phases:
             formatted = ", ".join(missing_phases)
@@ -151,15 +158,19 @@ class PlanController:
                 f"{formatted}"
             )
 
-        timestamp = self._utcnow_isoformat()
-        description = adapter.read_draft_description() or "Finalized workflow plan"
-        plan_content = self._build_final_plan_markdown(
-            workflow_id=adapter.workflow_id,
-            description=description,
-            timestamp=timestamp,
-        )
-        adapter.write_plan(plan_content)
+        plan_path = adapter.plan_dir / "workflow_plan.md"
+        if not plan_path.exists():
+            logger.warning(
+                "plan_task_plan_artifact_missing",
+                workflow_id=state.workflow_id,
+                path="plan/workflow_plan.md",
+            )
+            raise ValueError(
+                "Cannot finalize: plan/workflow_plan.md does not exist. The plan "
+                "writer must produce it (WRITE_PLAN) before finalization."
+            )
 
+        timestamp = self._utcnow_isoformat()
         while (phase := self.current_phase()) in _FINALIZE_HOPS:
             await self._advance(_FINALIZE_HOPS[phase], reason="plan:finalize")
         state.updated_at = timestamp
@@ -336,11 +347,24 @@ class PlanController:
         the gate's contract, so it only yields to WRITE_PLAN once QA approved the
         draft. Invoked while QA is still on 'revise'/'blocked', it must refuse —
         never bypass the gate and vault a rejected draft into the writer.
+
+        Because approving DRAFT_QA_REVIEW auto-advances to WRITE_PLAN (via the
+        gate on the live path, or gate-replay on resume), by the time this runs
+        the phase is usually already WRITE_PLAN. That is an idempotent success:
+        no transition, but the caller still re-emits the write-plan trigger so
+        the plan_writer (re)runs. Only a phase that is neither DRAFT_QA_REVIEW nor
+        WRITE_PLAN is an error.
         """
         current = self.current_phase()
+        if current == "WRITE_PLAN":
+            logger.info(
+                "plan_task_write_plan_retriggered", workflow_id=state.workflow_id
+            )
+            return state
         if current != "DRAFT_QA_REVIEW":
             raise ValueError(
-                f"handle_write_plan requires DRAFT_QA_REVIEW phase, got {current}"
+                "handle_write_plan requires DRAFT_QA_REVIEW or WRITE_PLAN phase, "
+                f"got {current}"
             )
         if not self._review_approved(state, "DRAFT_QA_REVIEW"):
             raise ValueError(
@@ -488,34 +512,6 @@ class PlanController:
             "## Open Questions\n"
             "(to be filled during interview — unresolved questions that need answers)\n"
         )
-
-    def _build_final_plan_markdown(
-        self, *, workflow_id: str, description: str, timestamp: str
-    ) -> str:
-        return f"""---
-workflow_id: {workflow_id}
-title: Finalized Plan
-description: {description}
-status: finalized
-created_at: \"{timestamp}\"
-finalized_at: \"{timestamp}\"
----
-
-## Tasks
-
-### Task: task-001
-```yaml
-task_id: task-001
-title: Initial Task
-description: First task in the workflow.
-dependencies: []
-acceptance_criteria:
-  - Plan description is documented in workflow artifacts
-  - Runtime state reflects TASK_COMPLETED phase
-  - Evidence artifact is written to evidence/ directory
-execution_hints: []
-```
-"""
 
     _PLANNING_PHASES = frozenset(
         {"DRAFT_INTERVIEW", "DRAFT_ADVISOR_REVIEW", "DRAFT_QA_REVIEW", "WRITE_PLAN", "PLAN_QA_REVIEW"}

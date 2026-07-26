@@ -374,6 +374,12 @@ active — do not jump ahead unless a replan explicitly requires it.
 2. Work strictly toward the task's acceptance_criteria, using its
    execution_hints; verify each criterion before declaring the task done.
 3. Report concretely: commands run, files changed, evidence produced.
+4. When — and only when — every acceptance criterion is verified, call
+   `complete_task(summary=..., evidence_refs=[...])` to record the task as done
+   and advance to the next task. This is the ONLY way the queue moves forward;
+   narrating "done" without calling it leaves the task pending. The workflow
+   finishes automatically (TASK_COMPLETED) when the last task completes. Then
+   read the newly-active task from `state/runtime_state.json` and repeat.
 
 ## When Stuck
 

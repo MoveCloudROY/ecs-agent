@@ -651,8 +651,15 @@ async def test_plan_finalize_rejects_with_only_advisor_approved(tmp_path: Path) 
         await PlanController(world, eid).handle_plan_finalize(state, adapter)
 
 
-async def test_plan_finalize_succeeds_when_both_approved(tmp_path: Path) -> None:
+async def test_plan_finalize_preserves_written_plan_and_advances(tmp_path: Path) -> None:
+    """/plan:finalize must NOT overwrite the plan_writer's workflow_plan.md.
+
+    Regression: handle_plan_finalize used to rewrite the plan from a hardcoded
+    single-task stub, clobbering the plan_writer's real multi-task plan. It must
+    now only gate on approvals + confirm the plan exists, then walk to TASK_READY.
+    """
     adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)  # the plan_writer's real 2-task plan
     state = _make_runtime_state()
     state.phase = "DRAFT_INTERVIEW"
     state.status = "active"
@@ -665,7 +672,22 @@ async def test_plan_finalize_succeeds_when_both_approved(tmp_path: Path) -> None
     assert updated_state.phase == "TASK_READY"
     assert plan_path.exists()
     parsed_plan = parse_plan(plan_path.read_text(encoding="utf-8"))
+    # Both plan_writer tasks survive finalize (not clobbered to a 1-task stub).
+    assert [t.task_id for t in parsed_plan.tasks] == ["task-001", "task-002"]
     assert parsed_plan.workflow_id == "test-workflow-001"
+
+
+async def test_plan_finalize_rejects_when_plan_missing(tmp_path: Path) -> None:
+    """Finalize with approvals but no written plan is a clear error, not a stub."""
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "DRAFT_INTERVIEW"
+    state.status = "active"
+    state.review_verdicts = _make_approved_verdicts()
+    world, eid = await _bound_world_at(state.phase)
+
+    with pytest.raises(ValueError, match="workflow_plan.md"):
+        await PlanController(world, eid).handle_plan_finalize(state, adapter)
 
 
 def test_start_without_final_plan_rejects_reviewed_status() -> None:
@@ -1847,6 +1869,227 @@ async def _build_test_world(
     )
     adapter_ref[0] = test_adapter
     return world, agent_id, test_adapter, runtime_state
+
+
+def _running_state_with_approvals() -> RuntimeState:
+    state = _make_runtime_state()
+    state.phase = "TASK_RUNNING"
+    state.status = "active"
+    state.current_task_id = "task-001"
+    state.review_verdicts = _make_approved_verdicts()
+    return state
+
+
+@pytest.mark.asyncio
+async def test_task_replan_command_scope_changed_forces_rereview(tmp_path: Path) -> None:
+    """`/task:replan --scope-changed <reason>` clears verdicts and re-reviews.
+
+    Regression: the command used to hardcode same-scope, leaving the controller's
+    scope-change re-review branch unreachable from the CLI.
+    """
+    from ecs_agent.components import UserPromptConfigComponent
+
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
+    eid: EntityId = agent_id  # type: ignore[assignment]
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    runtime_state[0] = _running_state_with_approvals()
+    await force(world, eid, "TASK_RUNNING", reason="setup")
+
+    config = world.get_component(eid, UserPromptConfigComponent)
+    assert config is not None
+    handler = config.script_handlers["task_replan"]
+    result = await handler(world, eid, "/task:replan --scope-changed the data model changed")
+
+    assert result is not None and not result.startswith("Error")
+    final = runtime_state[0]
+    assert final is not None
+    assert final.phase == "DRAFT_ADVISOR_REVIEW"
+    assert final.review_verdicts == []
+
+
+@pytest.mark.asyncio
+async def test_task_replan_command_same_scope_keeps_approvals(tmp_path: Path) -> None:
+    """Plain `/task:replan <reason>` stays same-scope: TASK_RUNNING, verdicts kept."""
+    from ecs_agent.components import UserPromptConfigComponent
+
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
+    eid: EntityId = agent_id  # type: ignore[assignment]
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    runtime_state[0] = _running_state_with_approvals()
+    await force(world, eid, "TASK_RUNNING", reason="setup")
+
+    config = world.get_component(eid, UserPromptConfigComponent)
+    assert config is not None
+    handler = config.script_handlers["task_replan"]
+    result = await handler(world, eid, "/task:replan just retry the same plan")
+
+    assert result is not None and not result.startswith("Error")
+    final = runtime_state[0]
+    assert final is not None
+    assert final.phase == "TASK_RUNNING"
+    assert len(final.review_verdicts) == 3
+
+
+@pytest.mark.asyncio
+async def test_complete_task_tool_advances_queue_to_completed(tmp_path: Path) -> None:
+    """The complete_task tool records completion and advances the live queue.
+
+    Regression: task execution used to have no way to record completion, so the
+    queue never advanced past the first task (never reached TASK_COMPLETED).
+    """
+    from ecs_agent.components import ToolRegistryComponent
+
+    world, agent_id, adapter, runtime_state = await _build_test_world(tmp_path)
+    eid: EntityId = agent_id  # type: ignore[assignment]
+    state = _make_runtime_state()
+    state.phase = "TASK_RUNNING"
+    state.status = "active"
+    state.current_task_id = "task-001"
+    state.review_verdicts = _make_approved_verdicts()
+    state.tasks = [
+        TaskRecord(task_id="task-001", title="t1", status="running"),
+        TaskRecord(task_id="task-002", title="t2", status="pending"),
+    ]
+    runtime_state[0] = state
+    await force(world, eid, "TASK_RUNNING", reason="setup")
+
+    registry = world.get_component(eid, ToolRegistryComponent)
+    assert registry is not None
+    complete = registry.handlers["complete_task"]
+
+    res1 = await complete(summary="did task 1, verified its criterion")
+    assert '"next_task": "task-002"' in res1
+    cur = runtime_state[0]
+    assert cur is not None and cur.current_task_id == "task-002"
+    assert cur.tasks[0].status == "completed"
+
+    res2 = await complete(summary="did task 2, verified its criterion")
+    assert '"workflow_done": true' in res2
+    done = runtime_state[0]
+    assert done is not None and done.phase == "TASK_COMPLETED"
+    assert (adapter.evidence_dir / "task-task-001-result.json").exists()
+    assert (adapter.evidence_dir / "task-task-002-result.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_complete_task_tool_rejects_outside_task_running(tmp_path: Path) -> None:
+    from ecs_agent.components import ToolRegistryComponent
+
+    world, agent_id, _adapter, runtime_state = await _build_test_world(tmp_path)
+    eid: EntityId = agent_id  # type: ignore[assignment]
+    state = _make_runtime_state()
+    state.phase = "DRAFT_INTERVIEW"
+    runtime_state[0] = state
+    await force(world, eid, "DRAFT_INTERVIEW", reason="setup")
+    registry = world.get_component(eid, ToolRegistryComponent)
+    assert registry is not None
+    result = await registry.handlers["complete_task"](summary="x")
+    assert result.startswith("Error") and "TASK_RUNNING" in result
+
+
+@pytest.mark.asyncio
+async def test_complete_task_tool_requires_summary(tmp_path: Path) -> None:
+    from ecs_agent.components import ToolRegistryComponent
+
+    world, agent_id, _adapter, runtime_state = await _build_test_world(tmp_path)
+    eid: EntityId = agent_id  # type: ignore[assignment]
+    state = _make_runtime_state()
+    state.phase = "TASK_RUNNING"
+    state.current_task_id = "task-001"
+    state.tasks = [TaskRecord(task_id="task-001", title="t1", status="running")]
+    runtime_state[0] = state
+    await force(world, eid, "TASK_RUNNING", reason="setup")
+    registry = world.get_component(eid, ToolRegistryComponent)
+    assert registry is not None
+    result = await registry.handlers["complete_task"](summary="   ")
+    assert result.startswith("Error") and "summary" in result
+
+
+@pytest.mark.asyncio
+async def test_handle_write_plan_idempotent_from_write_plan(tmp_path: Path) -> None:
+    """/plan:write from WRITE_PLAN is an idempotent success (re-trigger), not an error.
+
+    Regression: approving DRAFT_QA auto-advances to WRITE_PLAN, so the old
+    DRAFT_QA_REVIEW-only guard made /plan:write unreachable-to-success.
+    """
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = "WRITE_PLAN"
+    adapter.write_state(state)
+    world, eid = await _bound_world_at("WRITE_PLAN")
+    ctrl = PlanController(world, eid)
+
+    result = await ctrl.handle_write_plan(state, adapter)  # must not raise
+
+    assert result.phase == "WRITE_PLAN"
+    assert ctrl.current_phase() == "WRITE_PLAN"
+
+
+@pytest.mark.asyncio
+async def test_status_command_system_shows_reply_and_skips_reasoning() -> None:
+    """StatusCommandSystem completes a /plan:status turn without the model.
+
+    It appends the rendered result as the assistant reply, marks the transient
+    'status_shown' terminal (ReasoningSystem's skip signal), and publishes the
+    end-of-turn ReasoningCompleteEvent so front ends re-arm input.
+    """
+    from ecs_agent.components import RenderedUserPromptComponent
+    from ecs_agent.components.definitions import ConversationComponent
+    from ecs_agent.types import Message, ReasoningCompleteEvent
+    from examples.e2e.plan_and_task.status_command import (
+        STATUS_SHOWN_REASON,
+        StatusCommandSystem,
+    )
+
+    world = World()
+    eid = world.create_entity()
+    world.add_component(
+        eid, ConversationComponent(messages=[Message(role="user", content="/plan:status")])
+    )
+    world.add_component(
+        eid, RenderedUserPromptComponent(text='{"phase": "IDLE"}')
+    )
+    completed: list[ReasoningCompleteEvent] = []
+
+    async def _capture(event: ReasoningCompleteEvent) -> None:
+        completed.append(event)
+
+    world.event_bus.subscribe(ReasoningCompleteEvent, _capture)
+
+    await StatusCommandSystem(eid, ["/plan:status", "/task:status"]).process(world)
+
+    conv = world.get_component(eid, ConversationComponent)
+    assert conv is not None
+    assert conv.messages[-1].role == "assistant"
+    assert conv.messages[-1].content == '{"phase": "IDLE"}'
+    terminal = world.get_component(eid, TerminalComponent)
+    assert terminal is not None and terminal.reason == STATUS_SHOWN_REASON
+    assert len(completed) == 1
+
+
+@pytest.mark.asyncio
+async def test_status_command_system_ignores_non_status_messages() -> None:
+    """A non-status user message is left untouched for the normal reasoning path."""
+    from ecs_agent.components import RenderedUserPromptComponent
+    from ecs_agent.components.definitions import ConversationComponent
+    from ecs_agent.types import Message
+    from examples.e2e.plan_and_task.status_command import StatusCommandSystem
+
+    world = World()
+    eid = world.create_entity()
+    world.add_component(
+        eid, ConversationComponent(messages=[Message(role="user", content="hello there")])
+    )
+    world.add_component(eid, RenderedUserPromptComponent(text="hello there"))
+
+    await StatusCommandSystem(eid, ["/plan:status", "/task:status"]).process(world)
+
+    conv = world.get_component(eid, ConversationComponent)
+    assert conv is not None
+    assert len(conv.messages) == 1  # nothing appended
+    assert world.get_component(eid, TerminalComponent) is None
 
 
 @pytest.mark.asyncio

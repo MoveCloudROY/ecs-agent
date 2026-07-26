@@ -929,9 +929,17 @@ class TestEndToEnd:
                 Runner().run(world, max_ticks=None)
             )
             await wait_for(lambda: session.bridge.input_pending)
-            assert session.bridge.submit_input("/plan:status")
+            # A normal message streams a model reply (assistant entry)...
+            assert session.bridge.submit_input("Tell me about the plan")
             await wait_for(
                 lambda: any(e.kind == "assistant" for e in vm.transcript)
+            )
+            await wait_for(lambda: session.bridge.input_pending)
+            # ...while a read-only /plan:status is shown as a command panel with
+            # no model round-trip (StatusCommandSystem short-circuits it).
+            assert session.bridge.submit_input("/plan:status")
+            await wait_for(
+                lambda: any(e.kind == "command" for e in vm.transcript)
             )
             await wait_for(lambda: session.bridge.input_pending)
             assert session.bridge.submit_input("exit")
@@ -946,6 +954,9 @@ class TestEndToEnd:
         assert "No active workflow" in command_entry.text
         assistant_entry = next(e for e in vm.transcript if e.kind == "assistant")
         assert assistant_entry.text == "Streamed TUI reply."
+        # The status command consumed no FakeModel response (only the normal
+        # message did), so the second response is still queued.
+        assert model._index == 1
         assert vm.live_content == ""
         assert not session.bridge.input_pending
 
