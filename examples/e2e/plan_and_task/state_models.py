@@ -108,6 +108,9 @@ class RuntimeState:
     abort_reason: str | None = None
     graph_hash: str | None = None
     tasks: list[TaskRecord] = field(default_factory=list)
+    # Per review-phase count of recorded non-approved (revise/blocked) rounds,
+    # used to bound review revise loops. Reset on a scope-changed replan.
+    review_rounds: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _require_non_empty(self.workflow_id, field_name="workflow_id")
@@ -200,6 +203,7 @@ class RuntimeState:
                 created_at=payload["created_at"],
                 updated_at=payload["updated_at"],
                 tasks=tasks,
+                review_rounds=dict(payload.get("review_rounds", {})),
             )
         except KeyError as exc:
             logger.error("plan_task_runtime_state_missing_field", field=str(exc))

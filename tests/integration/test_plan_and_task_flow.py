@@ -1931,6 +1931,92 @@ async def test_task_replan_command_same_scope_keeps_approvals(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_task_replan_trips_circuit_breaker_to_blocked(tmp_path: Path) -> None:
+    """Same-scope /task:replan counts attempts; the breaker blocks after the limit.
+
+    Regression (Finding #6): retry_count never incremented and the breaker never
+    fired, so a failing task could be replanned forever.
+    """
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    state = _make_runtime_state()
+    state.phase = "TASK_RUNNING"
+    state.status = "active"
+    state.current_task_id = "task-001"
+    state.review_verdicts = _make_approved_verdicts()
+    state.tasks = [
+        TaskRecord(task_id="task-001", title="t1", status="running"),
+        TaskRecord(task_id="task-002", title="t2", status="pending"),
+    ]
+    world, eid = await _bound_world_at("TASK_RUNNING")
+    ctrl = PlanController(world, eid)
+
+    # First two same-scope replans retry; the third trips the breaker.
+    for _ in range(2):
+        state = await ctrl.handle_task_replan(state, adapter, "still failing")
+        assert ctrl.current_phase() == "TASK_RUNNING"
+    state = await ctrl.handle_task_replan(state, adapter, "failed again")
+
+    assert ctrl.current_phase() == "TASK_BLOCKED"
+    assert state.tasks[0].retry_count == 3
+
+
+@pytest.mark.asyncio
+async def test_task_replan_scope_changed_resets_retry_count(tmp_path: Path) -> None:
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    state = _make_runtime_state()
+    state.phase = "TASK_RUNNING"
+    state.status = "active"
+    state.current_task_id = "task-001"
+    state.review_verdicts = _make_approved_verdicts()
+    state.tasks = [
+        TaskRecord(task_id="task-001", title="t1", status="running", retry_count=2)
+    ]
+    world, eid = await _bound_world_at("TASK_RUNNING")
+    ctrl = PlanController(world, eid)
+
+    state = await ctrl.handle_task_replan(
+        state, adapter, "scope grew", scope_changed=True
+    )
+
+    assert ctrl.current_phase() == "DRAFT_ADVISOR_REVIEW"
+    assert state.tasks[0].retry_count == 0  # fresh plan resets attempts
+
+
+@pytest.mark.asyncio
+async def test_review_rounds_capped(tmp_path: Path) -> None:
+    """A review phase refuses to record more than _MAX_REVIEW_ROUNDS revise rounds.
+
+    Regression (Finding #7): review revise loops were unbounded.
+    """
+    from examples.e2e.plan_and_task.controller import PlanController, _MAX_REVIEW_ROUNDS
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    adapter.write_plan(_VALID_FINALIZED_TASK_PLAN)
+    state = _make_runtime_state()
+    state.phase = "PLAN_QA_REVIEW"
+    state.status = "active"
+    state.review_verdicts = [
+        ReviewVerdict(phase="DRAFT_ADVISOR_REVIEW", verdict="approved", decided_at="t"),
+        ReviewVerdict(phase="DRAFT_QA_REVIEW", verdict="approved", decided_at="t"),
+    ]
+    world, eid = await _bound_world_at("PLAN_QA_REVIEW")
+    ctrl = PlanController(world, eid)
+
+    for _ in range(_MAX_REVIEW_ROUNDS):
+        state = await ctrl.handle_plan_qa_review(state, adapter, "revise", notes="more")
+    assert state.review_rounds["PLAN_QA_REVIEW"] == _MAX_REVIEW_ROUNDS
+
+    with pytest.raises(ValueError, match="without approval"):
+        await ctrl.handle_plan_qa_review(state, adapter, "revise", notes="again")
+
+
+@pytest.mark.asyncio
 async def test_complete_task_tool_advances_queue_to_completed(tmp_path: Path) -> None:
     """The complete_task tool records completion and advances the live queue.
 

@@ -23,6 +23,7 @@ from examples.e2e.plan_and_task.scratchbook_adapter import (
 from examples.e2e.plan_and_task.state_models import (
     RuntimeState,
     ReviewVerdict,
+    TaskRecord,
     missing_approvals,
 )
 
@@ -56,6 +57,13 @@ def _derive_finalize_hops(graph: PhaseGraph) -> dict[str, str]:
 
 
 _FINALIZE_HOPS: dict[str, str] = _derive_finalize_hops(PLAN_TASK_PHASE_GRAPH)
+
+# Loop bounds. A same-scope replan counts as one failed attempt at the active
+# task; after this many attempts the circuit breaker holds it in TASK_BLOCKED
+# instead of retrying forever. A review phase may return revise/blocked at most
+# this many times before the workflow refuses to keep looping.
+_MAX_TASK_RETRIES = 3
+_MAX_REVIEW_ROUNDS = 5
 
 
 class ResumeAction(Enum):
@@ -302,6 +310,24 @@ class PlanController:
                     f"Cannot record {review_phase} verdict while {current} "
                     "is not approved"
                 )
+        # Bound the revise loop: a review phase may return revise/blocked at
+        # most _MAX_REVIEW_ROUNDS times before we refuse to keep looping and
+        # force an escalation. (approved is never capped.)
+        if verdict_str != "approved":
+            rounds = state.review_rounds.get(review_phase, 0)
+            if rounds >= _MAX_REVIEW_ROUNDS:
+                logger.warning(
+                    "plan_task_review_rounds_exceeded",
+                    workflow_id=state.workflow_id,
+                    phase=review_phase,
+                    rounds=rounds,
+                )
+                raise ValueError(
+                    f"{review_phase} has returned revise/blocked {rounds} times "
+                    f"without approval (max {_MAX_REVIEW_ROUNDS}). Stop revising — "
+                    "escalate to the user via ask_question, or abort with "
+                    "/task:abort."
+                )
         timestamp = self._utcnow_isoformat()
         verdict = ReviewVerdict(
             phase=review_phase,
@@ -318,6 +344,10 @@ class PlanController:
                 verdict=verdict_str,
             )
             return state
+        if verdict_str != "approved":
+            state.review_rounds[review_phase] = (
+                state.review_rounds.get(review_phase, 0) + 1
+            )
         adapter.write_review_verdict(review_phase, verdict)
 
         if current != review_phase and review_phase in allowed:
@@ -422,17 +452,54 @@ class PlanController:
         reason: str,
         scope_changed: bool = False,
     ) -> RuntimeState:
-        """Request a replan and optionally force advisor/QA re-review on scope change."""
+        """Request a replan; count the attempt and trip the breaker, or re-review.
+
+        A same-scope replan is a failed attempt at the active task: it increments
+        that task's ``retry_count`` and, once the circuit breaker trips
+        (``retry_count >= _MAX_TASK_RETRIES``), holds the workflow in
+        ``TASK_BLOCKED`` instead of looping back into ``TASK_RUNNING`` forever.
+        A scope-changed replan is a fresh plan: it resets the active task's
+        ``retry_count`` and routes to ``DRAFT_ADVISOR_REVIEW`` for re-review.
+        """
         self._require_reason(reason)
         self._require_plan_artifact(adapter, state)
 
         timestamp = self._utcnow_isoformat()
+        task = self._current_task_record(state)
+
+        if not scope_changed and task is not None:
+            task.retry_count += 1
+            task.last_error = reason[:200]
+            if self._circuit_broken(state, task.task_id):
+                # Attempts exhausted — hold instead of retrying again. From the
+                # usual TASK_RUNNING this is a valid edge; if already blocked,
+                # stay put (TASK_BLOCKED has no self-edge).
+                if self.current_phase() != "TASK_BLOCKED":
+                    await self._advance(
+                        "TASK_BLOCKED", reason="replan:circuit_breaker"
+                    )
+                state.last_checkpoint = reason
+                state.abort_reason = None
+                state.updated_at = timestamp
+                self._save(state, adapter)
+                logger.warning(
+                    "plan_task_replan_circuit_broken",
+                    workflow_id=state.workflow_id,
+                    task_id=task.task_id,
+                    retry_count=task.retry_count,
+                )
+                return state
+
         await self._advance("TASK_REPLAN", reason=f"task:replan:{reason[:80]}")
         state.last_checkpoint = reason
         state.abort_reason = None
 
         if scope_changed:
+            if task is not None:
+                task.retry_count = 0
+                task.last_error = None
             state.review_verdicts = []
+            state.review_rounds = {}
             self._world.remove_component(self._entity_id, PhaseApprovalsComponent)
             await self._advance("DRAFT_ADVISOR_REVIEW", reason="replan:scope_changed")
         else:
@@ -447,6 +514,27 @@ class PlanController:
             scope_changed=scope_changed,
         )
         return state
+
+    def _current_task_record(self, state: RuntimeState) -> "TaskRecord | None":
+        """The TaskRecord for ``state.current_task_id``, or None if unset/absent."""
+        if state.current_task_id is None:
+            return None
+        for task in state.tasks:
+            if task.task_id == state.current_task_id:
+                return task
+        return None
+
+    def _circuit_broken(self, state: RuntimeState, task_id: str) -> bool:
+        """True when the task's retry_count has reached the breaker limit.
+
+        Delegates to ``TaskExec.check_circuit_breaker`` so the threshold and the
+        ``plan_task_circuit_breaker_triggered`` log live in one place.
+        """
+        from examples.e2e.plan_and_task.task_exec import TaskExec
+
+        return TaskExec(
+            state=state, world=self._world, entity_id=self._entity_id
+        ).check_circuit_breaker(state, task_id, max_retries=_MAX_TASK_RETRIES)
 
     async def handle_task_resume(
         self, state: RuntimeState, adapter: ArtifactAdapter

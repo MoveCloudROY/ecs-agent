@@ -581,6 +581,22 @@ async def build_plan_task_world(
                 subagent_name=event.subagent_name,
                 exception=str(exc),
             )
+            # Surface the failure to the model (e.g. the review-round cap, or a
+            # verdict recorded out of order): the subagent's text result reached
+            # the model but the verdict was not recorded, so without this note it
+            # would keep re-running the same review blindly.
+            conv = world.get_component(agent_id, ConversationComponent)
+            if conv is not None:
+                conv.messages.append(
+                    Message(
+                        role="user",
+                        content=(
+                            f"System note: the {event.subagent_name} review could "
+                            f"not be recorded — {exc} Do not simply re-run the same "
+                            "review; address the note above."
+                        ),
+                    )
+                )
 
     world.event_bus.subscribe(DelegationCompletedEvent, _on_delegation_completed)
 
