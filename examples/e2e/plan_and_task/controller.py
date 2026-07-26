@@ -322,15 +322,12 @@ class PlanController:
                     phase=review_phase,
                     rounds=rounds,
                 )
-                # Escape options are phase-appropriate: review phases have no
-                # abort edge (/task:abort is task-phase only), so guide toward
-                # escalation, a forced approval, or restarting the workflow.
                 raise ValueError(
                     f"{review_phase} has returned revise/blocked {rounds} times "
                     f"without approval (max {_MAX_REVIEW_ROUNDS}). Stop revising — "
                     "escalate to the user via ask_question, record an approved "
-                    "verdict if the plan is acceptable, or start over with "
-                    "/plan:start."
+                    "verdict if the plan is acceptable, /task:abort to abandon "
+                    "the workflow, or /plan:start to restart."
                 )
         timestamp = self._utcnow_isoformat()
         verdict = ReviewVerdict(
@@ -429,7 +426,13 @@ class PlanController:
     async def handle_task_abort(
         self, state: RuntimeState, adapter: ArtifactAdapter, reason: str
     ) -> RuntimeState:
-        """Abort the current task and transition to TASK_ABORTED terminal state."""
+        """Abandon the workflow from any non-terminal phase → TASK_ABORTED.
+
+        Abort is a universal escape hatch, so it uses ``force()`` rather than
+        ``advance()``: the planning/review phases have no graph edge to a
+        terminal, but the user must still be able to give up on a workflow that
+        is stuck (e.g. reviews that never converge) from any phase.
+        """
         self._require_reason(reason)
         self._require_plan_artifact(adapter, state)
 
@@ -437,7 +440,12 @@ class PlanController:
         # abort_reason must be set before the save below: the persist-time
         # snapshot derives status, and "aborted" requires the reason present.
         state.abort_reason = reason
-        await self._advance("TASK_ABORTED", reason=f"task:abort:{reason[:80]}")
+        await force(
+            self._world,
+            self._entity_id,
+            "TASK_ABORTED",
+            reason=f"task:abort:{reason[:80]}",
+        )
         state.last_checkpoint = reason
         state.updated_at = timestamp
         self._save(state, adapter)

@@ -65,7 +65,7 @@ The interactive runtime supports eleven slash commands:
 - `/task:status`: Show the status of the current task and subagent sessions.
 - `/task:resume`: Resume a blocked or replanned task.
 - `/task:replan [--scope-changed] <reason>`: Request a replan for the current task. By default the replan is **same-scope** — it returns straight to `TASK_RUNNING` with the existing approvals intact. Prefix the reason with `--scope-changed` (or `--scope`) when the replan changes the plan's scope: that clears the recorded review verdicts, resets the approval ledger, and routes to `DRAFT_ADVISOR_REVIEW` so the changed plan is re-reviewed by the advisor and QA before execution resumes. A same-scope replan also counts as a failed attempt: after the retry limit the active task is held in `TASK_BLOCKED` (circuit breaker) rather than retried again.
-- `/task:abort`: Abort the current task and transition to a terminal state.
+- `/task:abort`: Abandon the workflow and transition to the `TASK_ABORTED` terminal state. It is a universal escape hatch — it works from **any** non-terminal phase (task *or* planning/review), using `force()` rather than a graph edge, so a workflow that is stuck (e.g. reviews that never converge) can always be given up.
 
 ## Artifact Layout
 

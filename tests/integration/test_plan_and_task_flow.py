@@ -2017,6 +2017,33 @@ async def test_review_rounds_capped(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "phase",
+    ["DRAFT_INTERVIEW", "DRAFT_QA_REVIEW", "WRITE_PLAN", "PLAN_QA_REVIEW"],
+)
+async def test_task_abort_works_from_any_phase(tmp_path: Path, phase: str) -> None:
+    """/task:abort is a universal escape hatch — it terminates from any phase.
+
+    Regression (Finding #8): planning/review phases had no graph edge to a
+    terminal, so /task:abort errored with 'invalid transition -> TASK_ABORTED'.
+    """
+    from examples.e2e.plan_and_task.controller import PlanController
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="test-workflow-001")
+    state = _make_runtime_state()
+    state.phase = phase
+    state.status = "active"
+    world, eid = await _bound_world_at(phase)
+    ctrl = PlanController(world, eid)
+
+    result = await ctrl.handle_task_abort(state, adapter, "abandon it")
+
+    assert ctrl.current_phase() == "TASK_ABORTED"
+    assert result.abort_reason == "abandon it"
+    assert result.status == "aborted"
+
+
+@pytest.mark.asyncio
 async def test_complete_task_tool_advances_queue_to_completed(tmp_path: Path) -> None:
     """The complete_task tool records completion and advances the live queue.
 
