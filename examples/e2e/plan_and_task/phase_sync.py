@@ -19,8 +19,9 @@ def derive_status(
     """Pure derivation — status is a view of phase + domain fields, never assigned.
 
     TASK_READY/TASK_BLOCKED are domain labels for their phases (TASK_BLOCKED is
-    only reachable via the graph's on_resume demotion). A phase that declares an
-    ApprovalGate but holds no verdict yet is awaiting review.
+    reached via the graph's on_resume demotion or the replan circuit breaker).
+    A phase that declares an ApprovalGate but holds no verdict yet is awaiting
+    review.
     """
     spec = PLAN_TASK_PHASE_GRAPH.phases_by_id[phase]
     if spec.terminal:

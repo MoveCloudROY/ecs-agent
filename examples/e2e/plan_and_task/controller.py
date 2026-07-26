@@ -322,11 +322,15 @@ class PlanController:
                     phase=review_phase,
                     rounds=rounds,
                 )
+                # Escape options are phase-appropriate: review phases have no
+                # abort edge (/task:abort is task-phase only), so guide toward
+                # escalation, a forced approval, or restarting the workflow.
                 raise ValueError(
                     f"{review_phase} has returned revise/blocked {rounds} times "
                     f"without approval (max {_MAX_REVIEW_ROUNDS}). Stop revising — "
-                    "escalate to the user via ask_question, or abort with "
-                    "/task:abort."
+                    "escalate to the user via ask_question, record an approved "
+                    "verdict if the plan is acceptable, or start over with "
+                    "/plan:start."
                 )
         timestamp = self._utcnow_isoformat()
         verdict = ReviewVerdict(
