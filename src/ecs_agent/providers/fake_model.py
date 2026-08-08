@@ -1,6 +1,12 @@
 """Fake LLM provider for testing."""
 
-from ecs_agent.types import Message, CompletionResult, ToolSchema, StreamDelta
+from ecs_agent.types import (
+    Message,
+    CompletionResult,
+    FinishReason,
+    ToolSchema,
+    StreamDelta,
+)
 from typing import Any, AsyncIterator
 
 
@@ -42,6 +48,10 @@ class FakeModel:
             The canned response string or None if not found.
         """
         return self._tool_responses.get(tool_name)
+
+    async def aclose(self) -> None:
+        """No owned transport; provided for LLMModel protocol parity."""
+        return None
 
     async def complete(
         self,
@@ -99,6 +109,8 @@ class FakeModel:
         tool_calls = result.message.tool_calls
         yield StreamDelta(
             tool_calls=tool_calls,
-            finish_reason="tool_calls" if tool_calls else "stop",
+            finish_reason=(
+                FinishReason.TOOL_CALLS if tool_calls else FinishReason.STOP
+            ),
             usage=result.usage,
         )

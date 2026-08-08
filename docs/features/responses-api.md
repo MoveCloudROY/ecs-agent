@@ -87,6 +87,47 @@ Reasoning models stream their summary on a separate channel
 `StreamDelta.reasoning_content` so callers can split private reasoning from the
 user-facing answer, exactly as they would on Chat Completions.
 
+Every stream ends with exactly one terminal delta, carrying the finish reason,
+usage and response id — see [Terminal state](#terminal-state) below.
+
+## Terminal state
+
+How a turn ended is read from the `status` on the provider's `response` object
+— `completed`, `incomplete`, `failed`, `cancelled` — not from the name of the
+event that delivered it. Streaming and non-streaming share one parse, so both
+report the same [`FinishReason`](./streaming.md#finish-reasons):
+
+| Provider status | `FinishReason` | Notes |
+|---|---|---|
+| `completed` | `STOP`, or `TOOL_CALLS` when the turn produced function calls | Matches what Chat Completions reports for the same turn |
+| `incomplete` | `LENGTH` / `CONTENT_FILTER` from `incomplete_details.reason` | The truncated turn's usage is still recorded |
+| `cancelled` | `CANCELLED` | |
+| `failed` | — | Raises `ValueError` with the provider's error code and message |
+
+Two degradations are handled explicitly:
+
+- **No `status` field.** The legacy `response.done` dialect (and some gateways
+  on failures) omit it; the event name is then used as the fallback status.
+- **No terminal event at all.** A stream that ends on the Chat-style `[DONE]`
+  sentinel or a closed connection gets a synthesised terminal delta with
+  `UNKNOWN` and the id seen on `response.created`, plus a
+  `responses_stream_missing_terminal_event` warning. Usage is unknowable there
+  and stays `None` — but the response id still reaches the caller, so token
+  accounting and stored-response chaining do not silently stall. `UNKNOWN` is
+  deliberately not reported as `STOP`: a completion the provider never stated
+  must not look clean.
+
+## Tool result contract
+
+A `role="tool"` message must carry the `tool_call_id` of the call it answers —
+without it the result cannot be rendered as a `function_call_output`, and
+dropping it would strand the matching `function_call` in the request. Adapters
+therefore reject such a history with `ValueError` naming the offending message
+index, rather than silently skipping the message. The same check runs on the
+Chat Completions, LiteLLM and Anthropic paths. Assembled outbound histories
+already satisfy it: `repair_dangling_tool_spans` completes unanswered spans
+with placeholder results before the request is built.
+
 ## Structured Output
 
 Pass a `response_format` (e.g. from
@@ -168,14 +209,15 @@ When using Responses API, additional metadata is available:
 
 - **response_id**: Unique identifier for each API response
 - **previous_response_id**: Links responses in multi-turn conversations
-- **usage_tokens**: Detailed token usage (prompt, completion, total)
+- **usage**: Detailed token usage (`prompt_tokens`, `completion_tokens`,
+  `total_tokens`, plus cache fields when the provider reports them)
 
 Access this via the response object:
 
 ```python
 result = await model.complete(messages)
 print(f"Response ID: {result.response_id}")
-print(f"Usage: {result.usage_tokens}")
+print(f"Usage: {result.usage}")
 ```
 
 ## Component: ResponsesAPIStateComponent

@@ -109,18 +109,31 @@ class Usage:
     completion_tokens: int
     total_tokens: int
 
+class FinishReason(StrEnum):
+    STOP = "stop"
+    LENGTH = "length"
+    TOOL_CALLS = "tool_calls"
+    CONTENT_FILTER = "content_filter"
+    CANCELLED = "cancelled"
+    UNKNOWN = "unknown"
+
 @dataclass(slots=True)
 class CompletionResult:
     message: Message
     usage: Usage | None = None
+    response_id: str | None = None
+    reasoning_content: str | None = None
+    finish_reason: FinishReason | None = None
 
 @dataclass(slots=True)
 class StreamDelta:
     content: str | None = None
     reasoning_content: str | None = None
+    reasoning_signature: str | None = None
     tool_calls: list[ToolCall] | None = None
-    finish_reason: str | None = None
+    finish_reason: FinishReason | None = None
     usage: Usage | None = None
+    response_id: str | None = None
 
 @dataclass(slots=True)
 class MessageBusEnvelope:

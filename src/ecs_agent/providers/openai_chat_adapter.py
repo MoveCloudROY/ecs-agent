@@ -9,6 +9,10 @@ from typing import Any, Protocol
 
 import httpx
 
+from ecs_agent.providers._message_contract import (
+    normalize_openai_finish_reason,
+    validate_tool_spans,
+)
 from ecs_agent.types import (
     CompletionResult,
     FileRefPart,
@@ -154,7 +158,9 @@ class OpenAIChatAdapter:
                     ):
                         reasoning_content = None
 
-                    finish_reason = choice.get("finish_reason")
+                    finish_reason = normalize_openai_finish_reason(
+                        choice.get("finish_reason")
+                    )
                     usage = self._facade._usage_from_raw(response_json.get("usage"))
 
                     tool_calls_delta = delta.get("tool_calls")
@@ -263,6 +269,7 @@ class OpenAIChatAdapter:
         tools: list[ToolSchema] | None,
         response_format: dict[str, Any] | None,
     ) -> dict[str, Any]:
+        validate_tool_spans(messages)
         request_body: dict[str, Any] = {
             "model": self._facade._model,
             "messages": self._convert_messages_to_openai(messages),
@@ -336,10 +343,14 @@ class OpenAIChatAdapter:
         return content_parts
 
     def _parse_response(self, response_data: dict[str, Any]) -> CompletionResult:
-        message_data = response_data["choices"][0]["message"]
-        message = self._parse_chat_message(message_data)
+        choice = response_data["choices"][0]
+        message = self._parse_chat_message(choice["message"])
         usage = self._facade._usage_from_raw(response_data.get("usage"))
-        return CompletionResult(message=message, usage=usage)
+        return CompletionResult(
+            message=message,
+            usage=usage,
+            finish_reason=normalize_openai_finish_reason(choice.get("finish_reason")),
+        )
 
     def _parse_chat_message(self, message_data: dict[str, Any]) -> Message:
         role = message_data.get("role", "assistant")

@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import json
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import aclosing
+from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
 import httpx
 
 from ecs_agent.logging import get_logger
+from ecs_agent.providers._message_contract import validate_tool_spans
 from ecs_agent.providers.config import ProviderConfig
 from ecs_agent.types import (
     CompletionResult,
     FileRefPart,
+    FinishReason,
     ImageUrlPart,
     Message,
     MessagePart,
@@ -25,6 +29,46 @@ from ecs_agent.types import (
 )
 
 logger = get_logger(__name__)
+
+# Every terminal event carries the same ``response`` object; the status inside
+# it — not the event name — says how the turn ended. Recognising terminality by
+# status keeps new event names from silently becoming "stream ended for no
+# stated reason".
+_TERMINAL_EVENT_TYPES = frozenset(
+    {
+        "response.completed",
+        "response.done",
+        "response.incomplete",
+        "response.failed",
+        "response.cancelled",
+    }
+)
+
+# Status is authoritative, but not every gateway sends it (the legacy
+# "response.done" dialect has no status at all, and some omit it on failures).
+# The event name that delivered the object is then the only signal left.
+_EVENT_IMPLIED_STATUS: dict[str, str] = {
+    "response.completed": "completed",
+    "response.done": "completed",
+    "response.incomplete": "incomplete",
+    "response.failed": "failed",
+    "response.cancelled": "cancelled",
+}
+
+_INCOMPLETE_REASONS: dict[str, FinishReason] = {
+    "max_output_tokens": FinishReason.LENGTH,
+    "max_tokens": FinishReason.LENGTH,
+    "content_filter": FinishReason.CONTENT_FILTER,
+}
+
+
+@dataclass(slots=True)
+class _Terminal:
+    """How a Responses turn ended, parsed from its ``response`` object."""
+
+    finish_reason: FinishReason
+    usage: Usage | None = None
+    response_id: str | None = None
 
 
 class _OpenAIModelFacade(Protocol):
@@ -107,25 +151,20 @@ class OpenAIResponsesAdapter:
                 raise
 
         response_data = response.json()
-        response_id = response_data.get("id")
-        resolved_response_id = response_id if isinstance(response_id, str) else None
-
-        status = response_data.get("status")
-        if status == "failed":
-            error = response_data.get("error") or {}
-            code = error.get("code", "unknown")
-            msg = error.get("message", "unknown error")
-            raise ValueError(f"Responses API returned failed status: [{code}] {msg}")
-
         output_items = response_data.get("output", [])
         message = self._parse_responses_output(output_items)
         reasoning_content = self._extract_reasoning_summary(output_items)
-        usage = self._facade._usage_from_raw(response_data.get("usage"))
+        # Same terminal parse as the streaming path: a truncated ("incomplete")
+        # response must not reach the caller looking like a complete answer.
+        terminal = self._terminal_from_response(
+            response_data, has_tool_calls=bool(message.tool_calls)
+        )
         return CompletionResult(
             message=message,
-            usage=usage,
-            response_id=resolved_response_id,
+            usage=terminal.usage,
+            response_id=terminal.response_id,
             reasoning_content=reasoning_content,
+            finish_reason=terminal.finish_reason,
         )
 
     async def stream(
@@ -160,8 +199,16 @@ class OpenAIResponsesAdapter:
 
         while True:
             try:
-                async for delta in self._stream_once(url, request_body, timeout):
-                    yield delta
+                # aclosing: `async for` never closes its iterator (PEP 525), so
+                # abandoning this generator (interruption, error, cancellation)
+                # would leave _stream_once suspended on a yield, holding its
+                # `async with client.stream(...)` connection checked out of the
+                # httpx pool until garbage collection.
+                async with aclosing(
+                    self._stream_once(url, request_body, timeout)
+                ) as once:
+                    async for delta in once:
+                        yield delta
                 break
             except httpx.HTTPStatusError as exc:
                 # raise_for_status fires before any delta is yielded, so
@@ -186,10 +233,16 @@ class OpenAIResponsesAdapter:
         url: str,
         request_body: dict[str, Any],
         timeout: httpx.Timeout,
-    ) -> AsyncIterator[StreamDelta]:
-        """Run a single streaming request and yield its deltas."""
+    ) -> AsyncGenerator[StreamDelta, None]:
+        """Run a single streaming request and yield its deltas.
+
+        Declared as an AsyncGenerator (not the looser AsyncIterator) so callers
+        can close it deterministically via ``contextlib.aclosing``.
+        """
         output_items: dict[int, dict[str, Any]] = {}
         current_response_id: str | None = None
+        terminal: _Terminal | None = None
+        tool_calls_emitted = False
 
         async with self._facade._client.stream(
             "POST",
@@ -298,15 +351,6 @@ class OpenAIResponsesAdapter:
                         output_items[output_index]["arguments"] += arguments_delta
                     continue
 
-                if event_type == "response.failed":
-                    response_obj = event_data.get("response", {})
-                    error = response_obj.get("error") or {}
-                    code = error.get("code", "unknown")
-                    msg = error.get("message", "unknown error")
-                    raise ValueError(
-                        f"Responses API returned failed status: [{code}] {msg}"
-                    )
-
                 if event_type == "response.output_item.done":
                     output_index = event_data.get("output_index", 0)
                     if output_index not in output_items:
@@ -333,6 +377,7 @@ class OpenAIResponsesAdapter:
                             parsed_args = {}
 
                         if isinstance(parsed_args, dict):
+                            tool_calls_emitted = True
                             yield StreamDelta(
                                 tool_calls=[
                                     ToolCall(
@@ -355,21 +400,111 @@ class OpenAIResponsesAdapter:
                             yield StreamDelta(content=done_text)
                     continue
 
-                if event_type in ("response.done", "response.completed"):
-                    response_obj = event_data.get("response", {})
-                    response_id = response_obj.get("id")
-                    usage = self._facade._usage_from_raw(
-                        response_obj.get("usage")
+                if event_type in _TERMINAL_EVENT_TYPES:
+                    # One parse for every way a turn can end (completed,
+                    # incomplete, cancelled) — and it raises on failed.
+                    terminal = self._terminal_from_response(
+                        event_data.get("response"),
+                        has_tool_calls=tool_calls_emitted,
+                        event_type=event_type,
                     )
-                    if isinstance(response_id, str) and response_id:
-                        current_response_id = response_id
-
-                    yield StreamDelta(
-                        finish_reason="stop",
-                        usage=usage,
-                        response_id=current_response_id,
-                    )
+                    if terminal.response_id is not None:
+                        current_response_id = terminal.response_id
                     break
+
+        if terminal is None:
+            # The stream ended without any terminal event: a bare "[DONE]"
+            # sentinel, or the connection simply closed. The turn did end, but
+            # the provider never said why — reporting STOP here would claim a
+            # clean completion that was never stated, and dropping the delta
+            # entirely would lose the response id (billing records nothing,
+            # stored-response chaining stalls). Usage is unknowable.
+            logger.warning(
+                "responses_stream_missing_terminal_event",
+                response_id=current_response_id,
+                endpoint=f"{self._facade._base_url}/responses",
+            )
+            terminal = _Terminal(finish_reason=FinishReason.UNKNOWN)
+
+        # Single exit: exactly one terminal delta per stream, whatever path
+        # reached it.
+        yield StreamDelta(
+            finish_reason=terminal.finish_reason,
+            usage=terminal.usage,
+            response_id=current_response_id,
+        )
+
+    def _terminal_from_response(
+        self,
+        response_obj: Any,
+        *,
+        has_tool_calls: bool,
+        event_type: str | None = None,
+    ) -> _Terminal:
+        """Derive the terminal state from a ``response`` object.
+
+        The single place that answers "how did this turn end?", shared by the
+        streaming and non-streaming paths so both report truncation, filtering
+        and cancellation identically. ``status`` is authoritative; when a
+        gateway omits it, the event name that delivered the object is the
+        fallback. Reading the reason from the object rather than branching per
+        event name means a new terminal event only has to be recognised as
+        terminal — its meaning is already handled.
+
+        Args:
+            response_obj: The provider's ``response`` object.
+            has_tool_calls: Whether the turn produced function calls — OpenAI
+                reports those as an ordinary ``completed`` status, while Chat
+                Completions distinguishes them as ``tool_calls``.
+            event_type: The SSE event that carried the object, if any.
+
+        Returns:
+            The parsed terminal state.
+
+        Raises:
+            ValueError: If the provider reports a failed response.
+        """
+        if not isinstance(response_obj, dict):
+            return _Terminal(finish_reason=FinishReason.UNKNOWN)
+
+        status = response_obj.get("status")
+        if not isinstance(status, str) or not status:
+            status = _EVENT_IMPLIED_STATUS.get(event_type or "", "completed")
+
+        if status == "failed":
+            error = response_obj.get("error") or {}
+            code = error.get("code", "unknown")
+            msg = error.get("message", "unknown error")
+            raise ValueError(f"Responses API returned failed status: [{code}] {msg}")
+
+        response_id = response_obj.get("id")
+        terminal = _Terminal(
+            finish_reason=FinishReason.UNKNOWN,
+            usage=self._facade._usage_from_raw(response_obj.get("usage")),
+            response_id=response_id if isinstance(response_id, str) and response_id else None,
+        )
+
+        if status == "incomplete":
+            details = response_obj.get("incomplete_details")
+            reason = details.get("reason") if isinstance(details, dict) else None
+            if isinstance(reason, str):
+                mapped = _INCOMPLETE_REASONS.get(reason)
+                if mapped is None:
+                    logger.warning("unmapped_incomplete_reason", raw_value=reason)
+                terminal.finish_reason = mapped or FinishReason.UNKNOWN
+            return terminal
+
+        if status == "cancelled":
+            terminal.finish_reason = FinishReason.CANCELLED
+            return terminal
+
+        # "completed", or a legacy dialect that asserts terminality through the
+        # event name and sends no status at all. Either way the provider said
+        # the turn is over and named no problem with it.
+        terminal.finish_reason = (
+            FinishReason.TOOL_CALLS if has_tool_calls else FinishReason.STOP
+        )
+        return terminal
 
     def _done_item_text(self, done_item: dict[str, Any]) -> str:
         """Concatenate the text of a message output_item.done payload.
@@ -397,6 +532,7 @@ class OpenAIResponsesAdapter:
         response_format: dict[str, Any] | None,
         previous_response_id: str | None,
     ) -> dict[str, Any]:
+        validate_tool_spans(messages)
         request_body: dict[str, Any] = {
             "model": self._facade._model,
             "input": self._convert_messages_to_responses_input(messages),
@@ -553,6 +689,8 @@ class OpenAIResponsesAdapter:
                 continue
 
             if msg.role == "tool":
+                # tool_call_id is guaranteed by validate_tool_spans at the
+                # request-body entry point; the check here only narrows the type.
                 if msg.tool_call_id is None:
                     continue
                 input_items.append(

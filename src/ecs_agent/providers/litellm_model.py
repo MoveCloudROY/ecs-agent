@@ -14,6 +14,10 @@ from typing import Any
 from collections.abc import AsyncIterator
 
 from ecs_agent.logging import get_logger
+from ecs_agent.providers._message_contract import (
+    normalize_openai_finish_reason,
+    validate_tool_spans,
+)
 from ecs_agent.providers._openai_format import convert_tools_to_openai
 from ecs_agent.types import (
     Message,
@@ -73,6 +77,10 @@ class LiteLLMModel:
     def model_id(self) -> str:
         return self._model
 
+    async def aclose(self) -> None:
+        """No owned transport: litellm manages its own global HTTP clients."""
+        return None
+
     async def complete(
         self,
         messages: list[Message],
@@ -95,6 +103,7 @@ class LiteLLMModel:
             CompletionResult or AsyncIterator[StreamDelta]
         """
         del thread_response_id
+        validate_tool_spans(messages)
         # Build kwargs for litellm.acompletion
         kwargs: dict[str, Any] = {
             "model": self._model,
@@ -140,7 +149,7 @@ class LiteLLMModel:
             delta = choice.get("delta", {})
 
             content = delta.get("content")
-            finish_reason = choice.get("finish_reason")
+            finish_reason = normalize_openai_finish_reason(choice.get("finish_reason"))
             usage_data = chunk.get("usage")
 
             usage: Usage | None = None
@@ -236,7 +245,8 @@ class LiteLLMModel:
         Returns:
             CompletionResult with message and usage
         """
-        message_data = response["choices"][0]["message"]
+        choice = response["choices"][0]
+        message_data = choice["message"]
 
         role = message_data["role"]
         content = message_data.get("content") or ""
@@ -263,7 +273,11 @@ class LiteLLMModel:
                 total_tokens=usage_data["total_tokens"],
             )
 
-        return CompletionResult(message=message, usage=usage)
+        return CompletionResult(
+            message=message,
+            usage=usage,
+            finish_reason=normalize_openai_finish_reason(choice.get("finish_reason")),
+        )
 
     def _parse_tool_arguments(self, arguments_str: str) -> dict[str, Any]:
         """Parse tool call arguments string to dict.

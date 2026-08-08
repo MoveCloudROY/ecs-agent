@@ -31,7 +31,8 @@ Each chunk emitted by the iterator is a `StreamDelta` object with the following 
   finish (at the `finish_reason` chunk, or at stream end for gateways that
   omit it). Arguments that never became valid JSON are preserved under a
   `{"_partial": "<raw text>"}` placeholder.
-- `finish_reason: str | None`: The reason why the generation stopped (e.g., `"stop"`, `"tool_calls"`).
+- `finish_reason: FinishReason | None`: Why generation stopped, normalized
+  across providers — see [Finish reasons](#finish-reasons).
 - `usage: Usage | None`: Usage statistics, typically only provided in the final delta.
 
 For Chat Completions streams, `OpenAIModel` requests the usage chunk via
@@ -41,6 +42,31 @@ shape (some gateways send it unconditionally). The usage — including
 usage-only delta *after* the delta carrying `finish_reason`, so consumers must
 keep iterating to the end of the stream rather than stopping at
 `finish_reason`.
+
+## Finish reasons
+
+`finish_reason` is a `FinishReason` (a `StrEnum`, so it compares equal to its
+string value). Providers report this in their own dialect — OpenAI says
+`length` where Anthropic says `max_tokens` — and every adapter maps into one
+shared vocabulary, so a caller can detect truncation without knowing which
+provider answered:
+
+| Value | Meaning | Provider dialects mapped |
+|---|---|---|
+| `STOP` | Model ended the turn on its own | `stop`, `end_turn`, `stop_sequence` |
+| `LENGTH` | Output hit a token limit and was truncated | `length`, `max_tokens`, `max_output_tokens` |
+| `TOOL_CALLS` | Turn ended by calling tools | `tool_calls`, `tool_use`, Responses `completed` + function-call output |
+| `CONTENT_FILTER` | Provider filtered or refused the output | `content_filter`, `refusal` |
+| `CANCELLED` | Provider reports the response was cancelled | `cancelled` |
+| `UNKNOWN` | The response ended without the provider stating a reason | unrecognised values; a stream closing on a bare `[DONE]` or EOF |
+
+`UNKNOWN` is a fact about the response, not a parse failure. It is never
+reported as `STOP`: claiming a clean completion the provider never stated would
+hide truncation. Unrecognised dialect values are logged
+(`unmapped_finish_reason`) so the vocabulary can be extended.
+
+The same value is on `CompletionResult.finish_reason` for non-streaming calls,
+so both transports answer "why did this end?" identically.
 
 ## Usage Example
 
@@ -78,7 +104,7 @@ async for delta in delta_iterator:
 ## Provider Implementation Details
 
 ### OpenAIModel
-`OpenAIModel` uses real Server-Sent Events (SSE) streaming. It accumulates partial tool call arguments internally and emits the completed tool calls exactly once, on the delta whose `finish_reason` is `"tool_calls"`; partially accumulated arguments are never re-emitted per chunk.
+`OpenAIModel` uses real Server-Sent Events (SSE) streaming. It accumulates partial tool call arguments internally and emits the completed tool calls exactly once; partially accumulated arguments are never re-emitted per chunk. On Chat Completions that happens at the `finish_reason` chunk (or at stream end for gateways that omit it); on the Responses API it happens when the call's `output_item.done` arrives, ahead of the terminal delta.
 
 ### ClaudeModel
 `ClaudeModel` parses the Anthropic SSE event stream: `text_delta` → `content`, `thinking_delta` → `reasoning_content`, `signature_delta` → `reasoning_signature` (emitted at the thinking block's `content_block_stop`), and tool calls once per `content_block_stop`. Usage from `message_start` (input/cache tokens) and `message_delta` (output tokens) is merged and emitted on the final delta together with the stop reason.
@@ -117,6 +143,22 @@ When an entity has `StreamingComponent(enabled=True)`, the `ReasoningSystem` aut
 6. For each content chunk, publishes `StreamContentDeltaEvent(entity_id, delta)`.
 7. On completion, publishes `StreamEndEvent(entity_id, timestamp)`.
 8. Accumulates all chunks into a final `CompletionResult` as normal.
+
+### Delivery Modes
+
+`StreamingComponent(non_blocking_delta_publish=...)` selects how stream
+events reach subscribers:
+
+- **Blocking (default, `False`)**: every event is awaited inline — each delta
+  waits for all subscribers before the next chunk is consumed. Deterministic
+  and backpressured, but token throughput is gated on the slowest subscriber.
+- **Non-blocking (`True`)**: events are enqueued to a per-stream FIFO
+  publisher and delivered by a single background consumer, strictly in
+  stream order — `StreamEndEvent` (and reasoning-end/content-start markers)
+  can never overtake an earlier delta. The turn finishes without waiting for
+  subscribers; the queued tail flushes in the background. On cancellation or
+  stream error the queued tail is dropped and `StreamEndEvent` is delivered
+  inline so consumers unblock.
 
 ### Subscribing to Stream Events
 

@@ -3,7 +3,7 @@
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any, Literal, NewType, cast, get_args
 
 from ecs_agent.accounting.models import LLMInvocationEvent, LLMRetryEvent, UsageRecord
@@ -268,6 +268,28 @@ class PhaseChangedEvent:
     tick: int
 
 
+class FinishReason(StrEnum):
+    """Why a completion ended, normalized across providers.
+
+    Providers report this in their own dialect — OpenAI says ``length`` where
+    Anthropic says ``max_tokens`` — so every adapter maps into this shared
+    vocabulary. Callers can then detect truncation without knowing which
+    provider answered.
+
+    ``UNKNOWN`` means the response ended without the provider stating a reason
+    (a stream that stopped on a bare ``[DONE]`` sentinel, or a closed
+    connection). It is a fact about the response, not a parse failure, and must
+    never be reported as a normal ``STOP``.
+    """
+
+    STOP = "stop"
+    LENGTH = "length"
+    TOOL_CALLS = "tool_calls"
+    CONTENT_FILTER = "content_filter"
+    CANCELLED = "cancelled"
+    UNKNOWN = "unknown"
+
+
 @dataclass(slots=True)
 class CompletionResult:
     """Result from LLM completion."""
@@ -276,6 +298,7 @@ class CompletionResult:
     usage: Usage | None = None
     response_id: str | None = None
     reasoning_content: str | None = None
+    finish_reason: FinishReason | None = None
 
 
 @dataclass(slots=True)
@@ -320,7 +343,7 @@ class StreamDelta:
     reasoning_content: str | None = None
     reasoning_signature: str | None = None
     tool_calls: list[ToolCall] | None = None
-    finish_reason: str | None = None
+    finish_reason: FinishReason | None = None
     usage: Usage | None = None
     response_id: str | None = None
 

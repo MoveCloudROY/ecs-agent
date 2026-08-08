@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from ecs_agent.accounting.normalization import normalize_anthropic_usage
+from ecs_agent.providers._message_contract import (
+    normalize_anthropic_stop_reason,
+    validate_tool_spans,
+)
 from ecs_agent.providers.config import ProviderConfig
 from ecs_agent.types import (
     CompletionResult,
@@ -72,6 +76,7 @@ class AnthropicMessagesAdapter:
     def build_messages(
         self, messages: list[Message]
     ) -> tuple[str | list[dict[str, Any]] | None, list[dict[str, Any]]]:
+        validate_tool_spans(messages)
         system_entries: list[tuple[str, bool]] = []
         anthropic_messages: list[dict[str, Any]] = []
 
@@ -87,15 +92,17 @@ class AnthropicMessagesAdapter:
                 tool_result_blocks: list[dict[str, Any]] = []
                 while index < len(messages) and messages[index].role == "tool":
                     tool_message = messages[index]
-                    if tool_message.tool_call_id is None:
-                        raise ValueError("Tool message requires tool_call_id")
-                    tool_result_blocks.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_message.tool_call_id,
-                            "content": tool_message.content,
-                        }
-                    )
+                    tool_call_id = tool_message.tool_call_id
+                    # Guaranteed non-None by validate_tool_spans above; the
+                    # check only narrows the type for the checker.
+                    if tool_call_id is not None:
+                        tool_result_blocks.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_call_id,
+                                "content": tool_message.content,
+                            }
+                        )
                     index += 1
                 anthropic_messages.append(
                     {
@@ -280,6 +287,9 @@ class AnthropicMessagesAdapter:
             message=message,
             usage=usage,
             reasoning_content=reasoning_content,
+            finish_reason=normalize_anthropic_stop_reason(
+                response_data.get("stop_reason")
+            ),
         )
 
     def _build_content_blocks(self, msg: Message) -> list[dict[str, Any]]:

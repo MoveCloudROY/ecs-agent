@@ -11,6 +11,7 @@ from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.types import (
     FileRefPart,
+    FinishReason,
     ImageUrlPart,
     Message,
     StreamDelta,
@@ -771,7 +772,8 @@ async def test_streaming_yields_thinking_deltas_signature_and_usage() -> None:
     final_deltas = [delta for delta in deltas if delta.finish_reason is not None]
     assert len(final_deltas) == 1
     final = final_deltas[0]
-    assert final.finish_reason == "end_turn"
+    # Anthropic's "end_turn" is normalized onto the shared vocabulary.
+    assert final.finish_reason is FinishReason.STOP
     assert final.usage is not None
     assert final.usage.prompt_tokens == 25
     assert final.usage.completion_tokens == 40
@@ -1024,7 +1026,8 @@ async def test_streaming_handles_message_delta_finish_reason() -> None:
     deltas = [delta async for delta in stream_iter]
 
     assert len(deltas) == 1
-    assert deltas[0].finish_reason == "tool_use"
+    # "tool_use" is Anthropic's dialect for the shared TOOL_CALLS reason.
+    assert deltas[0].finish_reason is FinishReason.TOOL_CALLS
 
 
 @pytest.mark.asyncio
@@ -1338,3 +1341,17 @@ def test_caching_build_request_body_emits_system_block_list() -> None:
 
     assert isinstance(body["system"], list)
     assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_owned_http_client() -> None:
+    """ClaudeModel owns an AsyncClient; aclose() must release it."""
+    model = ClaudeModel(
+        config=_anthropic_config(api_key="k"), model="claude-3-haiku-20240307"
+    )
+    mock_client = AsyncMock()
+    model._client = mock_client
+
+    await model.aclose()
+
+    mock_client.aclose.assert_awaited_once()

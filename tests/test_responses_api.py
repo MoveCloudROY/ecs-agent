@@ -18,7 +18,14 @@ from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import ResponsesAPICallEvent, EntityId
-from ecs_agent.types import CompletionResult, InterruptionReason, Message, ToolSchema
+from ecs_agent.types import (
+    CompletionResult,
+    FinishReason,
+    InterruptionReason,
+    Message,
+    ToolCall,
+    ToolSchema,
+)
 
 
 def _openai_config(
@@ -1781,3 +1788,298 @@ async def test_responses_api_no_retry_when_token_outside_error_object() -> None:
         )
 
     assert mock_client.post.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fallback_wrapper_closes_inner_stream_on_outer_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Closing the fallback wrapper generator must close the inner adapter stream.
+
+    PEP 525: `async for` does not implicitly aclose its iterator, so without
+    an explicit aclosing() the inner generator (holding the HTTP connection)
+    stayed open until garbage collection.
+    """
+    from typing import Any
+
+    from ecs_agent.types import StreamDelta
+
+    model = OpenAIModel(
+        config=_openai_config(api_key="k", api_format=ApiFormat.OPENAI_RESPONSES)
+    )
+
+    closed = {"inner": False}
+
+    async def fake_stream(
+        messages: Any,
+        tools: Any = None,
+        response_format: Any = None,
+        thread_response_id: Any = None,
+    ) -> Any:
+        try:
+            yield StreamDelta(content="a")
+            yield StreamDelta(content="b")
+        finally:
+            closed["inner"] = True
+
+    monkeypatch.setattr(model._responses_adapter, "stream", fake_stream)
+
+    stream = await model.complete([Message(role="user", content="q")], stream=True)
+    async for _delta in stream:
+        break
+
+    await stream.aclose()
+    assert closed["inner"] is True
+
+
+@pytest.mark.asyncio
+async def test_responses_api_streaming_closes_http_stream_on_early_close() -> None:
+    """Closing the stream early must release the underlying HTTP stream.
+
+    The adapter has its own generator hop (``stream`` -> ``_stream_once``) that
+    needs the same explicit close as the fallback wrapper: without it the
+    ``client.stream(...)`` context stays open — the connection is checked out
+    of the httpx pool until garbage collection.
+    """
+    model, mock_client = _streaming_model(
+        [
+            'data: {"type": "response.created", "response": {"id": "resp_close_1"}}',
+            'data: {"type": "response.output_text.delta", "output_index": 0, "delta": "a"}',
+            'data: {"type": "response.output_text.delta", "output_index": 0, "delta": "b"}',
+            'data: {"type": "response.completed", "response": {"id": "resp_close_1"}}',
+        ]
+    )
+
+    stream_result = await model.complete(
+        [Message(role="user", content="Hi")], stream=True
+    )
+    async for _delta in stream_result:
+        break
+    await stream_result.aclose()
+
+    assert mock_client.stream.return_value.__aexit__.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_responses_api_streaming_done_sentinel_emits_terminal_delta() -> None:
+    """A [DONE]-terminated stream still reports the response id.
+
+    Gateways that end the stream with the Chat-style ``[DONE]`` sentinel never
+    send ``response.completed``; without a terminal delta the turn's usage and
+    response id would be dropped silently.
+    """
+    model, _ = _streaming_model(
+        [
+            'data: {"type": "response.created", "response": {"id": "resp_sentinel_1"}}',
+            'data: {"type": "response.output_item.added", "output_index": 0, "item": {"type": "message", "role": "assistant"}}',
+            'data: {"type": "response.output_text.delta", "output_index": 0, "delta": "Hi"}',
+            "data: [DONE]",
+        ]
+    )
+
+    deltas = []
+    stream_result = await model.complete(
+        [Message(role="user", content="Hi")], stream=True
+    )
+    async for delta in stream_result:
+        deltas.append(delta)
+
+    assert [d.content for d in deltas if d.content] == ["Hi"]
+    final = deltas[-1]
+    # The provider never said why it stopped: UNKNOWN, not a fabricated STOP.
+    assert final.finish_reason is FinishReason.UNKNOWN
+    assert final.response_id == "resp_sentinel_1"
+    assert final.usage is None
+
+
+@pytest.mark.asyncio
+async def test_responses_api_streaming_eof_emits_terminal_delta() -> None:
+    """A stream that just ends (no sentinel, no completed) still terminates."""
+    model, _ = _streaming_model(
+        [
+            'data: {"type": "response.created", "response": {"id": "resp_eof_1"}}',
+            'data: {"type": "response.output_text.delta", "output_index": 0, "delta": "Hi"}',
+        ]
+    )
+
+    deltas = []
+    stream_result = await model.complete(
+        [Message(role="user", content="Hi")], stream=True
+    )
+    async for delta in stream_result:
+        deltas.append(delta)
+
+    final = deltas[-1]
+    assert final.finish_reason is FinishReason.UNKNOWN
+    assert final.response_id == "resp_eof_1"
+
+
+@pytest.mark.asyncio
+async def test_responses_api_streaming_truncation_reports_length_and_usage() -> None:
+    """A stream ending in response.incomplete must report LENGTH, not STOP.
+
+    The incomplete event carries the usage of the truncated turn; reporting it
+    as a normal stop would both hide the truncation and bill the turn as zero.
+    """
+    model, _ = _streaming_model(
+        [
+            'data: {"type": "response.created", "response": {"id": "resp_trunc_1"}}',
+            'data: {"type": "response.output_text.delta", "output_index": 0, "delta": "half a sen"}',
+            'data: {"type": "response.incomplete", "response": {"id": "resp_trunc_1", '
+            '"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}, '
+            '"usage": {"input_tokens": 900, "output_tokens": 4096, "total_tokens": 4996}}}',
+        ]
+    )
+
+    deltas = []
+    stream_result = await model.complete(
+        [Message(role="user", content="Hi")], stream=True
+    )
+    async for delta in stream_result:
+        deltas.append(delta)
+
+    final = deltas[-1]
+    assert final.finish_reason is FinishReason.LENGTH
+    assert final.usage is not None
+    assert final.usage.total_tokens == 4996
+    assert final.response_id == "resp_trunc_1"
+
+
+@pytest.mark.asyncio
+async def test_responses_api_non_streaming_truncation_reports_length() -> None:
+    """The non-streaming path parses the same terminal state as streaming."""
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "id": "resp_trunc_2",
+        "status": "incomplete",
+        "incomplete_details": {"reason": "max_output_tokens"},
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "half a sen"}],
+            }
+        ],
+        "usage": {"input_tokens": 900, "output_tokens": 4096, "total_tokens": 4996},
+    }
+    mock_response.raise_for_status = Mock()
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post.return_value = mock_response
+
+    model = OpenAIModel(
+        config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
+    )
+    model._client = mock_client
+
+    result = await model.complete([Message(role="user", content="hello")])
+
+    assert isinstance(result, CompletionResult)
+    assert result.finish_reason is FinishReason.LENGTH
+    assert result.usage is not None
+    assert result.usage.total_tokens == 4996
+    assert result.response_id == "resp_trunc_2"
+
+
+@pytest.mark.asyncio
+async def test_responses_api_non_streaming_completed_reports_tool_calls() -> None:
+    """A completed turn that produced function calls reports TOOL_CALLS.
+
+    Chat Completions distinguishes that case in its own finish_reason; the
+    normalized vocabulary keeps both OpenAI paths saying the same thing.
+    """
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "id": "resp_tc_1",
+        "status": "completed",
+        "output": [
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "get_weather",
+                "arguments": '{"city": "Oslo"}',
+            }
+        ],
+    }
+    mock_response.raise_for_status = Mock()
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post.return_value = mock_response
+
+    model = OpenAIModel(
+        config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
+    )
+    model._client = mock_client
+
+    result = await model.complete([Message(role="user", content="weather?")])
+
+    assert isinstance(result, CompletionResult)
+    assert result.finish_reason is FinishReason.TOOL_CALLS
+
+
+@pytest.mark.asyncio
+async def test_responses_api_cancelled_status_reports_cancelled() -> None:
+    model, _ = _streaming_model(
+        [
+            'data: {"type": "response.created", "response": {"id": "resp_cancel_1"}}',
+            'data: {"type": "response.cancelled", "response": {"id": "resp_cancel_1", "status": "cancelled"}}',
+        ]
+    )
+
+    stream_result = await model.complete(
+        [Message(role="user", content="Hi")], stream=True
+    )
+    deltas = [delta async for delta in stream_result]
+
+    assert deltas[-1].finish_reason is FinishReason.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_responses_api_rejects_tool_message_without_tool_call_id() -> None:
+    """An unpairable tool result must fail loudly, not vanish from the request.
+
+    Dropping it would strand the function_call that asked for it — exactly the
+    dangling span repair_dangling_tool_spans exists to prevent — leaving the
+    model to answer a tool call it never got a result for.
+    """
+    model = OpenAIModel(
+        config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
+    )
+    history = [
+        Message(role="user", content="weather?"),
+        Message(
+            role="assistant",
+            content="",
+            tool_calls=[
+                ToolCall(id="call_1", name="get_weather", arguments={"city": "Oslo"})
+            ],
+        ),
+        Message(role="tool", content="12C, clear", tool_call_id=None),
+    ]
+
+    with pytest.raises(ValueError, match=r"messages\[2\]"):
+        await model.complete(history)
+
+
+@pytest.mark.asyncio
+async def test_responses_api_streaming_completed_emits_single_terminal_delta() -> None:
+    """response.completed must not be followed by a second terminal delta."""
+    model, _ = _streaming_model(
+        [
+            'data: {"type": "response.created", "response": {"id": "resp_single_1"}}',
+            'data: {"type": "response.output_text.delta", "output_index": 0, "delta": "Hi"}',
+            'data: {"type": "response.completed", "response": {"id": "resp_single_1", "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}}',
+        ]
+    )
+
+    deltas = []
+    stream_result = await model.complete(
+        [Message(role="user", content="Hi")], stream=True
+    )
+    async for delta in stream_result:
+        deltas.append(delta)
+
+    terminal = [d for d in deltas if d.finish_reason is not None]
+    assert len(terminal) == 1
+    assert terminal[0].usage is not None
+    assert terminal[0].usage.total_tokens == 2

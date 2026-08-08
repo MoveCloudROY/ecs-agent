@@ -313,11 +313,18 @@ class LLMModel(Protocol):
         tools: list[ToolSchema] | None = None,
         stream: bool = False,
         response_format: dict[str, Any] | None = None,
+        thread_response_id: str | None = None,
     ) -> CompletionResult | AsyncIterator[StreamDelta]:
+        ...
+
+    async def aclose(self) -> None:
+        """Release owned transport resources (HTTP connection pools)."""
         ...
 ```
 
 The `complete` method returns a `CompletionResult` when `stream=False` and an `AsyncIterator[StreamDelta]` when `stream=True`.
+
+`aclose()` releases any owned transport (the built-in HTTP models close their `httpx.AsyncClient`; wrappers like `RetryModel` delegate to the wrapped model; models without owned resources no-op). There is no automatic shutdown hook — owners of long-lived processes should call it when a model instance is retired. It is idempotent.
 
 ### Using LLMModel with LLMComponent
 
@@ -536,7 +543,7 @@ model = FakeModel(responses=responses, model_id="test-model")
 ### Behavior
 
 - **Sequential**: Returns responses in the order they were provided. If the index exceeds the list length, it raises `IndexError`.
-- **Streaming**: When `stream=True`, it yields character-by-character `StreamDelta` objects. The final delta contains the `finish_reason="stop"` and usage information.
+- **Streaming**: When `stream=True`, it yields character-by-character `StreamDelta` objects. The final delta carries the tool calls (if any), usage, and a `finish_reason` of `FinishReason.TOOL_CALLS` or `FinishReason.STOP` — mirroring the real adapters' contract.
 - **Verification**: Stores the `last_response_format` for use in test assertions.
 
 ---

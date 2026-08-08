@@ -8,6 +8,7 @@ import httpx
 import structlog
 
 from ecs_agent.accounting.normalization import normalize_anthropic_usage
+from ecs_agent.providers._message_contract import normalize_anthropic_stop_reason
 from ecs_agent.providers.anthropic_messages_adapter import (
     AnthropicMessagesAdapter,
     AnthropicMessagesAdapterConfig,
@@ -77,6 +78,10 @@ class ClaudeModel:
             pool=pool_timeout,
         )
         self._client = httpx.AsyncClient(trust_env=False, timeout=self._timeout)
+
+    async def aclose(self) -> None:
+        """Close the owned httpx client, releasing its connection pool."""
+        await self._client.aclose()
 
     @property
     def model_id(self) -> str:
@@ -221,9 +226,12 @@ class ClaudeModel:
 
             if resolved_event_type == "message_delta":
                 delta = event_data.get("delta", {})
-                stop_reason = delta.get("stop_reason")
-                if not isinstance(stop_reason, str):
-                    stop_reason = None
+                # Anthropic's dialect (end_turn / max_tokens / tool_use) is
+                # mapped onto the shared FinishReason vocabulary so callers can
+                # detect truncation without knowing which provider answered.
+                finish_reason = normalize_anthropic_stop_reason(
+                    delta.get("stop_reason")
+                )
 
                 delta_usage = event_data.get("usage")
                 if isinstance(delta_usage, dict):
@@ -235,8 +243,8 @@ class ClaudeModel:
                     usage.provider_id = self._provider_config.provider_id
                     usage.model = self._model
 
-                if stop_reason is not None or usage is not None:
-                    yield StreamDelta(finish_reason=stop_reason, usage=usage)
+                if finish_reason is not None or usage is not None:
+                    yield StreamDelta(finish_reason=finish_reason, usage=usage)
                 return
 
         try:
