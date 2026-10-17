@@ -1,10 +1,12 @@
 """Tests for OpenAI Responses API support."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, Mock
+import json
 
 import httpx
 import pytest
+
+from tests.http_mock import MockHTTP, sse_response
 
 from ecs_agent.components import (
     ConversationComponent,
@@ -33,7 +35,7 @@ def _openai_config(
     api_key: str = "test-key",
     base_url: str = "https://api.openai.com/v1",
     api_format: ApiFormat = ApiFormat.OPENAI_RESPONSES,
-    enable_store: bool = False,
+    enable_store: bool | None = None,
 ) -> ProviderConfig:
     return ProviderConfig(
         provider_id="openai",
@@ -48,12 +50,22 @@ def test_responses_api_state_component_defaults() -> None:
     """Test ResponsesAPIStateComponent has correct default values."""
     component = ResponsesAPIStateComponent()
     assert component.previous_response_id is None
+    assert component.covered_message_count is None
 
 
 def test_responses_api_state_component_stores_response_id() -> None:
     """Test ResponsesAPIStateComponent stores and retrieves response_id."""
     component = ResponsesAPIStateComponent()
     component.previous_response_id = "resp_abc123"
+    assert component.previous_response_id == "resp_abc123"
+
+
+def test_responses_api_state_component_stores_covered_message_count() -> None:
+    """Test ResponsesAPIStateComponent stores the covered message count."""
+    component = ResponsesAPIStateComponent()
+    component.previous_response_id = "resp_abc123"
+    component.covered_message_count = 4
+    assert component.covered_message_count == 4
     assert component.previous_response_id == "resp_abc123"
 
 
@@ -99,8 +111,7 @@ def test_responses_api_call_event_is_dataclass_with_slots() -> None:
 
 @pytest.mark.asyncio
 async def test_responses_api_complete_non_streaming_sends_correct_request() -> None:
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_001",
         "model": "gpt-4o-mini",
         "output": [
@@ -110,11 +121,10 @@ async def test_responses_api_complete_non_streaming_sends_correct_request() -> N
                 "content": [{"type": "output_text", "text": "done"}],
             }
         ],
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(
@@ -124,7 +134,7 @@ async def test_responses_api_complete_non_streaming_sends_correct_request() -> N
         ),
         model="gpt-4o-mini",
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     messages = [
         Message(role="system", content="You are a helpful assistant."),
@@ -134,14 +144,15 @@ async def test_responses_api_complete_non_streaming_sends_correct_request() -> N
 
     await model.complete(messages)
 
-    assert mock_client.post.called
-    call_args = mock_client.post.call_args
-    assert call_args[0][0] == "https://test.openai.com/v1/responses"
+    assert mock_client.requests
+    request = mock_client.requests[-1]
+    assert str(request.url) == "https://test.openai.com/v1/responses"
 
-    body = call_args[1]["json"]
+    body = json.loads(request.content)
     assert body["model"] == "gpt-4o-mini"
     assert body["instructions"] == "You are a helpful assistant."
-    assert body["store"] is False
+    # Unset storage follows the SDK default: omit the parameter.
+    assert "store" not in body
     assert "messages" not in body
     assert body["input"] == [
         {
@@ -159,8 +170,7 @@ async def test_responses_api_complete_non_streaming_sends_correct_request() -> N
 
 @pytest.mark.asyncio
 async def test_responses_api_complete_non_streaming_parses_response() -> None:
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_abc123",
         "model": "gpt-4o-mini",
         "output": [
@@ -171,16 +181,15 @@ async def test_responses_api_complete_non_streaming_parses_response() -> None:
             }
         ],
         "usage": {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     result = await model.complete([Message(role="user", content="hello")])
 
@@ -195,8 +204,7 @@ async def test_responses_api_complete_non_streaming_parses_response() -> None:
 
 @pytest.mark.asyncio
 async def test_responses_api_complete_non_streaming_with_tools() -> None:
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_tools_1",
         "model": "gpt-4o-mini",
         "output": [
@@ -207,16 +215,15 @@ async def test_responses_api_complete_non_streaming_with_tools() -> None:
                 "arguments": '{"city": "SF"}',
             }
         ],
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     result = await model.complete([Message(role="user", content="weather?")])
 
@@ -233,8 +240,7 @@ async def test_responses_api_complete_non_streaming_with_tools() -> None:
 async def test_responses_api_final_answer_phase_wins_over_commentary_duplicate() -> (
     None
 ):
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_phase_1",
         "model": "gpt-5-mini",
         "output": [
@@ -251,16 +257,15 @@ async def test_responses_api_final_answer_phase_wins_over_commentary_duplicate()
                 "content": [{"type": "output_text", "text": "What is in scope?"}],
             },
         ],
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     result = await model.complete([Message(role="user", content="begin")])
 
@@ -269,8 +274,7 @@ async def test_responses_api_final_answer_phase_wins_over_commentary_duplicate()
 
 @pytest.mark.asyncio
 async def test_responses_api_commentary_text_kept_when_no_final_answer() -> None:
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_phase_2",
         "model": "gpt-5-mini",
         "output": [
@@ -289,16 +293,15 @@ async def test_responses_api_commentary_text_kept_when_no_final_answer() -> None
                 "arguments": '{"file_path": "draft.md"}',
             },
         ],
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     result = await model.complete([Message(role="user", content="begin")])
 
@@ -309,8 +312,7 @@ async def test_responses_api_commentary_text_kept_when_no_final_answer() -> None
 
 @pytest.mark.asyncio
 async def test_responses_api_parse_prefers_call_id_over_item_id() -> None:
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_tools_2",
         "model": "gpt-4o-mini",
         "output": [
@@ -322,16 +324,15 @@ async def test_responses_api_parse_prefers_call_id_over_item_id() -> None:
                 "arguments": '{"city": "SF"}',
             }
         ],
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     result = await model.complete([Message(role="user", content="weather?")])
 
@@ -341,8 +342,7 @@ async def test_responses_api_parse_prefers_call_id_over_item_id() -> None:
 
 @pytest.mark.asyncio
 async def test_responses_api_replays_function_call_with_matching_call_id() -> None:
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_replay_1",
         "model": "gpt-4o-mini",
         "output": [
@@ -352,16 +352,15 @@ async def test_responses_api_replays_function_call_with_matching_call_id() -> No
                 "content": [{"type": "output_text", "text": "72F"}],
             }
         ],
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     from ecs_agent.types import ToolCall
 
@@ -379,7 +378,7 @@ async def test_responses_api_replays_function_call_with_matching_call_id() -> No
 
     await model.complete(messages)
 
-    body = mock_client.post.call_args[1]["json"]
+    body = json.loads(mock_client.requests[-1].content)
     function_calls = [i for i in body["input"] if i["type"] == "function_call"]
     outputs = [i for i in body["input"] if i["type"] == "function_call_output"]
     assert function_calls == [
@@ -403,8 +402,7 @@ async def test_responses_api_replays_function_call_with_matching_call_id() -> No
 async def test_responses_api_complete_non_streaming_state_component_updates_on_success() -> (
     None
 ):
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_state_123",
         "model": "gpt-4o-mini",
         "output": [
@@ -414,18 +412,17 @@ async def test_responses_api_complete_non_streaming_state_component_updates_on_s
                 "content": [{"type": "output_text", "text": "ok"}],
             }
         ],
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     world = World()
     entity = world.create_entity()
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
     world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
@@ -441,14 +438,18 @@ async def test_responses_api_complete_non_streaming_state_component_updates_on_s
     state = world.get_component(entity, ResponsesAPIStateComponent)
     assert state is not None
     assert state.previous_response_id == "resp_state_123"
+    # The stored response covers the sent input (the single user message) plus
+    # its appended assistant output: 1 + 1 = 2 outbound items.
+    assert state.covered_message_count == 2
 
 
 class _ThreadRecordingModel:
-    """Chaining-capable fake that records received thread_response_id values."""
+    """Chaining-capable fake that records received chaining parameters."""
 
     def __init__(self, response_id: str = "resp_new_1") -> None:
         self._response_id = response_id
         self.received_thread_response_ids: list[str | None] = []
+        self.received_covered_message_counts: list[int | None] = []
 
     @property
     def model_id(self) -> str:
@@ -461,8 +462,10 @@ class _ThreadRecordingModel:
         stream=False,
         response_format=None,
         thread_response_id=None,
+        covered_message_count=None,
     ):
         self.received_thread_response_ids.append(thread_response_id)
+        self.received_covered_message_counts.append(covered_message_count)
         return CompletionResult(
             message=Message(role="assistant", content="ok"),
             response_id=self._response_id,
@@ -470,7 +473,7 @@ class _ThreadRecordingModel:
 
 
 @pytest.mark.asyncio
-async def test_reasoning_passes_thread_response_id_through_wrapper_models() -> None:
+async def test_reasoning_does_not_auto_chain_unverified_wrapper_state() -> None:
     """Response chaining must survive wrapper models such as RetryModel.
 
     Regression: reasoning used to sniff ``isinstance(model, OpenAIModel)``, so
@@ -503,11 +506,45 @@ async def test_reasoning_passes_thread_response_id_through_wrapper_models() -> N
 
     await ReasoningSystem().process(world)
 
-    assert inner.received_thread_response_ids == ["resp_state_old"]
+    assert inner.received_thread_response_ids == [None]
+    # The state carries no covered count in this fixture, so the parameter is
+    # not passed at all (legacy models without it keep working).
+    assert inner.received_covered_message_counts == [None]
     state = world.get_component(entity, ResponsesAPIStateComponent)
     assert state is not None
     assert state.previous_response_id == "resp_new_1"
     assert [event.response_id for event in api_events] == ["resp_new_1"]
+
+
+@pytest.mark.asyncio
+async def test_reasoning_does_not_auto_chain_from_message_count_alone() -> None:
+    """The covered-message count travels with thread_response_id so chaining
+    adapters can trim the replayed prefix from input."""
+    inner = _ThreadRecordingModel(response_id="resp_new_2")
+    world = World()
+    entity = world.create_entity()
+    world.add_component(entity, LLMComponent(model=inner))
+    world.add_component(
+        entity,
+        ConversationComponent(messages=[Message(role="user", content="hello")]),
+    )
+    world.add_component(
+        entity,
+        ResponsesAPIStateComponent(
+            previous_response_id="resp_old_2",
+            covered_message_count=2,
+        ),
+    )
+
+    await ReasoningSystem().process(world)
+
+    assert inner.received_thread_response_ids == [None]
+    assert inner.received_covered_message_counts == [None]
+    state = world.get_component(entity, ResponsesAPIStateComponent)
+    assert state is not None
+    assert state.previous_response_id == "resp_new_2"
+    # 1 sent user message + 1 appended assistant message.
+    assert state.covered_message_count == 2
 
 
 @pytest.mark.asyncio
@@ -550,8 +587,7 @@ async def test_reasoning_omits_thread_response_id_without_state_component() -> N
 @pytest.mark.asyncio
 async def test_responses_api_reasoning_emits_api_observation() -> None:
     """Real Responses API reasoning publishes api.responses telemetry."""
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_observed_123",
         "model": "gpt-4o-mini",
         "output": [
@@ -561,11 +597,10 @@ async def test_responses_api_reasoning_emits_api_observation() -> None:
                 "content": [{"type": "output_text", "text": "observed"}],
             }
         ],
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     world = World()
     sink = RecordingTelemetrySink()
@@ -575,7 +610,7 @@ async def test_responses_api_reasoning_emits_api_observation() -> None:
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES),
         model="gpt-4o-mini",
     )
-    model._client = mock_client
+    model._client = mock_client.client()
     world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
@@ -600,11 +635,10 @@ async def test_responses_api_reasoning_emits_api_observation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_responses_api_complete_non_streaming_previous_response_id_from_state_component() -> (
+async def test_responses_api_ignores_state_without_provenance() -> (
     None
 ):
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_new_1",
         "model": "gpt-4o-mini",
         "output": [
@@ -614,11 +648,10 @@ async def test_responses_api_complete_non_streaming_previous_response_id_from_st
                 "content": [{"type": "output_text", "text": "threaded"}],
             }
         ],
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     world = World()
     entity = world.create_entity()
@@ -629,7 +662,7 @@ async def test_responses_api_complete_non_streaming_previous_response_id_from_st
             enable_store=True,
         )
     )
-    model._client = mock_client
+    model._client = mock_client.client()
     world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
@@ -642,16 +675,15 @@ async def test_responses_api_complete_non_streaming_previous_response_id_from_st
 
     await ReasoningSystem().process(world)
 
-    body = mock_client.post.call_args[1]["json"]
-    assert body["previous_response_id"] == "resp_old_789"
+    body = json.loads(mock_client.requests[-1].content)
+    assert "previous_response_id" not in body
 
 
 @pytest.mark.asyncio
-async def test_responses_api_complete_omits_previous_response_id_when_store_disabled() -> (
+async def test_responses_api_omits_unverified_automatic_reference() -> (
     None
 ):
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_new_2",
         "model": "gpt-4o-mini",
         "output": [
@@ -661,18 +693,17 @@ async def test_responses_api_complete_omits_previous_response_id_when_store_disa
                 "content": [{"type": "output_text", "text": "stateless"}],
             }
         ],
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     world = World()
     entity = world.create_entity()
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
     world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
@@ -685,9 +716,238 @@ async def test_responses_api_complete_omits_previous_response_id_when_store_disa
 
     await ReasoningSystem().process(world)
 
-    body = mock_client.post.call_args[1]["json"]
-    assert body["store"] is False
+    body = json.loads(mock_client.requests[-1].content)
+    # Unset storage omits the parameter; unverified state never enables chaining.
+    assert "store" not in body
     assert "previous_response_id" not in body
+
+
+@pytest.mark.asyncio
+async def test_responses_api_complete_chaining_trims_covered_input() -> None:
+    """A chained request must not replay the covered prefix in ``input``.
+
+    The stored response already contains its own request items and assistant
+    output; sending them again doubles the rendered context. With
+    covered_message_count the adapter trims exactly the covered prefix.
+    """
+    mock_response = httpx.Response(200, json={
+        "id": "resp_trimmed",
+        "model": "gpt-4o-mini",
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok"}],
+            }
+        ],
+    })
+
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
+
+    model = OpenAIModel(
+        config=_openai_config(
+            api_key="test-key",
+            api_format=ApiFormat.OPENAI_RESPONSES,
+            enable_store=True,
+        )
+    )
+    model._client = mock_client.client()
+
+    messages = [
+        Message(role="system", content="sys"),
+        Message(role="user", content="first question"),
+        Message(role="assistant", content="first answer"),
+        Message(role="user", content="second question"),
+    ]
+    await model.complete(
+        messages,
+        thread_response_id="resp_prev_1",
+        covered_message_count=2,
+    )
+
+    body = json.loads(mock_client.requests[-1].content)
+    assert body["store"] is True
+    assert body["previous_response_id"] == "resp_prev_1"
+    # The system prompt still travels in instructions; only the two covered
+    # non-system messages ("first question", "first answer") are trimmed.
+    assert body["instructions"] == "sys"
+    assert body["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "second question"}],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_responses_api_complete_chaining_without_count_keeps_full_input() -> (
+    None
+):
+    """Without a covered count the full history stays in ``input``.
+
+    Lossless fallback: chaining adapters that cannot prove the stored response
+    covers the prefix keep replaying everything rather than risk context loss.
+    """
+    mock_response = httpx.Response(200, json={
+        "id": "resp_full",
+        "model": "gpt-4o-mini",
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok"}],
+            }
+        ],
+    })
+
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
+
+    model = OpenAIModel(
+        config=_openai_config(
+            api_key="test-key",
+            api_format=ApiFormat.OPENAI_RESPONSES,
+            enable_store=True,
+        )
+    )
+    model._client = mock_client.client()
+
+    await model.complete(
+        [
+            Message(role="user", content="first question"),
+            Message(role="assistant", content="first answer"),
+            Message(role="user", content="second question"),
+        ],
+        thread_response_id="resp_prev_1",
+    )
+
+    body = json.loads(mock_client.requests[-1].content)
+    assert body["previous_response_id"] == "resp_prev_1"
+    assert len(body["input"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_responses_api_chaining_trims_in_message_space_not_item_space() -> (
+    None
+):
+    """The covered count is a MESSAGE count: trimming must happen before
+    conversion so assistant messages that map to multiple input items (one
+    message + one function_call per tool call) stay aligned.
+
+    Regression guard: trimming the converted item list would either leave the
+    covered function_call items in ``input`` or cut into the new tail.
+    """
+    mock_response = httpx.Response(200, json={
+        "id": "resp_trimmed_2",
+        "model": "gpt-4o-mini",
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok"}],
+            }
+        ],
+    })
+
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
+
+    model = OpenAIModel(
+        config=_openai_config(
+            api_key="test-key",
+            api_format=ApiFormat.OPENAI_RESPONSES,
+            enable_store=True,
+        )
+    )
+    model._client = mock_client.client()
+
+    messages = [
+        Message(role="user", content="first question"),
+        Message(
+            role="assistant",
+            content="",
+            tool_calls=[
+                ToolCall(
+                    id="call_1",
+                    name="get_weather",
+                    arguments={"city": "Paris"},
+                )
+            ],
+        ),
+        Message(role="tool", content="sunny", tool_call_id="call_1"),
+        Message(role="user", content="second question"),
+    ]
+    await model.complete(
+        messages,
+        thread_response_id="resp_prev_1",
+        covered_message_count=2,
+    )
+
+    body = json.loads(mock_client.requests[-1].content)
+    assert body["previous_response_id"] == "resp_prev_1"
+    # The covered assistant message (which would expand to one message item
+    # plus one function_call item) is dropped whole; only the uncovered tail
+    # survives.
+    assert body["input"] == [
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": "sunny",
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "second question"}],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_responses_api_complete_retry_after_trim_restores_full_input() -> (
+    None
+):
+    """The 400 retry must restore the full history into ``input``.
+
+    Regression guard: without the stored response the trimmed incremental
+    input would lose the context the chain used to carry.
+    """
+    mock_client = MockHTTP()
+    mock_client.responses = [
+        _prev_id_rejected_error(),
+        _responses_success("resp_after_retry", "recovered"),
+    ]
+
+    model = OpenAIModel(
+        config=_openai_config(
+            api_key="test-key",
+            base_url="https://test.openai.com/v1",
+            api_format=ApiFormat.OPENAI_RESPONSES,
+            enable_store=True,
+        )
+    )
+    model._client = mock_client.client()
+
+    messages = [
+        Message(role="user", content="first question"),
+        Message(role="assistant", content="first answer"),
+        Message(role="user", content="second question"),
+    ]
+    result = await model.complete(
+        messages,
+        thread_response_id="resp_old_400",
+        covered_message_count=2,
+    )
+
+    assert result.message.content == "recovered"
+    assert len(mock_client.requests) == 2
+    first_body = json.loads(mock_client.requests[0].content)
+    retry_body = json.loads(mock_client.requests[1].content)
+    assert first_body["previous_response_id"] == "resp_old_400"
+    assert len(first_body["input"]) == 1
+    assert "previous_response_id" not in retry_body
+    assert len(retry_body["input"]) == 3
 
 
 _PREV_ID_REJECTED_BODY = (
@@ -704,9 +964,8 @@ def _prev_id_rejected_error() -> httpx.HTTPStatusError:
     )
 
 
-def _responses_success(response_id: str, text: str) -> Mock:
-    success = Mock(spec=httpx.Response)
-    success.json.return_value = {
+def _responses_success(response_id: str, text: str) -> httpx.Response:
+    success = httpx.Response(200, json={
         "id": response_id,
         "model": "gpt-4o-mini",
         "output": [
@@ -716,8 +975,7 @@ def _responses_success(response_id: str, text: str) -> Mock:
                 "content": [{"type": "output_text", "text": text}],
             }
         ],
-    }
-    success.raise_for_status = Mock()
+    })
     return success
 
 
@@ -725,8 +983,8 @@ def _responses_success(response_id: str, text: str) -> Mock:
 async def test_responses_api_complete_retries_without_previous_response_id_on_400() -> (
     None
 ):
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.side_effect = [
+    mock_client = MockHTTP()
+    mock_client.responses = [
         _prev_id_rejected_error(),
         _responses_success("resp_after_retry", "recovered"),
     ]
@@ -739,33 +997,34 @@ async def test_responses_api_complete_retries_without_previous_response_id_on_40
             enable_store=True,
         )
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     result = await model.complete(
-        [Message(role="user", content="hello")],
+        [Message(role="user", content="original"), Message(role="assistant", content="prior"), Message(role="user", content="hello")],
+        covered_message_count=2,
         thread_response_id="resp_old_400",
     )
 
     assert result.message.content == "recovered"
     assert result.response_id == "resp_after_retry"
-    assert mock_client.post.call_count == 2
-    first_body = mock_client.post.call_args_list[0][1]["json"]
-    retry_body = mock_client.post.call_args_list[1][1]["json"]
+    assert len(mock_client.requests) == 2
+    first_body = json.loads(mock_client.requests[0].content)
+    retry_body = json.loads(mock_client.requests[1].content)
     assert first_body["previous_response_id"] == "resp_old_400"
     assert "previous_response_id" not in retry_body
     # The retry stays on the Responses endpoint with storage untouched.
     assert retry_body["store"] is True
     assert (
-        mock_client.post.call_args_list[1][0][0]
+        str(mock_client.requests[1].url)
         == "https://test.openai.com/v1/responses"
     )
     assert model._responses_api_available is True
 
 
 @pytest.mark.asyncio
-async def test_responses_api_complete_stops_chaining_after_rejection() -> None:
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.side_effect = [
+async def test_rejected_auto_chain_does_not_override_explicit_reference() -> None:
+    mock_client = MockHTTP()
+    mock_client.responses = [
         _prev_id_rejected_error(),
         _responses_success("resp_1", "first"),
         _responses_success("resp_2", "second"),
@@ -779,10 +1038,11 @@ async def test_responses_api_complete_stops_chaining_after_rejection() -> None:
             enable_store=True,
         )
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     await model.complete(
-        [Message(role="user", content="hello")],
+        [Message(role="user", content="original"), Message(role="assistant", content="prior"), Message(role="user", content="hello")],
+        covered_message_count=2,
         thread_response_id="resp_old_400",
     )
     result = await model.complete(
@@ -791,10 +1051,11 @@ async def test_responses_api_complete_stops_chaining_after_rejection() -> None:
     )
 
     assert result.message.content == "second"
-    # Second complete() must be a single round-trip without the chain.
-    assert mock_client.post.call_count == 3
-    third_body = mock_client.post.call_args_list[2][1]["json"]
-    assert "previous_response_id" not in third_body
+    # Explicit references remain explicit even after automatic chaining is disabled.
+    assert len(mock_client.requests) == 3
+    third_body = json.loads(mock_client.requests[2].content)
+    assert third_body["previous_response_id"] == "resp_1"
+    assert model._responses_adapter._previous_response_id_rejected
     assert third_body["store"] is True
 
 
@@ -802,16 +1063,12 @@ async def test_responses_api_complete_stops_chaining_after_rejection() -> None:
 async def test_responses_api_streaming_retries_without_previous_response_id_on_400() -> (
     None
 ):
-    error_cm = MagicMock()
-    error_cm.__aenter__.return_value = httpx.Response(
+    error_cm = httpx.Response(
         400,
         request=httpx.Request("POST", "https://test.openai.com/v1/responses"),
         text=_PREV_ID_REJECTED_BODY,
     )
 
-    ok_response = AsyncMock()
-    ok_response.is_error = False
-    ok_response.raise_for_status = Mock()
 
     async def ok_aiter_lines():
         yield 'data: {"type": "response.created", "response": {"id": "resp_stream_retry"}}'
@@ -819,12 +1076,11 @@ async def test_responses_api_streaming_retries_without_previous_response_id_on_4
         yield 'data: {"type": "response.output_item.delta", "output_index": 0, "delta": {"type": "content_delta", "text": "recovered"}}'
         yield 'data: {"type": "response.done", "response": {"id": "resp_stream_retry"}}'
 
-    ok_response.aiter_lines = ok_aiter_lines
-    ok_cm = MagicMock()
-    ok_cm.__aenter__.return_value = ok_response
+    ok_response = sse_response(ok_aiter_lines())
+    ok_cm = ok_response
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.stream = MagicMock(side_effect=[error_cm, ok_cm])
+    mock_client = MockHTTP()
+    mock_client.responses = [error_cm, ok_cm]
 
     model = OpenAIModel(
         config=_openai_config(
@@ -834,11 +1090,12 @@ async def test_responses_api_streaming_retries_without_previous_response_id_on_4
             enable_store=True,
         )
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     deltas = []
     stream_result = await model.complete(
-        [Message(role="user", content="hi")],
+        [Message(role="user", content="original"), Message(role="assistant", content="prior"), Message(role="user", content="hi")],
+        covered_message_count=2,
         stream=True,
         thread_response_id="resp_old_400",
     )
@@ -847,9 +1104,9 @@ async def test_responses_api_streaming_retries_without_previous_response_id_on_4
 
     assert any(d.content == "recovered" for d in deltas)
     assert deltas[-1].response_id == "resp_stream_retry"
-    assert mock_client.stream.call_count == 2
-    first_body = mock_client.stream.call_args_list[0][1]["json"]
-    retry_body = mock_client.stream.call_args_list[1][1]["json"]
+    assert len(mock_client.requests) == 2
+    first_body = json.loads(mock_client.requests[0].content)
+    retry_body = json.loads(mock_client.requests[1].content)
     assert first_body["previous_response_id"] == "resp_old_400"
     assert "previous_response_id" not in retry_body
     assert retry_body["stream"] is True
@@ -865,20 +1122,16 @@ async def test_responses_api_streaming_propagates_read_timeout_stall() -> None:
     and the interactive frontend can return control to the user — rather than
     the read=None behaviour where the turn hangs forever.
     """
-    stalled_response = AsyncMock()
-    stalled_response.is_error = False
-    stalled_response.raise_for_status = Mock()
 
     async def stalling_aiter_lines():
         raise httpx.ReadTimeout("stream went silent")
         yield ""  # pragma: no cover — only marks this an async generator
 
-    stalled_response.aiter_lines = stalling_aiter_lines
-    cm = MagicMock()
-    cm.__aenter__.return_value = stalled_response
+    stalled_response = sse_response(stalling_aiter_lines())
+    cm = stalled_response
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.stream = MagicMock(return_value=cm)
+    mock_client = MockHTTP()
+    mock_client.responses = [cm]
 
     model = OpenAIModel(
         config=_openai_config(
@@ -886,7 +1139,7 @@ async def test_responses_api_streaming_propagates_read_timeout_stall() -> None:
         ),
         stream_read_timeout=30.0,
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     stream_result = await model.complete(
         [Message(role="user", content="hi")], stream=True
@@ -895,28 +1148,24 @@ async def test_responses_api_streaming_propagates_read_timeout_stall() -> None:
         async for _ in stream_result:
             pass
     # The stall window was actually applied to the streaming request.
-    assert mock_client.stream.call_args[1]["timeout"].read == 30.0
+    assert mock_client.requests[-1].extensions["timeout"]["read"] == 30.0
 
 
-def _streaming_model(lines: list[str]) -> tuple[OpenAIModel, AsyncMock]:
-    mock_response = AsyncMock()
-    mock_response.is_error = False
-    mock_response.raise_for_status = Mock()
+def _streaming_model(lines: list[str]) -> tuple[OpenAIModel, MockHTTP]:
 
     async def mock_aiter_lines():
         for line in lines:
             yield line
 
-    mock_response.aiter_lines = mock_aiter_lines
+    mock_response = sse_response(mock_aiter_lines())
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.stream = MagicMock()
-    mock_client.stream.return_value.__aenter__.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
     return model, mock_client
 
 
@@ -1009,7 +1258,64 @@ async def test_responses_api_streaming_done_item_arguments_are_authoritative() -
 
 
 @pytest.mark.asyncio
-async def test_responses_api_streaming_failed_response_raises() -> None:
+async def test_responses_api_streaming_done_item_dict_arguments() -> None:
+    """A done item carrying arguments as a dict must not lose them.
+
+    Regression: the streaming path used to json.loads the arguments blindly,
+    silently dropping dict payloads to {} while the non-streaming path kept
+    them.
+    """
+    model, _ = _streaming_model(
+        [
+            'data: {"type": "response.output_item.added", "output_index": 0, "item": {"type": "function_call", "id": "fc_item_3", "call_id": "call_std_3", "name": "get_weather", "arguments": ""}}',
+            'data: {"type": "response.output_item.done", "output_index": 0, "item": {"type": "function_call", "id": "fc_item_3", "call_id": "call_std_3", "name": "get_weather", "arguments": {"city": "Paris", "unit": "c"}}}',
+            'data: {"type": "response.completed", "response": {"id": "resp_std_4"}}',
+        ]
+    )
+
+    deltas = []
+    stream_result = await model.complete(
+        [Message(role="user", content="weather?")], stream=True
+    )
+    async for delta in stream_result:
+        deltas.append(delta)
+
+    tool_deltas = [d for d in deltas if d.tool_calls]
+    assert len(tool_deltas) == 1
+    assert tool_deltas[0].tool_calls[0].arguments == {"city": "Paris", "unit": "c"}
+
+
+@pytest.mark.asyncio
+async def test_responses_api_streaming_invalid_arguments_preserved_as_partial() -> (
+    None
+):
+    """Unparseable arguments are preserved under _partial, not dropped.
+
+    Mirrors OpenAIChatAdapter._finalize_tool_calls so consumers see the same
+    shape from both adapters.
+    """
+    model, _ = _streaming_model(
+        [
+            'data: {"type": "response.output_item.added", "output_index": 0, "item": {"type": "function_call", "id": "fc_item_4", "call_id": "call_std_4", "name": "get_weather", "arguments": ""}}',
+            'data: {"type": "response.output_item.done", "output_index": 0, "item": {"type": "function_call", "id": "fc_item_4", "call_id": "call_std_4", "name": "get_weather", "arguments": "{\\"city\\":"}}',
+            'data: {"type": "response.completed", "response": {"id": "resp_std_5"}}',
+        ]
+    )
+
+    deltas = []
+    stream_result = await model.complete(
+        [Message(role="user", content="weather?")], stream=True
+    )
+    async for delta in stream_result:
+        deltas.append(delta)
+
+    tool_deltas = [d for d in deltas if d.tool_calls]
+    assert len(tool_deltas) == 1
+    assert tool_deltas[0].tool_calls[0].arguments == {"_partial": '{"city":'}
+
+
+@pytest.mark.asyncio
+async def test_responses_api_streaming_failed_response_has_error_terminal() -> None:
     model, _ = _streaming_model(
         [
             'data: {"type": "response.created", "response": {"id": "resp_fail_1"}}',
@@ -1020,9 +1326,10 @@ async def test_responses_api_streaming_failed_response_raises() -> None:
     stream_result = await model.complete(
         [Message(role="user", content="Hi")], stream=True
     )
-    with pytest.raises(ValueError, match=r"\[server_error\] boom"):
-        async for _delta in stream_result:
-            pass
+    deltas = [delta async for delta in stream_result]
+    assert deltas[-1].finish_reason == "error"
+    assert deltas[-1].error is not None
+    assert "[server_error] boom" in deltas[-1].error
 
 
 @pytest.mark.asyncio
@@ -1035,8 +1342,8 @@ async def test_responses_api_complete_unrelated_400_raises_without_retry() -> No
     )
     error = httpx.HTTPStatusError("400", request=request, response=response)
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.side_effect = error
+    mock_client = MockHTTP()
+    mock_client.responses = [error]
 
     model = OpenAIModel(
         config=_openai_config(
@@ -1046,7 +1353,7 @@ async def test_responses_api_complete_unrelated_400_raises_without_retry() -> No
             enable_store=True,
         )
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     with pytest.raises(httpx.HTTPStatusError):
         await model.complete(
@@ -1054,15 +1361,15 @@ async def test_responses_api_complete_unrelated_400_raises_without_retry() -> No
             thread_response_id="resp_x",
         )
 
-    assert mock_client.post.call_count == 1
+    assert len(mock_client.requests) == 1
 
 
 @pytest.mark.asyncio
 async def test_responses_api_complete_400_when_chain_not_sent_raises_without_retry() -> (
     None
 ):
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.side_effect = _prev_id_rejected_error()
+    mock_client = MockHTTP()
+    mock_client.responses = [_prev_id_rejected_error()]
 
     model = OpenAIModel(
         config=_openai_config(
@@ -1072,24 +1379,22 @@ async def test_responses_api_complete_400_when_chain_not_sent_raises_without_ret
             enable_store=True,
         )
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     with pytest.raises(httpx.HTTPStatusError):
         await model.complete([Message(role="user", content="hello")])
 
-    assert mock_client.post.call_count == 1
+    assert len(mock_client.requests) == 1
 
 
 @pytest.mark.asyncio
 async def test_responses_api_complete_non_streaming_falls_back_when_disabled() -> None:
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "choices": [{"message": {"role": "assistant", "content": "fallback"}}]
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(
@@ -1098,7 +1403,7 @@ async def test_responses_api_complete_non_streaming_falls_back_when_disabled() -
             api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
         )
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     tools = [
         ToolSchema(
@@ -1109,8 +1414,8 @@ async def test_responses_api_complete_non_streaming_falls_back_when_disabled() -
     ]
     await model.complete([Message(role="user", content="hello")], tools=tools)
 
-    call_args = mock_client.post.call_args
-    assert call_args[0][0] == "https://test.openai.com/v1/chat/completions"
+    request = mock_client.requests[-1]
+    assert str(request.url) == "https://test.openai.com/v1/chat/completions"
 
 
 @pytest.mark.asyncio
@@ -1127,14 +1432,12 @@ async def test_responses_api_complete_non_streaming_falls_back_on_404() -> None:
         response=responses_response,
     )
 
-    fallback_response = Mock(spec=httpx.Response)
-    fallback_response.json.return_value = {
+    fallback_response = httpx.Response(200, json={
         "choices": [{"message": {"role": "assistant", "content": "fallback"}}]
-    }
-    fallback_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.side_effect = [responses_error, fallback_response]
+    mock_client = MockHTTP()
+    mock_client.responses = [responses_error, fallback_response]
 
     model = OpenAIModel(
         config=_openai_config(
@@ -1143,20 +1446,20 @@ async def test_responses_api_complete_non_streaming_falls_back_on_404() -> None:
             api_format=ApiFormat.OPENAI_RESPONSES,
         )
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     result = await model.complete([Message(role="user", content="hello")])
 
     assert result.message.role == "assistant"
     assert result.message.content == "fallback"
     assert model._responses_api_available is False
-    assert mock_client.post.call_count == 2
+    assert len(mock_client.requests) == 2
     assert (
-        mock_client.post.call_args_list[0][0][0]
+        str(mock_client.requests[0].url)
         == "https://test.openai.com/v1/responses"
     )
     assert (
-        mock_client.post.call_args_list[1][0][0]
+        str(mock_client.requests[1].url)
         == "https://test.openai.com/v1/chat/completions"
     )
 
@@ -1164,8 +1467,6 @@ async def test_responses_api_complete_non_streaming_falls_back_on_404() -> None:
 @pytest.mark.asyncio
 async def test_responses_api_streaming_yields_stream_deltas() -> None:
     """Test Responses API streaming yields StreamDelta objects."""
-    mock_response = AsyncMock()
-    mock_response.raise_for_status = Mock()
 
     async def mock_aiter_lines():
         yield "event: response.created"
@@ -1187,16 +1488,15 @@ async def test_responses_api_streaming_yields_stream_deltas() -> None:
         yield 'data: {"type": "response.done", "response": {"id": "resp_stream_1", "usage": {"input_tokens": 5, "output_tokens": 10, "total_tokens": 15}}}'
         yield ""
 
-    mock_response.aiter_lines = mock_aiter_lines
+    mock_response = sse_response(mock_aiter_lines())
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.stream = MagicMock()
-    mock_client.stream.return_value.__aenter__.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     deltas = []
     stream_result = await model.complete(
@@ -1213,8 +1513,6 @@ async def test_responses_api_streaming_yields_stream_deltas() -> None:
 @pytest.mark.asyncio
 async def test_responses_api_streaming_handles_tool_calls() -> None:
     """Test Responses API streaming accumulates tool calls correctly."""
-    mock_response = AsyncMock()
-    mock_response.raise_for_status = Mock()
 
     async def mock_aiter_lines():
         yield "event: response.output_item.added"
@@ -1233,16 +1531,15 @@ async def test_responses_api_streaming_handles_tool_calls() -> None:
         yield 'data: {"type": "response.done", "response": {"id": "resp_tool_1"}}'
         yield ""
 
-    mock_response.aiter_lines = mock_aiter_lines
+    mock_response = sse_response(mock_aiter_lines())
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.stream = MagicMock()
-    mock_client.stream.return_value.__aenter__.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     deltas = []
     stream_result = await model.complete(
@@ -1262,8 +1559,6 @@ async def test_responses_api_streaming_handles_tool_calls() -> None:
 @pytest.mark.asyncio
 async def test_responses_api_streaming_emits_done() -> None:
     """Test Responses API streaming emits final delta with finish_reason and usage."""
-    mock_response = AsyncMock()
-    mock_response.raise_for_status = Mock()
 
     async def mock_aiter_lines():
         yield "event: response.output_item.added"
@@ -1279,16 +1574,15 @@ async def test_responses_api_streaming_emits_done() -> None:
         yield 'data: {"type": "response.done", "response": {"id": "resp_done", "usage": {"input_tokens": 3, "output_tokens": 5, "total_tokens": 8}}}'
         yield ""
 
-    mock_response.aiter_lines = mock_aiter_lines
+    mock_response = sse_response(mock_aiter_lines())
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.stream = MagicMock()
-    mock_client.stream.return_value.__aenter__.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     deltas = []
     stream_result = await model.complete(
@@ -1310,8 +1604,6 @@ async def test_responses_api_streaming_emits_done() -> None:
 async def test_responses_api_streaming_previous_response_id_updates_state_component() -> (
     None
 ):
-    mock_response = AsyncMock()
-    mock_response.raise_for_status = Mock()
 
     async def mock_aiter_lines():
         yield "event: response.created"
@@ -1327,18 +1619,17 @@ async def test_responses_api_streaming_previous_response_id_updates_state_compon
         yield 'data: {"type": "response.done", "response": {"id": "resp_streaming_123"}}'
         yield ""
 
-    mock_response.aiter_lines = mock_aiter_lines
+    mock_response = sse_response(mock_aiter_lines())
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.stream = MagicMock()
-    mock_client.stream.return_value.__aenter__.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     world = World()
     entity = world.create_entity()
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
     world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
@@ -1361,22 +1652,22 @@ async def test_responses_api_streaming_previous_response_id_updates_state_compon
 
 
 @pytest.mark.asyncio
-async def test_responses_api_non_streaming_previous_response_id_preserved_on_failure() -> (
+async def test_responses_api_failure_does_not_resurrect_unverified_state() -> (
     None
 ):
     request = httpx.Request("POST", "https://api.openai.com/v1/responses")
     response = httpx.Response(500, request=request, text="server error")
     error = httpx.HTTPStatusError("boom", request=request, response=response)
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.side_effect = error
+    mock_client = MockHTTP()
+    mock_client.responses = [error]
 
     world = World()
     entity = world.create_entity()
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
     world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
@@ -1390,19 +1681,16 @@ async def test_responses_api_non_streaming_previous_response_id_preserved_on_fai
     await ReasoningSystem().process(world)
 
     state = world.get_component(entity, ResponsesAPIStateComponent)
-    assert state is not None
-    assert state.previous_response_id == "resp_stable_old"
+    assert state is None
 
 
 @pytest.mark.asyncio
-async def test_responses_api_streaming_previous_response_id_preserved_on_interruption() -> (
+async def test_responses_api_interruption_does_not_resurrect_unverified_state() -> (
     None
 ):
     world = World()
     entity = world.create_entity()
 
-    mock_response = AsyncMock()
-    mock_response.raise_for_status = Mock()
 
     async def mock_aiter_lines():
         yield "event: response.created"
@@ -1423,16 +1711,15 @@ async def test_responses_api_streaming_previous_response_id_preserved_on_interru
         yield 'data: {"type": "response.done", "response": {"id": "resp_streaming_new"}}'
         yield ""
 
-    mock_response.aiter_lines = mock_aiter_lines
+    mock_response = sse_response(mock_aiter_lines())
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.stream = MagicMock()
-    mock_client.stream.return_value.__aenter__.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
     world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
@@ -1450,8 +1737,7 @@ async def test_responses_api_streaming_previous_response_id_preserved_on_interru
     await ReasoningSystem().process(world)
 
     state = world.get_component(entity, ResponsesAPIStateComponent)
-    assert state is not None
-    assert state.previous_response_id == "resp_keep_old"
+    assert state is None
 
 
 @pytest.mark.asyncio
@@ -1462,8 +1748,7 @@ async def test_responses_api_translates_json_schema_response_format_to_text() ->
     top-level response_format parameter, and expects {name, schema, strict}
     alongside the type rather than nested under a json_schema key.
     """
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_fmt_1",
         "model": "gpt-4o-mini",
         "output": [
@@ -1473,16 +1758,15 @@ async def test_responses_api_translates_json_schema_response_format_to_text() ->
                 "content": [{"type": "output_text", "text": "{}"}],
             }
         ],
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     schema = {"type": "object", "properties": {"city": {"type": "string"}}}
     response_format = {
@@ -1494,7 +1778,7 @@ async def test_responses_api_translates_json_schema_response_format_to_text() ->
         [Message(role="user", content="hello")], response_format=response_format
     )
 
-    body = mock_client.post.call_args[1]["json"]
+    body = json.loads(mock_client.requests[-1].content)
     assert "response_format" not in body
     assert body["text"] == {
         "format": {
@@ -1509,8 +1793,7 @@ async def test_responses_api_translates_json_schema_response_format_to_text() ->
 @pytest.mark.asyncio
 async def test_responses_api_translates_json_object_response_format_to_text() -> None:
     """A bare {"type": "json_object"} maps straight into text.format."""
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_fmt_2",
         "model": "gpt-4o-mini",
         "output": [
@@ -1520,23 +1803,22 @@ async def test_responses_api_translates_json_object_response_format_to_text() ->
                 "content": [{"type": "output_text", "text": "{}"}],
             }
         ],
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     await model.complete(
         [Message(role="user", content="hello")],
         response_format={"type": "json_object"},
     )
 
-    body = mock_client.post.call_args[1]["json"]
+    body = json.loads(mock_client.requests[-1].content)
     assert "response_format" not in body
     assert body["text"] == {"format": {"type": "json_object"}}
 
@@ -1544,8 +1826,7 @@ async def test_responses_api_translates_json_object_response_format_to_text() ->
 @pytest.mark.asyncio
 async def test_responses_api_complete_extracts_reasoning_summary() -> None:
     """A reasoning output item's summary_text populates reasoning_content."""
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_reason_1",
         "model": "gpt-5",
         "output": [
@@ -1563,17 +1844,16 @@ async def test_responses_api_complete_extracts_reasoning_summary() -> None:
                 "content": [{"type": "output_text", "text": "The answer is 42."}],
             },
         ],
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES),
         model="gpt-5",
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     result = await model.complete([Message(role="user", content="question")])
 
@@ -1618,24 +1898,19 @@ async def test_responses_api_streaming_falls_back_to_chat_on_404() -> None:
         request=httpx.Request("POST", "https://test.openai.com/v1/responses"),
         text="Not Found",
     )
-    error_cm = MagicMock()
-    error_cm.__aenter__.return_value = error_response
+    error_cm = error_response
 
-    chat_response = AsyncMock()
-    chat_response.is_error = False
-    chat_response.raise_for_status = Mock()
 
     async def chat_aiter_lines():
         yield 'data: {"choices": [{"delta": {"content": "fallback"}, "finish_reason": null}]}'
         yield 'data: {"choices": [{"delta": {}, "finish_reason": "stop"}]}'
         yield "data: [DONE]"
 
-    chat_response.aiter_lines = chat_aiter_lines
-    chat_cm = MagicMock()
-    chat_cm.__aenter__.return_value = chat_response
+    chat_response = sse_response(chat_aiter_lines())
+    chat_cm = chat_response
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.stream = MagicMock(side_effect=[error_cm, chat_cm])
+    mock_client = MockHTTP()
+    mock_client.responses = [error_cm, chat_cm]
 
     model = OpenAIModel(
         config=_openai_config(
@@ -1644,7 +1919,7 @@ async def test_responses_api_streaming_falls_back_to_chat_on_404() -> None:
             api_format=ApiFormat.OPENAI_RESPONSES,
         )
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     deltas = []
     stream_result = await model.complete(
@@ -1655,9 +1930,9 @@ async def test_responses_api_streaming_falls_back_to_chat_on_404() -> None:
 
     assert any(d.content == "fallback" for d in deltas)
     assert model._responses_api_available is False
-    assert mock_client.stream.call_count == 2
-    responses_url = mock_client.stream.call_args_list[0][0][1]
-    chat_url = mock_client.stream.call_args_list[1][0][1]
+    assert len(mock_client.requests) == 2
+    responses_url = str(mock_client.requests[0].url)
+    chat_url = str(mock_client.requests[1].url)
     assert responses_url == "https://test.openai.com/v1/responses"
     assert chat_url == "https://test.openai.com/v1/chat/completions"
 
@@ -1728,8 +2003,8 @@ async def test_responses_api_retries_on_400_with_structured_param_error() -> Non
         response=httpx.Response(400, request=request, text=param_body),
     )
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.side_effect = [error, _responses_success("resp_ok", "recovered")]
+    mock_client = MockHTTP()
+    mock_client.responses = [error, _responses_success("resp_ok", "recovered")]
 
     model = OpenAIModel(
         config=_openai_config(
@@ -1739,15 +2014,16 @@ async def test_responses_api_retries_on_400_with_structured_param_error() -> Non
             enable_store=True,
         )
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     result = await model.complete(
-        [Message(role="user", content="hi")], thread_response_id="resp_old"
+        [Message(role="user", content="original"), Message(role="assistant", content="prior"), Message(role="user", content="hi")],
+        covered_message_count=2, thread_response_id="resp_old"
     )
 
     assert result.message.content == "recovered"
-    assert mock_client.post.call_count == 2
-    assert "previous_response_id" not in mock_client.post.call_args_list[1][1]["json"]
+    assert len(mock_client.requests) == 2
+    assert "previous_response_id" not in json.loads(mock_client.requests[1].content)
 
 
 @pytest.mark.asyncio
@@ -1769,8 +2045,8 @@ async def test_responses_api_no_retry_when_token_outside_error_object() -> None:
         response=httpx.Response(400, request=request, text=unrelated_body),
     )
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.side_effect = error
+    mock_client = MockHTTP()
+    mock_client.responses = [error]
 
     model = OpenAIModel(
         config=_openai_config(
@@ -1780,14 +2056,14 @@ async def test_responses_api_no_retry_when_token_outside_error_object() -> None:
             enable_store=True,
         )
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     with pytest.raises(httpx.HTTPStatusError):
         await model.complete(
             [Message(role="user", content="hi")], thread_response_id="resp_old"
         )
 
-    assert mock_client.post.call_count == 1
+    assert len(mock_client.requests) == 1
 
 
 @pytest.mark.asyncio
@@ -1815,6 +2091,7 @@ async def test_fallback_wrapper_closes_inner_stream_on_outer_close(
         tools: Any = None,
         response_format: Any = None,
         thread_response_id: Any = None,
+        covered_message_count: Any = None,
     ) -> Any:
         try:
             yield StreamDelta(content="a")
@@ -1838,7 +2115,7 @@ async def test_responses_api_streaming_closes_http_stream_on_early_close() -> No
 
     The adapter has its own generator hop (``stream`` -> ``_stream_once``) that
     needs the same explicit close as the fallback wrapper: without it the
-    ``client.stream(...)`` context stays open — the connection is checked out
+    SDK stream stays open — the connection is checked out
     of the httpx pool until garbage collection.
     """
     model, mock_client = _streaming_model(
@@ -1857,7 +2134,7 @@ async def test_responses_api_streaming_closes_http_stream_on_early_close() -> No
         break
     await stream_result.aclose()
 
-    assert mock_client.stream.return_value.__aexit__.await_count == 1
+    assert mock_client.returned[0].is_closed
 
 
 @pytest.mark.asyncio
@@ -1948,8 +2225,7 @@ async def test_responses_api_streaming_truncation_reports_length_and_usage() -> 
 @pytest.mark.asyncio
 async def test_responses_api_non_streaming_truncation_reports_length() -> None:
     """The non-streaming path parses the same terminal state as streaming."""
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_trunc_2",
         "status": "incomplete",
         "incomplete_details": {"reason": "max_output_tokens"},
@@ -1961,16 +2237,15 @@ async def test_responses_api_non_streaming_truncation_reports_length() -> None:
             }
         ],
         "usage": {"input_tokens": 900, "output_tokens": 4096, "total_tokens": 4996},
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     result = await model.complete([Message(role="user", content="hello")])
 
@@ -1988,8 +2263,7 @@ async def test_responses_api_non_streaming_completed_reports_tool_calls() -> Non
     Chat Completions distinguishes that case in its own finish_reason; the
     normalized vocabulary keeps both OpenAI paths saying the same thing.
     """
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_tc_1",
         "status": "completed",
         "output": [
@@ -2000,16 +2274,15 @@ async def test_responses_api_non_streaming_completed_reports_tool_calls() -> Non
                 "arguments": '{"city": "Oslo"}',
             }
         ],
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     result = await model.complete([Message(role="user", content="weather?")])
 

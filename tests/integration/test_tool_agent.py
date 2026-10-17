@@ -126,18 +126,15 @@ async def test_unknown_tool_graceful_handling() -> None:
     runner = Runner()
     await runner.run(world, max_ticks=5)
 
-    expected_error = "Error: unknown tool 'nonexistent_tool'"
     results = world.get_component(entity_id, ToolResultsComponent)
-    assert results is not None
-    assert results.results["tc2"] == expected_error
+    assert results is None
+    assert runner.last_result is not None and not runner.last_result.success
+    assert runner.last_result.error == "Unknown tool 'nonexistent_tool'"
 
     conversation = world.get_component(entity_id, ConversationComponent)
     assert conversation is not None
-    assert any(message.role == "tool" for message in conversation.messages)
-    assert any(
-        message.role == "tool" and message.content == expected_error
-        for message in conversation.messages
-    )
+    assert not any(message.role == "tool" for message in conversation.messages)
+    assert conversation.messages[-1].generation_status == "error"
 
     error_component = world.get_component(entity_id, ErrorComponent)
     assert error_component is None

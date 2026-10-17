@@ -346,3 +346,40 @@ async def test_subagent_result_propagates_external_cancellation() -> None:
 
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+def test_global_scheduler_rebinds_across_event_loops() -> None:
+    """A new event loop must not inherit the previous loop's dead scheduler.
+
+    Regression: _GLOBAL_SCHEDULER survived asyncio.run() boundaries carrying
+    a loop-pinned lock and stale active_count from tasks the old loop killed,
+    so a fresh run's sessions queued forever behind phantom occupancy.
+    """
+    from ecs_agent.systems.subagent_runtime import get_global_scheduler
+
+    reset_global_scheduler()
+    try:
+
+        async def hog_the_only_slot() -> None:
+            scheduler = get_global_scheduler(max_background_concurrency=1)
+            await scheduler.enqueue("ses_old_loop", _never_run)
+            admitted = await scheduler.reserve_admissions()
+            assert [q.session_id for q in admitted] == ["ses_old_loop"]
+            # Loop exits with the slot still occupied (task killed with loop).
+
+        async def _never_run() -> None:
+            return None
+
+        asyncio.run(hog_the_only_slot())
+
+        async def fresh_loop_run() -> None:
+            scheduler = get_global_scheduler(max_background_concurrency=1)
+            await scheduler.enqueue("ses_new_loop", _never_run)
+            admitted = await asyncio.wait_for(
+                scheduler.reserve_admissions(), timeout=1.0
+            )
+            assert [q.session_id for q in admitted] == ["ses_new_loop"]
+
+        asyncio.run(fresh_loop_run())
+    finally:
+        reset_global_scheduler()

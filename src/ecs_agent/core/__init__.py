@@ -5,6 +5,7 @@ from .event_bus import EventBus
 from .query import Query
 from .world import World
 from .runner import Runner
+from .run_result import RunResult, RunStatus
 
 
-__all__ = ["EventBus", "EntityIdGenerator", "Query", "World", "Runner"]
+__all__ = ["EventBus", "EntityIdGenerator", "Query", "World", "Runner", "RunResult", "RunStatus"]

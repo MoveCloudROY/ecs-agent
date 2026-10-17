@@ -83,7 +83,9 @@ async def test_basic_conversation_appends_assistant_response() -> None:
     conversation = world.get_component(entity_id, ConversationComponent)
     assert conversation is not None
     assert len(conversation.messages) == 2
-    assert conversation.messages[1] == Message(role="assistant", content="Hi there!")
+    assert conversation.messages[1].role == "assistant"
+    assert conversation.messages[1].content == "Hi there!"
+    assert conversation.messages[1].generation_status == "completed"
 
 
 @pytest.mark.asyncio
@@ -103,6 +105,10 @@ async def test_tool_calls_attach_pending_tool_calls_component() -> None:
     )
     entity_id = world.create_entity()
     world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(entity_id, ToolRegistryComponent(
+        tools={"get_weather": ToolSchema(name="get_weather", description="test tool", parameters={"type": "object"})},
+        handlers={},
+    ))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Need weather")]),
@@ -133,6 +139,10 @@ async def test_pending_tool_calls_block_follow_up_reasoning() -> None:
     )
     entity_id = world.create_entity()
     world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(entity_id, ToolRegistryComponent(
+        tools={"get_weather": ToolSchema(name="get_weather", description="test tool", parameters={"type": "object"})},
+        handlers={},
+    ))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Need weather")]),
@@ -295,7 +305,9 @@ async def test_error_handling_adds_error_component() -> None:
     assert error is not None
     assert error.system_name == "ReasoningSystem"
     assert "provider exploded" in error.error
-    assert terminal is None
+    assert terminal is not None
+    assert terminal.reason == "reasoning_error"
+    assert terminal.error == error.error
 
 
 @pytest.mark.asyncio

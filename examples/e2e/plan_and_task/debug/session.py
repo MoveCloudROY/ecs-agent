@@ -40,6 +40,7 @@ from ecs_agent.components.definitions import (
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import get_logger
 from ecs_agent.providers.protocol import LLMModel
+from ecs_agent.outcomes import RECOVERABLE_REASONING_TERMINALS
 from ecs_agent.systems import TerminalCleanupSystem
 from ecs_agent.systems.user_input import UserInputSystem
 from ecs_agent.types import (
@@ -323,7 +324,7 @@ class PlanTaskDebugSession:
         # normalization (−15 < −10) and reasoning_complete terminals are cleared
         # so the session keeps ticking.
         self._world.register_system(
-            TerminalCleanupSystem(priority=1, clear_reasons=("reasoning_complete",)),
+            TerminalCleanupSystem(priority=1, clear_reasons=RECOVERABLE_REASONING_TERMINALS),
             priority=1,
         )
         self._world.register_system(UserInputSystem(priority=-15), priority=-15)

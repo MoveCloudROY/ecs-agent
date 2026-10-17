@@ -1,9 +1,13 @@
 """Tests for OpenAI-compatible model."""
 
 import json
-import pytest
-import httpx
 from unittest.mock import AsyncMock, Mock
+
+import httpx
+import pytest
+
+from tests.http_mock import MockHTTP
+
 from ecs_agent.logging import configure_logging
 from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
@@ -360,6 +364,7 @@ async def test_assistant_message_with_content_and_tool_calls_preserves_content()
             ],
         ),
     ]
+    messages.append(Message(role="tool", content="sunny", tool_call_id="call_2"))
     await model.complete(messages)
 
     body = mock_client.post.call_args[1]["json"]
@@ -396,7 +401,7 @@ async def test_convert_messages_serializes_tool_call_arguments_as_json_string() 
         ],
     )
 
-    await model.complete([message])
+    await model.complete([message, Message(role="tool", content="done", tool_call_id="call_123")])
 
     # Verify the request was made with JSON-serialized arguments
     body = mock_client.post.call_args[1]["json"]
@@ -453,8 +458,7 @@ async def test_multimodal_chat_request_maps_parts_to_chat_content() -> None:
 
 @pytest.mark.asyncio
 async def test_multimodal_responses_request_maps_image_and_file_parts() -> None:
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_mm_1",
         "output": [
             {
@@ -463,16 +467,15 @@ async def test_multimodal_responses_request_maps_image_and_file_parts() -> None:
                 "content": [{"type": "output_text", "text": "ok"}],
             }
         ],
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     await model.complete(
         [
@@ -487,7 +490,7 @@ async def test_multimodal_responses_request_maps_image_and_file_parts() -> None:
         ]
     )
 
-    body = mock_client.post.call_args[1]["json"]
+    body = json.loads(mock_client.requests[-1].content)
     content = body["input"][0]["content"]
     assert content[0] == {"type": "input_text", "text": "Analyze"}
     assert content[1] == {
@@ -538,8 +541,7 @@ async def test_openai_chat_adapter_delivers_system_prompt_containing_summary_xml
 @pytest.mark.asyncio
 async def test_openai_responses_adapter_delivers_summary_xml_in_instructions() -> None:
     """Test that OpenAI Responses API request contains XML summary in instructions field only."""
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_compaction_1",
         "output": [
             {
@@ -548,16 +550,15 @@ async def test_openai_responses_adapter_delivers_summary_xml_in_instructions() -
                 "content": [{"type": "output_text", "text": "ok"}],
             }
         ],
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     summary_xml = "<chat_history_summary>Summary: X happened</chat_history_summary>"
     await model.complete(
@@ -567,7 +568,7 @@ async def test_openai_responses_adapter_delivers_summary_xml_in_instructions() -
         ]
     )
 
-    body = mock_client.post.call_args[1]["json"]
+    body = json.loads(mock_client.requests[-1].content)
 
     # Verify instructions field contains the XML summary
     assert "instructions" in body
@@ -585,8 +586,7 @@ async def test_openai_responses_adapter_delivers_summary_xml_in_instructions() -
 
 @pytest.mark.asyncio
 async def test_vision_responses_output_parses_parts_into_message_parts() -> None:
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.json.return_value = {
+    mock_response = httpx.Response(200, json={
         "id": "resp_vision_1",
         "output": [
             {
@@ -607,16 +607,15 @@ async def test_vision_responses_output_parses_parts_into_message_parts() -> None
                 ],
             }
         ],
-    }
-    mock_response.raise_for_status = Mock()
+    })
 
-    mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.return_value = mock_response
+    mock_client = MockHTTP()
+    mock_client.responses = [mock_response]
 
     model = OpenAIModel(
         config=_openai_config(api_key="test-key", api_format=ApiFormat.OPENAI_RESPONSES)
     )
-    model._client = mock_client
+    model._client = mock_client.client()
 
     result = await model.complete([Message(role="user", content="vision")])
     assert result.message.content == "Found details."
@@ -646,3 +645,17 @@ async def test_unsupported_api_format_raises_clear_error() -> None:
 
     with pytest.raises(ValueError, match="Unsupported OpenAI provider api_format"):
         await model.complete([Message(role="user", content="hello")])
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_owned_http_client() -> None:
+    """Models own an AsyncClient; aclose() must release its connection pool."""
+    from unittest.mock import AsyncMock
+
+    model = OpenAIModel(config=_openai_config(api_key="k"))
+    mock_client = AsyncMock()
+    model._client = mock_client
+
+    await model.aclose()
+
+    mock_client.aclose.assert_awaited_once()

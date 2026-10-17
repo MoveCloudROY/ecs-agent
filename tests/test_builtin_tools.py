@@ -23,6 +23,21 @@ from ecs_agent.tools.builtins.edit_tool import edit_file
 from ecs_agent.tools.builtins.file_tools import read_file, write_file
 from ecs_agent.types import ToolCall
 
+
+async def test_numbered_read_exposes_absolute_positions_and_keeps_edit_snapshot(tmp_path: Path) -> None:
+    target = tmp_path / "draft.md"
+    target.write_text("heading\n\nold content\nlast line", encoding="utf-8")
+    skill = BuiltinToolsSkill().bind_workspace(str(tmp_path))
+    tools = skill.tools()
+    schema, reader = tools["read_file"]
+    assert schema.inline_result
+    output = await reader(file_path="draft.md", offset=2, limit=2, line_numbers=True)
+    assert output == "2: \n3: old content"
+    assert target.read_text() == "heading\n\nold content\nlast line"
+    await tools["edit_file"][1](file_path="draft.md", op="replace", pos=3, content="corrected")
+    assert target.read_text() == "heading\n\ncorrected\nlast line"
+    assert await reader(file_path="draft.md", offset=2, limit=2) == "\ncorrected"
+
 # Try importing glob; will fail if not implemented yet (expected for TDD red phase)
 try:
     from ecs_agent.tools.builtins.glob_tool import glob

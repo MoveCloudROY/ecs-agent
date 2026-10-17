@@ -19,7 +19,9 @@ from ecs_agent.components import (
 from ecs_agent.accounting.instrumentation import complete_with_llm_invocation_event
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
+from ecs_agent.outcomes import GenerationStatus
 from ecs_agent.prompts.message_assembly import (
+    ContextBudgetExceededError,
     commit_prompt_context_reservation,
     prepare_outbound_messages,
     resolve_system_prompt_parts,
@@ -75,14 +77,22 @@ class PlanningSystem:
             context_queue = world.get_component(entity_id, PromptContextQueueComponent)
             runner_state = world.get_component(entity_id, RunnerStateComponent)
             current_tick = runner_state.current_tick if runner_state is not None else 0
-            messages, context_reservation = prepare_outbound_messages(
-                world,
-                entity_id,
-                system_prompt=system_prompt_text,
-                system_volatile_suffix=system_volatile_suffix,
-                prefix_messages=[plan_context],
-                current_tick=current_tick,
-            )
+            try:
+                messages, context_reservation = prepare_outbound_messages(
+                    world,
+                    entity_id,
+                    system_prompt=system_prompt_text,
+                    system_volatile_suffix=system_volatile_suffix,
+                    prefix_messages=[plan_context],
+                    current_tick=current_tick,
+                )
+            except ContextBudgetExceededError as exc:
+                logger.error("planning_budget_exhausted", entity_id=int(entity_id), exception=str(exc))
+                world.add_component(entity_id, ErrorComponent(
+                    error=str(exc), system_name="PlanningSystem", timestamp=time.time(),
+                ))
+                world.add_component(entity_id, TerminalComponent(reason="budget_exhausted", error=str(exc)))
+                continue
             if context_reservation is not None:
                 world.add_component(entity_id, context_reservation)
 
@@ -112,6 +122,17 @@ class PlanningSystem:
                     world.remove_component(entity_id, PromptContextReservationComponent)
                 # Add the step description to the conversation history
                 conversation.messages.append(result.message)
+                if result.message.generation_status not in (
+                    GenerationStatus.COMPLETED, GenerationStatus.TOOL_CALLS,
+                ):
+                    status = result.message.generation_status or GenerationStatus.UNKNOWN
+                    logger.warning("planning_generation_stopped", status=status, error=result.error)
+                    result.message.tool_calls = None
+                    world.add_component(entity_id, TerminalComponent(
+                        reason=f"planning_{status.value}",
+                        error=result.error if status is GenerationStatus.ERROR else None,
+                    ))
+                    continue
                 if result.message.tool_calls:
                     world.add_component(
                         entity_id,
@@ -179,7 +200,7 @@ class PlanningSystem:
                 )
                 world.add_component(
                     entity_id,
-                    TerminalComponent(reason="planning_error"),
+                    TerminalComponent(reason="planning_error", error=str(exc)),
                 )
 
 

@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 
-from collections.abc import AsyncGenerator, AsyncIterator
-from contextlib import aclosing
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator
+from contextlib import aclosing, contextmanager
 from dataclasses import dataclass
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import httpx
 
 from ecs_agent.logging import get_logger
 from ecs_agent.providers._message_contract import validate_tool_spans
 from ecs_agent.providers.config import ProviderConfig
+from ecs_agent.providers.responses_state import bind_provider_output, message_view_hash, previous_response_error, response_origin
 from ecs_agent.types import (
     CompletionResult,
     FileRefPart,
@@ -22,13 +24,50 @@ from ecs_agent.types import (
     Message,
     MessagePart,
     MessageRole,
+    ProviderOutput,
     StreamDelta,
     ToolCall,
     ToolSchema,
     Usage,
 )
 
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
+    from openai.types.responses.response_create_params import (
+        ResponseCreateParamsNonStreaming,
+        ResponseCreateParamsStreaming,
+    )
+
 logger = get_logger(__name__)
+
+
+@contextmanager
+def _sdk_errors_as_httpx() -> Iterator[None]:
+    """Preserve the provider's HTTP error contract for fallback and RetryModel."""
+    from openai import APIConnectionError, APIError, APIStatusError, APITimeoutError
+
+    try:
+        yield
+    except APIStatusError as exc:
+        raise httpx.HTTPStatusError(
+            str(exc), request=exc.request, response=exc.response
+        ) from exc
+    except APIConnectionError as exc:
+        # Preserve the precise transport error (including ReadTimeout) when
+        # available, so existing retry policies and callers keep working.
+        cause = exc.__cause__
+        if isinstance(cause, httpx.RequestError):
+            raise cause from exc
+        error_type = (
+            httpx.TimeoutException
+            if isinstance(exc, APITimeoutError)
+            else httpx.RequestError
+        )
+        raise error_type(str(exc), request=exc.request) from exc
+    except APIError as exc:
+        logger.error("llm_sdk_error", exception=str(exc))
+        raise
+
 
 # Every terminal event carries the same ``response`` object; the status inside
 # it — not the event name — says how the turn ended. Recognising terminality by
@@ -69,6 +108,7 @@ class _Terminal:
     finish_reason: FinishReason
     usage: Usage | None = None
     response_id: str | None = None
+    error: str | None = None
 
 
 class _OpenAIModelFacade(Protocol):
@@ -86,10 +126,6 @@ class _OpenAIModelFacade(Protocol):
 
     def _handle_request_error(self, exc: httpx.RequestError) -> None: ...
 
-    def _convert_tools_to_openai(
-        self, tools: list[ToolSchema]
-    ) -> list[dict[str, Any]]: ...
-
     def _convert_tools_to_responses(
         self, tools: list[ToolSchema]
     ) -> list[dict[str, Any]]: ...
@@ -106,11 +142,64 @@ class OpenAIResponsesAdapter:
 
     def __init__(self, facade: _OpenAIModelFacade) -> None:
         self._facade = facade
+        self._sdk_client: AsyncOpenAI | None = None
+        self._sdk_origin: str | None = None
         # Latched when a provider 400s a request because of
         # previous_response_id (e.g. gateways whose HTTP endpoint does not
         # implement stored-response chaining). Once set, the chain is
         # omitted from every subsequent request of this model instance.
         self._previous_response_id_rejected = False
+
+    @property
+    def origin(self) -> str:
+        """Current endpoint, model and credential scope of this adapter."""
+        return response_origin(
+            provider_id=self._facade._provider_config.provider_id,
+            base_url=self._facade._base_url, model=self._facade._model,
+            headers=self._facade._build_headers(),
+        )
+
+    def _output_state(
+        self, items: list[dict[str, Any]], *, complete: bool,
+        response: dict[str, Any] | None = None,
+        origin: str | None = None,
+        requested_store: bool | None = None,
+    ) -> ProviderOutput:
+        response = response or {}
+        stored = response.get("store", requested_store)
+        if requested_store is False:
+            stored = False
+        return ProviderOutput(
+            protocol="openai_responses", origin=origin or self.origin,
+            items=deepcopy(items),
+            complete=complete and all(item.get("status") not in {"in_progress", "incomplete"} for item in items),
+            response_id=response.get("id"),
+            stored=stored if isinstance(stored, bool) else None,
+        )
+
+    def _get_client(self) -> AsyncOpenAI:
+        """Create the SDK lazily, sharing the HTTP pool owned by the facade."""
+        origin = self.origin
+        if self._sdk_client is None or self._sdk_origin != origin:
+            # Import only when Responses is used: importing ecs_agent or using
+            # other providers must not eagerly import the SDK/Pydantic.
+            from openai import AsyncOpenAI
+
+            self._sdk_client = AsyncOpenAI(
+                # Some compatible gateways use only custom authentication.
+                # Keep accepting an empty key; the explicit headers below
+                # preserve the facade's authentication on the wire.
+                api_key=self._facade._provider_config.api_key or "unused",
+                base_url=self._facade._base_url,
+                http_client=self._facade._client,
+                timeout=self._facade._timeout,
+                default_headers=self._facade._build_headers(),
+                # RetryModel owns retries and their accounting. SDK retries
+                # would multiply attempts and bypass its configured policy.
+                max_retries=0,
+            )
+            self._sdk_origin = origin
+        return self._sdk_client
 
     async def complete(
         self,
@@ -118,30 +207,30 @@ class OpenAIResponsesAdapter:
         tools: list[ToolSchema] | None = None,
         response_format: dict[str, Any] | None = None,
         previous_response_id: str | None = None,
+        covered_message_count: int | None = None,
     ) -> CompletionResult:
         request_body = self._build_request_body(
             messages,
             tools,
             response_format,
             previous_response_id,
+            covered_message_count,
         )
-        url = f"{self._facade._base_url}/responses"
 
         while True:
             try:
-                response = await self._facade._client.post(
-                    url,
-                    json=request_body,
-                    headers=self._facade._build_headers(),
-                )
-                response.raise_for_status()
+                request_origin = self.origin
+                with _sdk_errors_as_httpx():
+                    response = await self._get_client().responses.create(
+                        **cast("ResponseCreateParamsNonStreaming", request_body)
+                    )
                 break
             except httpx.HTTPStatusError as exc:
                 if self._should_retry_without_previous_response_id(
-                    exc, request_body
+                    exc, request_body, full_history=covered_message_count is not None and covered_message_count > 0 and self._has_replayable_history(messages)
                 ):
-                    request_body = self._request_body_without_previous_response_id(
-                        request_body, exc
+                    request_body = self._retry_body_without_chain(
+                        messages, tools, response_format, exc
                     )
                     continue
                 self._facade._handle_http_error(exc)
@@ -150,7 +239,11 @@ class OpenAIResponsesAdapter:
                 self._facade._handle_request_error(exc)
                 raise
 
-        response_data = response.json()
+        # Exclude unset fields to preserve legacy gateway dialects that omit
+        # standard fields; SDK models also retain unknown extension fields.
+        # Gateway extensions can intentionally differ from OpenAI's schema
+        # (e.g. dict tool arguments), so do not warn about their serialization.
+        response_data = response.to_dict(mode="python", warnings=False)
         output_items = response_data.get("output", [])
         message = self._parse_responses_output(output_items)
         reasoning_content = self._extract_reasoning_summary(output_items)
@@ -159,12 +252,20 @@ class OpenAIResponsesAdapter:
         terminal = self._terminal_from_response(
             response_data, has_tool_calls=bool(message.tool_calls)
         )
+        if isinstance(output_items, list) and output_items:
+            bind_provider_output(message, self._output_state(
+                output_items,
+                complete=terminal.finish_reason in {FinishReason.STOP, FinishReason.TOOL_CALLS},
+                response=response_data,
+                origin=request_origin, requested_store=request_body.get("store"),
+            ))
         return CompletionResult(
             message=message,
             usage=terminal.usage,
             response_id=terminal.response_id,
             reasoning_content=reasoning_content,
             finish_reason=terminal.finish_reason,
+            error=terminal.error,
         )
 
     async def stream(
@@ -173,16 +274,17 @@ class OpenAIResponsesAdapter:
         tools: list[ToolSchema] | None = None,
         response_format: dict[str, Any] | None = None,
         previous_response_id: str | None = None,
+        covered_message_count: int | None = None,
     ) -> AsyncIterator[StreamDelta]:
         request_body = self._build_request_body(
             messages,
             tools,
             response_format,
             previous_response_id,
+            covered_message_count,
         )
         request_body["stream"] = True
 
-        url = f"{self._facade._base_url}/responses"
         # read defaults to None (unbounded) so a legitimately slow stream is
         # never cut off. When stream_read_timeout is set it acts as a stall
         # detector: httpx's read timeout is per-chunk and resets whenever any
@@ -198,27 +300,30 @@ class OpenAIResponsesAdapter:
         )
 
         while True:
+            started = False
             try:
                 # aclosing: `async for` never closes its iterator (PEP 525), so
                 # abandoning this generator (interruption, error, cancellation)
                 # would leave _stream_once suspended on a yield, holding its
-                # `async with client.stream(...)` connection checked out of the
+                # SDK stream connection checked out of the
                 # httpx pool until garbage collection.
                 async with aclosing(
-                    self._stream_once(url, request_body, timeout)
+                    self._stream_once(request_body, timeout)
                 ) as once:
                     async for delta in once:
+                        started = True
                         yield delta
                 break
             except httpx.HTTPStatusError as exc:
                 # raise_for_status fires before any delta is yielded, so
                 # retrying here never replays partial output.
-                if self._should_retry_without_previous_response_id(
-                    exc, request_body
+                if not started and self._should_retry_without_previous_response_id(
+                    exc, request_body, full_history=covered_message_count is not None and covered_message_count > 0 and self._has_replayable_history(messages)
                 ):
-                    request_body = self._request_body_without_previous_response_id(
-                        request_body, exc
+                    request_body = self._retry_body_without_chain(
+                        messages, tools, response_format, exc
                     )
+                    request_body["stream"] = True
                     continue
                 self._facade._handle_http_error(exc)
                 raise
@@ -230,7 +335,6 @@ class OpenAIResponsesAdapter:
 
     async def _stream_once(
         self,
-        url: str,
         request_body: dict[str, Any],
         timeout: httpx.Timeout,
     ) -> AsyncGenerator[StreamDelta, None]:
@@ -240,144 +344,181 @@ class OpenAIResponsesAdapter:
         can close it deterministically via ``contextlib.aclosing``.
         """
         output_items: dict[int, dict[str, Any]] = {}
+        raw_items: dict[int, dict[str, Any]] = {}
+        done_indices: set[int] = set()
+        response_data: dict[str, Any] = {}
         current_response_id: str | None = None
         terminal: _Terminal | None = None
         tool_calls_emitted = False
+        emitted_tool_ids: set[str] = set()
+        any_text_emitted = False
+        request_origin = self.origin
 
-        async with self._facade._client.stream(
-            "POST",
-            url,
-            json=request_body,
-            headers=self._facade._build_headers(),
-            timeout=timeout,
-        ) as response:
-            if response.is_error:
-                # Buffer the error body inside the stream context so
-                # HTTPStatusError handlers can read response.text after
-                # the context closes.
-                await response.aread()
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                if not line:
-                    continue
+        with _sdk_errors_as_httpx():
+            stream = await self._get_client().responses.create(
+                **cast("ResponseCreateParamsStreaming", request_body),
+                timeout=timeout,
+            )
+            # Closing the adapter generator must close the SDK stream even on
+            # cancellation or when a consumer stops after the first delta.
+            async with stream:
+                async for event in stream:
+                    event_data: dict[str, Any] = event.to_dict(
+                        mode="python", warnings=False
+                    )
 
-                stripped = line.strip()
-                if not stripped or stripped.startswith("event:"):
-                    continue
-                if not stripped.startswith("data:"):
-                    continue
-
-                data_str = stripped[5:].strip()
-                if not data_str or data_str == "[DONE]":
-                    break
-
-                try:
-                    event_data = json.loads(data_str)
-                except json.JSONDecodeError:
-                    continue
-
-                event_type = event_data.get("type")
-                if event_type == "response.created":
-                    response_obj = event_data.get("response", {})
-                    response_id = response_obj.get("id")
-                    if isinstance(response_id, str):
-                        current_response_id = response_id
-                    continue
-
-                if event_type == "response.output_item.added":
-                    output_index = event_data.get("output_index", 0)
-                    item = event_data.get("item", {})
-                    output_items[output_index] = {
-                        "type": item.get("type"),
-                        "role": item.get("role"),
-                        # call_id pairs with function_call_output on replay;
-                        # fall back to the item id for providers that omit it.
-                        "id": item.get("call_id") or item.get("id"),
-                        "name": item.get("name"),
-                        "arguments": "",
-                        # Tracks whether any text delta was streamed for this
-                        # item so the done handler can recover text from
-                        # gateways that omit deltas without duplicating it.
-                        "text_emitted": False,
-                    }
-                    continue
-
-                if event_type == "response.output_item.delta":
-                    output_index = event_data.get("output_index", 0)
-                    delta = event_data.get("delta", {})
-                    delta_type = delta.get("type")
-
-                    if output_index not in output_items:
+                    event_type = event_data.get("type")
+                    if event_type in {"response.output_item.added", "response.output_item.done"}:
+                        index = event_data.get("output_index", 0)
+                        raw_item = event_data.get("item")
+                        if isinstance(raw_item, dict):
+                            raw_items[index] = deepcopy(raw_item)
+                        if event_type == "response.output_item.done":
+                            done_indices.add(index)
+                        if raw_items:
+                            yield StreamDelta(provider_output=self._output_state(
+                                [raw_items[key] for key in sorted(raw_items)], complete=False,
+                                origin=request_origin, requested_store=request_body.get("store"),
+                            ))
+                    if event_type == "response.created":
+                        response_obj = event_data.get("response", {})
+                        response_id = response_obj.get("id")
+                        if isinstance(response_id, str):
+                            current_response_id = response_id
                         continue
 
-                    item_data = output_items[output_index]
-                    if delta_type == "content_delta":
-                        text = delta.get("text")
-                        if isinstance(text, str) and text:
-                            item_data["text_emitted"] = True
-                            yield StreamDelta(content=text)
-                    elif delta_type == "arguments_delta":
-                        arguments = delta.get("arguments")
-                        if isinstance(arguments, str):
-                            item_data["arguments"] += arguments
-                    continue
-
-                # Standard OpenAI Responses dialect: "delta" is a plain string
-                # (the block above handles the object-shaped legacy dialect).
-                if event_type == "response.output_text.delta":
-                    output_index = event_data.get("output_index", 0)
-                    text_delta = event_data.get("delta")
-                    if isinstance(text_delta, str) and text_delta:
-                        if output_index in output_items:
-                            output_items[output_index]["text_emitted"] = True
-                        yield StreamDelta(content=text_delta)
-                    continue
-
-                # Reasoning models stream their summary as a separate channel;
-                # surface it as reasoning_content so callers can split it from
-                # the user-facing answer (mirrors Chat's reasoning_content).
-                if event_type == "response.reasoning_summary_text.delta":
-                    reasoning_delta = event_data.get("delta")
-                    if isinstance(reasoning_delta, str) and reasoning_delta:
-                        yield StreamDelta(reasoning_content=reasoning_delta)
-                    continue
-
-                if event_type == "response.function_call_arguments.delta":
-                    output_index = event_data.get("output_index", 0)
-                    arguments_delta = event_data.get("delta")
-                    if output_index in output_items and isinstance(
-                        arguments_delta, str
-                    ):
-                        output_items[output_index]["arguments"] += arguments_delta
-                    continue
-
-                if event_type == "response.output_item.done":
-                    output_index = event_data.get("output_index", 0)
-                    if output_index not in output_items:
+                    if event_type == "response.output_item.added":
+                        output_index = event_data.get("output_index", 0)
+                        item = event_data.get("item", {})
+                        output_items[output_index] = {
+                            "type": item.get("type"),
+                            "role": item.get("role"),
+                            # call_id pairs with function_call_output on replay;
+                            # fall back to the item id for providers that omit it.
+                            "id": item.get("call_id") or item.get("id"),
+                            "name": item.get("name"),
+                            "arguments": "",
+                            # Tracks whether any text delta was streamed for this
+                            # item so the done handler can recover text from
+                            # gateways that omit deltas without duplicating it.
+                            "text_emitted": False,
+                            "text": "",
+                        }
                         continue
 
-                    item_data = output_items[output_index]
-                    # Standard dialect: the done item carries the complete
-                    # arguments string, which is authoritative over whatever
-                    # accumulated from delta events.
-                    done_item = event_data.get("item")
-                    if isinstance(done_item, dict):
-                        done_arguments = done_item.get("arguments")
-                        if isinstance(done_arguments, str) and done_arguments:
-                            item_data["arguments"] = done_arguments
+                    if event_type == "response.output_item.delta":
+                        output_index = event_data.get("output_index", 0)
+                        delta = event_data.get("delta", {})
+                        delta_type = delta.get("type")
 
-                    if item_data.get("type") == "function_call":
-                        tool_call_id = item_data.get("id", "")
-                        name = item_data.get("name", "")
-                        arguments_str = item_data.get("arguments", "{}")
+                        if output_index not in output_items:
+                            continue
 
-                        try:
-                            parsed_args = json.loads(arguments_str)
-                        except json.JSONDecodeError:
-                            parsed_args = {}
+                        item_data = output_items[output_index]
+                        if delta_type == "content_delta":
+                            text = delta.get("text")
+                            if isinstance(text, str) and text:
+                                item_data["text_emitted"] = True
+                                item_data["text"] += text
+                                any_text_emitted = True
+                                yield StreamDelta(content=text)
+                        elif delta_type == "arguments_delta":
+                            arguments = delta.get("arguments")
+                            if isinstance(arguments, str):
+                                item_data["arguments"] += arguments
+                        continue
 
-                        if isinstance(parsed_args, dict):
+                    # Standard OpenAI Responses dialect: "delta" is a plain string
+                    # (the block above handles the object-shaped legacy dialect).
+                    if event_type == "response.output_text.delta":
+                        output_index = event_data.get("output_index", 0)
+                        text_delta = event_data.get("delta")
+                        if isinstance(text_delta, str) and text_delta:
+                            if output_index in output_items:
+                                output_items[output_index]["text_emitted"] = True
+                                output_items[output_index]["text"] += text_delta
+                            any_text_emitted = True
+                            yield StreamDelta(content=text_delta)
+                        continue
+
+                    # Reasoning models stream their summary as a separate channel;
+                    # surface it as reasoning_content so callers can split it from
+                    # the user-facing answer (mirrors Chat's reasoning_content).
+                    if event_type == "response.reasoning_summary_text.delta":
+                        reasoning_delta = event_data.get("delta")
+                        if isinstance(reasoning_delta, str) and reasoning_delta:
+                            yield StreamDelta(reasoning_content=reasoning_delta)
+                        continue
+
+                    if event_type == "response.function_call_arguments.delta":
+                        output_index = event_data.get("output_index", 0)
+                        arguments_delta = event_data.get("delta")
+                        if output_index in output_items and isinstance(
+                            arguments_delta, str
+                        ):
+                            output_items[output_index]["arguments"] += arguments_delta
+                        continue
+
+                    if event_type == "response.output_item.done":
+                        output_index = event_data.get("output_index", 0)
+                        if output_index not in output_items:
+                            item = event_data.get("item")
+                            if not isinstance(item, dict):
+                                continue
+                            output_items[output_index] = {
+                                "type": item.get("type"), "role": item.get("role"),
+                                "id": item.get("call_id") or item.get("id"),
+                                "name": item.get("name"), "arguments": item.get("arguments", ""),
+                                "text_emitted": False, "text": "",
+                            }
+
+                        item_data = output_items[output_index]
+                        # Standard dialect: the done item carries the complete
+                        # arguments (a JSON string, or a dict on some gateways),
+                        # which is authoritative over whatever accumulated from
+                        # delta events.
+                        done_item = event_data.get("item")
+                        if isinstance(done_item, dict):
+                            done_arguments = done_item.get("arguments")
+                            if "arguments" in done_item:
+                                item_data["arguments"] = done_arguments
+                        elif output_index in raw_items:
+                            # Legacy gateways omit the item on done; the completed
+                            # argument buffer is the available authoritative body.
+                            raw_items[output_index]["status"] = "completed"
+                            if item_data.get("type") == "function_call":
+                                raw_items[output_index]["arguments"] = item_data["arguments"]
+                            elif item_data.get("type") == "message":
+                                raw_items[output_index]["content"] = [{
+                                    "type": "output_text", "text": item_data["text"],
+                                }]
+
+                        if item_data.get("type") == "function_call":
+                            tool_call_id = item_data.get("id", "")
+                            name = item_data.get("name", "")
+                            arguments_raw = item_data.get("arguments", "{}")
+
+                            # dict arguments pass through untouched; strings are
+                            # parsed, with the raw text preserved under a
+                            # ``_partial`` placeholder when they never became valid
+                            # JSON (mirrors OpenAIChatAdapter._finalize_tool_calls,
+                            # so consumers see the same shape from both adapters).
+                            if isinstance(arguments_raw, dict):
+                                parsed_args = arguments_raw
+                            elif isinstance(arguments_raw, str) and arguments_raw:
+                                try:
+                                    parsed_args = json.loads(arguments_raw)
+                                except json.JSONDecodeError:
+                                    parsed_args = {"_partial": arguments_raw}
+                            else:
+                                parsed_args = {"_partial": arguments_raw}
+
+                            if not isinstance(parsed_args, dict):
+                                parsed_args = {"_partial": arguments_raw}
                             tool_calls_emitted = True
+                            if tool_call_id in emitted_tool_ids:
+                                continue
+                            emitted_tool_ids.add(tool_call_id)
                             yield StreamDelta(
                                 tool_calls=[
                                     ToolCall(
@@ -387,30 +528,33 @@ class OpenAIResponsesAdapter:
                                     )
                                 ]
                             )
-                    elif (
-                        item_data.get("type") == "message"
-                        and not item_data.get("text_emitted")
-                        and isinstance(done_item, dict)
-                    ):
-                        # No text deltas streamed: recover the message text from
-                        # the terminal item so delta-less gateways aren't silent.
-                        done_text = self._done_item_text(done_item)
-                        if done_text:
-                            item_data["text_emitted"] = True
-                            yield StreamDelta(content=done_text)
-                    continue
+                        elif (
+                            item_data.get("type") == "message"
+                            and not item_data.get("text_emitted")
+                            and isinstance(done_item, dict)
+                        ):
+                            # No text deltas streamed: recover the message text from
+                            # the terminal item so delta-less gateways aren't silent.
+                            done_text = self._done_item_text(done_item)
+                            if done_text:
+                                item_data["text_emitted"] = True
+                                any_text_emitted = True
+                                yield StreamDelta(content=done_text)
+                        continue
 
-                if event_type in _TERMINAL_EVENT_TYPES:
-                    # One parse for every way a turn can end (completed,
-                    # incomplete, cancelled) — and it raises on failed.
-                    terminal = self._terminal_from_response(
-                        event_data.get("response"),
-                        has_tool_calls=tool_calls_emitted,
-                        event_type=event_type,
-                    )
-                    if terminal.response_id is not None:
-                        current_response_id = terminal.response_id
-                    break
+                    if event_type in _TERMINAL_EVENT_TYPES:
+                        raw_response = event_data.get("response", {})
+                        response_data = raw_response if isinstance(raw_response, dict) else {}
+                        # One parse for every way a turn can end (completed,
+                        # incomplete, cancelled, failed), retaining reported usage.
+                        terminal = self._terminal_from_response(
+                            event_data.get("response"),
+                            has_tool_calls=tool_calls_emitted,
+                            event_type=event_type,
+                        )
+                        if terminal.response_id is not None:
+                            current_response_id = terminal.response_id
+                        break
 
         if terminal is None:
             # The stream ended without any terminal event: a bare "[DONE]"
@@ -428,10 +572,37 @@ class OpenAIResponsesAdapter:
 
         # Single exit: exactly one terminal delta per stream, whatever path
         # reached it.
+        raw_output = response_data.get("output")
+        has_snapshot = isinstance(raw_output, list) and bool(raw_output)
+        ordered_items = raw_output if has_snapshot else [raw_items[key] for key in sorted(raw_items)]
+        output_state = None
+        final_message = None
+        final_calls = None
+        if ordered_items:
+            output_state = self._output_state(
+                ordered_items,
+                complete=(
+                    terminal.finish_reason in {FinishReason.STOP, FinishReason.TOOL_CALLS}
+                    and (has_snapshot or set(raw_items) <= done_indices)
+                ),
+                response=response_data,
+                origin=request_origin, requested_store=request_body.get("store"),
+            )
+            if has_snapshot:
+                final_message = bind_provider_output(self._parse_responses_output(ordered_items), output_state)
+                if final_message.tool_calls and terminal.finish_reason is FinishReason.STOP:
+                    terminal.finish_reason = FinishReason.TOOL_CALLS
+                final_calls = [call for call in final_message.tool_calls or [] if call.id not in emitted_tool_ids] or None
+                if final_message.content and not any_text_emitted:
+                    yield StreamDelta(content=final_message.content)
         yield StreamDelta(
             finish_reason=terminal.finish_reason,
             usage=terminal.usage,
             response_id=current_response_id,
+            error=terminal.error,
+            provider_output=output_state,
+            message=final_message,
+            tool_calls=final_calls,
         )
 
     def _terminal_from_response(
@@ -461,8 +632,6 @@ class OpenAIResponsesAdapter:
         Returns:
             The parsed terminal state.
 
-        Raises:
-            ValueError: If the provider reports a failed response.
         """
         if not isinstance(response_obj, dict):
             return _Terminal(finish_reason=FinishReason.UNKNOWN)
@@ -471,18 +640,22 @@ class OpenAIResponsesAdapter:
         if not isinstance(status, str) or not status:
             status = _EVENT_IMPLIED_STATUS.get(event_type or "", "completed")
 
-        if status == "failed":
-            error = response_obj.get("error") or {}
-            code = error.get("code", "unknown")
-            msg = error.get("message", "unknown error")
-            raise ValueError(f"Responses API returned failed status: [{code}] {msg}")
-
         response_id = response_obj.get("id")
         terminal = _Terminal(
             finish_reason=FinishReason.UNKNOWN,
             usage=self._facade._usage_from_raw(response_obj.get("usage")),
             response_id=response_id if isinstance(response_id, str) and response_id else None,
         )
+
+        if status == "failed":
+            error = response_obj.get("error")
+            error = error if isinstance(error, dict) else {}
+            code = error.get("code", "unknown")
+            msg = error.get("message", "unknown error")
+            terminal.finish_reason = FinishReason.ERROR
+            terminal.error = f"Responses API returned failed status: [{code}] {msg}"
+            logger.error("responses_generation_failed", exception=terminal.error)
+            return terminal
 
         if status == "incomplete":
             details = response_obj.get("incomplete_details")
@@ -496,6 +669,9 @@ class OpenAIResponsesAdapter:
 
         if status == "cancelled":
             terminal.finish_reason = FinishReason.CANCELLED
+            return terminal
+
+        if status != "completed":
             return terminal
 
         # "completed", or a legacy dialect that asserts terminality through the
@@ -531,12 +707,17 @@ class OpenAIResponsesAdapter:
         tools: list[ToolSchema] | None,
         response_format: dict[str, Any] | None,
         previous_response_id: str | None,
+        covered_message_count: int | None = None,
     ) -> dict[str, Any]:
-        validate_tool_spans(messages)
+        validate_tool_spans(
+            messages, allow_external_results=(previous_response_id is not None and not covered_message_count),
+        )
         request_body: dict[str, Any] = {
             "model": self._facade._model,
             "input": self._convert_messages_to_responses_input(messages),
-            "store": self._facade._provider_config.enable_store,
+            # Also retain a replayable backup when store=True. A response ID
+            # alone cannot recover opaque reasoning after its remote expiry.
+            "include": ["reasoning.encrypted_content"],
         }
 
         instructions = self._facade._extract_responses_instructions(messages)
@@ -548,18 +729,41 @@ class OpenAIResponsesAdapter:
             text_format = self._response_format_to_text(response_format)
             if text_format is not None:
                 request_body["text"] = text_format
-        # Only chain to a prior response when storage is enabled: with
-        # store=false the referenced response was never persisted server-side,
-        # and providers reject previous_response_id for unstored responses.
-        # The full message history is always sent in "input", so omitting the
-        # chain loses no context.
-        if (
-            previous_response_id is not None
-            and self._facade._provider_config.enable_store
-            and not self._previous_response_id_rejected
-        ):
+
+        # Explicit response references and storage are independent SDK inputs.
+        if previous_response_id is not None:
             request_body["previous_response_id"] = previous_response_id
+            if covered_message_count is not None and covered_message_count > 0:
+                trimmed = self._trim_covered_messages(messages, covered_message_count)
+                increment = self._convert_messages_to_responses_input(trimmed)
+                if increment:
+                    request_body["input"] = increment
+                else:
+                    # Rebuild instead of duplicating the whole input on a chain.
+                    request_body.pop("previous_response_id")
+        store = self._facade._provider_config.enable_store
+        if store is not None:
+            request_body["store"] = store
         return request_body
+
+    def _trim_covered_messages(
+        self, messages: list[Message], covered_message_count: int
+    ) -> list[Message]:
+        """Drop the leading ``covered_message_count`` non-system messages.
+
+        The stored response already contains those messages (as its request
+        items and assistant output), so they must not be replayed in
+        ``input``. System messages are kept: they are rendered as
+        ``instructions`` and are never part of the chained context.
+        """
+        remaining = covered_message_count
+        trimmed: list[Message] = []
+        for message in messages:
+            if message.role != "system" and remaining > 0:
+                remaining -= 1
+                continue
+            trimmed.append(message)
+        return trimmed
 
     def _response_format_to_text(
         self, response_format: dict[str, Any]
@@ -622,20 +826,25 @@ class OpenAIResponsesAdapter:
         return "\n".join(texts) if texts else None
 
     def _should_retry_without_previous_response_id(
-        self, exc: httpx.HTTPStatusError, request_body: dict[str, Any]
+        self, exc: httpx.HTTPStatusError, request_body: dict[str, Any], *, full_history: bool = False
     ) -> bool:
-        """True when a 400 blames the previous_response_id we sent.
-
-        Seen on gateways whose HTTP Responses endpoint does not implement
-        stored-response chaining (e.g. "previous_response_id is only
-        supported on Responses WebSocket v2"). The full history is already
-        in "input", so retrying without the chain loses no context.
-        """
-        if "previous_response_id" not in request_body:
+        """Retry an invalid reference only with a complete local replay basis."""
+        if not full_history or "previous_response_id" not in request_body:
             return False
-        if exc.response.status_code != 400:
+        if exc.response.status_code not in (400, 404):
             return False
         return self._blames_previous_response_id(exc.response.text)
+
+    def _has_replayable_history(self, messages: list[Message]) -> bool:
+        """Require locally replayable opaque state before a remote-free retry."""
+        for message in messages:
+            output = message.provider_output
+            if output is None or not output.complete:
+                continue
+            for item in output.items:
+                if item.get("type") == "reasoning" and not item.get("encrypted_content"):
+                    return False
+        return True
 
     def _blames_previous_response_id(self, body_text: str) -> bool:
         """True when a 400 body attributes the failure to previous_response_id.
@@ -646,39 +855,30 @@ class OpenAIResponsesAdapter:
         retry. Falls back to a raw substring scan only for gateways that return
         a non-JSON error body.
         """
-        token = "previous_response_id"
-        try:
-            parsed = json.loads(body_text)
-        except (json.JSONDecodeError, ValueError):
-            return token in body_text
+        return previous_response_error(body_text)
 
-        error = parsed.get("error") if isinstance(parsed, dict) else None
-        if not isinstance(error, dict):
-            return token in body_text
-
-        if error.get("param") == token:
-            return True
-        return any(
-            isinstance(error.get(field), str) and token in error[field]
-            for field in ("message", "code")
-        )
-
-    def _request_body_without_previous_response_id(
-        self, request_body: dict[str, Any], exc: httpx.HTTPStatusError
+    def _retry_body_without_chain(
+        self,
+        messages: list[Message],
+        tools: list[ToolSchema] | None,
+        response_format: dict[str, Any] | None,
+        exc: httpx.HTTPStatusError,
     ) -> dict[str, Any]:
-        """Latch chaining off for this model instance and rebuild the body."""
-        self._previous_response_id_rejected = True
+        """Rebuild from full history; latch off only an unsupported capability.
+
+        The full history goes back into ``input``: without the stored response
+        to carry the covered prefix, the trimmed incremental input would lose
+        the context the chain used to provide.
+        """
+        text = exc.response.text.lower()
+        self._previous_response_id_rejected = any(word in text for word in ("not supported", "unsupported", "only supported", "unknown parameter", "unrecognized parameter"))
         logger.warning(
             "responses_previous_response_id_rejected",
             status_code=exc.response.status_code,
             response_body=exc.response.text,
             endpoint=f"{self._facade._base_url}/responses",
         )
-        return {
-            key: value
-            for key, value in request_body.items()
-            if key != "previous_response_id"
-        }
+        return self._build_request_body(messages, tools, response_format, None)
 
     def _convert_messages_to_responses_input(
         self, messages: list[Message]
@@ -687,6 +887,18 @@ class OpenAIResponsesAdapter:
         for msg in messages:
             if msg.role == "system":
                 continue
+
+            output = msg.provider_output
+            if output is not None and output.complete:
+                same_origin = output.protocol == "openai_responses" and output.origin == self.origin
+                same_view = output.view_hash == message_view_hash(msg)
+                if same_origin and same_view:
+                    input_items.extend(deepcopy(output.items))
+                    continue
+                logger.warning(
+                    "responses_output_projection", reason="origin_changed" if not same_origin else "message_edited",
+                    response_id=output.response_id,
+                )
 
             if msg.role == "tool":
                 # tool_call_id is guaranteed by validate_tool_spans at the
@@ -809,14 +1021,15 @@ class OpenAIResponsesAdapter:
                     try:
                         loaded_arguments = json.loads(arguments)
                     except json.JSONDecodeError:
-                        loaded_arguments = {}
+                        loaded_arguments = {"_partial": arguments}
                 elif isinstance(arguments, dict):
                     loaded_arguments = arguments
                 else:
-                    loaded_arguments = {}
+                    loaded_arguments = {"_partial": arguments}
 
                 parsed_arguments = (
-                    loaded_arguments if isinstance(loaded_arguments, dict) else {}
+                    loaded_arguments if isinstance(loaded_arguments, dict)
+                    else {"_partial": arguments}
                 )
                 tool_calls.append(
                     ToolCall(

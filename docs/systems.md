@@ -182,6 +182,11 @@ The PlanningSystem enables an entity to follow a structured sequence of actions 
 ### Behavior
 This system skips processing if the plan is already marked as completed. For active plans, it creates a context message indicating the current step (e.g., "Step 1/5: description") and sends it to the LLM. After the LLM provides a response, the system increments the step index and publishes a completion event. It marks the plan as finished once the final step is reached.
 
+Only complete text or validated tool-call generations can advance a step. A
+truncated, cancelled, filtered, unknown, or failed generation preserves its
+partial message and stops with `planning_<status>` without advancing the plan or
+queuing tool calls.
+
 ### Error Handling
 Provider exhaustion leads to a `TerminalComponent`. Other exceptions trigger both an `ErrorComponent` and a `TerminalComponent(reason="planning_error")`.
 
@@ -218,6 +223,15 @@ Results always land in the original `tool_calls` order: conversation appends, sc
 ### Error Handling
 This system does not throw exceptions. If it encounters an unknown tool or a handler fails, it records the error as a string within the tool result message so the LLM can respond to the failure. Task cancellation (`asyncio.CancelledError`) propagates and cancels the remaining calls of the in-flight group.
 
+Reasoning and Planning validate calls against the tools supplied to that request
+before queuing them. Validation includes call identity, complete JSON arguments,
+and JSON Schema Draft 2020-12 constraints (including local references; remote
+schema retrieval is disabled). ToolExecution validates parameters again for
+manually queued/imported calls before invoking a handler. A batch with missing or
+duplicate identities is rejected entirely with `tool_execution_error` because
+its results cannot be paired reliably. Invalid parameters on a manually queued
+call produce an error result without executing the handler.
+
 ### Usage Example
 ```python
 from ecs_agent.components import ToolExecutionConfigComponent
@@ -243,6 +257,8 @@ The MessageBusSystem provides a robust messaging infrastructure for multi-agent 
 
 ### Behavior
 The system manages per-subscriber message queues with bounded buffering (default `max_queue_size=1000`). It processes outgoing messages from entities and delivers them to subscribers based on topic filters.
+
+Subscriptions come from two sources: the `MessageBusSubscriptionComponent` snapshot (declarative, re-read each tick) and runtime `subscribe()` calls (e.g. `request()` inboxes). Each tick merges the component snapshot with the accumulated runtime subscriptions rather than replacing wholesale, so a runtime subscriber's queue is never silently disconnected on the next tick.
 
 #### Pub/Sub
 Entities can publish messages to any topic. Subscribers receive copies of these messages in their conversation history, formatted as "From {sender_id} on {topic}: {content}".
@@ -304,6 +320,10 @@ The ReplanningSystem allows an agent to adjust its course of action based on the
 
 ### Behavior
 Replanning occurs when the plan's `current_step` moves past a internal checkpoint. The system sends a specialized prompt to the LLM asking for a revised step list in JSON format. If the LLM provides new steps, the system replaces the remaining portion of the plan and publishes a revision event.
+
+Only a completed generation may replace the plan, even if incomplete output
+happens to parse as JSON. Other generation outcomes retain the working plan and
+wait for a later completed step before another revision attempt.
 
 ### Error Handling
 If the provider is exhausted or the LLM output fails to parse as valid JSON, the system silently advances its internal checkpoint. This prevents the agent from stalling or entering an infinite loop of replanning attempts.
@@ -416,6 +436,10 @@ Compresses conversation history by summarizing older messages using the entity's
 ### Behavior
 The system estimates token count using `word_count * 1.3`. When the estimate exceeds `CompactionConfigComponent.threshold_tokens`, the configured `compaction_method` selects which messages to summarize. `full_history` summarizes all non-system messages; `predrop_then_compact` first applies outbound-budget pruning to the summary input. After summarization, live conversation history is rebuilt from the original system message (if present) plus a minimal last-user continuation anchor (if present). If a matching `RenderedUserPromptComponent` exists for that last raw user message, its rendered text is used as the anchor so script-trigger prompts do not re-run after compaction. The summary is archived in `ConversationArchiveComponent` and stored in `CurrentCompactionSummaryComponent` for injection into the system prompt via `SystemPromptRenderSystem`. Compaction does **not** touch `RenderedSystemPromptComponent`: the render system detects the new summary through its cache-key fingerprint and re-renders on its next pass.
 
+Pending tool calls prevent compaction. An incomplete, failed, or empty summary
+does not replace history or the existing summary; it stops the turn with a
+`compaction_<status>` terminal. Already completed budget trimming remains applied.
+
 ### Context providers
 State that must survive compaction (e.g. pending subagent sessions) is contributed to the summarization request through the `CompactionContextProvider` protocol (`ecs_agent.prompts.compaction_context`): each provider returns a text block or `None`, and non-empty blocks are appended to the summary input in provider order. CompactionSystem has no knowledge of any contributor's domain — the built-in `SubagentCompactionContextProvider` owns the subagent digest, classifying sessions with the canonical status sets from `ecs_agent.types` (`PENDING_SUBAGENT_STATUSES` / `COMPLETED_SUBAGENT_STATUSES`, exhaustiveness-guarded by tests), and `TodoCompactionContextProvider` carries the agent's current todo list through summarization verbatim (see [Todo List](features/todo-list.md)). To add a contributor, implement the protocol and construct the system with `CompactionSystem(context_providers=[*DEFAULT_COMPACTION_CONTEXT_PROVIDERS, MyProvider()])`.
 
@@ -492,7 +516,13 @@ The `subagent` tool accepts parameters:
 - `load_skills` (optional): Additional skill names to load on the subagent
 - `background` (optional): If true, executes asynchronously and returns session ID
 - `stream` (optional): If true, enables streaming telemetry events to the parent EventBus
-- `timeout` (optional): Maximum seconds to wait for completion
+- `timeout` (optional): Maximum seconds to wait for completion. Defaults to no
+  limit, and omitting it is usually right: on timeout the subagent is cancelled
+  and available partial output is retained as unfinished; it is not a final result.
+  A re-dispatch starts a new run. The tool description deliberately
+  carries no example value, because a model will copy one: a live run passed the
+  same literal on 31 of 32 dispatches and lost every document-writing subagent to
+  it. Set `default_timeout` on the system for a floor; note per-call wins over it.
 
 ### Lifecycle States
 Background sessions transition through these states:

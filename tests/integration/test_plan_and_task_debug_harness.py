@@ -270,3 +270,50 @@ async def test_cli_dispatch_and_fake_loader(tmp_path: Path) -> None:
         assert events["ok"] is True and events["events"]
         bad = await _dispatch(s, {"cmd": "nope"})
         assert bad["ok"] is False
+
+
+async def test_subagent_llm_usage_reaches_parent_installed_billing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Billing installed as a plugin bills child-world (subagent) LLM calls too."""
+    from ecs_agent.plugins import install_plugins
+    from examples.e2e.plan_and_task import billing as billing_module
+    from examples.e2e.plan_and_task.billing import BillingSubscriber
+
+    logged: list[dict[str, object]] = []
+
+    class _CapturingLogger:
+        def info(self, event: str, **kwargs: object) -> None:
+            if event == "plan_task_llm_usage":
+                logged.append(kwargs)
+
+    monkeypatch.setattr(billing_module, "logger", _CapturingLogger())
+
+    model = FakeModel(
+        responses=[
+            _resp(
+                tool_calls=[
+                    ToolCall(
+                        id="sub1",
+                        name="subagent",
+                        arguments={
+                            "category": "advisor",
+                            "prompt": "review the draft",
+                        },
+                    )
+                ]
+            ),
+            _resp("VERDICT: approved"),
+            _resp("advisor consulted"),
+            _resp("wrap-up"),
+        ]
+    )
+    async with await PlanTaskDebugSession.build(model, base_dir=tmp_path) as s:
+        billing = BillingSubscriber()
+        await install_plugins(s._world, [billing])
+        result = await s.send("consult the advisor", timeout=30)
+
+    assert any(sub.name == "advisor" for sub in result.subagents)
+    child_worlds = {str(entry.get("world")) for entry in logged if entry.get("world")}
+    assert any(name.startswith("advisor") for name in child_worlds)
+    assert billing._invocation_count >= 3

@@ -84,6 +84,8 @@ def get_model(
         provider_id=parsed.provider,
         extra_headers=dict(entry.extra_headers),
         timeout=entry.timeout,
+        enable_store=entry.enable_store,
+        enable_response_chaining=entry.enable_response_chaining,
         **kwargs,
     )
 

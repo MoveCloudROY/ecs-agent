@@ -105,3 +105,17 @@ REQUIRED_REVIEW_PHASES: tuple[str, ...] = derive_required_review_phases(
     PLAN_TASK_PHASE_GRAPH
 )
 REVIEW_VERDICTS: tuple[str, ...] = derive_review_verdicts(PLAN_TASK_PHASE_GRAPH)
+
+# Which subagent category owns each phase that a subagent drives. main.py routes
+# completed dispatches by this name, the controller quotes it when a gate
+# refuses, and the pre-flight dispatch guard uses the inverse to decide whether a
+# dispatch is in order — one table so the three cannot drift apart.
+REVIEW_CATEGORY_BY_PHASE: dict[str, str] = {
+    "DRAFT_ADVISOR_REVIEW": "advisor",
+    "DRAFT_QA_REVIEW": "qa",
+    "WRITE_PLAN": "plan_writer",
+    "PLAN_QA_REVIEW": "plan_qa",
+}
+REVIEW_PHASE_BY_CATEGORY: dict[str, str] = {
+    category: phase for phase, category in REVIEW_CATEGORY_BY_PHASE.items()
+}

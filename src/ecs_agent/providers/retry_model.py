@@ -53,6 +53,16 @@ class RetryModel:
         """Attach the current world's EventBus for retry observation events."""
         self._event_bus = event_bus
 
+    async def aclose(self) -> None:
+        """Delegate resource release to the wrapped model.
+
+        getattr-guarded so wrapping a legacy model without aclose() keeps
+        working (mirrors the thread_response_id forwarding contract).
+        """
+        inner_aclose = getattr(self._model, "aclose", None)
+        if inner_aclose is not None:
+            await inner_aclose()
+
     async def complete(
         self,
         messages: list[Message],
@@ -60,13 +70,16 @@ class RetryModel:
         stream: bool = False,
         response_format: dict[str, Any] | None = None,
         thread_response_id: str | None = None,
+        covered_message_count: int | None = None,
     ) -> CompletionResult | AsyncIterator[StreamDelta]:
-        # Forward the thread id only when set, mirroring the caller-side
-        # contract: wrapped models predating the parameter keep working in
-        # non-chaining sessions.
+        # Forward the chaining parameters only when set, mirroring the
+        # caller-side contract: wrapped models predating the parameters keep
+        # working in non-chaining sessions.
         extra_kwargs: dict[str, Any] = {}
         if thread_response_id is not None:
             extra_kwargs["thread_response_id"] = thread_response_id
+        if covered_message_count is not None:
+            extra_kwargs["covered_message_count"] = covered_message_count
 
         if stream:
             return await self._model.complete(

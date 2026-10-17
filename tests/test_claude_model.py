@@ -113,6 +113,9 @@ def test_build_messages_converts_tool_result_to_user_tool_result_block() -> None
         config=_anthropic_config(api_key="test-key"), model="claude-3-haiku-20240307"
     )
     messages = [
+        Message(role="assistant", content="", tool_calls=[
+            ToolCall(id="toolu_123", name="get_weather", arguments={}),
+        ]),
         Message(role="tool", content="22C and sunny", tool_call_id="toolu_123"),
     ]
 
@@ -120,6 +123,8 @@ def test_build_messages_converts_tool_result_to_user_tool_result_block() -> None
 
     assert system is None
     assert anthropic_messages == [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_123",
+                                             "name": "get_weather", "input": {}}]},
         {
             "role": "user",
             "content": [
@@ -502,6 +507,9 @@ async def test_complete_non_streaming_makes_expected_request() -> None:
     messages = [
         Message(role="system", content="System prompt"),
         Message(role="user", content="Hello"),
+        Message(role="assistant", content="", tool_calls=[
+            ToolCall(id="toolu_111", name="get_weather", arguments={}),
+        ]),
         Message(role="tool", content="Sunny", tool_call_id="toolu_111"),
     ]
     tools = [
@@ -530,6 +538,8 @@ async def test_complete_non_streaming_makes_expected_request() -> None:
     assert body["system"] == "System prompt"
     assert body["messages"] == [
         {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_111",
+                                             "name": "get_weather", "input": {}}]},
         {
             "role": "user",
             "content": [

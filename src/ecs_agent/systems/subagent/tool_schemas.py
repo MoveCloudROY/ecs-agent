@@ -2,8 +2,8 @@
 
 Data-only (Task 3 of the subagent package refactor): each function returns a
 ``ToolSchema``. No logic, no ECS/world coupling. The descriptions and parameter
-schemas are moved verbatim from ``SubagentSystem.install_*`` and are asserted by the
-existing test suite — keep them byte-for-byte.
+schemas describe the same result contract used by synchronous and background
+consumers. Control results stay inline so artifact storage cannot hide their state.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ def build_subagent_schema(tool_name: str, *, free_mode_enabled: bool) -> ToolSch
     )
 
     return ToolSchema(
+        inline_result=True,
         name=tool_name,
         description=(
             "Spawn a subagent to handle a self-contained task. The subagent runs in its own "
@@ -47,7 +48,9 @@ def build_subagent_schema(tool_name: str, *, free_mode_enabled: bool) -> ToolSch
             "                       use subagent_result(session_id) to retrieve the answer later.\n"
             "  stream             — when background=True, mirror child-world streaming events onto the "
             "                       parent EventBus as session-scoped SubagentStream* telemetry.\n"
-            "  timeout            — max seconds to wait before aborting (null = no limit).\n\n"
+            "  timeout            — max seconds before the run is aborted and its\n"
+            "                       partial work marked unfinished (null = no limit, the default).\n"
+            "                       Omit it unless you need a hard bound.\n\n"
             "RETURNS (sync): final answer string from the subagent. This IS the complete "
             "result. No session is created for synchronous calls, so never call "
             "subagent_result/subagent_status for them.\n"
@@ -58,8 +61,8 @@ def build_subagent_schema(tool_name: str, *, free_mode_enabled: bool) -> ToolSch
             "  // Parallel — launch two subagents, collect later\n"
             '  subagent(category="coder", prompt="Write unit tests for auth.py.", background=True)\n'
             '  subagent(category="reviewer", prompt="Review auth.py for security issues.", background=True)\n\n'
-            "  // With extra skill and timeout\n"
-            '  subagent(category="analyst", prompt="Analyze Q1 sales data.", load_skills=["sql"], timeout=120)'
+            "  // With an extra skill\n"
+            '  subagent(category="analyst", prompt="Analyze Q1 sales data.", load_skills=["sql"])'
         ),
         parameters={
             "type": "object",
@@ -87,7 +90,7 @@ def build_subagent_schema(tool_name: str, *, free_mode_enabled: bool) -> ToolSch
                 },
                 "timeout": {
                     "type": ["number", "null"],
-                    "description": "Maximum seconds to wait before aborting. null means no timeout. Only respected in sync mode and for background collection in subagent_result.",
+                    "description": "Maximum seconds to wait before aborting the subagent. Omit this (null, the default) unless you have a specific reason to bound the run: on timeout the subagent is cancelled; available partial output is retained as unfinished and is not a successful final result. A re-dispatch starts a new run. Long-running categories (writing a document or a plan) routinely need several minutes. Do not copy a number from an example. Applies to synchronous and background execution; subagent_result has a separate wait timeout.",
                 },
             },
             "required": ["category", "prompt"],
@@ -97,6 +100,7 @@ def build_subagent_schema(tool_name: str, *, free_mode_enabled: bool) -> ToolSch
 
 def build_status_schema() -> ToolSchema:
     return ToolSchema(
+        inline_result=True,
         name="subagent_status",
         description=(
             "Check the status of background subagent sessions. Use this to decide when "
@@ -133,6 +137,7 @@ def build_status_schema() -> ToolSchema:
 
 def build_wait_schema() -> ToolSchema:
     return ToolSchema(
+        inline_result=True,
         name="subagent_wait",
         description=(
             "Wait as a barrier until ALL background subagent sessions in the scope "
@@ -174,6 +179,7 @@ def build_wait_schema() -> ToolSchema:
 
 def build_result_schema() -> ToolSchema:
     return ToolSchema(
+        inline_result=True,
         name="subagent_result",
         description=(
             "Block until a background subagent session finishes, then return its result. "
@@ -231,6 +237,7 @@ def build_result_schema() -> ToolSchema:
 
 def build_cancel_schema() -> ToolSchema:
     return ToolSchema(
+        inline_result=True,
         name="subagent_cancel",
         description=(
             "Abort a running background subagent session and free its resources.\n\n"
@@ -260,6 +267,7 @@ def build_cancel_schema() -> ToolSchema:
 
 def build_resume_schema() -> ToolSchema:
     return ToolSchema(
+        inline_result=True,
         name="subagent_resume",
         description=(
             "Restart a failed, timed-out, or cancelled background subagent session.\n\n"

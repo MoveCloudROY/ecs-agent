@@ -705,6 +705,10 @@ async def test_retry_uses_reserved_payload_then_commit_clears_once_on_success() 
         )
     )
 
+    # A failed generation is terminal; this test explicitly elects to retry.
+    from ecs_agent.components import TerminalComponent
+
+    world.remove_component(entity_id, TerminalComponent)
     await ReasoningSystem().process(world)
 
     first_pool = model.calls[0][-1].content

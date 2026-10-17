@@ -64,10 +64,11 @@ class SequencedProvider:
 
 
 class ThreadRecordingProvider:
-    """Records the thread_response_id received on each complete() call."""
+    """Records the chaining parameters received on each complete() call."""
 
     def __init__(self) -> None:
         self.received_thread_response_ids: list[str | None] = []
+        self.received_covered_message_counts: list[int | None] = []
 
     @property
     def model_id(self) -> str:
@@ -80,8 +81,10 @@ class ThreadRecordingProvider:
         stream: bool = False,
         response_format=None,
         thread_response_id: str | None = None,
+        covered_message_count: int | None = None,
     ):
         self.received_thread_response_ids.append(thread_response_id)
+        self.received_covered_message_counts.append(covered_message_count)
         if stream:
             return _stream_delta_iter()
         return _result("ok")
@@ -114,6 +117,38 @@ async def test_retry_model_forwards_thread_response_id_streaming() -> None:
     _ = [delta async for delta in stream]
 
     assert inner.received_thread_response_ids == ["resp_prev_2"]
+
+
+@pytest.mark.asyncio
+async def test_retry_model_forwards_covered_message_count_non_streaming() -> None:
+    """Wrapping a chaining-capable model must not drop the covered count."""
+    inner = ThreadRecordingProvider()
+    retry_model = RetryModel(inner)
+
+    await retry_model.complete(
+        [Message(role="user", content="hello")],
+        thread_response_id="resp_prev_3",
+        covered_message_count=4,
+    )
+
+    assert inner.received_thread_response_ids == ["resp_prev_3"]
+    assert inner.received_covered_message_counts == [4]
+
+
+@pytest.mark.asyncio
+async def test_retry_model_forwards_covered_message_count_streaming() -> None:
+    inner = ThreadRecordingProvider()
+    retry_model = RetryModel(inner)
+
+    stream = await retry_model.complete(
+        [Message(role="user", content="hello")],
+        stream=True,
+        thread_response_id="resp_prev_4",
+        covered_message_count=5,
+    )
+    _ = [delta async for delta in stream]
+
+    assert inner.received_covered_message_counts == [5]
 
 
 @pytest.mark.asyncio
@@ -245,3 +280,30 @@ async def test_exponential_backoff_timing(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert result.message.content == "ok"
     assert waits == [1.0, 2.0, 4.0]
+
+
+class _ClosableProvider(ThreadRecordingProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_retry_model_aclose_delegates_to_wrapped_model() -> None:
+    inner = _ClosableProvider()
+    retry_model = RetryModel(inner)
+
+    await retry_model.aclose()
+
+    assert inner.closed is True
+
+
+@pytest.mark.asyncio
+async def test_retry_model_aclose_tolerates_models_without_aclose() -> None:
+    inner = ThreadRecordingProvider()  # legacy: no aclose
+    retry_model = RetryModel(inner)
+
+    await retry_model.aclose()  # must not raise

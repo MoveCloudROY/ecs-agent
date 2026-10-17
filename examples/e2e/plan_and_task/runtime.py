@@ -12,6 +12,8 @@ from ecs_agent.components import UserInputComponent
 from ecs_agent.components.definitions import ConversationComponent, TerminalComponent
 from ecs_agent.logging import get_logger
 from ecs_agent.providers.protocol import LLMModel
+from ecs_agent.outcomes import RECOVERABLE_REASONING_TERMINALS, GenerationStatus, classify_generation
+from ecs_agent.accounting.instrumentation import complete_with_llm_invocation_event
 from ecs_agent.systems import TerminalCleanupSystem
 from ecs_agent.systems.user_input import UserInputSystem
 from ecs_agent.types import (
@@ -93,7 +95,11 @@ def slug_from_description(description: str) -> str:
 _VALID_SLUG = _re.compile(r"^[a-z][a-z0-9-]*$")
 
 
-async def derive_workflow_id_from_llm(description: str, model: LLMModel) -> str:
+async def derive_workflow_id_from_llm(
+    description: str, model: LLMModel, *, world: World | None = None,
+    entity_id: EntityId | None = None,
+) -> str:
+    """Derive a slug from a complete generation, recording usage when hosted."""
     prompt = (
         "Convert the following task description into a short, meaningful English "
         "workflow identifier. Rules: lowercase letters, digits, and hyphens only; "
@@ -102,11 +108,23 @@ async def derive_workflow_id_from_llm(description: str, model: LLMModel) -> str:
         f"Description: {description}"
     )
     try:
-        result = await model.complete(
-            [Message(role="user", content=prompt)],
-            stream=False,
-        )
+        messages = [Message(role="user", content=prompt)]
+        if world is not None and entity_id is not None:
+            result = await complete_with_llm_invocation_event(
+                event_bus=world.event_bus, entity_id=entity_id, model=model,
+                messages=messages, operation="workflow_id", stream=False,
+            )
+        else:
+            result = await model.complete(messages, stream=False)
         if not isinstance(result, CompletionResult):
+            close = getattr(result, "aclose", None)
+            if close is not None:
+                await close()
+            return slug_from_description(description)
+        if result.error is not None or classify_generation(
+            result.finish_reason, has_tool_calls=bool(result.message.tool_calls), legacy_complete=True,
+        ) is not GenerationStatus.COMPLETED:
+            logger.warning("plan_task_workflow_id_incomplete", finish_reason=result.finish_reason)
             return slug_from_description(description)
         raw = (result.message.content or "").strip().splitlines()[0].strip().lower()
         normalized = _re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
@@ -266,7 +284,7 @@ async def setup_interactive_input(
     world.event_bus.subscribe(ReasoningCompleteEvent, on_reasoning_complete)
     world.event_bus.subscribe(ErrorOccurredEvent, on_error)
     world.register_system(
-        TerminalCleanupSystem(priority=1, clear_reasons=("reasoning_complete",)),
+        TerminalCleanupSystem(priority=1, clear_reasons=RECOVERABLE_REASONING_TERMINALS),
         priority=1,
     )
     # Priority -15: run BEFORE UserPromptNormalizationSystem (-10) so the user

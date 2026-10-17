@@ -86,6 +86,10 @@ class SubagentService:
         }
         if queue_position is not None:
             payload["queue_position"] = queue_position
+        if session.outcome_status is not None:
+            payload["outcome_status"] = session.outcome_status
+        if session.partial_content is not None:
+            payload["partial_content"] = session.partial_content
 
         return payload
 

@@ -19,6 +19,54 @@ Subagent delegation provides:
 - **Retry Reliability**: Transparent `RetryModel` wrapping for transient LLM failures.
 
 
+## Run and delegation outcomes
+
+`Runner.run(..., target_entity=entity)` returns a `RunResult` (also available on
+`RunCompletedEvent.result` and `runner.last_result`). The result records the
+target, run ID, semantic status, actual terminal reason, final or partial message,
+and error. The existing lifecycle event status remains a runner-mechanics field;
+use `result.success` to decide whether the task produced a valid final answer.
+External cancellation and exceptions still propagate, with the terminal snapshot
+retained on the runner.
+
+Child delegation uses this snapshot to construct `DelegationResult`. A completed
+coroutine, an exhausted tick budget, or the presence of an earlier assistant
+message does not imply success. Failed child runs preserve intermediate text as
+partial output. The legacy text result explicitly labels that text as unfinished.
+`DelegationCompletedEvent` carries `outcome_status`, `partial_content`, and the
+runner snapshot when available. Background session results expose the same
+outcome and keep cancellation distinct from failure.
+
+Delegation and control schemas declare `inline_result=True`. Their final answers,
+partial/error labels, session IDs, and status payloads remain visible to the
+parent model even when a tool-result sink is enabled. The plan/task example also
+persists complete non-approved review notes so resume does not lose corrections
+that occurred after a short preview.
+
+Only the target child's terminal state ends a targeted runner; another entity's
+completion cannot be mistaken for that child's final result. Successful results
+require a completed final message and no pending tool calls. Empty output without
+an alternative final payload is a failed delegation result.
+
+This verifies the generation and execution contract, not the factual correctness
+of the answer or arbitrary business acceptance criteria. Applications must check
+their actual artifacts and evidence separately; a tool that records a caller's
+completion declaration is not an independent acceptance validator.
+
+External cancellation and timeout preserve the child's partial message before
+the enclosing delegation unwinds. Sync returns/events, background session results,
+and waiters share that snapshot. An expired delegation deadline is recorded as
+`timeout` in the child's `RunResult`; explicit cancellation remains `cancelled`.
+Cancellation waits for child cleanup before releasing the background slot and
+signalling result waiters. Parent child-stub histories are synchronized on failure
+as well as on success.
+
+Final messages may contain file or image parts without text. At the legacy text
+tool boundary, such a result is JSON with `content` and typed `parts` references;
+the full `Message` remains available in `RunResult.final_message`. A final answer
+from before a newer user message, or history with an unclosed tool span, cannot
+satisfy the successful-result contract.
+
 ## Core Components
 
 ### SubagentConfig

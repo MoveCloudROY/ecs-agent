@@ -274,7 +274,7 @@ async def test_llm_generation_includes_raw_messages_and_output() -> None:
         "streaming": False,
     }
     assert generation.output == {
-        "message": Message(role="assistant", content="Telemetry ready"),
+        "message": Message(role="assistant", content="Telemetry ready", generation_status="completed"),
         "reasoning_content": "observed reasoning",
         "response_id": "resp-langfuse-success",
     }
@@ -363,7 +363,7 @@ async def test_streaming_generation_records_final_output_once() -> None:
         "streaming": True,
     }
     assert generation.output == {
-        "message": Message(role="assistant", content="Telemetry ready"),
+        "message": Message(role="assistant", content="Telemetry ready", generation_status="completed", finish_reason="stop"),
         "reasoning_content": None,
         "response_id": "resp-stream-final",
     }
@@ -423,6 +423,8 @@ async def test_streaming_deltas_are_ordered_without_final_output_duplication() -
             role="assistant",
             content="answer-1answer-2",
             reasoning_content="thinking-1thinking-2",
+            generation_status="completed",
+            finish_reason="stop",
         ),
         "reasoning_content": "thinking-1thinking-2",
         "response_id": "resp-stream-ordered",
@@ -460,7 +462,9 @@ async def test_streaming_error_after_partial_output_keeps_stream_end_error() -> 
     assert stream_end.status == "error"
     assert stream_end.parent_observation_id == generation.observation_id
     assert generation.status == "error"
-    assert generation.output is None
+    assert generation.output is not None
+    assert generation.output["message"].generation_status == "error"
+    assert generation.output["message"].content == "partial"
 
 
 @pytest.mark.asyncio
@@ -489,7 +493,7 @@ async def test_retry_attempts_are_mapped_with_reason_and_status() -> None:
     assert [record.metadata["provider_id"] for record in retry_records] == ["flaky-provider", "flaky-provider"]
     assert [record.metadata["model"] for record in retry_records] == ["flaky-retry-model", "flaky-retry-model"]
     assert [record.metadata["reason"] for record in retry_records] == ["http_500", "http_500"]
-    assert generation.output == {"message": Message(role="assistant", content="retry success"), "reasoning_content": None, "response_id": None}
+    assert generation.output == {"message": Message(role="assistant", content="retry success", generation_status="completed"), "reasoning_content": None, "response_id": None}
 
 
 @pytest.mark.asyncio
@@ -873,6 +877,10 @@ async def test_tool_permission_denied_nests_under_calling_generation() -> None:
     )
     entity_id = world.create_entity()
     world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(entity_id, ToolRegistryComponent(
+        tools={"bash": ToolSchema(name="bash", description="shell", parameters={"type": "object"})},
+        handlers={},
+    ))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="Try running bash")]),
@@ -1124,7 +1132,7 @@ async def test_complete_with_llm_invocation_event_streaming_maps_final_output_on
         "streaming": True,
     }
     assert generation.output == {
-        "message": Message(role="assistant", content="Telemetry ready"),
+        "message": Message(role="assistant", content="Telemetry ready", generation_status="completed", finish_reason="stop"),
         "reasoning_content": None,
         "response_id": "resp-direct-stream",
     }

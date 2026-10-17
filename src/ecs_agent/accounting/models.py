@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from ecs_agent.outcomes import GenerationStatus, InvocationStatus
 
-
-LLMInvocationStatus = Literal["success", "error", "cancelled", "unknown"]
+LLMInvocationStatus = InvocationStatus
 
 
 class StreamCompleteness(Enum):
@@ -71,6 +70,8 @@ class LLMInvocationEvent:
     status: LLMInvocationStatus = "success"
     streaming: bool = False
     duration_seconds: float | None = None
+    generation_status: GenerationStatus | None = None
+    finish_reason: str | None = None
 
     def __post_init__(self) -> None:
         interrupted = self.usage.stream_completeness is not StreamCompleteness.COMPLETE

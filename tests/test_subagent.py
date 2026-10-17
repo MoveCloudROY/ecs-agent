@@ -2405,7 +2405,10 @@ async def test_subagent_handler_uses_immutable_effective_config_snapshot() -> No
         assert child_entity == EntityId(1)
         assert task == "run with extra skill"
         assert config_snapshot.skills == ["base-skill", "extra-skill"]
-        return "snapshot-result"
+        from ecs_agent.core import RunStatus
+        from ecs_agent.systems.subagent.results import DelegationResult
+
+        return DelegationResult(status=RunStatus.COMPLETED, final_content="snapshot-result")
 
     async def fake_publish_delegation_events(*args: Any, **kwargs: Any) -> None:
         del args, kwargs
@@ -3072,11 +3075,13 @@ async def test_cancelled_background_session_enqueues_cancellation_notification(
     queue = world.get_component(parent_entity, SubagentNotificationQueueComponent)
     assert queue is not None
     # Cancellation is wake-worthy: exactly one "cancelled" notification so a
-    # parent blocked in subagent_wait wakes up. It still publishes no
-    # DelegationCompletedEvent (the delegation never completed).
+    # parent blocked in subagent_wait wakes up. The completion event describes
+    # the cancelled terminal outcome, not a successful task result.
     assert [n.terminal_status for n in queue.notifications] == ["cancelled"]
     assert [n.session_id for n in queue.notifications] == [session_id]
-    assert completed_events == []
+    assert len(completed_events) == 1
+    assert completed_events[0].success is False
+    assert completed_events[0].outcome_status == "cancelled"
 
 
 async def test_sync_subagent_call_does_not_enqueue_parent_notification() -> None:
@@ -6246,3 +6251,96 @@ async def test_subagent_resume_unknown_session_returns_corrective_hint() -> None
     assert "Session not found" in payload["error"]
     assert "background" in payload["hint"]
     assert payload["known_session_ids"] == ["ses_1111222233334444"]
+
+
+async def test_stream_bridge_preserves_event_order_with_slow_subscriber() -> None:
+    """Translated subagent stream events must arrive in seq order.
+
+    Regression: each translated event was published via a bare
+    asyncio.create_task, so concurrent handler invocations completed in
+    arbitrary order (no strong reference, no exception observation either).
+    """
+    import asyncio as _asyncio
+
+    from ecs_agent.systems.subagent.delegation import DelegationExecutor
+    from ecs_agent.types import (
+        StreamContentDeltaEvent,
+        StreamEndEvent,
+        StreamStartEvent,
+        SubagentStreamDeltaEvent,
+        SubagentStreamEndEvent,
+        SubagentStreamStartEvent,
+    )
+
+    parent_world = World()
+    child_world = World()
+    parent_entity = parent_world.create_entity()
+
+    received: list[int] = []
+
+    async def slow_then_fast(event: SubagentStreamDeltaEvent) -> None:
+        # First delta sleeps longer than the second: with unordered
+        # fire-and-forget publishes, seq 1 would land before seq 0.
+        await _asyncio.sleep(0.05 if event.seq == 1 else 0)
+        received.append(event.seq)
+
+    async def on_start(event: SubagentStreamStartEvent) -> None:
+        received.append(event.seq)
+
+    async def on_end(event: SubagentStreamEndEvent) -> None:
+        received.append(event.seq)
+
+    parent_world.event_bus.subscribe(SubagentStreamStartEvent, on_start)
+    parent_world.event_bus.subscribe(SubagentStreamDeltaEvent, slow_then_fast)
+    parent_world.event_bus.subscribe(SubagentStreamEndEvent, on_end)
+
+    executor = DelegationExecutor()
+    cleanup = executor.bridge_subagent_stream_events(
+        parent_world=parent_world,
+        child_world=child_world,
+        parent_entity_id=parent_entity,
+        session_id="ses_bridge_order",
+        category="researcher",
+        child_world_name="child",
+    )
+
+    await child_world.event_bus.publish(
+        StreamStartEvent(entity_id=EntityId(1), timestamp=0.0)
+    )
+    await child_world.event_bus.publish(
+        StreamContentDeltaEvent(entity_id=EntityId(1), delta="a")
+    )
+    await child_world.event_bus.publish(
+        StreamContentDeltaEvent(entity_id=EntityId(1), delta="b")
+    )
+    await child_world.event_bus.publish(
+        StreamEndEvent(entity_id=EntityId(1), timestamp=1.0)
+    )
+    cleanup()
+
+    deadline = _asyncio.get_running_loop().time() + 2.0
+    while len(received) < 4 and _asyncio.get_running_loop().time() < deadline:
+        await _asyncio.sleep(0.01)
+
+    assert received == [0, 1, 2, 3]
+
+
+def test_subagent_schema_does_not_anchor_a_concrete_timeout_value() -> None:
+    """The tool description must not hand the model a timeout literal to copy.
+
+    Regression: the only worked example carried ``timeout=120``, and a live
+    plan-and-task session passed exactly that on 31 of 32 dispatches — killing
+    every plan_writer, one of them 9 seconds after it had finished its work.
+    """
+    from ecs_agent.systems.subagent.tool_schemas import build_subagent_schema
+
+    schema = build_subagent_schema("subagent", free_mode_enabled=False)
+    description = schema.description
+
+    assert "timeout=120" not in description
+    timeout_param = schema.parameters["properties"]["timeout"]["description"]
+    # Steer toward omitting it rather than guessing a number.
+    assert "omit" in timeout_param.lower()
+    # Say out loud what a too-small value costs, so the model does not treat a
+    # timeout as free insurance.
+    assert "discard" in timeout_param.lower() or "abort" in timeout_param.lower()

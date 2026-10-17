@@ -81,14 +81,17 @@ from ecs_agent.types import (
     CachedToolResultRef,
     EntityId,
     FileRefPart,
+    FinishReason,
     ImageUrlPart,
     Message,
     MessagePart,
+    ProviderOutput,
     SubagentNotificationRecord,
     SubagentSessionRecord,
     ToolCall,
     ToolSchema,
 )
+from ecs_agent.outcomes import GenerationStatus
 
 logger = get_logger(__name__)
 
@@ -182,7 +185,19 @@ COMPONENT_REGISTRY: dict[str, type[Any]] = {
 
 class WorldSerializer:
     @staticmethod
-    def to_dict(world: World) -> dict[str, Any]:
+    def to_dict(
+        world: World,
+        *,
+        exclude_component_types: tuple[type[Any], ...] = (),
+    ) -> dict[str, Any]:
+        """Serialize the world into a JSON-compatible payload.
+
+        Args:
+            world: World instance to serialize.
+            exclude_component_types: Component types omitted from this
+                payload only (e.g. TerminalComponent for resume-friendly
+                checkpoints) — the live world is never mutated.
+        """
         entities: dict[str, dict[str, Any]] = {}
         component_store = world._components._components
 
@@ -197,6 +212,10 @@ class WorldSerializer:
                 if component is None:
                     continue
                 if isinstance(component, EPHEMERAL_COMPONENT_TYPES):
+                    continue
+                if exclude_component_types and isinstance(
+                    component, exclude_component_types
+                ):
                     continue
                 serialized_components[component_type.__name__] = (
                     WorldSerializer._serialize_component(component)
@@ -393,26 +412,61 @@ class WorldSerializer:
                 },
             }
 
-        serialized = asdict(component)
+        if isinstance(component, ConversationComponent):
+            # Built by hand: asdict() would deep-copy the entire message
+            # history only for _message_to_dict to convert it all over again
+            # — the double full-history conversion tax on every snapshot.
+            return {
+                "messages": [
+                    WorldSerializer._message_to_dict(message)
+                    for message in component.messages
+                ],
+                "max_messages": component.max_messages,
+                "history_id": component.history_id,
+                "revision": component.revision,
+            }
+
+        if isinstance(component, MessageBusConversationComponent):
+            # Same single-pass treatment as ConversationComponent.
+            return {
+                "entity_id": int(component.entity_id),
+                "messages": [
+                    WorldSerializer._message_to_dict(message)
+                    for message in component.messages
+                ],
+                "max_messages": component.max_messages,
+            }
+
+        if isinstance(component, LLMComponent):
+            # SDK clients contain locks and live transports; never deepcopy
+            # them just to replace them with an external provider reference.
+            return {
+                "model": getattr(component.model, "model_id", "default"),
+                "system_prompt": component.system_prompt,
+                "pending_model": None,
+            }
+
+        if isinstance(component, ToolRegistryComponent):
+            return {
+                "tools": {name: asdict(schema) for name, schema in component.tools.items()},
+                "handlers": NON_SERIALIZABLE_PLACEHOLDER,
+            }
+        if isinstance(component, UserPromptConfigComponent):
+            return {
+                "triggers": [asdict(trigger) for trigger in component.triggers],
+                "enable_context_pool": component.enable_context_pool,
+                "context_pool_max_chars": component.context_pool_max_chars,
+                "script_handlers": NON_SERIALIZABLE_PLACEHOLDER,
+            }
+        if isinstance(component, EmbeddingComponent):
+            return {"provider": NON_SERIALIZABLE_PLACEHOLDER, "dimension": component.dimension}
+        if isinstance(component, VectorStoreComponent):
+            return {"store": NON_SERIALIZABLE_PLACEHOLDER}
+
+        serialized = {} if isinstance(component, SubagentRegistryComponent) else asdict(component)
 
         if isinstance(component, WorkspaceBindingComponent):
             serialized["workspace_root"] = str(component.workspace_root)
-
-        if isinstance(component, LLMComponent):
-            serialized["model"] = getattr(component.model, "model_id", "default")
-            serialized["pending_model"] = None
-
-        if isinstance(component, ToolRegistryComponent):
-            serialized["handlers"] = NON_SERIALIZABLE_PLACEHOLDER
-
-        if isinstance(component, UserPromptConfigComponent):
-            serialized["script_handlers"] = NON_SERIALIZABLE_PLACEHOLDER
-
-        if isinstance(component, EmbeddingComponent):
-            serialized["provider"] = NON_SERIALIZABLE_PLACEHOLDER
-
-        if isinstance(component, VectorStoreComponent):
-            serialized["store"] = NON_SERIALIZABLE_PLACEHOLDER
 
         if isinstance(component, SubagentRegistryComponent):
             subagents_serialized: dict[str, Any] = {}
@@ -442,12 +496,6 @@ class WorldSerializer:
                 ),
             }
 
-        if isinstance(component, ConversationComponent):
-            serialized["messages"] = [
-                WorldSerializer._message_to_dict(message)
-                for message in component.messages
-            ]
-
         # MessageBusSubscriptionComponent: convert set[str] to list[str]
         if isinstance(component, MessageBusSubscriptionComponent):
             subscriptions_dict = {}
@@ -455,14 +503,6 @@ class WorldSerializer:
                 # Convert set of entity IDs (as strings) to list
                 subscriptions_dict[topic] = sorted(list(entity_ids))
             serialized["subscriptions"] = subscriptions_dict
-
-        # MessageBusConversationComponent: convert EntityId to int
-        if isinstance(component, MessageBusConversationComponent):
-            serialized["entity_id"] = int(serialized["entity_id"])
-            serialized["messages"] = [
-                WorldSerializer._message_to_dict(message)
-                for message in component.messages
-            ]
 
         # ScratchbookIndexComponent: convert ScratchbookRef objects to dicts
         if isinstance(component, ScratchbookIndexComponent):
@@ -821,6 +861,19 @@ class WorldSerializer:
             reasoning_content=data.get("reasoning_content"),
             reasoning_signature=data.get("reasoning_signature"),
             compaction_metadata=data.get("compaction_metadata"),
+            generation_status=(
+                GenerationStatus(data["generation_status"])
+                if data.get("generation_status") is not None else None
+            ),
+            finish_reason=(
+                FinishReason(data["finish_reason"])
+                if data.get("finish_reason") is not None else None
+            ),
+            provider_output=(
+                ProviderOutput(**data["provider_output"])
+                if data.get("provider_output") is not None else None
+            ),
+            cache_control=data.get("cache_control", False),
         )
 
     @staticmethod
@@ -855,6 +908,15 @@ class WorldSerializer:
 
         if message.reasoning_signature is not None:
             serialized["reasoning_signature"] = message.reasoning_signature
+
+        if message.generation_status is not None:
+            serialized["generation_status"] = str(message.generation_status)
+        if message.finish_reason is not None:
+            serialized["finish_reason"] = str(message.finish_reason)
+        if message.provider_output is not None:
+            serialized["provider_output"] = asdict(message.provider_output)
+        if message.cache_control:
+            serialized["cache_control"] = True
 
         return serialized
 

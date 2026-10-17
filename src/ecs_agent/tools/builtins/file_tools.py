@@ -29,9 +29,11 @@ def _validate_path(file_path: str, workspace_root: str) -> Path:
 @tool(
     description=(
         "Read clean UTF-8 file content from workspace. "
-        "Always specify offset and limit to avoid reading oversized files."
+        "Always specify offset and limit to avoid reading oversized files. "
+        "Use line_numbers=true before edit_file to see exact absolute line positions, including blank lines."
     ),
     concurrency_safe=True,
+    inline_result=True,
 )
 async def read_file(
     file_path: Annotated[str, "Workspace-relative path to the file to read."],
@@ -44,6 +46,10 @@ async def read_file(
         int | str,
         "Maximum number of lines to return. Use 0 to read all lines. Accepts an integer or numeric string.",
     ] = 0,
+    line_numbers: Annotated[
+        bool,
+        "Prefix each returned line with its absolute 1-based line number. Use true when preparing an edit_file operation.",
+    ] = False,
 ) -> str:
     target = _validate_path(file_path, workspace_root)
     normalized_offset = _parse_non_negative_numeric_input(
@@ -81,6 +87,8 @@ async def read_file(
         if normalized_limit <= 0
         else all_lines[start : start + normalized_limit]
     )
+    if line_numbers:
+        return "\n".join(f"{start + index + 1}: {line}" for index, line in enumerate(selected))
     return "\n".join(selected)
 
 

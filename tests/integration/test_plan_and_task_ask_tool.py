@@ -703,7 +703,7 @@ class TestInteractiveModelStoreDefault:
     tokens here — it stays off unless explicitly opted in.
     """
 
-    def test_store_chaining_off_by_default(
+    def test_storage_unset_and_chaining_off_by_default(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from examples.e2e.plan_and_task.main import build_model_from_env
@@ -712,9 +712,10 @@ class TestInteractiveModelStoreDefault:
         monkeypatch.setenv("LLM_API_FORMAT", "openai_responses")
         monkeypatch.delenv("LLM_ENABLE_STORE", raising=False)
         model = build_model_from_env()
-        assert model._provider_config.enable_store is False
+        assert model._provider_config.enable_store is None
+        assert model._provider_config.enable_response_chaining is False
 
-    def test_store_chaining_opt_in(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_store_opt_in_does_not_enable_chaining(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from examples.e2e.plan_and_task.main import build_model_from_env
 
         monkeypatch.setenv("LLM_API_KEY", "sk-test")
@@ -722,6 +723,7 @@ class TestInteractiveModelStoreDefault:
         monkeypatch.setenv("LLM_ENABLE_STORE", "1")
         model = build_model_from_env()
         assert model._provider_config.enable_store is True
+        assert model._provider_config.enable_response_chaining is False
 
 
 class TestInteractiveStreamReadTimeout:

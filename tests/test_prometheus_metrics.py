@@ -727,6 +727,7 @@ async def test_streaming_metrics_capture_first_delta_duration_and_interruption()
             _ = result
             yield StreamDelta(content="a")
             yield StreamDelta(content="b")
+            yield StreamDelta(finish_reason="stop")
 
     success_world = World()
     success_metrics = await _install_metrics(success_world)

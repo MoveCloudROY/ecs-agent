@@ -24,6 +24,7 @@ def test_provider_entry_construction_defaults_and_repr_hides_api_key() -> None:
     assert entry.extra_headers == {}
     assert entry.timeout is None
     assert entry.default_max_tokens == 4096
+    assert entry.enable_store is None
     assert "secret-key" not in repr(entry)
 
 
@@ -82,6 +83,7 @@ api_format = "openai_responses"
 api_key_env = "LLM_API_KEY"
 timeout = 30.0
 default_max_tokens = 1234
+enable_store = true
 """.strip(),
         encoding="utf-8",
     )
@@ -94,6 +96,7 @@ default_max_tokens = 1234
     assert entry.api_key_env == "LLM_API_KEY"
     assert entry.timeout == 30.0
     assert entry.default_max_tokens == 1234
+    assert entry.enable_store is True
 
 
 def test_get_model_explicit_api_key_returns_openai_provider() -> None:
@@ -202,7 +205,63 @@ def test_get_model_delegates_to_model_constructor_with_registry_config(
         "provider_id": "aliyun",
         "extra_headers": {"x-foo": "bar"},
         "timeout": 12.5,
+        "enable_store": None,
+        "enable_response_chaining": False,
     }
+
+
+def test_provider_registry_from_dict_parses_enable_store() -> None:
+    registry = ProviderRegistry.from_dict(
+        {
+            "stored": {
+                "base_url": "https://api.openai.com/v1",
+                "api_format": "openai_responses",
+                "api_key": "k",
+                "enable_store": True,
+            }
+        }
+    )
+    assert registry.get_entry("stored").enable_store is True
+
+    with pytest.raises(ValueError, match="enable_store"):
+        ProviderRegistry.from_dict(
+            {
+                "broken": {
+                    "base_url": "https://example.com",
+                    "api_format": "openai_responses",
+                    "api_key": "k",
+                    "enable_store": "yes",
+                }
+            }
+        )
+
+
+def test_get_model_forwards_enable_store_from_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = ProviderRegistry.from_dict(
+        {
+            "openai": {
+                "base_url": "https://api.openai.com/v1",
+                "api_format": "openai_responses",
+                "api_key": "test-key",
+                "enable_store": True,
+            }
+        }
+    )
+    captured: dict[str, object] = {}
+    sentinel = object()
+
+    def fake_model(model_id: str, **kwargs: object) -> object:
+        captured.update(kwargs)
+        return sentinel
+
+    monkeypatch.setattr(registry_module, "Model", fake_model, raising=False)
+
+    model = get_model("openai/gpt-4o", registry=registry)
+
+    assert model is sentinel
+    assert captured["enable_store"] is True
 
 
 def test_get_model_anthropic_messages_forwards_default_max_tokens_to_model(

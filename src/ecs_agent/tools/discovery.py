@@ -110,7 +110,7 @@ def _create_async_handler(fn: Callable[..., Any]) -> Callable[..., Awaitable[str
     async def sync_wrapper(**kwargs: Any) -> str:
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, partial(fn, **kwargs))
-        return result
+        return cast(str, result)
 
     return sync_wrapper
 
@@ -119,6 +119,7 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     concurrency_safe: bool = False,
+    inline_result: bool = False,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         tool_name = name or fn.__name__
@@ -130,6 +131,7 @@ def tool(
             description=tool_description,
             parameters=_build_parameters_schema(fn),
             concurrency_safe=concurrency_safe,
+            inline_result=inline_result,
         )
         handler = _create_async_handler(fn)
 

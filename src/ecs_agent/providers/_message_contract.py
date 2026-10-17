@@ -74,31 +74,60 @@ def normalize_anthropic_stop_reason(raw: object) -> FinishReason | None:
     return _normalize(raw, _ANTHROPIC_STOP_REASONS, "anthropic")
 
 
-def validate_tool_spans(messages: list[Message]) -> None:
-    """Reject histories an adapter cannot translate faithfully.
+def tool_span_error(
+    messages: list[Message], *, allow_external_results: bool = False,
+) -> str | None:
+    """Check call/result identity, order and closure before full-history replay.
 
-    A ``role="tool"`` message carries a result that only means something when
-    paired with the call it answers, so a missing ``tool_call_id`` cannot be
-    rendered in any provider's format. Adapters call this before building a
-    request body: failing here names the offending message, whereas silently
-    skipping it strands the matching call and dropping the whole span would
-    hide a corrupted history.
-
-    Args:
-        messages: The outbound message list, already repaired and assembled.
-
-    Raises:
-        ValueError: If a tool message has no ``tool_call_id``.
+    Explicit Responses incremental input may begin with results for calls in
+    its referenced remote response. All locally declared calls still have to
+    be answered exactly once, in their declared order.
     """
+    pending: list[str] = []
+    calls_seen: set[str] = set()
+    results_seen: set[str] = set()
+    external_prefix = allow_external_results
     for index, message in enumerate(messages):
-        if message.role != "tool" or message.tool_call_id is not None:
+        if message.role == "system":
             continue
-        logger.error(
-            "tool_message_missing_tool_call_id",
-            message_index=index,
-            content_length=len(message.content),
-        )
-        raise ValueError(
-            f"Tool message requires tool_call_id (messages[{index}]); "
-            "a tool result cannot be paired with its call without one."
-        )
+        if message.role == "tool":
+            call_id = message.tool_call_id
+            if not call_id:
+                return f"Tool message requires tool_call_id (messages[{index}])"
+            if call_id in results_seen:
+                return f"Duplicate tool result for {call_id} (messages[{index}])"
+            if pending:
+                if call_id != pending[0]:
+                    return f"Out-of-order or unknown tool result {call_id} (messages[{index}])"
+                pending.pop(0)
+            elif not external_prefix:
+                return f"Orphan tool result {call_id} (messages[{index}])"
+            results_seen.add(call_id)
+            continue
+        external_prefix = False
+        if pending:
+            return f"Unanswered tool calls before messages[{index}]: {pending}"
+        for call in message.tool_calls or []:
+            if message.role != "assistant" or not call.id or not call.name:
+                return f"Invalid tool call identity (messages[{index}])"
+            if call.id in calls_seen or call.id in results_seen:
+                return f"Duplicate tool call {call.id} (messages[{index}])"
+            calls_seen.add(call.id)
+            pending.append(call.id)
+    if pending:
+        return f"Unanswered tool calls at end of history: {pending}"
+    return None
+
+
+def validate_tool_spans(
+    messages: list[Message], *, allow_external_results: bool = False,
+) -> None:
+    """Raise ValueError for an unpaired, duplicate, or misordered tool span.
+
+    ``allow_external_results`` is reserved for explicit incremental Responses
+    input whose previous_response_id supplies the missing remote call prefix.
+    """
+    error = tool_span_error(messages, allow_external_results=allow_external_results)
+    if error is not None:
+        logger.error("invalid_tool_history", error=error)
+        raise ValueError(error)

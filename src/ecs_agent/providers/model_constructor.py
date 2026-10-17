@@ -111,7 +111,8 @@ def Model(
     provider_id: str = "",
     extra_headers: dict[str, str] | None = None,
     timeout: float | None = None,
-    enable_store: bool = False,
+    enable_store: bool | None = None,
+    enable_response_chaining: bool = False,
     enable_prompt_caching: bool = True,
     **kwargs: Any,
 ) -> LLMModel:
@@ -131,7 +132,8 @@ def Model(
         provider_id: Optional label stored in ProviderConfig (unused at runtime).
         extra_headers: Additional HTTP headers forwarded on every request.
         timeout: Global request timeout in seconds (overrides per-phase defaults).
-        enable_store: Enable conversation storage (Responses API feature).
+        enable_store: SDK store parameter; None omits it, False sends false.
+        enable_response_chaining: Opt into verified automatic Responses chaining.
         enable_prompt_caching: Emit Anthropic prompt-cache breakpoints (Claude
             adapter only; ignored by other formats). Defaults to True.
         **kwargs: Extra keyword arguments forwarded to the underlying model
@@ -199,6 +201,7 @@ def Model(
         extra_headers=extra_headers or {},
         timeout=timeout,
         enable_store=enable_store,
+        enable_response_chaining=enable_response_chaining,
         enable_prompt_caching=enable_prompt_caching,
     )
 

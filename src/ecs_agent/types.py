@@ -1,12 +1,18 @@
 """Core type definitions for ECS-based LLM Agent."""
 
+from __future__ import annotations
+
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, StrEnum
-from typing import Any, Literal, NewType, cast, get_args
+from typing import TYPE_CHECKING, Any, Literal, NewType, cast, get_args
 
 from ecs_agent.accounting.models import LLMInvocationEvent, LLMRetryEvent, UsageRecord
+from ecs_agent.outcomes import GenerationStatus
+
+if TYPE_CHECKING:
+    from ecs_agent.core.run_result import RunResult
 
 EntityId = NewType("EntityId", int)
 SystemHandle = NewType("SystemHandle", str)
@@ -71,6 +77,19 @@ class ContextPrunedEvent:
 
 
 @dataclass(slots=True)
+class ProviderOutput:
+    """JSON-only provider output retained for faithful protocol replay."""
+
+    protocol: str
+    origin: str
+    items: list[dict[str, Any]]
+    complete: bool = True
+    response_id: str | None = None
+    stored: bool | None = None
+    view_hash: str = ""
+
+
+@dataclass(slots=True)
 class Message:
     """Represents a message in the conversation.
 
@@ -110,6 +129,9 @@ class Message:
     Anthropic Messages adapter) place a ``cache_control`` breakpoint at this
     message's boundary. Adapters without caching support ignore it.
     """
+    generation_status: GenerationStatus | None = None
+    finish_reason: FinishReason | None = None
+    provider_output: ProviderOutput | None = None
 
 
 @dataclass(slots=True)
@@ -145,10 +167,9 @@ class ToolSchema:
 
     ``inline_result`` keeps the tool's result verbatim in the conversation even
     when a tool-results sink is externalizing other results to artifact paths.
-    Use it for small, must-see outputs the model has to read every time —
-    notably interactive user answers (``ask_question``), which are conversation
-    input rather than bulk tool output and would be lost if hidden behind a
-    path the model may not fetch.
+    Use it for must-see outputs: interactive user answers, subagent control
+    payloads, and file reads that retrieve archived results. Callers should
+    bound file reads with offset/limit to control their context size.
     """
 
     name: str
@@ -225,6 +246,7 @@ class RunCompletedEvent:
     duration_seconds: float
     ticks: int
     active_entities: int
+    result: RunResult | None = None
 
 
 @dataclass(slots=True)
@@ -288,6 +310,7 @@ class FinishReason(StrEnum):
     CONTENT_FILTER = "content_filter"
     CANCELLED = "cancelled"
     UNKNOWN = "unknown"
+    ERROR = "error"
 
 
 @dataclass(slots=True)
@@ -299,6 +322,12 @@ class CompletionResult:
     response_id: str | None = None
     reasoning_content: str | None = None
     finish_reason: FinishReason | None = None
+    error: str | None = None
+
+    @property
+    def provider_output(self) -> ProviderOutput | None:
+        """The same protocol state carried by the persisted message."""
+        return self.message.provider_output
 
 
 @dataclass(slots=True)
@@ -346,6 +375,9 @@ class StreamDelta:
     finish_reason: FinishReason | None = None
     usage: Usage | None = None
     response_id: str | None = None
+    error: str | None = None
+    provider_output: ProviderOutput | None = None
+    message: Message | None = None
 
 
 @dataclass(slots=True)
@@ -494,6 +526,8 @@ class StreamEndEvent:
     status: str = "success"
     duration_seconds: float | None = None
     first_delta_seconds: float | None = None
+    generation_status: GenerationStatus | None = None
+    finish_reason: FinishReason | None = None
 
 
 @dataclass(slots=True)
@@ -827,6 +861,8 @@ class SubagentSessionRecord:
     launch_trace_id: str | None = None
     launch_run_id: str | None = None
     launch_parent_observation_id: str | None = None
+    outcome_status: str | None = None
+    partial_content: str | None = None
 
     def __post_init__(self) -> None:
         self.status = _normalize_subagent_lifecycle_status(self.status)
@@ -952,6 +988,9 @@ class DelegationCompletedEvent:
     run_id: str | None = None
     parent_observation_id: str | None = None
     start_time: datetime | None = None
+    run_result: RunResult | None = None
+    outcome_status: str | None = None
+    partial_content: str | None = None
 
 
 @dataclass(slots=True)
@@ -1054,6 +1093,9 @@ __all__ = [
     "CheckpointRestoredEvent",
     "CompactionCompleteEvent",
     "CompletionResult",
+    "ProviderOutput",
+    "GenerationStatus",
+    "FinishReason",
     "ConversationBranch",
     "ConversationMessage",
     "DelegationCompletedEvent",

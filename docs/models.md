@@ -62,7 +62,8 @@ model = Model("gpt-4o", base_url="...", api_key="...", api_format="openai_chat_c
 | `provider_id` | `str` | `""` | Label stored in `ProviderConfig` (not used at runtime) |
 | `extra_headers` | `dict[str, str] \| None` | `None` | Additional HTTP headers |
 | `timeout` | `float \| None` | `None` | Global request timeout (seconds) |
-| `enable_store` | `bool` | `False` | Enable conversation storage (Responses API feature) |
+| `enable_store` | `bool \| None` | `None` | Responses SDK `store`: true, false, or omitted when unset. Independent of chaining and Prompt Cache. |
+| `enable_response_chaining` | `bool` | `False` | Opt into automatic chaining after verifying provider, stored state and the actual protocol prefix. |
 | `enable_prompt_caching` | `bool` | `True` | Emit Anthropic `cache_control` breakpoints (Claude adapter only; ignored by other formats). Set `False` to revert to the pre-caching request shape. |
 | `**kwargs` | | | Forwarded to the underlying model constructor (e.g. `connect_timeout`, `max_tokens`) |
 
@@ -235,6 +236,8 @@ Dispatch by `api_format`:
 | `extra_headers` | `dict[str, str]` | `{}` | Extra HTTP headers |
 | `timeout` | `float \| None` | `None` | Global timeout override (seconds) |
 | `default_max_tokens` | `int` | `4096` | Used as `max_tokens` for `ClaudeModel` |
+| `enable_store` | `bool \| None` | `None` | Responses storage: true / false / omitted |
+| `enable_response_chaining` | `bool` | `False` | Verified automatic Responses chaining |
 
 ---
 
@@ -357,7 +360,7 @@ llm_component.pending_model = get_model("aliyun/qwen3.5-flash", registry=registr
 
 ## OpenAIModel
 
-`OpenAIModel` is an OpenAI-compatible HTTP model using `httpx.AsyncClient`. It works with OpenAI's API as well as compatible alternatives like DashScope, vLLM, or Ollama. Internally it dispatches to explicit **chat completions** or **responses** adapters based on the `api_format` in the `ProviderConfig`.
+`OpenAIModel` uses the official OpenAI Python SDK for Responses API requests and `httpx.AsyncClient` directly for Chat Completions. It works with OpenAI's API as well as compatible alternatives like DashScope, vLLM, or Ollama. Internally it dispatches to explicit **chat completions** or **responses** adapters based on the `api_format` in the `ProviderConfig`.
 
 ### Configuration
 
@@ -401,7 +404,7 @@ The default adapter (`ApiFormat.OPENAI_CHAT_COMPLETIONS`) sends POST requests to
 
 ### Responses Adapter
 
-Set `api_format=ApiFormat.OPENAI_RESPONSES` in the `ProviderConfig` to activate the Responses API adapter. It sends POST requests to `/responses`.
+Set `api_format=ApiFormat.OPENAI_RESPONSES` in the `ProviderConfig` to activate the Responses API adapter. It calls `AsyncOpenAI.responses.create()` for both regular and streaming requests to `/responses`. The SDK shares the model's HTTP connection pool; `RetryModel` controls retries. See [Responses API](./features/responses-api.md) for configuration and error compatibility.
 
 For multimodal vision input, build user messages with `content=` for the text prompt and `Message.parts` containing `ImageUrlPart(url=...)` entries. The adapter converts `ImageUrlPart` into Responses API `input_image` items automatically (see `examples/vision_agent.py` for a full runnable example).
 

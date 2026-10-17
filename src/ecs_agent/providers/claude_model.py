@@ -94,7 +94,7 @@ class ClaudeModel:
 
     def _build_messages(
         self, messages: list[Message]
-    ) -> tuple[str | None, list[dict[str, Any]]]:
+    ) -> tuple[str | list[dict[str, Any]] | None, list[dict[str, Any]]]:
         return self._messages_adapter.build_messages(messages)
 
     def _build_tools(
@@ -325,10 +325,12 @@ class ClaudeModel:
         stream: bool = False,
         response_format: dict[str, Any] | None = None,
         thread_response_id: str | None = None,
+        covered_message_count: int | None = None,
     ) -> CompletionResult | AsyncIterator[StreamDelta]:
         # Anthropic has no stored-response chaining; accepted per the LLMModel
         # protocol and ignored.
         del thread_response_id
+        del covered_message_count
         request = AnthropicMessagesRequest(
             messages=messages,
             tools=tools,

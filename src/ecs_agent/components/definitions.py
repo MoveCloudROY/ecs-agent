@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from uuid import uuid4
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 import asyncio
@@ -49,6 +50,8 @@ class ConversationComponent:
 
     messages: list[Message]
     max_messages: int = 100
+    history_id: str = field(default_factory=lambda: uuid4().hex)
+    revision: int = 0
 
 
 @dataclass(slots=True)
@@ -191,6 +194,7 @@ class TerminalComponent:
     """Marks Agent completion."""
 
     reason: str
+    error: str | None = None
 
 
 @dataclass(slots=True)
@@ -262,6 +266,18 @@ class ResponsesAPIStateComponent:
     """Tracks OpenAI Responses API state for conversation threading."""
 
     previous_response_id: str | None = None
+    covered_message_count: int | None = None
+    """Number of leading non-system outbound messages the stored response
+    already covers (its request items plus its assistant output). When the
+    adapter chains with ``previous_response_id`` it trims this many leading
+    items from ``input`` so the stored context is not replayed a second time.
+    Recorded together with ``previous_response_id`` by ReasoningSystem."""
+    origin: str | None = None
+    history_id: str | None = None
+    history_revision: int = 0
+    covered_item_count: int = 0
+    prefix_hash: str | None = None
+    stored: bool | None = None
 
 
 @dataclass(slots=True)

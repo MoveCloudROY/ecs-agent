@@ -82,6 +82,8 @@ def test_to_dict_with_simple_components() -> None:
     data = WorldSerializer.to_dict(world)
 
     assert data["next_entity_id"] == 2
+    conversation = world.get_component(entity, ConversationComponent)
+    assert conversation is not None
     assert data["entities"]["1"]["ConversationComponent"] == {
         "messages": [
             {
@@ -92,6 +94,8 @@ def test_to_dict_with_simple_components() -> None:
             }
         ],
         "max_messages": 50,
+        "history_id": conversation.history_id,
+        "revision": 0,
     }
     assert data["entities"]["1"]["KVStoreComponent"] == {"store": {"k": "v"}}
 

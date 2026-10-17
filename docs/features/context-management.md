@@ -67,6 +67,12 @@ The `CompactionSystem` reduces conversation length by summarizing older messages
 - **`ConversationArchiveComponent`**: Stores archived summaries.
   - `archived_summaries: list[str]` — Past conversation summaries (default: `[]`)
 
+When protected context alone exceeds a budget configured to reject overflow,
+message assembly raises `ContextBudgetExceededError`. Reasoning, Planning, and
+Replanning report `budget_exhausted` without calling the model. The runner keeps
+that outcome and error in its result even after temporary error components are
+cleaned up; it is not a successful completion.
+
 ### XML System Summary Injection
 
 After compaction, the generated summary is stored in `CurrentCompactionSummaryComponent`. The `SystemPromptRenderSystem` automatically detects this component and injects the summary into the system prompt using an XML block:

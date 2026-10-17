@@ -19,6 +19,28 @@ from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import Message, ToolCall, ToolSchema
 
 
+async def test_failed_tool_result_stays_visible_while_error_artifact_is_retained(tmp_path: Path) -> None:
+    world = World()
+    entity = world.create_entity()
+    registry = ArtifactRegistry(root=tmp_path)
+
+    async def fail() -> str:
+        raise ValueError("file changed; read again before editing")
+
+    world.add_component(entity, ConversationComponent([]))
+    world.add_component(entity, ToolRegistryComponent(
+        tools={"edit": ToolSchema(name="edit", description="edit", parameters={})},
+        handlers={"edit": fail},
+    ))
+    world.add_component(entity, PendingToolCallsComponent([ToolCall(id="failed", name="edit", arguments={})]))
+    await ToolExecutionSystem(registry=registry).process(world)
+    conv = world.get_component(entity, ConversationComponent)
+    assert conv.messages[-1].content == "Error executing tool 'edit': file changed; read again before editing"
+    reference = world.get_component(entity, ToolResultsComponent).results["failed"]
+    assert reference.startswith("scratchbook/records/tool/")
+    assert "file changed; read again before editing" in (tmp_path / reference).read_text()
+
+
 @pytest.fixture
 def tmp_scratchbook(tmp_path: Path) -> Path:
     """Create temporary scratchbook directory."""

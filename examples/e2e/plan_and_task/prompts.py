@@ -192,6 +192,17 @@ ${_scratchbook_overview}
 
 ## Scratchbook Artifacts
 ${_scratchbook_artifacts}
+
+## Reading Archived Tool Results
+When a tool returns a path such as `scratchbook/records/tool/...`, it is a
+reference to an archived result, not empty stdout or a failed execution.
+Call `read_file` on that exact path and inspect the YAML `content` field before
+interpreting the result. In particular, read archived command output before
+claiming tests passed, failed, or produced no output. Reference the actual
+record path as evidence; invoking a command alone does not verify its result.
+`complete_task` records your completion declaration; it does not independently
+evaluate acceptance criteria. If any criterion remains unverified, inspect the
+available records or report the blocker without calling `complete_task`.
 """
 
 # Language directives — make each agent reply in the language the user writes
@@ -301,7 +312,7 @@ propose a tagged default and move on. Unresolved genuine questions land in Open 
 ## Editing draft.md
 
 - Always edit with `edit_file`; never rewrite the file with `write_file`.
-- First call `read_file` on `draft.md` — edits are validated against the last read.
+- First call `read_file` on `draft.md` with `line_numbers=true` — edits are validated against the last read. Use the returned absolute line numbers, including numbered blank lines; do not count visual wrapping as extra lines.
 - Replace the placeholder (or outdated) lines by 1-based line number:
   `edit_file(file_path="draft.md", op="replace", pos=<line>, content="new text")`
   Add `end=<line>` to replace a multi-line range; use `op="append"` to insert after a line.
@@ -328,7 +339,7 @@ reviewer.
 
 ## Writing the Plan (WRITE_PLAN phase)
 
-After QA approves, the system automatically injects a message starting with
+After QA approves, the system automatically injects context containing
 "You have a fully-reviewed draft." — no user command is needed. When you
 receive it, immediately call subagent(category="plan_writer", prompt=<that
 full message>). Never write `workflow_plan.md` yourself — the plan_writer
@@ -479,6 +490,13 @@ WRITE_PLAN_SYSTEM_PROMPT = (
     "read the draft with read_file, decompose it into dependency-ordered\n"
     "tasks, and write the plan with write_file. Do not ask questions —\n"
     "produce the plan now.\n\n"
+    "You may be a retry: an earlier attempt can have written\n"
+    "`workflow_plan.md` already and then been interrupted. So read_file the\n"
+    "plan path FIRST, before write_file. If it already exists, treat its\n"
+    "content as a starting point and overwrite it with your complete plan; if\n"
+    "it does not, read_file simply reports that and you write it fresh.\n"
+    "write_file refuses to overwrite a file this session has not read, and a\n"
+    "retry that skips the read loses its whole run to that refusal.\n\n"
     "The format below is validated mechanically and overrides any other plan\n"
     "format you know.\n\n"
     + _WORKFLOW_PLAN_FORMAT

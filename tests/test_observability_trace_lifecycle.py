@@ -291,8 +291,8 @@ def _unique_turn_traces(sink: RecordingTelemetrySink) -> list[TelemetryRecord]:
 
 
 @pytest.mark.asyncio
-async def test_runner_success_creates_one_trace() -> None:
-    """A successful runner run creates one closed trace without empty tick spans."""
+async def test_runner_stop_without_final_answer_is_not_task_success() -> None:
+    """Stopping closes the trace but does not prove successful task completion."""
     world = World()
     world.register_system(TerminatingSystem(), priority=0)
     sink = RecordingTelemetrySink()
@@ -304,7 +304,7 @@ async def test_runner_success_creates_one_trace() -> None:
     assert len(trace_records) == 1
     trace = trace_records[0]
     assert trace.name == "runner.run"
-    assert trace.status == "success"
+    assert trace.status == "unknown"
     assert trace.end_time is not None
     assert trace.latency_ms is not None
     assert trace.metadata == {
@@ -314,6 +314,8 @@ async def test_runner_success_creates_one_trace() -> None:
         "active_entities_end": 2,
         "reason": "terminal_component",
         "ticks": 1,
+        "run_status": "unknown",
+        "terminal_reason": "done",
     }
 
     assert {record.run_id for record in sink.records} == {trace.run_id}
@@ -392,9 +394,10 @@ async def test_runner_max_ticks_records_score_and_closes_trace() -> None:
     trace_records = [record for record in sink.records if record.kind == "trace"]
     assert len(trace_records) == 1
     trace = trace_records[0]
-    assert trace.status == "success"
+    assert trace.status == "unknown"
     assert trace.metadata is not None
     assert trace.metadata["reason"] == "max_ticks"
+    assert trace.metadata["run_status"] == "max_ticks"
 
     scores = {score.name: score.value for score in sink.scores}
     assert scores == {

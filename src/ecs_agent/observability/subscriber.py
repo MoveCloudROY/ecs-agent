@@ -216,6 +216,8 @@ class ObservabilitySubscriber:
                     "operation": event.operation,
                     "response_id": event.response_id,
                     "streaming": event.streaming,
+                    "generation_status": event.generation_status,
+                    "finish_reason": event.finish_reason,
                     **self._context_pressure_metadata(event),
                 },
                 error=event.error,
@@ -452,11 +454,20 @@ class ObservabilitySubscriber:
         root_record.end_time = ended_at
         root_record.latency_ms = (ended_at - state.started_at).total_seconds() * 1000
         root_record.status = self._status(event.status)
+        if event.result is not None:
+            root_record.status = (
+                "success" if event.result.success
+                else "cancelled" if event.result.status in {"cancelled", "interrupted"}
+                else "error" if event.result.status in {"error", "timeout"} else "unknown"
+            )
+            root_record.error = event.result.error
         root_record.metadata = {
             **state.metadata,
             "active_entities_end": event.active_entities,
             "reason": event.reason,
             "ticks": event.ticks,
+            "run_status": event.result.status if event.result is not None else None,
+            "terminal_reason": event.result.reason if event.result is not None else event.reason,
         }
 
         try:
@@ -594,6 +605,8 @@ class ObservabilitySubscriber:
                     "correlation_id": event.correlation_id,
                     "traceparent": event.traceparent,
                     "child_world_name": event.child_world_name,
+                    "outcome_status": event.outcome_status,
+                    "partial_content": event.partial_content,
                 },
                 error=event.error,
             )
@@ -821,6 +834,8 @@ class ObservabilitySubscriber:
                         "timestamp": event.timestamp,
                         "duration_seconds": event.duration_seconds,
                         "first_delta_seconds": event.first_delta_seconds,
+                        "generation_status": event.generation_status,
+                        "finish_reason": event.finish_reason,
                     },
                 )
             )

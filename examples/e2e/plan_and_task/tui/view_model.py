@@ -408,7 +408,13 @@ class PlanTaskViewModel:
                 # completion count; the next stream re-estimates on top.
                 self._turn_actual_tokens += completion
                 self._stream_token_estimate = 0.0
-                return [UiChange(section="usage")]
+                changes = [UiChange(section="usage")]
+                if event.entity_id == self.agent_id and event.status != "success":
+                    changes.extend(self._append(TranscriptEntry(
+                        kind="system",
+                        text=f"response {event.status}: {event.finish_reason or 'no finish reason'}",
+                    )))
+                return changes
             case CompactionCompleteEvent() if event.entity_id == self.agent_id:
                 message = (
                     f"compaction: {event.original_tokens} → "

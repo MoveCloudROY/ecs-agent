@@ -16,10 +16,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ecs_agent.components import ConversationComponent
+from ecs_agent.core.event_bus import SequentialEventPublisher
 from ecs_agent.core.runner import Runner
 from ecs_agent.core.world import World
 from ecs_agent.observability.context import current_run_id, current_trace_id
 from ecs_agent.plugins import propagate_plugins
+from ecs_agent.systems.subagent.results import DelegationResult
+from ecs_agent.systems.subagent._contextvars import _DELEGATION_OUTCOME_CAPTURE
 from ecs_agent.types import (
     EntityId,
     Message,
@@ -77,47 +80,41 @@ class DelegationExecutor:
         child_entity: EntityId,
         task: str,
         config: SubagentConfig,
-    ) -> str:
-        """Execute child world delegation run and return extracted result."""
+    ) -> DelegationResult:
+        """Run the target child and preserve its semantic terminal outcome."""
         child_world.add_component(
             child_entity,
             ConversationComponent(messages=[Message(role="user", content=task)]),
         )
         runner = Runner()
-        await runner.run(
-            child_world,
-            max_ticks=config.max_ticks,
-            trace_id=getattr(
+        capture = _DELEGATION_OUTCOME_CAPTURE.get()
+        try:
+            result = await runner.run(
                 child_world,
-                "_ecs_agent_trace_id",
-                current_trace_id(),
-            ),
-            run_id=getattr(
-                child_world,
-                "_ecs_agent_run_id",
-                current_run_id(),
-            ),
-            parent_observation_id=getattr(
-                child_world,
-                "_ecs_agent_parent_observation_id",
-                None,
-            ),
-            emit_root_trace=False,
-        )
-        return self._extract_delegation_result(child_world, child_entity)
-
-    def _extract_delegation_result(
-        self, child_world: World, child_entity: EntityId
-    ) -> str:
-        """Extract terminal delegation result from child conversation."""
-        child_conv = child_world.get_component(child_entity, ConversationComponent)
-        if child_conv is None:
-            return "Error: No conversation found"
-
-        for message in reversed(child_conv.messages):
-            if message.role == "assistant":
-                return message.content
-        return "Error: No assistant message found in subagent conversation"
+                max_ticks=config.max_ticks,
+                trace_id=getattr(
+                    child_world,
+                    "_ecs_agent_trace_id",
+                    current_trace_id(),
+                ),
+                run_id=getattr(
+                    child_world,
+                    "_ecs_agent_run_id",
+                    current_run_id(),
+                ),
+                parent_observation_id=getattr(
+                    child_world,
+                    "_ecs_agent_parent_observation_id",
+                    None,
+                ),
+                emit_root_trace=False,
+                target_entity=child_entity,
+                cancellation_reason=capture.cancellation_reason if capture is not None else None,
+            )
+        finally:
+            if capture is not None:
+                capture.run_result = runner.last_result
+        return DelegationResult.from_run(result)
 
     def install_child_observability(
         self,
@@ -165,8 +162,16 @@ class DelegationExecutor:
             seq += 1
             return current
 
+        # FIFO publisher: translated events reach the parent bus in seq
+        # order, with a strong task reference and observed errors — the bare
+        # create_task-per-event approach delivered them in scheduler order
+        # and could be garbage-collected mid-flight.
+        publisher = SequentialEventPublisher(
+            parent_world.event_bus, label=f"subagent_stream:{session_id}"
+        )
+
         def publish_translated_event(event: object) -> None:
-            asyncio.create_task(parent_world.event_bus.publish(event))
+            publisher.publish_nowait(event)
 
         async def on_start(event: StreamStartEvent) -> None:
             publish_translated_event(
@@ -232,6 +237,9 @@ class DelegationExecutor:
             )
             child_world.event_bus.unsubscribe(StreamContentDeltaEvent, on_content_delta)
             child_world.event_bus.unsubscribe(StreamEndEvent, on_end)
+            # Flush the already-translated tail in the background; nothing
+            # new can arrive after the unsubscribes above.
+            publisher.close()
 
         return cleanup
 

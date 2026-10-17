@@ -237,3 +237,31 @@ async def test_undo_restores_entity_tracking() -> None:
 
     assert world.has_entity(entity)
     assert not world.has_entity(post_snapshot_entity)
+
+
+async def test_save_checkpoint_preserves_terminal_component_in_world(
+    tmp_path: Any,
+) -> None:
+    """Saving a checkpoint must not mutate the live world.
+
+    TerminalComponent is excluded from the payload (resume-friendly) but the
+    in-memory world keeps it — save is a read-only operation.
+    """
+    import json as json_module
+
+    from ecs_agent.components import RunnerStateComponent, TerminalComponent
+    from ecs_agent.core import Runner
+
+    world = World()
+    entity = world.create_entity()
+    world.add_component(entity, RunnerStateComponent(current_tick=2))
+    world.add_component(entity, TerminalComponent(reason="done"))
+
+    checkpoint_path = tmp_path / "checkpoint.json"
+    Runner().save_checkpoint(world, checkpoint_path)
+
+    assert world.get_component(entity, TerminalComponent) is not None
+
+    data = json_module.loads(checkpoint_path.read_text(encoding="utf-8"))
+    for components in data["entities"].values():
+        assert "TerminalComponent" not in components

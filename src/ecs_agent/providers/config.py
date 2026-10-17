@@ -21,10 +21,11 @@ class ProviderConfig:
     api_format: ApiFormat
     extra_headers: dict[str, str] = field(default_factory=dict)
     timeout: float | None = None
-    enable_store: bool = False
+    enable_store: bool | None = None
     enable_prompt_caching: bool = True
     """Emit Anthropic ``cache_control`` breakpoints (tools, stable system prefix,
     latest message). Set ``False`` to revert to the pre-caching request shape."""
+    enable_response_chaining: bool = False
 
 
 @dataclass(slots=True)
@@ -36,6 +37,10 @@ class ProviderEntry:
     extra_headers: dict[str, str] = field(default_factory=dict)
     timeout: float | None = None
     default_max_tokens: int = 4096
+    enable_store: bool | None = None
+    """Map to SDK store; None omits the parameter, False sends false."""
+    enable_response_chaining: bool = False
+    """Opt into verified automatic response chaining, independently of store."""
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ProviderEntry":
@@ -89,6 +94,14 @@ class ProviderEntry:
         if not isinstance(default_max_tokens_raw, int):
             raise ValueError("Provider entry 'default_max_tokens' must be an integer")
 
+        enable_store_raw = data.get("enable_store")
+        if enable_store_raw is not None and not isinstance(enable_store_raw, bool):
+            raise ValueError("Provider entry 'enable_store' must be a boolean or null")
+
+        enable_chaining = data.get("enable_response_chaining", False)
+        if not isinstance(enable_chaining, bool):
+            raise ValueError("Provider entry 'enable_response_chaining' must be a boolean")
+
         return cls(
             base_url=base_url_raw.rstrip("/"),
             api_format=api_format,
@@ -97,4 +110,6 @@ class ProviderEntry:
             extra_headers=dict(extra_headers_raw),
             timeout=timeout,
             default_max_tokens=default_max_tokens_raw,
+            enable_store=enable_store_raw,
+            enable_response_chaining=enable_chaining,
         )

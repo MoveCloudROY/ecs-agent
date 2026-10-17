@@ -9,6 +9,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+import httpx
+
 from ecs_agent.accounting.models import (
     StreamCompleteness,
     UsageRecord,
@@ -21,6 +23,9 @@ from ecs_agent.accounting.instrumentation import (
     resolve_provider_id,
 )
 from ecs_agent.logging import get_logger
+from ecs_agent.outcomes import GenerationStatus, classify_generation
+from ecs_agent.tools.validation import tool_call_error
+from ecs_agent.tools.streaming import merge_stream_tool_calls, finalize_tool_calls
 from ecs_agent.components import (
     ChildStubComponent,
     ConversationComponent,
@@ -43,7 +48,12 @@ from ecs_agent.components import (
 from ecs_agent.core.event_bus import SequentialEventPublisher
 from ecs_agent.core.world import World
 from ecs_agent.providers.protocol import LLMModel
+from ecs_agent.providers.responses_state import (
+    bind_provider_output, canonical_digest, previous_response_error, response_context_for,
+)
+from ecs_agent.history import invalidate_response_chain
 from ecs_agent.prompts.message_assembly import (
+    ContextBudgetExceededError,
     commit_prompt_context_reservation,
     prepare_outbound_messages,
     resolve_system_prompt_parts,
@@ -53,6 +63,7 @@ from ecs_agent.types import (
     CompletionResult,
     FinishReason,
     Message,
+    ProviderOutput,
     StreamContentDeltaEvent,
     StreamEndEvent,
     StreamReasoningDeltaEvent,
@@ -100,17 +111,8 @@ class ReasoningSystem:
             responses_api_state = world.get_component(
                 entity_id, ResponsesAPIStateComponent
             )
-            # The last response id is tracked every turn (below) for
-            # inspection/serialization, but it is only *sent* as
-            # previous_response_id when the OpenAI provider was built with
-            # enable_store=True; otherwise OpenAIModel drops it and relies on
-            # the full history in "input". Passing it here is therefore always
-            # safe and lossless regardless of the provider.
-            previous_response_id = (
-                responses_api_state.previous_response_id
-                if responses_api_state is not None
-                else None
-            )
+            previous_response_id: str | None = None
+            covered_message_count: int | None = None
 
             # Check for interruption
             if world.has_component(entity_id, InterruptionComponent):
@@ -138,15 +140,44 @@ class ReasoningSystem:
 
             runner_state = world.get_component(entity_id, RunnerStateComponent)
             current_tick = runner_state.current_tick if runner_state is not None else 0
-            messages, context_reservation = prepare_outbound_messages(
-                world,
-                entity_id,
-                system_prompt=system_prompt_text,
-                system_volatile_suffix=system_volatile_suffix,
-                current_tick=current_tick,
-            )
+            try:
+                messages, context_reservation = prepare_outbound_messages(
+                    world,
+                    entity_id,
+                    system_prompt=system_prompt_text,
+                    system_volatile_suffix=system_volatile_suffix,
+                    current_tick=current_tick,
+                )
+            except ContextBudgetExceededError as exc:
+                logger.error("reasoning_budget_exhausted", entity_id=int(entity_id), exception=str(exc))
+                world.add_component(entity_id, ErrorComponent(
+                    error=str(exc), system_name="ReasoningSystem", timestamp=time.time(),
+                ))
+                world.add_component(entity_id, TerminalComponent(reason="budget_exhausted", error=str(exc)))
+                continue
             if not any(message.role != "system" for message in messages):
                 continue
+            response_context = response_context_for(active_model, messages)
+            if responses_api_state is not None and response_context is not None and conversation is not None:
+                state = responses_api_state
+                item_count = state.covered_item_count
+                valid = (
+                    state.origin == response_context.origin
+                    and state.history_id == conversation.history_id
+                    and state.history_revision == conversation.revision
+                    and item_count > 0 and item_count <= len(response_context.items)
+                    and state.prefix_hash == canonical_digest(response_context.items[:item_count])
+                )
+                if not valid:
+                    invalidate_response_chain(world, entity_id, reason="origin_or_history_changed")
+                elif response_context.automatic_chaining and state.stored is True:
+                    covered_message_count = response_context.covered_messages(item_count)
+                    if covered_message_count is not None and item_count < len(response_context.items):
+                        previous_response_id = state.previous_response_id
+                    else:
+                        covered_message_count = None
+            elif responses_api_state is not None and responses_api_state.origin is not None:
+                invalidate_response_chain(world, entity_id, reason="provider_or_conversation_unavailable")
             if context_reservation is not None:
                 world.add_component(entity_id, context_reservation)
 
@@ -177,11 +208,17 @@ class ReasoningSystem:
             observation_event_published = False
             invocation_started_at = time.monotonic()
             invocation_start_time = datetime.now(timezone.utc)
-            model_parameters = (
+            partial_result = CompletionResult(message=Message(role="assistant", content=""))
+            model_parameters: dict[str, Any] | None = (
                 {"thread_response_id": previous_response_id}
                 if previous_response_id is not None
                 else None
             )
+            if (
+                model_parameters is not None
+                and covered_message_count is not None
+            ):
+                model_parameters["covered_message_count"] = covered_message_count
             await publish_llm_observation_started_event(
                 event_bus=world.event_bus,
                 entity_id=entity_id,
@@ -206,6 +243,8 @@ class ReasoningSystem:
                         tools,
                         non_blocking_delta_publish,
                         previous_response_id,
+                        covered_message_count,
+                        partial_result,
                     )
                     if stream_outcome is None:
                         # In-band interruption: the partial turn is already
@@ -228,21 +267,28 @@ class ReasoningSystem:
                             invocation_start_time=invocation_start_time,
                             observation_event_published=observation_event_published,
                             invocation_event_published=invocation_event_published,
+                            partial_result=partial_result,
                         )
                         observation_event_published = True
                         invocation_event_published = True
                         continue
                     result = stream_outcome
                 else:
-                    # Pass the thread id only when one was recorded: chaining
-                    # is provider-agnostic (LLMModel protocol), while models
-                    # predating the parameter keep working in non-chaining
-                    # sessions.
+                    # Only a verified automatic anchor reaches this call site.
+                    # The count was recomputed from current protocol boundaries,
+                    # not trusted from an older Message count.
                     if previous_response_id is not None:
+                        complete_kwargs: dict[str, Any] = {
+                            "thread_response_id": previous_response_id
+                        }
+                        if covered_message_count is not None:
+                            complete_kwargs["covered_message_count"] = (
+                                covered_message_count
+                            )
                         non_stream_result = await active_model.complete(
                             messages,
                             tools=tools,
-                            thread_response_id=previous_response_id,
+                            **complete_kwargs,
                         )
                     else:
                         non_stream_result = await active_model.complete(
@@ -254,6 +300,29 @@ class ReasoningSystem:
                             "Model returned stream iterator in non-streaming mode"
                         )
                     result = non_stream_result
+
+                generation_status = classify_generation(
+                    result.finish_reason,
+                    has_tool_calls=bool(result.message.tool_calls),
+                    legacy_complete=not streaming_enabled,
+                )
+                result.message.generation_status = generation_status
+                result.message.finish_reason = result.finish_reason
+                generation_error = result.error
+                if generation_status is GenerationStatus.TOOL_CALLS:
+                    calls = result.message.tool_calls or []
+                    generation_error = tool_call_error(calls, tools)
+                    if result.provider_output is not None and not result.provider_output.complete:
+                        generation_error = "Incomplete provider output for tool calls"
+                    if generation_error is not None:
+                        generation_status = GenerationStatus.ERROR
+                        result.message.generation_status = generation_status
+                if generation_error is not None:
+                    generation_status = GenerationStatus.ERROR
+                    result.message.generation_status = generation_status
+                invocation_status = generation_status.invocation_status
+                if generation_status is GenerationStatus.ERROR and generation_error is None:
+                    generation_error = "Invalid or incomplete tool call in model response"
 
                 self._queue_reasoning_context_if_configured(
                     world=world,
@@ -285,7 +354,10 @@ class ReasoningSystem:
                     reasoning_content=result.reasoning_content,
                     usage=result.usage,
                     response_id=result.response_id,
-                    status="success",
+                    status=invocation_status,
+                    generation_status=generation_status,
+                    finish_reason=result.finish_reason,
+                    error=generation_error,
                     duration_seconds=invocation_duration_seconds,
                     start_time=invocation_start_time,
                     end_time=invocation_end_time,
@@ -298,14 +370,26 @@ class ReasoningSystem:
                     provider_id=provider_id,
                     model=active_model.model_id,
                     usage=result.usage,
-                    stream_completeness=StreamCompleteness.COMPLETE,
+                    stream_completeness=(
+                        result.usage.stream_completeness
+                        if result.usage is not None else StreamCompleteness.UNKNOWN
+                    ),
                     request_id=result.response_id,
                     operation="reasoning",
-                    status="success",
+                    status=invocation_status,
+                    generation_status=generation_status,
+                    finish_reason=result.finish_reason,
                     streaming=streaming_enabled,
                     duration_seconds=invocation_duration_seconds,
                 )
                 invocation_event_published = True
+
+                # Retain partial text with its outcome, but never leave an
+                # unexecuted tool span in replayable conversation history.
+                if generation_status not in (
+                    GenerationStatus.COMPLETED, GenerationStatus.TOOL_CALLS
+                ):
+                    result.message.tool_calls = None
 
                 if context_reservation is not None:
                     # Persisting the sent context block into the conversation
@@ -323,18 +407,30 @@ class ReasoningSystem:
                 if conversation is not None:
                     conversation.messages.append(result.message)
 
-                # Record the latest response id every turn (only OpenAI Responses
-                # returns one). Consumed next turn as previous_response_id — sent
-                # only when the provider enabled stored-response chaining, and
-                # otherwise useful for inspection/serialization. See the read
-                # site above.
-                if result.response_id is not None:
-                    world.add_component(
-                        entity_id,
-                        ResponsesAPIStateComponent(
-                            previous_response_id=result.response_id,
-                        ),
+                # Keep the response identity for diagnostics. Only a verified,
+                # stored, complete protocol prefix can become an automatic anchor.
+                if result.response_id is not None and invocation_status == "success":
+                    output = result.provider_output
+                    verified_output = (
+                        output is not None and output.complete
+                        and response_context is not None
+                        and output.origin == response_context.origin
                     )
+                    prefix_items = (
+                        response_context.items + output.items
+                        if verified_output and response_context is not None and output is not None
+                        else []
+                    )
+                    world.add_component(entity_id, ResponsesAPIStateComponent(
+                        previous_response_id=result.response_id,
+                        covered_message_count=sum(message.role != "system" for message in messages) + 1,
+                        origin=response_context.origin if verified_output and response_context is not None else None,
+                        history_id=conversation.history_id if conversation is not None else None,
+                        history_revision=conversation.revision if conversation is not None else 0,
+                        covered_item_count=len(prefix_items),
+                        prefix_hash=canonical_digest(prefix_items) if prefix_items else None,
+                        stored=output.stored if verified_output and output is not None else None,
+                    ))
 
                 duration_ms = (time.time() - start_time) * 1000
                 tool_call_names = (
@@ -343,20 +439,22 @@ class ReasoningSystem:
                     else []
                 )
                 logger.info(
-                    "reasoning_complete",
+                    "reasoning_complete" if invocation_status == "success" else "reasoning_finished",
                     entity_id=int(entity_id),
                     model=active_model.model_id,
                     duration_ms=round(duration_ms, 2),
                     tool_call_count=len(tool_call_names),
                     tool_call_names=tool_call_names,
                     system="ReasoningSystem",
+                    generation_status=generation_status.value,
+                    finish_reason=result.finish_reason,
                 )
-                if result.message.tool_calls:
+                if generation_status is GenerationStatus.TOOL_CALLS:
                     world.add_component(
                         entity_id,
-                        PendingToolCallsComponent(tool_calls=result.message.tool_calls),
+                        PendingToolCallsComponent(tool_calls=result.message.tool_calls or []),
                     )
-                else:
+                elif generation_status is GenerationStatus.COMPLETED:
                     await world.event_bus.publish(
                         ReasoningCompleteEvent(
                             entity_id=entity_id,
@@ -368,6 +466,15 @@ class ReasoningSystem:
                         entity_id,
                         TerminalComponent(reason="reasoning_complete"),
                     )
+                else:
+                    world.add_component(
+                        entity_id,
+                        TerminalComponent(
+                            reason=f"reasoning_{generation_status.value}",
+                            error=generation_error,
+                        ),
+                    )
+                    world.remove_component(entity_id, ResponsesAPIStateComponent)
             except (IndexError, StopIteration):
                 if not observation_event_published:
                     invocation_end_time = datetime.now(timezone.utc)
@@ -421,6 +528,7 @@ class ReasoningSystem:
                     invocation_start_time=invocation_start_time,
                     observation_event_published=observation_event_published,
                     invocation_event_published=invocation_event_published,
+                    partial_result=partial_result,
                 )
                 observation_event_published = True
                 invocation_event_published = True
@@ -435,6 +543,13 @@ class ReasoningSystem:
                     )
                 raise
             except Exception as exc:
+                if (
+                    previous_response_id is not None
+                    and isinstance(exc, httpx.HTTPStatusError)
+                    and exc.response.status_code in {400, 404}
+                    and previous_response_error(exc.response.text)
+                ):
+                    invalidate_response_chain(world, entity_id, reason="remote_anchor_invalid")
                 # httpx timeout exceptions stringify to ""; keep at least the type name.
                 error_text = str(exc) or type(exc).__name__
                 if not observation_event_published:
@@ -451,6 +566,14 @@ class ReasoningSystem:
                         model_parameters=model_parameters,
                         status="error",
                         error=error_text,
+                        response_message=(
+                            partial_result.message if partial_result.message.content
+                            or partial_result.message.reasoning_content else None
+                        ),
+                        usage=partial_result.usage,
+                        response_id=partial_result.response_id,
+                        generation_status=GenerationStatus.ERROR,
+                        finish_reason=FinishReason.ERROR,
                         duration_seconds=time.monotonic() - invocation_started_at,
                         start_time=invocation_start_time,
                         end_time=invocation_end_time,
@@ -458,20 +581,21 @@ class ReasoningSystem:
                     observation_event_published = True
                 if not invocation_event_published:
                     stream_completeness = (
-                        StreamCompleteness.PARTIAL
-                        if streaming_enabled
-                        else StreamCompleteness.UNKNOWN
+                        partial_result.usage.stream_completeness
+                        if partial_result.usage is not None else StreamCompleteness.UNKNOWN
                     )
                     await self._publish_llm_invocation_event(
                         world=world,
                         entity_id=entity_id,
                         provider_id=provider_id,
                         model=active_model.model_id,
-                        usage=None,
+                        usage=partial_result.usage,
                         stream_completeness=stream_completeness,
-                        request_id=None,
+                        request_id=partial_result.response_id,
                         operation="reasoning",
                         status="error",
+                        generation_status=GenerationStatus.ERROR,
+                        finish_reason=FinishReason.ERROR,
                         streaming=streaming_enabled,
                         duration_seconds=time.monotonic() - invocation_started_at,
                     )
@@ -489,6 +613,10 @@ class ReasoningSystem:
                         system_name="ReasoningSystem",
                         timestamp=time.time(),
                     ),
+                )
+                world.add_component(
+                    entity_id,
+                    TerminalComponent(reason="reasoning_error", error=error_text),
                 )
 
     def _resolve_provider_id(self, active_model: LLMModel) -> str:
@@ -535,6 +663,8 @@ class ReasoningSystem:
         status: str,
         streaming: bool,
         duration_seconds: float | None,
+        generation_status: GenerationStatus | None = None,
+        finish_reason: str | None = None,
     ) -> None:
         await publish_llm_invocation_event(
             event_bus=world.event_bus,
@@ -548,6 +678,8 @@ class ReasoningSystem:
             status=status,
             streaming=streaming,
             duration_seconds=duration_seconds,
+            generation_status=generation_status,
+            finish_reason=finish_reason,
         )
         self._record_token_usage(world, entity_id, usage)
 
@@ -610,6 +742,7 @@ class ReasoningSystem:
         invocation_start_time: datetime,
         observation_event_published: bool,
         invocation_event_published: bool,
+        partial_result: CompletionResult,
     ) -> None:
         """Publish the cancelled-turn observability pair (observation + invocation).
 
@@ -630,27 +763,35 @@ class ReasoningSystem:
                 streaming=streaming_enabled,
                 model_parameters=model_parameters,
                 status="cancelled",
+                response_message=(
+                    partial_result.message if partial_result.message.content
+                    or partial_result.message.reasoning_content else None
+                ),
+                usage=partial_result.usage,
+                response_id=partial_result.response_id,
+                generation_status=GenerationStatus.CANCELLED,
+                finish_reason=FinishReason.CANCELLED,
                 duration_seconds=time.monotonic() - invocation_started_at,
                 start_time=invocation_start_time,
                 end_time=invocation_end_time,
             )
         if not invocation_event_published:
-            stream_completeness = StreamCompleteness.UNKNOWN
-            interruption = world.get_component(entity_id, InterruptionComponent)
-            if interruption is not None:
-                partial_chunks = interruption.metadata.get("partial_chunks")
-                if isinstance(partial_chunks, int) and partial_chunks > 0:
-                    stream_completeness = StreamCompleteness.PARTIAL
+            stream_completeness = (
+                partial_result.usage.stream_completeness
+                if partial_result.usage is not None else StreamCompleteness.UNKNOWN
+            )
             await self._publish_llm_invocation_event(
                 world=world,
                 entity_id=entity_id,
                 provider_id=provider_id,
                 model=model_id,
-                usage=None,
+                usage=partial_result.usage,
                 stream_completeness=stream_completeness,
-                request_id=None,
+                request_id=partial_result.response_id,
                 operation="reasoning",
                 status="cancelled",
+                generation_status=GenerationStatus.CANCELLED,
+                finish_reason=FinishReason.CANCELLED,
                 streaming=streaming_enabled,
                 duration_seconds=time.monotonic() - invocation_started_at,
             )
@@ -666,6 +807,8 @@ class ReasoningSystem:
         tools: list[ToolSchema] | None,
         non_blocking_delta_publish: bool,
         previous_response_id: str | None,
+        covered_message_count: int | None,
+        partial_result: CompletionResult,
     ) -> CompletionResult | None:
         """Consume the model stream and build the turn result.
 
@@ -674,14 +817,17 @@ class ReasoningSystem:
         already persisted and StreamEnd emitted; the caller publishes the
         cancelled observability events and skips normal turn completion.
         """
-        # Same conditional as the non-streaming path: the thread id is passed
-        # whenever recorded, regardless of the concrete model class.
+        # Match the non-streaming path: forward only the anchor and boundary
+        # verified against the actual outbound protocol prefix.
         if previous_response_id is not None:
+            stream_kwargs: dict[str, Any] = {"thread_response_id": previous_response_id}
+            if covered_message_count is not None:
+                stream_kwargs["covered_message_count"] = covered_message_count
             stream_result = await active_model.complete(
                 messages,
                 tools=tools,
                 stream=True,
-                thread_response_id=previous_response_id,
+                **stream_kwargs,
             )
         else:
             stream_result = await active_model.complete(
@@ -690,6 +836,14 @@ class ReasoningSystem:
                 stream=True,
             )
         if isinstance(stream_result, CompletionResult):
+            # This provider returned a complete non-streaming result despite
+            # stream=True. Apply the same explicit legacy boundary as normal
+            # non-streaming calls, never the EOF inference used for iterators.
+            if stream_result.finish_reason is None:
+                stream_result.finish_reason = (
+                    FinishReason.TOOL_CALLS if stream_result.message.tool_calls
+                    else FinishReason.STOP
+                )
             return stream_result
 
         stream = stream_result
@@ -722,6 +876,9 @@ class ReasoningSystem:
         reasoning_signature: str | None = None
         response_id: str | None = None
         finish_reason: FinishReason | None = None
+        generation_error: str | None = None
+        provider_output: ProviderOutput | None = None
+        final_message: Message | None = None
         stream_status = "success"
         interrupted = False
 
@@ -850,12 +1007,21 @@ class ReasoningSystem:
 
                 if delta.usage is not None:
                     usage = delta.usage
+                    partial_result.usage = usage
 
                 if delta.response_id is not None:
                     response_id = delta.response_id
+                    partial_result.response_id = response_id
 
                 if delta.finish_reason is not None:
                     finish_reason = delta.finish_reason
+                if delta.error is not None:
+                    generation_error = delta.error
+                if delta.provider_output is not None:
+                    provider_output = delta.provider_output
+                    partial_result.message.provider_output = provider_output
+                if delta.message is not None:
+                    final_message = delta.message
 
                 if world.get_component(entity_id, InterruptionComponent) is not None:
                     interrupted = True
@@ -871,12 +1037,13 @@ class ReasoningSystem:
                 # leaves dangling assistant tool_calls that strict providers
                 # reject on the next request.
                 stream_status = "cancelled"
+                finish_reason = FinishReason.CANCELLED
                 tool_call_buffers.clear()
                 partial_content = "".join(content_chunks)
-                if partial_content and conversation is not None:
-                    conversation.messages.append(
-                        Message(role="assistant", content=partial_content)
-                    )
+                self._persist_partial_result(
+                    world, entity_id, conversation, partial_result,
+                    partial_content, "".join(reasoning_chunks), finish_reason,
+                )
                 interruption = world.get_component(entity_id, InterruptionComponent)
                 if interruption is not None:
                     interruption.metadata.update(
@@ -887,17 +1054,34 @@ class ReasoningSystem:
                         }
                     )
                 return None
+            finish_reason = FinishReason.ERROR if generation_error is not None else (finish_reason or FinishReason.UNKNOWN)
+            stream_status = classify_generation(
+                finish_reason, has_tool_calls=bool(tool_call_buffers)
+            ).invocation_status
+            if stream_status == "success":
+                calls = (
+                    final_message.tool_calls if final_message is not None
+                    else self._finalize_tool_calls(tool_call_buffers)
+                ) or []
+                call_error = tool_call_error(calls, tools)
+                if calls and provider_output is not None and not provider_output.complete:
+                    call_error = "Incomplete provider output for tool calls"
+                if call_error is not None:
+                    stream_status = "error"
+                    finish_reason = FinishReason.ERROR
+                    generation_error = call_error
         except asyncio.CancelledError:
             # Genuine (external) cancellation delivered at an await point:
             # salvage the partial content, mark the interruption, re-raise.
             # Tool calls are dropped for the same dangling-span reason as the
             # in-band path.
             stream_status = "cancelled"
+            finish_reason = FinishReason.CANCELLED
             partial_content = "".join(content_chunks)
-            if partial_content and conversation is not None:
-                conversation.messages.append(
-                    Message(role="assistant", content=partial_content)
-                )
+            self._persist_partial_result(
+                world, entity_id, conversation, partial_result,
+                partial_content, "".join(reasoning_chunks), finish_reason,
+            )
 
             interruption = world.get_component(entity_id, InterruptionComponent)
             partial_metadata = {
@@ -920,11 +1104,12 @@ class ReasoningSystem:
             raise
         except Exception:
             stream_status = "error"
+            finish_reason = FinishReason.ERROR
             partial_content = "".join(content_chunks)
-            if partial_content and conversation is not None:
-                conversation.messages.append(
-                    Message(role="assistant", content=partial_content)
-                )
+            self._persist_partial_result(
+                world, entity_id, conversation, partial_result,
+                partial_content, "".join(reasoning_chunks), finish_reason,
+            )
             raise
         finally:
             # Close the provider stream explicitly: an abandoned generator
@@ -958,8 +1143,12 @@ class ReasoningSystem:
                 status=stream_status,
                 duration_seconds=time.perf_counter() - stream_start_published_at,
                 first_delta_seconds=first_delta_seconds,
+                generation_status=classify_generation(
+                    finish_reason, has_tool_calls=bool(tool_call_buffers)
+                ),
+                finish_reason=finish_reason,
             )
-            if publisher is not None and stream_status == "success":
+            if publisher is not None and stream_status not in {"cancelled", "error"}:
                 # Same FIFO channel as the deltas: End can never overtake
                 # them. The flush continues in the background — the turn
                 # does not wait for slow subscribers.
@@ -972,8 +1161,7 @@ class ReasoningSystem:
                     publisher.cancel()
                 await world.event_bus.publish(end_event)
 
-        return CompletionResult(
-            message=Message(
+        message = final_message or Message(
                 role="assistant",
                 content="".join(content_chunks),
                 tool_calls=self._finalize_tool_calls(tool_call_buffers),
@@ -982,14 +1170,52 @@ class ReasoningSystem:
                 # signed thinking replay can rebuild the assistant turn.
                 reasoning_content="".join(reasoning_chunks) or None,
                 reasoning_signature=reasoning_signature,
-            ),
+            )
+        if provider_output is not None:
+            bind_provider_output(message, provider_output)
+        return CompletionResult(
+            message=message,
             usage=usage,
             response_id=response_id,
             reasoning_content="".join(reasoning_chunks) or None,
             # Parity with the non-streaming path: the caller sees why the turn
             # ended (truncation, filtering) regardless of transport.
             finish_reason=finish_reason,
+            error=generation_error,
         )
+
+    @staticmethod
+    def _persist_partial_result(
+        world: World,
+        entity_id: EntityId,
+        conversation: ConversationComponent | None,
+        result: CompletionResult,
+        content: str,
+        reasoning: str,
+        finish_reason: FinishReason,
+    ) -> None:
+        """Commit sent context before partial output without executable tools."""
+        result.finish_reason = finish_reason
+        provider_output = result.message.provider_output
+        result.message = Message(
+            role="assistant",
+            content=content,
+            reasoning_content=reasoning or None,
+            generation_status=classify_generation(finish_reason, has_tool_calls=False),
+            finish_reason=finish_reason,
+            provider_output=provider_output,
+        )
+        if conversation is None or not (content or reasoning):
+            return
+        reservation = world.get_component(entity_id, PromptContextReservationComponent)
+        if reservation is not None:
+            commit_prompt_context_reservation(
+                queue=world.get_component(entity_id, PromptContextQueueComponent),
+                reservation=reservation,
+                conversation=conversation,
+            )
+            world.remove_component(entity_id, PromptContextReservationComponent)
+        conversation.messages.append(result.message)
 
     def _queue_reasoning_context_if_configured(
         self,
@@ -1028,78 +1254,11 @@ class ReasoningSystem:
         )
 
     def _merge_stream_tool_calls(
-        self,
-        buffers: dict[str, dict[str, Any]],
-        delta_tool_calls: list[ToolCall] | None,
+        self, buffers: dict[str, dict[str, Any]], delta_tool_calls: list[ToolCall] | None,
     ) -> None:
-        if not delta_tool_calls:
-            return
-
-        for tool_call in delta_tool_calls:
-            if tool_call.id:
-                tool_call_id = tool_call.id
-            elif buffers:
-                # Continuation fragments from providers that omit the id
-                # extend the most recently started tool call.
-                tool_call_id = next(reversed(buffers))
-            else:
-                tool_call_id = f"tool_call_{len(buffers)}"
-            current = buffers.setdefault(
-                tool_call_id,
-                {
-                    "id": tool_call_id,
-                    "name": "",
-                    "arguments_buffer": "",
-                    "arguments": None,
-                },
-            )
-
-            if tool_call.name:
-                current["name"] = tool_call.name
-
-            partial = tool_call.arguments.get("_partial")
-            if isinstance(partial, str):
-                current["arguments_buffer"] += partial
-            elif tool_call.arguments:
-                # A fully parsed dict supersedes any partial snapshots
-                # buffered earlier for the same call.
-                current["arguments"] = tool_call.arguments
-                current["arguments_buffer"] = ""
+        merge_stream_tool_calls(buffers, delta_tool_calls)
 
     def _finalize_tool_calls(
-        self, buffers: dict[str, dict[str, Any]]
+        self, buffers: dict[str, dict[str, Any]],
     ) -> list[ToolCall] | None:
-        if not buffers:
-            return None
-
-        completed: list[ToolCall] = []
-        for buffered in buffers.values():
-            parsed_arguments: dict[str, Any]
-            arguments_buffer = buffered["arguments_buffer"]
-            arguments = buffered["arguments"]
-
-            if isinstance(arguments, dict):
-                # A complete parsed dict always wins over the fragment buffer.
-                parsed_arguments = arguments
-            elif arguments_buffer:
-                try:
-                    loaded_arguments = json.loads(arguments_buffer)
-                except json.JSONDecodeError:
-                    loaded_arguments = {"_partial": arguments_buffer}
-
-                if isinstance(loaded_arguments, dict):
-                    parsed_arguments = loaded_arguments
-                else:
-                    parsed_arguments = {"_partial": arguments_buffer}
-            else:
-                parsed_arguments = {}
-
-            completed.append(
-                ToolCall(
-                    id=buffered["id"],
-                    name=buffered["name"],
-                    arguments=parsed_arguments,
-                )
-            )
-
-        return completed
+        return finalize_tool_calls(buffers)

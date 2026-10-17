@@ -4,15 +4,18 @@ import asyncio
 import json
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from ecs_agent.components.definitions import (
+    ChildStubComponent,
     InterruptionComponent,
     RunnerStateComponent,
     TerminalComponent,
 )
 from ecs_agent.types import (
+    EntityId,
     RunCompletedEvent,
     RunStartedEvent,
     RunnerLifecycleStatus,
@@ -20,8 +23,9 @@ from ecs_agent.types import (
     RunnerTickStartedEvent,
 )
 from ecs_agent.core.world import World
+from ecs_agent.core.run_result import RunResult, snapshot_run_result
 from ecs_agent.logging import STANDARD_EVENT_NAMES, get_logger
-from ecs_agent.observability.context import reset_run_context, set_run_context
+from ecs_agent.observability.context import current_run_id, reset_run_context, set_run_context
 from ecs_agent.serialization import WorldSerializer
 
 logger = get_logger(__name__)
@@ -29,6 +33,9 @@ logger = get_logger(__name__)
 
 class Runner:
     """Orchestrates the main execution loop."""
+
+    def __init__(self) -> None:
+        self.last_result: RunResult | None = None
 
     async def run(
         self,
@@ -40,7 +47,9 @@ class Runner:
         run_id: str | None = None,
         parent_observation_id: str | None = None,
         emit_root_trace: bool = True,
-    ) -> None:
+        target_entity: EntityId | None = None,
+        cancellation_reason: Callable[[], str] | None = None,
+    ) -> RunResult:
         """Run the main execution loop until terminal condition.
 
         Executes world.process() repeatedly until either:
@@ -58,6 +67,15 @@ class Runner:
             max_ticks: Maximum number of ticks to run (default 100).
                        Pass None for unlimited execution.
             start_tick: Starting tick count for resume (default 0)
+            target_entity: Only this entity's terminal/interruption stops the
+                run, when supplied. Used by delegation to ignore other entities.
+            cancellation_reason: Optional enclosing deadline classifier, evaluated
+                during cancellation before publishing the terminal snapshot.
+
+        Returns:
+            Semantic run result, also carried by RunCompletedEvent. External
+            cancellation and exceptions still propagate; last_result retains
+            their terminal snapshot.
         """
         resolved_trace_id = uuid.uuid4().hex if trace_id is None else trace_id
         resolved_run_id = str(uuid.uuid4()) if run_id is None else run_id
@@ -66,6 +84,7 @@ class Runner:
             run_id=resolved_run_id,
         )
         run_start_time = time.monotonic()
+        self.last_result = None
         tick = start_tick
         completion_published = False
         try:
@@ -100,15 +119,16 @@ class Runner:
                     entity_id = world.create_entity()
                     world.add_component(entity_id, TerminalComponent(reason="max_ticks"))
                     logger.info(STANDARD_EVENT_NAMES["RUN_COMPLETE"], reason="max_ticks", world_name=world.name)
-                    await self._publish_run_completed(
+                    result = await self._publish_run_completed(
                         world=world,
                         status="max_ticks",
                         reason="max_ticks",
                         start_time=run_start_time,
                         ticks=tick - start_tick,
+                        target_entity=target_entity,
                     )
                     completion_published = True
-                    return
+                    return result
 
                 logger.debug(STANDARD_EVENT_NAMES["TICK_START"], tick=tick, world_name=world.name)
                 tick_start_time = time.monotonic()
@@ -119,7 +139,7 @@ class Runner:
                     )
                 )
                 interrupted_before_tick = self._has_top_level_component(
-                    world, InterruptionComponent
+                    world, InterruptionComponent, target_entity
                 )
 
                 try:
@@ -141,15 +161,16 @@ class Runner:
                             reason="interruption_component",
                             world_name=world.name,
                         )
-                        await self._publish_run_completed(
+                        result = await self._publish_run_completed(
                             world=world,
                             status="interruption_component",
                             reason="interruption_component",
                             start_time=run_start_time,
                             ticks=tick - start_tick,
+                            target_entity=target_entity,
                         )
                         completion_published = True
-                        return
+                        return result
                     # CancelledError arrived from outside (e.g. asyncio.wait_for timeout)
                     # — re-raise so the caller's timeout handler fires correctly
                     logger.info(
@@ -157,16 +178,17 @@ class Runner:
                         reason="external_cancellation",
                         world_name=world.name,
                     )
-                    await self._publish_run_completed(
+                    result = await self._publish_run_completed(
                         world=world,
                         status="cancelled",
-                        reason="external_cancellation",
+                        reason=cancellation_reason() if cancellation_reason is not None else "external_cancellation",
                         start_time=run_start_time,
                         ticks=tick - start_tick,
+                        target_entity=target_entity,
                     )
                     completion_published = True
                     raise
-                except Exception:
+                except Exception as exc:
                     tick_duration_ms = (time.monotonic() - tick_start_time) * 1000
                     await world.event_bus.publish(
                         RunnerTickCompletedEvent(
@@ -176,18 +198,20 @@ class Runner:
                             active_entities=self._active_entity_count(world),
                         )
                     )
-                    await self._publish_run_completed(
+                    result = await self._publish_run_completed(
                         world=world,
                         status="error",
                         reason="exception",
+                        error=str(exc) or type(exc).__name__,
                         start_time=run_start_time,
                         ticks=tick - start_tick,
+                        target_entity=target_entity,
                     )
                     completion_published = True
                     raise
 
                 interrupted_after_tick = self._has_top_level_component(
-                    world, InterruptionComponent
+                    world, InterruptionComponent, target_entity
                 )
                 if interrupted_after_tick and not interrupted_before_tick:
                     logger.debug("interruption_detected", tick=tick, world_name=world.name)
@@ -199,7 +223,7 @@ class Runner:
                     duration_ms=tick_duration_ms,
                     world_name=world.name,
                 )
-                has_terminal = self._has_top_level_component(world, TerminalComponent)
+                has_terminal = self._has_top_level_component(world, TerminalComponent, target_entity)
                 tick_status: RunnerLifecycleStatus = (
                     "terminal_component" if has_terminal else "success"
                 )
@@ -219,15 +243,16 @@ class Runner:
                     logger.info(
                         STANDARD_EVENT_NAMES["RUN_COMPLETE"], reason="terminal_component", world_name=world.name
                     )
-                    await self._publish_run_completed(
+                    result = await self._publish_run_completed(
                         world=world,
                         status="terminal_component",
                         reason="terminal_component",
                         start_time=run_start_time,
                         ticks=tick - start_tick,
+                        target_entity=target_entity,
                     )
                     completion_published = True
-                    return
+                    return result
         except asyncio.CancelledError:
             if not completion_published:
                 logger.info(
@@ -235,12 +260,13 @@ class Runner:
                     reason="external_cancellation",
                     world_name=world.name,
                 )
-                await self._publish_run_completed(
+                result = await self._publish_run_completed(
                     world=world,
                     status="cancelled",
-                    reason="external_cancellation",
+                    reason=cancellation_reason() if cancellation_reason is not None else "external_cancellation",
                     start_time=run_start_time,
                     ticks=tick - start_tick,
+                    target_entity=target_entity,
                 )
             raise
         finally:
@@ -250,8 +276,13 @@ class Runner:
         self,
         world: World,
         component_type: type[TerminalComponent] | type[InterruptionComponent],
+        target_entity: EntityId | None = None,
     ) -> bool:
-        return any(True for _ in world.query(component_type))
+        return any(
+            not world.has_component(entity, ChildStubComponent)
+            and (target_entity is None or entity == target_entity)
+            for entity, _ in world.query(component_type)
+        )
 
     def _active_entity_count(self, world: World) -> int:
         return len(world._entity_ids)
@@ -264,7 +295,14 @@ class Runner:
         reason: str,
         start_time: float,
         ticks: int,
-    ) -> None:
+        target_entity: EntityId | None = None,
+        error: str | None = None,
+    ) -> RunResult:
+        result = snapshot_run_result(
+            world, run_id=current_run_id(), reason=reason, ticks=ticks,
+            target_entity=target_entity, error=error,
+        )
+        self.last_result = result
         await world.event_bus.publish(
             RunCompletedEvent(
                 status=status,
@@ -272,8 +310,10 @@ class Runner:
                 duration_seconds=time.monotonic() - start_time,
                 ticks=ticks,
                 active_entities=self._active_entity_count(world),
+                result=result,
             )
         )
+        return result
 
     def save_checkpoint(self, world: World, path: str | Path) -> None:
         """Save world state and runner state to checkpoint file.
@@ -286,12 +326,11 @@ class Runner:
         """
         checkpoint_path = Path(path)
 
-        # Remove TerminalComponent before serializing (resume-friendly)
-        terminal_entities = [eid for eid, _ in world.query(TerminalComponent)]
-        for eid in terminal_entities:
-            world.remove_component(eid, TerminalComponent)
-
-        world_data = WorldSerializer.to_dict(world)
+        # TerminalComponent is excluded from the payload only (resume-
+        # friendly); saving must not mutate the live world.
+        world_data = WorldSerializer.to_dict(
+            world, exclude_component_types=(TerminalComponent,)
+        )
 
         # Extract runner state from world
         runner_state_entities = list(world.query(RunnerStateComponent))

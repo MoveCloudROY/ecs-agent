@@ -9,6 +9,7 @@ import os
 import re as _re
 import shutil
 import sys
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -20,10 +21,13 @@ from ecs_agent.components import (
     CompactionConfigComponent,
     ConversationComponent,
     ConversationArchiveComponent,
+    ContextEntry,
     CurrentCompactionSummaryComponent,
     LLMComponent,
     PhaseApprovalsComponent,
     PhaseComponent,
+    PromptContextQueueComponent,
+    PromptContextReservationComponent,
     RenderedSystemPromptComponent,
     SubagentRegistryComponent,
     SubagentSessionTableComponent,
@@ -77,6 +81,9 @@ from examples.e2e.plan_and_task.scratchbook_adapter import (
     build_scratchbook_prompt_config,
 )
 from examples.e2e.plan_and_task.controller import PlanController, ResumeAction
+from examples.e2e.plan_and_task.dispatch_guard import (
+    install_review_order_dispatch_guard,
+)
 from examples.e2e.plan_and_task.phase_graph import (
     PLAN_TASK_PHASE_GRAPH,
     REVIEW_VERDICTS,
@@ -220,17 +227,51 @@ def _reset_compaction_state(world: World, entity_id: EntityId) -> None:
     world.remove_component(entity_id, RenderedSystemPromptComponent)
 
 
+def _queue_workflow_context(
+    world: World, entity_id: EntityId, content: str, *, source: str
+) -> None:
+    """Deliver callback context on the next model call, after tool receipts land."""
+    queue = world.get_component(entity_id, PromptContextQueueComponent)
+    if queue is None:
+        queue = PromptContextQueueComponent()
+        world.add_component(entity_id, queue)
+    queue.entries.append(ContextEntry(
+        entry_id=uuid.uuid4().hex,
+        priority=0,
+        source_label=f"plan_task:{source}",
+        content=content,
+        registration_order=max((entry.registration_order for entry in queue.entries), default=-1) + 1,
+    ))
+
+
+def _clear_workflow_context(
+    world: World, entity_id: EntityId, *, source: str | None = None
+) -> None:
+    """Discard obsolete workflow prompts while preserving caller-owned context."""
+    prefix = f"plan_task:{source}" if source is not None else "plan_task:"
+    queue = world.get_component(entity_id, PromptContextQueueComponent)
+    if queue is not None:
+        queue.entries = [entry for entry in queue.entries if not entry.source_label.startswith(prefix)]
+    reservation = world.get_component(entity_id, PromptContextReservationComponent)
+    if reservation is not None and any(
+        entry.source_label.startswith(prefix) for entry in reservation.reserved_entries
+    ):
+        # Entries are consumed only on commit; surviving queue entries will be
+        # reserved again without the obsolete rendered workflow instructions.
+        world.remove_component(entity_id, PromptContextReservationComponent)
+
+
 def _reset_workflow_boundary_state(
     world: World, entity_id: EntityId, *, preserve_user_text: str | None = None
 ) -> None:
     _reset_compaction_state(world, entity_id)
+    _clear_workflow_context(world, entity_id)
     conversation = world.get_component(entity_id, ConversationComponent)
     if conversation is not None:
-        conversation.messages.clear()
-        if preserve_user_text is not None:
-            conversation.messages.append(
-                Message(role="user", content=preserve_user_text)
-            )
+        from ecs_agent.history import replace_conversation_history
+
+        messages = [Message(role="user", content=preserve_user_text)] if preserve_user_text is not None else []
+        replace_conversation_history(world, entity_id, messages, reason="workflow_reset", new_conversation=True)
 
 
 async def resume_workflow(
@@ -452,10 +493,13 @@ async def build_plan_task_world(
     _base_dir = base_dir or _WORKFLOW_BASE_DIR
 
     def _reset_task_conversation(w: World, eid: EntityId, trigger_text: str) -> None:
-        conv = w.get_component(eid, ConversationComponent)
-        if conv is not None:
-            conv.messages.clear()
-            conv.messages.append(Message(role="user", content=trigger_text))
+        from ecs_agent.history import replace_conversation_history
+
+        _clear_workflow_context(w, eid)
+        replace_conversation_history(
+            w, eid, [Message(role="user", content=trigger_text)],
+            reason="task_boundary", new_conversation=True,
+        )
 
     async def _load_workflow(
         w: World,
@@ -543,11 +587,11 @@ async def build_plan_task_world(
         try:
             if event.subagent_name == "advisor":
                 runtime_state[0] = await controller.handle_advisor_review(
-                    current, adapter, verdict_str, notes=event.result[:500]
+                    current, adapter, verdict_str, notes=event.result
                 )
             elif event.subagent_name == "qa":
                 new_state = await controller.handle_qa_review(
-                    current, adapter, verdict_str, notes=event.result[:500]
+                    current, adapter, verdict_str, notes=event.result
                 )
                 runtime_state[0] = new_state
                 if new_state.phase == "WRITE_PLAN":
@@ -560,16 +604,14 @@ async def build_plan_task_world(
                             (adapter.plan_dir / "workflow_plan.md").relative_to(adapter.base_dir)
                         )
                         trigger_msg = build_write_plan_prompt(draft_path, plan_path)
-                        conv.messages.append(
-                            Message(role="user", content=trigger_msg)
-                        )
+                        _queue_workflow_context(world, agent_id, trigger_msg, source="write_plan")
                         logger.info(
                             "plan_task_auto_trigger_plan_writer",
                             workflow_id=new_state.workflow_id,
                         )
             elif event.subagent_name == "plan_qa":
                 runtime_state[0] = await controller.handle_plan_qa_review(
-                    current, adapter, verdict_str, notes=event.result[:500]
+                    current, adapter, verdict_str, notes=event.result
                 )
             elif event.subagent_name == "plan_writer":
                 runtime_state[0] = await controller.handle_write_plan_completed(
@@ -582,20 +624,17 @@ async def build_plan_task_world(
                 exception=str(exc),
             )
             # Surface the failure to the model (e.g. the review-round cap, or a
-            # verdict recorded out of order): the subagent's text result reached
-            # the model but the verdict was not recorded, so without this note it
-            # would keep re-running the same review blindly.
+            # verdict recorded out of order). This callback runs before the
+            # tool receipt lands, so queue the note instead of splitting that
+            # call/receipt span with a user message.
             conv = world.get_component(agent_id, ConversationComponent)
             if conv is not None:
-                conv.messages.append(
-                    Message(
-                        role="user",
-                        content=(
-                            f"System note: the {event.subagent_name} review could "
-                            f"not be recorded — {exc} Do not simply re-run the same "
-                            "review; address the note above."
-                        ),
-                    )
+                _queue_workflow_context(
+                    world, agent_id,
+                    f"System note: the {event.subagent_name} review could "
+                    f"not be recorded — {exc} Do not simply re-run the same "
+                    "review; address the note above.",
+                    source="review_error",
                 )
 
     world.event_bus.subscribe(DelegationCompletedEvent, _on_delegation_completed)
@@ -604,6 +643,8 @@ async def build_plan_task_world(
         """Journal every committed transition into the active workflow's events.jsonl."""
         if event.entity_id != agent_id:
             return
+        if event.from_phase == "WRITE_PLAN" and event.to_phase != "WRITE_PLAN":
+            _clear_workflow_context(world, agent_id, source="write_plan")
         journal_adapter = adapter_ref[0]
         if journal_adapter is None:
             return
@@ -641,7 +682,7 @@ async def build_plan_task_world(
             return "Error: /plan:start requires a non-empty description."
         try:
             derived_id = (
-                await derive_workflow_id_from_llm(description, model)
+                await derive_workflow_id_from_llm(description, model, world=_world, entity_id=_entity_id)
                 or description[:40].strip()
             )
             adapter = ArtifactAdapter(
@@ -1003,7 +1044,9 @@ async def build_plan_task_world(
     ]
     world.add_component(
         agent_id,
-        UserPromptConfigComponent(triggers=triggers, script_handlers=script_handlers),
+        UserPromptConfigComponent(
+            triggers=triggers, script_handlers=script_handlers, enable_context_pool=True,
+        ),
     )
 
     await bind_phase_graph(world, agent_id, PLAN_TASK_PHASE_GRAPH, agent_key="main")
@@ -1037,6 +1080,10 @@ async def build_plan_task_world(
     world.register_system(subagent_system, priority=-1)
     subagent_system.install_subagent_tool(world, agent_id, tool_name="subagent")
     subagent_system.install_subagent_control_tools(world, agent_id)
+    # Refuse an out-of-order reviewer dispatch before it runs. The controller
+    # already refuses one, but only when the verdict is recorded — by then the
+    # subagent has done (and billed) its whole run.
+    install_review_order_dispatch_guard(world, agent_id, runtime_state)
     # Interactive clarification tool: pauses the turn to put structured
     # questions to the user (surfaced by the TUI modal or the stdin runtime).
     install_ask_question_tool(world, agent_id)
@@ -1134,24 +1181,27 @@ def build_model_from_env() -> LLMModel:
         api_format = ApiFormat.OPENAI_CHAT_COMPLETIONS
     logger.info("using_model", model_name=model_name, api_format=api_format)
     print(f"Using model: {model_name}")
-    # Stored-response chaining (previous_response_id) is OFF by default.
-    # This workflow is human-in-the-loop: `ask_question` and the input prompt
-    # can pause a turn for minutes, during which a server-side stored response
-    # can expire. Chaining saves no tokens here — the adapter always sends the
-    # full history in `input` — so it stays off unless a gateway is known to
-    # benefit. Set LLM_ENABLE_STORE=1 to opt in.
-    store_enabled = os.environ.get("LLM_ENABLE_STORE", "0").lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
+    # Storage follows SDK's tri-state parameter; chaining is a separate opt-in.
+    def env_bool(name: str) -> bool | None:
+        raw = os.environ.get(name)
+        if raw is None:
+            return None
+        if raw.lower() in ("1", "true", "yes", "on"):
+            return True
+        if raw.lower() in ("0", "false", "no", "off"):
+            return False
+        logger.error("invalid_boolean_environment", variable=name)
+        raise ValueError(f"{name} must be true/false or unset")
+
+    store_enabled = env_bool("LLM_ENABLE_STORE")
+    chaining_enabled = env_bool("LLM_ENABLE_RESPONSE_CHAINING") or False
     return Model(
         model_name,
         base_url=base_url,
         api_key=api_key,
         api_format=api_format,
-        enable_store=api_format == ApiFormat.OPENAI_RESPONSES and store_enabled,
+        enable_store=store_enabled if api_format == ApiFormat.OPENAI_RESPONSES else None,
+        enable_response_chaining=api_format == ApiFormat.OPENAI_RESPONSES and chaining_enabled,
         stream_read_timeout=stream_read_timeout,
     )
 
@@ -1172,8 +1222,17 @@ async def main() -> None:
     )
     langfuse_handle = await install_plan_task_langfuse_observability(world)
 
+    # Billing mounts as a propagating raw-event plugin: delegation copies its
+    # subscription onto every subagent child world, so reviewer/writer LLM
+    # calls are billed too (a bare event_bus.subscribe only sees this world).
     billing = BillingSubscriber()
-    billing.subscribe(world.event_bus)
+    plugins_handle = langfuse_handle
+    if plugins_handle is None:
+        from ecs_agent.plugins import install_plugins
+
+        plugins_handle = await install_plugins(world, [billing])
+    else:
+        await plugins_handle.add(billing)
 
     accounting = AccountingSubscriber()
     accounting.subscribe(world.event_bus)
@@ -1194,9 +1253,8 @@ async def main() -> None:
     try:
         await runner.run(world, max_ticks=max_ticks)
     finally:
-        if langfuse_handle is not None:
-            await langfuse_handle.flush()
-            await langfuse_handle.shutdown()
+        await plugins_handle.flush()
+        await plugins_handle.shutdown()
     billing.log_session_summary()
 
     conv = world.get_component(agent_id, ConversationComponent)

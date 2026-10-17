@@ -66,6 +66,12 @@ async def lookup_weather(city: Annotated[str, "City name."]) -> str:
     ...
 ```
 
+Use `@tool(..., inline_result=True)` when the next model call must receive the
+result itself even if scratchbook sinking is enabled. The default is `False`.
+File readers and delegation/control tools use inline results so the model can
+read archived output, review feedback, session IDs, and lifecycle status.
+Failed tool results remain visible inline even when their full record is archived.
+
 ### Scanning a Module
 
 ```python

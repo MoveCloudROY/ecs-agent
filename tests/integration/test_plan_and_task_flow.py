@@ -2733,7 +2733,7 @@ async def test_plan_start_reset_does_not_retrigger_on_second_normalization(
 
     calls = {"count": 0}
 
-    async def fake_derive_workflow_id(description: str, model: object) -> str:
+    async def fake_derive_workflow_id(description: str, model: object, **kwargs: object) -> str:
         _ = (description, model)
         calls["count"] += 1
         return "build-demo"
@@ -3624,7 +3624,7 @@ async def test_controller_qa_verdict_blocked_while_advisor_revise_does_not_advan
 
     # QA gets consulted before the advisor approved — the phase must hold and no
     # QA verdict may be recorded.
-    with pytest.raises(ValueError, match="not approved"):
+    with pytest.raises(ValueError, match=r"not 'approved'"):
         await controller.handle_qa_review(state, adapter, "revise", notes="also no")
     assert controller.current_phase() == "DRAFT_ADVISOR_REVIEW"
     assert all(v.phase != "DRAFT_QA_REVIEW" for v in state.review_verdicts)
@@ -4085,7 +4085,7 @@ async def test_handle_write_plan_rejects_unapproved_qa(tmp_path: Path) -> None:
     world, eid = await _bound_world_at(state.phase)
     ctrl = PlanController(world, eid)
 
-    with pytest.raises(ValueError, match="not approved"):
+    with pytest.raises(ValueError, match=r"not 'approved'"):
         await ctrl.handle_write_plan(state, adapter)
     # The rejected call must not move the workflow forward.
     assert ctrl.current_phase() == "DRAFT_QA_REVIEW"
@@ -4576,6 +4576,80 @@ async def test_billing_subscriber_wired_in_build_plan_task_world(tmp_path: Path)
     assert LLMInvocationEvent in world.event_bus._handlers  # type: ignore[attr-defined]
 
 
+def test_billing_subscriber_is_propagating_observability_plugin() -> None:
+    from ecs_agent.plugins.api import ObservabilityPlugin
+    from examples.e2e.plan_and_task.billing import BillingSubscriber
+
+    sub = BillingSubscriber()
+
+    assert isinstance(sub, ObservabilityPlugin)
+    assert sub.propagate_to_children is True
+    assert sub.telemetry_sink() is None
+
+
+async def test_billing_plugin_counts_child_world_invocations() -> None:
+    """Installed as a plugin, billing sees subagent (child-world) LLM usage."""
+    from ecs_agent.accounting.models import LLMInvocationEvent, UsageRecord
+    from ecs_agent.core import World
+    from ecs_agent.plugins import install_plugins, propagate_plugins
+    from ecs_agent.types import EntityId
+    from examples.e2e.plan_and_task.billing import BillingSubscriber
+
+    parent = World()
+    billing = BillingSubscriber()
+    await install_plugins(parent, [billing])
+
+    child = World(name="advisor")
+    propagate_plugins(parent, child)
+
+    event = LLMInvocationEvent(
+        entity_id=EntityId(1),
+        provider_id="test",
+        model="m",
+        usage=UsageRecord(prompt_tokens=100, completion_tokens=5, total_tokens=105),
+    )
+    await parent.event_bus.publish(event)
+    await child.event_bus.publish(event)
+
+    assert billing._invocation_count == 2
+    assert billing._total_prompt_tokens == 200
+
+
+async def test_billing_plugin_labels_child_world_usage_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ecs_agent.accounting.models import LLMInvocationEvent, UsageRecord
+    from ecs_agent.core import World
+    from ecs_agent.types import EntityId
+    from examples.e2e.plan_and_task import billing as billing_module
+    from examples.e2e.plan_and_task.billing import BillingSubscriber
+
+    logged: list[tuple[str, dict[str, object]]] = []
+
+    class _CapturingLogger:
+        def info(self, event: str, **kwargs: object) -> None:
+            logged.append((event, kwargs))
+
+    monkeypatch.setattr(billing_module, "logger", _CapturingLogger())
+
+    billing = BillingSubscriber()
+    child = World(name="qa")
+    ((event_type, handler),) = billing.event_subscriptions(child)
+    assert event_type is LLMInvocationEvent
+
+    await handler(
+        LLMInvocationEvent(
+            entity_id=EntityId(7),
+            provider_id="test",
+            model="m",
+            usage=UsageRecord(prompt_tokens=10),
+        )
+    )
+
+    usage_events = [kw for name, kw in logged if name == "plan_task_llm_usage"]
+    assert usage_events and usage_events[0]["world"] == "qa"
+
+
 async def test_accounting_subscriber_wired_in_main(tmp_path: Path) -> None:
     """AccountingSubscriber can be subscribed to the world event_bus without error."""
     from ecs_agent.providers.fake_model import FakeModel
@@ -4657,7 +4731,7 @@ async def test_handle_write_plan_completed_transitions_write_plan_to_plan_qa_rev
     assert result.phase == "PLAN_QA_REVIEW"
 
 
-def test_provider_config_enable_store_defaults_false() -> None:
+def test_provider_config_enable_store_defaults_unset() -> None:
     from ecs_agent.providers.config import ApiFormat, ProviderConfig
 
     config = ProviderConfig(
@@ -4667,7 +4741,7 @@ def test_provider_config_enable_store_defaults_false() -> None:
         api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
     )
 
-    assert config.enable_store is False
+    assert config.enable_store is None
 
 
 def test_provider_config_enable_store_can_be_set_true() -> None:
@@ -6729,3 +6803,343 @@ async def test_live_review_after_rehydration_appends_latest(tmp_path: Path) -> N
     assert [r["verdict"] for r in ledger.records] == ["revise", "approved"]
     # Notes alignment: sticky clearing applies to the ledger copy too.
     assert ledger.records[-1]["notes"] is None
+
+
+# ---------------------------------------------------------------------------
+# Diagnosable review-gate rejections (2026-07-29 probe findings #4)
+# ---------------------------------------------------------------------------
+
+
+async def test_not_approved_rejection_reports_the_recorded_verdict_and_round(
+    tmp_path: Path,
+) -> None:
+    """The 'not approved' refusal must say a verdict IS recorded and what it is.
+
+    Regression: the message only said "<phase> is not approved", which a model
+    reads as "no verdict was recorded". A live run burned 31 minutes
+    re-dispatching the advisor to "repair" a review record that already existed
+    and was simply sitting on 'revise'.
+    """
+    from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter as ArtifactAdapter,
+    )
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="diagnosable-refusal")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "diagnosable refusal")
+    state = await controller.handle_advisor_review(state, adapter, "revise", notes="no")
+
+    with pytest.raises(ValueError) as excinfo:
+        await controller.handle_qa_review(state, adapter, "approved")
+
+    message = str(excinfo.value)
+    # Names the blocking phase and the verdict actually on file.
+    assert "DRAFT_ADVISOR_REVIEW" in message
+    assert "'revise'" in message
+    # States the record exists, so "repair the missing review" is not inferable.
+    assert "already recorded" in message
+    # Reports how much revise budget is left.
+    assert "1/5" in message
+    # Points at the real next action.
+    assert "advisor" in message.lower()
+
+
+async def test_describe_review_gate_distinguishes_missing_from_unapproved(
+    tmp_path: Path,
+) -> None:
+    """The three gate states must read differently to a caller.
+
+    "no verdict on file" and "a verdict is on file but says revise" call for
+    opposite actions; a refusal that cannot tell them apart is what sent a live
+    run off to repair a record that already existed.
+    """
+    from examples.e2e.plan_and_task.controller import (
+        PlanController,
+        describe_review_gate,
+    )
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter as ArtifactAdapter,
+    )
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="gate-description")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "gate description")
+
+    nothing = describe_review_gate(state, "DRAFT_ADVISOR_REVIEW", ("DRAFT_QA_REVIEW",))
+    assert "no recorded verdict" in nothing
+    assert "already recorded" not in nothing
+    assert "advisor" in nothing
+    assert "DRAFT_QA_REVIEW" in nothing
+
+    state = await controller.handle_advisor_review(state, adapter, "revise", notes="no")
+    unapproved = describe_review_gate(
+        state, "DRAFT_ADVISOR_REVIEW", ("DRAFT_QA_REVIEW",)
+    )
+    assert "already recorded" in unapproved
+    assert "'revise'" in unapproved
+    assert "1/5" in unapproved
+    assert "do not try to repair" in unapproved
+
+    state = await controller.handle_advisor_review(state, adapter, "approved")
+    approved = describe_review_gate(state, "DRAFT_ADVISOR_REVIEW", ("DRAFT_QA_REVIEW",))
+    assert "'approved'" in approved
+    assert "already recorded" not in approved
+
+
+async def test_unreachable_phase_rejection_names_the_reachable_phases(
+    tmp_path: Path,
+) -> None:
+    """Recording a far-off review must name what the workflow expects instead."""
+    from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter as ArtifactAdapter,
+    )
+
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id="unreachable-refusal")
+    world, eid = await _bound_world_at("IDLE")
+    controller = PlanController(world, eid)
+    state = await controller.handle_plan_start(adapter, "unreachable refusal")
+    state = await controller.handle_advisor_review(state, adapter, "approved")
+    # Only a QA verdict advances out of the advisor phase.
+    state = await controller.handle_qa_review(state, adapter, "revise", notes="qa")
+    assert controller.current_phase() == "DRAFT_QA_REVIEW"
+
+    with pytest.raises(ValueError) as excinfo:
+        await controller.handle_plan_qa_review(state, adapter, "approved")
+
+    message = str(excinfo.value)
+    assert "PLAN_QA_REVIEW" in message
+    assert "DRAFT_QA_REVIEW" in message
+    # Tells the model which phases it may actually record next.
+    assert "WRITE_PLAN" in message
+
+
+# ---------------------------------------------------------------------------
+# plan_writer retry safety (2026-07-29 probe findings #3)
+# ---------------------------------------------------------------------------
+
+
+def test_write_plan_prompt_tells_the_writer_to_read_an_existing_plan_first() -> None:
+    """A re-dispatched plan writer must know to read before overwriting.
+
+    Regression: write_file refuses to clobber a file the caller has not read,
+    and each dispatch gets a fresh child world with no snapshot. A live run
+    lost three consecutive plan_writer dispatches to that guard because the
+    prompt only mentioned reading the *draft*.
+    """
+    from examples.e2e.plan_and_task.prompts import WRITE_PLAN_SYSTEM_PROMPT
+
+    assert "workflow_plan.md" in WRITE_PLAN_SYSTEM_PROMPT
+    lowered = WRITE_PLAN_SYSTEM_PROMPT.lower()
+    assert "already exists" in lowered
+    assert "read_file" in lowered
+    # The guard's own wording, so the model can connect prompt to tool error.
+    assert "overwrit" in lowered
+
+
+# ---------------------------------------------------------------------------
+# BillingSubscriber surfaces invocation status (2026-07-29 probe findings #6)
+# ---------------------------------------------------------------------------
+
+
+def test_billing_subscriber_separates_non_success_invocations() -> None:
+    """Cancelled/errored invocations must not read as ordinary zero-token calls.
+
+    Regression: five zero-usage rows in a live run looked like a provider fault
+    until the logs were cross-checked; they were four subagent timeouts and one
+    ConnectError, all already labelled by the framework.
+    """
+    import asyncio
+
+    from ecs_agent.accounting.models import (
+        LLMInvocationEvent,
+        StreamCompleteness,
+        UsageRecord,
+    )
+    from ecs_agent.types import EntityId
+    from examples.e2e.plan_and_task.billing import BillingSubscriber
+
+    sub = BillingSubscriber()
+
+    async def _run() -> None:
+        ok = LLMInvocationEvent(
+            entity_id=EntityId(1),
+            provider_id="test",
+            model="m",
+            usage=UsageRecord(prompt_tokens=100, completion_tokens=10, total_tokens=110),
+        )
+        cancelled = LLMInvocationEvent(
+            entity_id=EntityId(1),
+            provider_id="test",
+            model="m",
+            usage=UsageRecord(stream_completeness=StreamCompleteness.UNKNOWN),
+            status="cancelled",
+        )
+        await sub._handle_llm_invocation(ok)
+        await sub._handle_llm_invocation(cancelled)
+
+    asyncio.run(_run())
+
+    assert sub._invocation_count == 2
+    assert sub._non_success_count == 1
+    assert sub._total_prompt_tokens == 100
+
+
+def test_billing_subscriber_logs_status_and_completeness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every usage line carries status + stream_completeness for diagnosis."""
+    import asyncio
+
+    from ecs_agent.accounting.models import (
+        LLMInvocationEvent,
+        StreamCompleteness,
+        UsageRecord,
+    )
+    from ecs_agent.types import EntityId
+    from examples.e2e.plan_and_task import billing as billing_module
+    from examples.e2e.plan_and_task.billing import BillingSubscriber
+
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    class _Recorder:
+        def info(self, event: str, **kwargs: object) -> None:
+            captured.append((event, kwargs))
+
+    monkeypatch.setattr(billing_module, "logger", _Recorder())
+    sub = BillingSubscriber()
+
+    async def _run() -> None:
+        await sub._handle_llm_invocation(
+            LLMInvocationEvent(
+                entity_id=EntityId(1),
+                provider_id="test",
+                model="m",
+                usage=UsageRecord(stream_completeness=StreamCompleteness.PARTIAL),
+                status="cancelled",
+            )
+        )
+
+    asyncio.run(_run())
+    sub.log_session_summary()
+
+    usage_lines = [kw for name, kw in captured if name == "plan_task_llm_usage"]
+    assert len(usage_lines) == 1
+    assert usage_lines[0]["status"] == "cancelled"
+    assert usage_lines[0]["stream_completeness"] == "partial"
+
+    summaries = [
+        kw for name, kw in captured if name == "plan_task_session_billing_summary"
+    ]
+    assert summaries[0]["non_success_invocation_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight review-order guard (2026-07-29 probe findings #4)
+# ---------------------------------------------------------------------------
+
+
+async def _guarded_world(tmp_path: Path, workflow_id: str) -> tuple[object, ...]:
+    from ecs_agent.providers.fake_model import FakeModel
+    from examples.e2e.plan_and_task.controller import PlanController
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+    from examples.e2e.plan_and_task.scratchbook_adapter import (
+        PlanTaskScratchbookAdapter as ArtifactAdapter,
+    )
+
+    world, agent_id, _adapter_ref, state_ref = await build_plan_task_world(
+        model=FakeModel(responses=["ok"]), base_dir=tmp_path
+    )
+    controller = PlanController(world, agent_id)
+    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id=workflow_id)
+    state = await controller.handle_plan_start(adapter, workflow_id)
+    state_ref[0] = state
+    return world, agent_id, controller, adapter, state_ref
+
+
+def _subagent_handler(world: object, agent_id: object) -> object:
+    from ecs_agent.components.definitions import ToolRegistryComponent
+
+    registry = world.get_component(agent_id, ToolRegistryComponent)  # type: ignore[attr-defined]
+    assert registry is not None
+    return registry.handlers["subagent"]
+
+
+async def test_dispatch_guard_rejects_qa_before_the_advisor_is_approved(
+    tmp_path: Path,
+) -> None:
+    """An out-of-order reviewer dispatch must be refused before it burns a run.
+
+    Regression: five reviewer subagents in one live run executed in full and
+    were only rejected when their verdict was recorded — the work was already
+    paid for by then.
+    """
+    world, agent_id, controller, adapter, state_ref = await _guarded_world(
+        tmp_path, "guard-qa-too-early"
+    )
+    state = await controller.handle_advisor_review(
+        state_ref[0], adapter, "revise", notes="no"
+    )
+    state_ref[0] = state
+
+    handler = _subagent_handler(world, agent_id)
+    result = await handler(category="qa", prompt="review the draft")
+
+    assert result.startswith("Error:")
+    assert "DRAFT_ADVISOR_REVIEW" in result
+    assert "'revise'" in result
+    # The refusal must not read as "the advisor review is missing".
+    assert "already recorded" in result
+
+
+async def test_dispatch_guard_rejects_a_review_phase_that_is_not_reachable(
+    tmp_path: Path,
+) -> None:
+    """plan_qa dispatched from DRAFT_QA_REVIEW is refused up front."""
+    world, agent_id, controller, adapter, state_ref = await _guarded_world(
+        tmp_path, "guard-plan-qa-too-early"
+    )
+    state = await controller.handle_advisor_review(state_ref[0], adapter, "approved")
+    state = await controller.handle_qa_review(state, adapter, "revise", notes="qa")
+    state_ref[0] = state
+    assert controller.current_phase() == "DRAFT_QA_REVIEW"
+
+    handler = _subagent_handler(world, agent_id)
+    result = await handler(category="plan_qa", prompt="review the plan")
+
+    assert result.startswith("Error:")
+    assert "PLAN_QA_REVIEW" in result
+    assert "DRAFT_QA_REVIEW" in result
+
+
+async def test_dispatch_guard_allows_the_reviewer_the_phase_expects(
+    tmp_path: Path,
+) -> None:
+    """The guard must not stand in the way of the in-order dispatch."""
+    world, agent_id, _controller, _adapter, _state_ref = await _guarded_world(
+        tmp_path, "guard-allows-advisor"
+    )
+
+    handler = _subagent_handler(world, agent_id)
+    result = await handler(category="advisor", prompt="review the draft")
+
+    assert not result.startswith("Error: out-of-order")
+
+
+async def test_dispatch_guard_stays_out_of_the_way_without_a_workflow(
+    tmp_path: Path,
+) -> None:
+    """No runtime state yet: the guard must defer rather than block."""
+    from ecs_agent.providers.fake_model import FakeModel
+    from examples.e2e.plan_and_task.main import build_plan_task_world
+
+    world, agent_id, _adapter_ref, _state_ref = await build_plan_task_world(
+        model=FakeModel(responses=["ok"]), base_dir=tmp_path
+    )
+    handler = _subagent_handler(world, agent_id)
+    result = await handler(category="advisor", prompt="review something")
+
+    assert not result.startswith("Error: out-of-order")

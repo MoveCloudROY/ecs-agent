@@ -10,6 +10,7 @@ from ecs_agent.components import (
     ErrorComponent,
     LLMComponent,
     PendingToolCallsComponent,
+    ToolRegistryComponent,
     StreamingComponent,
 )
 from ecs_agent.core import World
@@ -216,7 +217,9 @@ async def test_streaming_produces_complete_message_from_deltas() -> None:
 
     conversation = world.get_component(entity_id, ConversationComponent)
     assert conversation is not None
-    assert conversation.messages[-1] == Message(role="assistant", content="Hello world")
+    assert conversation.messages[-1].content == "Hello world"
+    assert conversation.messages[-1].generation_status == "completed"
+    assert conversation.messages[-1].finish_reason == "stop"
 
 
 @pytest.mark.asyncio
@@ -268,6 +271,10 @@ async def test_streaming_tool_call_deltas_accumulate_into_pending_tool_calls() -
     )
     entity_id = world.create_entity()
     world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(entity_id, ToolRegistryComponent(
+        tools={"get_weather": ToolSchema(name="get_weather", description="test tool", parameters={"type": "object"})},
+        handlers={},
+    ))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -301,6 +308,10 @@ async def test_streaming_parsed_arguments_supersede_stale_partial_snapshot() -> 
     )
     entity_id = world.create_entity()
     world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(entity_id, ToolRegistryComponent(
+        tools={"get_weather": ToolSchema(name="get_weather", description="test tool", parameters={"type": "object"})},
+        handlers={},
+    ))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -327,6 +338,10 @@ async def test_streaming_fragments_without_id_merge_into_previous_tool_call() ->
     )
     entity_id = world.create_entity()
     world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(entity_id, ToolRegistryComponent(
+        tools={"get_weather": ToolSchema(name="get_weather", description="test tool", parameters={"type": "object"})},
+        handlers={},
+    ))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -389,6 +404,10 @@ async def test_fake_model_streams_tool_calls_from_scripted_result() -> None:
     )
     entity_id = world.create_entity()
     world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(entity_id, ToolRegistryComponent(
+        tools={"get_weather": ToolSchema(name="get_weather", description="test tool", parameters={"type": "object"})},
+        handlers={},
+    ))
     world.add_component(
         entity_id,
         ConversationComponent(
@@ -427,7 +446,9 @@ async def test_streaming_error_preserves_partial_content_and_sets_error_componen
     conversation = world.get_component(entity_id, ConversationComponent)
     error = world.get_component(entity_id, ErrorComponent)
     assert conversation is not None
-    assert conversation.messages[-1] == Message(role="assistant", content="partial")
+    assert conversation.messages[-1].content == "partial"
+    assert conversation.messages[-1].generation_status == "error"
+    assert conversation.messages[-1].finish_reason == "error"
     assert error is not None
     assert error.system_name == "ReasoningSystem"
     assert "stream broke" in error.error
@@ -694,3 +715,151 @@ async def test_streaming_contract_emits_single_start_and_end_around_reasoning_an
     await ReasoningSystem().process(world)
 
     assert seen == ["start", "reasoning:thinking", "content:done", "end"]
+
+
+class MultiPhaseStreamingFakeModel(FakeModel):
+    """Streams reasoning deltas, then content deltas, then the final chunk."""
+
+    async def _stream_complete(
+        self, result: CompletionResult
+    ) -> AsyncIterator[StreamDelta]:
+        _ = result
+        yield StreamDelta(reasoning_content="r1")
+        yield StreamDelta(reasoning_content="r2")
+        yield StreamDelta(content="c1")
+        yield StreamDelta(content="c2")
+        yield StreamDelta(content="c3")
+        yield StreamDelta(finish_reason="stop")
+
+
+@pytest.mark.asyncio
+async def test_non_blocking_stream_events_preserve_order_and_drain() -> None:
+    """Non-blocking mode must deliver stream events strictly in order.
+
+    Regression: deltas were fire-and-forget tasks while phase markers and
+    StreamEnd were published inline, so subscribers observed StreamEnd (and
+    reasoning-end/content-start) before the tail deltas — with no seq field
+    to reorder by. The turn must also drain its queue before returning, so
+    no events are still in flight afterwards.
+    """
+    from ecs_agent.types import StreamContentStartEvent, StreamReasoningEndEvent
+
+    world = World()
+    model = MultiPhaseStreamingFakeModel(
+        responses=[CompletionResult(message=Message(role="assistant", content=""))]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="go")]),
+    )
+    world.add_component(
+        entity_id,
+        StreamingComponent(enabled=True, non_blocking_delta_publish=True),
+    )
+
+    seen: list[str] = []
+
+    async def on_start(event: StreamStartEvent) -> None:
+        seen.append("start")
+
+    async def on_reasoning_delta(event: StreamReasoningDeltaEvent) -> None:
+        await asyncio.sleep(0)  # force a queue backlog
+        seen.append(f"r:{event.reasoning_delta}")
+
+    async def on_reasoning_end(event: StreamReasoningEndEvent) -> None:
+        seen.append("r_end")
+
+    async def on_content_start(event: StreamContentStartEvent) -> None:
+        seen.append("c_start")
+
+    async def on_delta(event: StreamContentDeltaEvent) -> None:
+        await asyncio.sleep(0)  # force a queue backlog
+        seen.append(f"c:{event.delta}")
+
+    async def on_end(event: StreamEndEvent) -> None:
+        seen.append("end")
+
+    world.event_bus.subscribe(StreamStartEvent, on_start)
+    world.event_bus.subscribe(StreamReasoningDeltaEvent, on_reasoning_delta)
+    world.event_bus.subscribe(StreamReasoningEndEvent, on_reasoning_end)
+    world.event_bus.subscribe(StreamContentStartEvent, on_content_start)
+    world.event_bus.subscribe(StreamContentDeltaEvent, on_delta)
+    world.event_bus.subscribe(StreamEndEvent, on_end)
+
+    await ReasoningSystem().process(world)
+
+    # The turn returns without waiting for subscribers; the queued tail is
+    # flushed in the background, strictly in stream order.
+    deadline = time.monotonic() + 2.0
+    while len(seen) < 9 and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+
+    assert seen == [
+        "start",
+        "r:r1",
+        "r:r2",
+        "r_end",
+        "c_start",
+        "c:c1",
+        "c:c2",
+        "c:c3",
+        "end",
+    ]
+
+    conversation = world.get_component(entity_id, ConversationComponent)
+    assert conversation is not None
+    assert conversation.messages[-1].content == "c1c2c3"
+
+
+@pytest.mark.asyncio
+async def test_stream_generator_closed_on_inband_interruption() -> None:
+    """Abandoning the provider stream must close it, releasing its connection.
+
+    Regression: interrupted/errored turns left the async generator suspended
+    inside `async with client.stream(...)`; the connection stayed checked out
+    of the httpx pool until garbage collection, and repeated interruptions
+    exhausted the pool (PoolTimeout).
+    """
+    closed = {"stream": False}
+
+    class _TrackedStreamModel(FakeModel):
+        async def _stream_complete(
+            self, result: CompletionResult
+        ) -> AsyncIterator[StreamDelta]:
+            _ = result
+            try:
+                yield StreamDelta(content="A")
+                yield StreamDelta(content="B")
+                yield StreamDelta(finish_reason="stop")
+            finally:
+                closed["stream"] = True
+
+    world = World()
+    model = _TrackedStreamModel(
+        responses=[CompletionResult(message=Message(role="assistant", content=""))]
+    )
+    entity_id = world.create_entity()
+    world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(
+        entity_id,
+        ConversationComponent(messages=[Message(role="user", content="go")]),
+    )
+    world.add_component(entity_id, StreamingComponent(enabled=True))
+
+    from ecs_agent.components import InterruptionComponent
+    from ecs_agent.types import InterruptionReason
+
+    async def interrupt_on_first(event: StreamContentDeltaEvent) -> None:
+        if event.entity_id == entity_id:
+            world.add_component(
+                entity_id,
+                InterruptionComponent(reason=InterruptionReason.USER_REQUESTED),
+            )
+
+    world.event_bus.subscribe(StreamContentDeltaEvent, interrupt_on_first)
+
+    await ReasoningSystem().process(world)
+
+    assert closed["stream"] is True

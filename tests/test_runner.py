@@ -501,7 +501,7 @@ class TestRunner:
         conversation = world.get_component(entity_id, ConversationComponent)
         interruption = world.get_component(entity_id, InterruptionComponent)
         assert conversation is not None
-        assert conversation.messages[-1] == Message(role="assistant", content="partial")
+        assert conversation.messages[-1] == Message(role="assistant", content="partial", generation_status="cancelled", finish_reason="cancelled")
         assert interruption is not None
 
     @pytest.mark.asyncio
@@ -617,7 +617,7 @@ class TestRunner:
         error = world.get_component(entity_id, ErrorComponent)
 
         assert conversation is not None
-        assert conversation.messages[-1] == Message(role="assistant", content="A")
+        assert conversation.messages[-1] == Message(role="assistant", content="A", generation_status="cancelled", finish_reason="cancelled")
         assert interruption is not None
         assert interruption.reason == InterruptionReason.SYSTEM_PAUSE
         assert terminal is None

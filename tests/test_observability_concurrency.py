@@ -124,12 +124,12 @@ async def test_concurrent_runs_have_isolated_trace_ids() -> None:
         assert all(record.parent_observation_id == generation.observation_id for record in stream_records)
 
     assert generation_by_model["model-a"].output == {
-        "message": Message(role="assistant", content="alpha"),
+        "message": Message(role="assistant", content="alpha", generation_status="completed", finish_reason="stop"),
         "reasoning_content": None,
         "response_id": "resp-model-a",
     }
     assert generation_by_model["model-b"].output == {
-        "message": Message(role="assistant", content="beta"),
+        "message": Message(role="assistant", content="beta", generation_status="completed", finish_reason="stop"),
         "reasoning_content": None,
         "response_id": "resp-model-b",
     }

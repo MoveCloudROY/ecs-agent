@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 
 from ecs_agent.types import EntityId, Message, ToolSchema, Usage, UserInputReceivedEvent
+from ecs_agent.outcomes import GenerationStatus, InvocationStatus
 
 
-LLMObservationStatus = Literal["success", "error", "cancelled", "unknown"]
+LLMObservationStatus = InvocationStatus
 
 
 @dataclass(slots=True)
@@ -48,6 +49,8 @@ class LLMObservationCompletedEvent:
     start_time: datetime | None = None
     end_time: datetime | None = None
     cost_details: dict[str, Any] = field(default_factory=dict)
+    generation_status: GenerationStatus | None = None
+    finish_reason: str | None = None
 
 
 __all__ = [

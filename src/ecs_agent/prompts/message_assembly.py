@@ -27,6 +27,10 @@ INTERRUPTED_TOOL_RESULT = (
 )
 
 
+class ContextBudgetExceededError(ValueError):
+    """Raised when protected outbound content cannot fit the configured budget."""
+
+
 def repair_dangling_tool_spans(messages: list[Message]) -> list[Message]:
     """Insert synthetic results for assistant tool calls that have no reply.
 
@@ -212,7 +216,8 @@ def trim_context_to_fit(
         chars_per_token=config.token_estimation_chars_per_token,
     )
     if config.overflow_behavior == "error":
-        raise ValueError("Protected content exceeds configured budget")
+        logger.error("outbound_budget_exceeded", estimated_tokens=estimated_tokens, max_tokens=budget)
+        raise ContextBudgetExceededError("Protected content exceeds configured budget")
 
     logger.warning(
         "outbound_budget_exceeded",
@@ -789,18 +794,20 @@ def _drop_oldest_tool_span(
             continue
 
         end_index = index + 1
-        matched_tool_result = False
+        answered_ids: set[str] = set()
         while end_index < len(messages):
             candidate = messages[end_index]
             if candidate.role != "tool":
                 break
             if candidate.tool_call_id in tool_call_ids:
-                matched_tool_result = True
+                if candidate.tool_call_id in answered_ids:
+                    break
+                answered_ids.add(candidate.tool_call_id)
                 end_index += 1
                 continue
             break
 
-        if not matched_tool_result:
+        if answered_ids != tool_call_ids:
             continue
 
         if protect_from is not None and end_index > protect_from:
@@ -927,6 +934,7 @@ def _cached_artifact_path_for_entry(
 
 
 __all__ = [
+    "ContextBudgetExceededError",
     "trim_context_to_fit",
     "assemble_messages",
     "build_keyword_registry",

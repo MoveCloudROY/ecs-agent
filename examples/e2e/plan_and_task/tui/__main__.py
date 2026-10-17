@@ -48,8 +48,16 @@ async def main() -> None:
     )
     langfuse_handle = await install_plan_task_langfuse_observability(world)
 
+    # Same wiring as main.py: billing rides the plugin pipeline so subagent
+    # child worlds are billed too.
     billing = BillingSubscriber()
-    billing.subscribe(world.event_bus)
+    plugins_handle = langfuse_handle
+    if plugins_handle is None:
+        from ecs_agent.plugins import install_plugins
+
+        plugins_handle = await install_plugins(world, [billing])
+    else:
+        await plugins_handle.add(billing)
     accounting = AccountingSubscriber()
     accounting.subscribe(world.event_bus)
 
@@ -71,9 +79,8 @@ async def main() -> None:
             task_group.create_task(session.app.run_async())
             task_group.create_task(run_world())
     finally:
-        if langfuse_handle is not None:
-            await langfuse_handle.flush()
-            await langfuse_handle.shutdown()
+        await plugins_handle.flush()
+        await plugins_handle.shutdown()
         billing.log_session_summary()
 
 

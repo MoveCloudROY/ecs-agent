@@ -20,20 +20,25 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ecs_agent.core.world import World
+from ecs_agent.core.run_result import RunStatus
 from ecs_agent.logging import get_logger
 from ecs_agent.systems.subagent._contextvars import (
     _BACKGROUND_LAUNCH_OBSERVABILITY_CONTEXT,
     _PUBLISH_COMPLETION_EVENT,
+    _DELEGATION_OUTCOME_CAPTURE,
 )
 from ecs_agent.systems.subagent.notifications import NotificationCoordinator
 from ecs_agent.systems.subagent.result_envelope import parse_background_result_envelope
+from ecs_agent.systems.subagent.results import (
+    DelegationOutcomeCapture, DelegationResult, LegacyDelegationResult, normalize_delegation_result,
+)
 from ecs_agent.systems.subagent_runtime import SubagentRuntimeManager
 from ecs_agent.types import EntityId, SubagentConfig, SubagentSessionRecord
 
 logger = get_logger(__name__)
 
 # Seam signatures captured from SubagentSystem at build time.
-ExecuteCore = Callable[..., Awaitable[tuple[str, bool, str | None]]]
+ExecuteCore = Callable[..., Awaitable[DelegationResult | LegacyDelegationResult]]
 PersistResult = Callable[[str], tuple[str, str, str | None] | None]
 PublishEvents = Callable[..., Awaitable[None]]
 
@@ -71,7 +76,10 @@ class BackgroundSessionRunner:
         runtime_manager = self._runtime_manager
         notification_coordinator = self._notification_coordinator
 
-        async def execute_with_config() -> tuple[str, bool, str | None]:
+        capture = DelegationOutcomeCapture()
+
+        async def execute_with_config() -> DelegationResult:
+            capture_token = _DELEGATION_OUTCOME_CAPTURE.set(capture)
             token = _PUBLISH_COMPLETION_EVENT.set(False)
             launch_context_token = _BACKGROUND_LAUNCH_OBSERVABILITY_CONTEXT.set(
                 (
@@ -82,7 +90,7 @@ class BackgroundSessionRunner:
             )
             try:
                 if metadata.stream:
-                    return await execute_core(
+                    return normalize_delegation_result(await execute_core(
                         world,
                         parent_entity_id,
                         category,
@@ -92,9 +100,9 @@ class BackgroundSessionRunner:
                         config,
                         session_id=session_id,
                         stream=True,
-                    )
+                    ))
 
-                return await execute_core(
+                return normalize_delegation_result(await execute_core(
                     world,
                     parent_entity_id,
                     category,
@@ -102,12 +110,20 @@ class BackgroundSessionRunner:
                     metadata.correlation_id,
                     metadata.traceparent,
                     config,
-                )
+                ))
             finally:
                 _BACKGROUND_LAUNCH_OBSERVABILITY_CONTEXT.reset(launch_context_token)
                 _PUBLISH_COMPLETION_EVENT.reset(token)
+                _DELEGATION_OUTCOME_CAPTURE.reset(capture_token)
 
         async def publish_failure_events(error_msg: str) -> None:
+            failure_status = (
+                RunStatus.TIMEOUT if metadata.status == "timed_out"
+                else RunStatus.CANCELLED if metadata.status == "cancelled" else RunStatus.ERROR
+            )
+            metadata.outcome_status = failure_status.value
+            outcome = capture.failure(failure_status, error_msg)
+            metadata.partial_content = outcome.partial_content or None
             await publish_events(
                 world,
                 parent_entity_id,
@@ -115,7 +131,7 @@ class BackgroundSessionRunner:
                 correlation_id=metadata.correlation_id,
                 traceparent=metadata.traceparent,
                 task=metadata.prompt,
-                result=error_msg,
+                result=outcome.as_tuple()[0],
                 success=False,
                 error=error_msg,
                 trace_id=metadata.launch_trace_id,
@@ -123,10 +139,12 @@ class BackgroundSessionRunner:
                 parent_observation_id=metadata.launch_parent_observation_id,
                 observation_id=metadata.correlation_id,
                 publish_started=False,
+                outcome=outcome,
             )
 
         async def finalize_failure(error_msg: str) -> None:
             metadata.status = "failed"
+            metadata.outcome_status = RunStatus.ERROR.value
             metadata.error = error_msg
             metadata.finished_at = _utc_now_iso()
             metadata.updated_at = metadata.finished_at
@@ -142,12 +160,10 @@ class BackgroundSessionRunner:
             await runtime_manager.update_status(session_id, metadata.status)
             await runtime_manager.sync_to_component(world, parent_entity_id)
             try:
-                if resolved_timeout is not None:
-                    result, success, error = await asyncio.wait_for(
-                        execute_with_config(), timeout=resolved_timeout
-                    )
-                else:
-                    result, success, error = await execute_with_config()
+                capture.timeout_scope = asyncio.timeout(resolved_timeout)
+                async with capture.timeout_scope:
+                    outcome = await execute_with_config()
+                result, success, error = outcome.as_tuple()
             except asyncio.CancelledError:
                 # Reached via task.cancel(). cancel_session() normally set the
                 # status already; force it for cancellations that bypassed it
@@ -155,15 +171,22 @@ class BackgroundSessionRunner:
                 # in "running".
                 if metadata.status in ("queued", "running"):
                     metadata.status = "cancelled"
+                metadata.outcome_status = RunStatus.CANCELLED.value
+                metadata.error = "Subagent cancelled"
+                metadata.partial_content = capture.failure(RunStatus.CANCELLED, metadata.error).partial_content or None
                 metadata.finished_at = _utc_now_iso()
                 metadata.updated_at = metadata.finished_at
+                await runtime_manager.update_status(session_id, metadata.status)
                 await runtime_manager.sync_to_component(world, parent_entity_id)
                 # Cancellation is a terminal status: waiters (subagent_wait
                 # futures) must wake, exactly like success/failure/timeout.
                 notification_coordinator.enqueue_parent_notification(world, metadata)
+                await publish_failure_events(metadata.error)
                 raise
             except asyncio.TimeoutError:
                 error_msg = f"Error: Subagent timeout after {resolved_timeout}s"
+                metadata.outcome_status = RunStatus.TIMEOUT.value
+                metadata.partial_content = capture.failure(RunStatus.TIMEOUT, error_msg).partial_content or None
                 metadata.finished_at = _utc_now_iso()
                 metadata.updated_at = metadata.finished_at
                 logger.error(
@@ -182,6 +205,8 @@ class BackgroundSessionRunner:
 
             try:
                 metadata.updated_at = _utc_now_iso()
+                metadata.outcome_status = outcome.status.value
+                metadata.partial_content = outcome.partial_content or None
                 if success:
                     parsed_result = parse_background_result_envelope(result)
                     if parsed_result is None:
@@ -201,9 +226,13 @@ class BackgroundSessionRunner:
                         metadata.artifact_record_path = record_path
                         metadata.artifact_inline_content = inline_content
                 else:
-                    metadata.status = "failed"
+                    metadata.status = (
+                        "cancelled" if outcome.status in {RunStatus.CANCELLED, RunStatus.INTERRUPTED}
+                        else "timed_out" if outcome.status is RunStatus.TIMEOUT else "failed"
+                    )
                     metadata.finished_at = metadata.updated_at
                     metadata.error = error
+                    metadata.result_excerpt = outcome.partial_content[:200] or None
                 await runtime_manager.update_status(session_id, metadata.status)
             except Exception as exc:
                 # Finalization itself failed (persist IO error, status-update
@@ -244,6 +273,7 @@ class BackgroundSessionRunner:
                 parent_observation_id=metadata.launch_parent_observation_id,
                 observation_id=metadata.correlation_id,
                 publish_started=False,
+                outcome=outcome,
             )
 
         return run_in_background

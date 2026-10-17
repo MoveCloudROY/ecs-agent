@@ -805,7 +805,7 @@ async def test_streaming_partial_content_persisted_on_interrupt_cancel() -> None
     error = world.get_component(entity_id, ErrorComponent)
 
     assert conversation is not None
-    assert conversation.messages[-1] == Message(role="assistant", content="partial")
+    assert conversation.messages[-1] == Message(role="assistant", content="partial", generation_status="cancelled", finish_reason="cancelled")
     assert interruption is not None
     assert interruption.reason == InterruptionReason.USER_REQUESTED
     assert error is None
@@ -890,7 +890,7 @@ async def test_streaming_interrupt_mid_generation_preserves_partial_and_emits_st
     error = world.get_component(entity_id, ErrorComponent)
 
     assert conversation is not None
-    assert conversation.messages[-1] == Message(role="assistant", content="A")
+    assert conversation.messages[-1] == Message(role="assistant", content="A", generation_status="cancelled", finish_reason="cancelled")
     assert interruption is not None
     assert interruption.reason == InterruptionReason.SYSTEM_PAUSE
     assert error is None

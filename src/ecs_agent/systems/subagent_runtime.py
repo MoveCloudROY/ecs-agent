@@ -46,12 +46,21 @@ class BackgroundScheduler:
         self.active_count = 0
         self._running_session_ids: set[str] = set()
         self._lock = asyncio.Lock()
+        # Pinned on first async use; get_global_scheduler() discards a
+        # scheduler bound to a dead loop (its lock and occupancy are unusable
+        # in the new one).
+        self._bound_loop: asyncio.AbstractEventLoop | None = None
+
+    def _bind_current_loop(self) -> None:
+        if self._bound_loop is None:
+            self._bound_loop = asyncio.get_running_loop()
 
     async def enqueue(
         self,
         session_id: str,
         coroutine_factory: Callable[[], Awaitable[None]],
     ) -> None:
+        self._bind_current_loop()
         async with self._lock:
             self.pending_queue.append(
                 QueuedSession(
@@ -61,6 +70,7 @@ class BackgroundScheduler:
             )
 
     async def reserve_admissions(self) -> list[QueuedSession]:
+        self._bind_current_loop()
         async with self._lock:
             admitted: list[QueuedSession] = []
             while self.pending_queue and self.active_count < self.max_concurrency:
@@ -121,6 +131,25 @@ def reset_global_scheduler() -> None:
 
 def get_global_scheduler(max_background_concurrency: int = 5) -> BackgroundScheduler:
     global _GLOBAL_SCHEDULER
+
+    if _GLOBAL_SCHEDULER is not None and _GLOBAL_SCHEDULER._bound_loop is not None:
+        try:
+            running_loop: asyncio.AbstractEventLoop | None = (
+                asyncio.get_running_loop()
+            )
+        except RuntimeError:
+            running_loop = None
+        if running_loop is not None and _GLOBAL_SCHEDULER._bound_loop is not running_loop:
+            # The scheduler survived an asyncio.run() boundary: its lock is
+            # pinned to the dead loop and its occupancy counts tasks that
+            # died with it. Start fresh instead of queueing forever behind
+            # phantom sessions.
+            logger.warning(
+                "background_scheduler_rebound_for_new_loop",
+                stale_active_count=_GLOBAL_SCHEDULER.active_count,
+                stale_pending=len(_GLOBAL_SCHEDULER.pending_queue),
+            )
+            _GLOBAL_SCHEDULER = None
 
     if _GLOBAL_SCHEDULER is None:
         _GLOBAL_SCHEDULER = BackgroundScheduler(
@@ -337,6 +366,8 @@ class SubagentRuntimeManager:
                         "cancelled",
                     )
                     metadata.status = "cancelled"
+                    metadata.outcome_status = "cancelled"
+                    metadata.error = "Subagent cancelled before starting"
                     metadata.updated_at = _utc_now_iso()
                     metadata.finished_at = metadata.updated_at
 
@@ -352,15 +383,22 @@ class SubagentRuntimeManager:
             if metadata is not None and metadata.status in ("queued", "running"):
                 validate_subagent_lifecycle_transition(metadata.status, "cancelled")
                 metadata.status = "cancelled"
+                metadata.outcome_status = "cancelled"
+                metadata.error = "Subagent cancelled"
                 metadata.updated_at = _utc_now_iso()
                 if metadata.finished_at is None:
                     metadata.finished_at = metadata.updated_at
 
-        self._signal_session_terminal(session_id)
-
         if task is not None and not task.done():
             task.cancel()
             logger.info("session_task_cancelled", session_id=session_id)
+            if task is not asyncio.current_task():
+                # The child records its partial output while cancellation
+                # unwinds. Waiters must not observe a terminal before that
+                # snapshot is available.
+                await asyncio.gather(task, return_exceptions=True)
+
+        self._signal_session_terminal(session_id)
 
         await self.release_slot(session_id)
 

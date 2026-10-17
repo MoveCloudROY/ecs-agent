@@ -299,3 +299,47 @@ async def test_accounting_subscriber_failure_is_logged_and_publish_continues(
     output = _captured_log_output(captured)
     assert "event_bus_subscriber_error" in output
     assert "accounting explode" in output
+
+
+class _NameStringModel:
+    """Mimics OpenAIModel: empty provider label, ``_model`` is the name string."""
+
+    def __init__(self) -> None:
+        self._model = "gpt-5.6-sol"
+
+    @property
+    def provider_id(self) -> str:
+        return ""
+
+    @property
+    def model_id(self) -> str:
+        return self._model
+
+
+class _PlainWrapper:
+    """Mimics RetryModel: no labels of its own, wraps via ``_model``."""
+
+    def __init__(self, inner: object) -> None:
+        self._model = inner
+
+
+def test_resolve_provider_id_does_not_descend_into_model_name_string() -> None:
+    from ecs_agent.accounting.instrumentation import resolve_provider_id
+
+    assert resolve_provider_id(_NameStringModel()) == "_NameStringModel"
+
+
+def test_resolve_provider_id_walks_wrappers_but_stops_at_name_string() -> None:
+    from ecs_agent.accounting.instrumentation import resolve_provider_id
+
+    assert resolve_provider_id(_PlainWrapper(_NameStringModel())) == "_NameStringModel"
+
+
+def test_resolve_model_id_does_not_descend_into_model_name_string() -> None:
+    from ecs_agent.accounting.instrumentation import resolve_model_id
+
+    class _NoLabels:
+        def __init__(self) -> None:
+            self._model = "gpt-5.6-sol"
+
+    assert resolve_model_id(_NoLabels()) == "_NoLabels"

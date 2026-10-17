@@ -7,10 +7,13 @@ execution results and revise remaining steps if needed.
 from __future__ import annotations
 
 import json
+import time
 
 from ecs_agent.accounting.instrumentation import complete_with_llm_invocation_event
 from ecs_agent.components import (
     ConversationComponent,
+    ErrorComponent,
+    TerminalComponent,
     LLMComponent,
     PlanComponent,
     PromptContextQueueComponent,
@@ -18,7 +21,10 @@ from ecs_agent.components import (
     RunnerStateComponent,
 )
 from ecs_agent.core.world import World
+from ecs_agent.logging import get_logger
+from ecs_agent.outcomes import GenerationStatus
 from ecs_agent.prompts.message_assembly import (
+    ContextBudgetExceededError,
     commit_prompt_context_reservation,
     prepare_outbound_messages,
     resolve_system_prompt_parts,
@@ -27,6 +33,7 @@ from ecs_agent.scratchbook import ArtifactRegistry, ScratchbookService
 from ecs_agent.systems._plan_utils import derive_plan_name, render_plan_markdown
 from ecs_agent.types import CompletionResult, EntityId, Message, PlanRevisedEvent
 
+logger = get_logger(__name__)
 
 class ReplanningSystem:
     """System that dynamically revises plan steps based on execution results.
@@ -92,14 +99,22 @@ class ReplanningSystem:
             replanning_prompt = self._build_replanning_prompt(
                 plan=plan, conversation=conversation
             )
-            messages, context_reservation = prepare_outbound_messages(
-                world,
-                entity_id,
-                system_prompt=system_prompt_text,
-                system_volatile_suffix=system_volatile_suffix,
-                current_tick=current_tick,
-                conversation_override=[Message(role="user", content=replanning_prompt)],
-            )
+            try:
+                messages, context_reservation = prepare_outbound_messages(
+                    world,
+                    entity_id,
+                    system_prompt=system_prompt_text,
+                    system_volatile_suffix=system_volatile_suffix,
+                    current_tick=current_tick,
+                    conversation_override=[Message(role="user", content=replanning_prompt)],
+                )
+            except ContextBudgetExceededError as exc:
+                logger.error("replanning_budget_exhausted", entity_id=int(entity_id), exception=str(exc))
+                world.add_component(entity_id, ErrorComponent(
+                    error=str(exc), system_name="ReplanningSystem", timestamp=time.time(),
+                ))
+                world.add_component(entity_id, TerminalComponent(reason="budget_exhausted", error=str(exc)))
+                continue
 
             if context_reservation is not None:
                 world.add_component(entity_id, context_reservation)
@@ -116,6 +131,16 @@ class ReplanningSystem:
                     raise RuntimeError(
                         "Provider returned stream iterator in non-streaming mode"
                     )
+                if result.message.generation_status is not GenerationStatus.COMPLETED:
+                    logger.warning(
+                        "replanning_generation_stopped",
+                        status=result.message.generation_status, error=result.error,
+                    )
+                    # This optional revision cannot replace the working plan.
+                    # Retry only when another completed step warrants a review.
+                    self._last_replanned[entity_id] = plan.current_step
+                    world.remove_component(entity_id, PromptContextReservationComponent)
+                    continue
                 if context_queue is not None and context_reservation is not None:
                     commit_prompt_context_reservation(
                         queue=context_queue,
@@ -163,7 +188,8 @@ class ReplanningSystem:
             except (IndexError, StopIteration):
                 # Provider exhausted — skip replanning silently
                 self._last_replanned[entity_id] = plan.current_step
-            except Exception:
+            except Exception as exc:
+                logger.error("replanning_error", exception=str(exc))
                 continue
 
     def _build_replanning_prompt(

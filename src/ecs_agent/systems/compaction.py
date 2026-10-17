@@ -17,11 +17,15 @@ from ecs_agent.components import (
     ConversationComponent,
     EntityRegistryComponent,
     LLMComponent,
+    PendingToolCallsComponent,
     RenderedUserPromptComponent,
+    TerminalComponent,
     TokenUsageComponent,
 )
 from ecs_agent.core import World
+from ecs_agent.history import replace_conversation_history
 from ecs_agent.logging import get_logger
+from ecs_agent.outcomes import GenerationStatus
 from ecs_agent.token_counting import count_tokens
 from ecs_agent.prompts.message_assembly import (
     _drop_oldest_tool_span,
@@ -67,6 +71,12 @@ class CompactionSystem:
         for entity_id, (config, conversation) in world.query(
             CompactionConfigComponent, ConversationComponent
         ):
+            if world.has_component(entity_id, TerminalComponent):
+                continue
+            if world.has_component(entity_id, PendingToolCallsComponent):
+                # Pending calls and their provider reasoning belong to one
+                # unfinished turn; compact only after their results are landed.
+                continue
             llm_component = world.get_component(entity_id, LLMComponent)
             if llm_component is None:
                 continue
@@ -97,7 +107,7 @@ class CompactionSystem:
                 )
                 if changed:
                     dropped = len(conversation.messages) - len(trimmed)
-                    conversation.messages = trimmed
+                    replace_conversation_history(world, entity_id, trimmed, reason="compaction_trim")
                     self._invalidate_usage_anchor(world, entity_id)
                     logger.info(
                         "context_trimmed",
@@ -164,6 +174,9 @@ class CompactionSystem:
                 ),
             )
 
+            if summary is None:
+                continue
+
             archive = world.get_component(entity_id, ConversationArchiveComponent)
             if archive is None:
                 archive = ConversationArchiveComponent()
@@ -190,7 +203,7 @@ class CompactionSystem:
                 )
                 if anchor is not None:
                     new_messages.append(anchor)
-            conversation.messages = new_messages
+            replace_conversation_history(world, entity_id, new_messages, reason="compaction_summary")
 
             compacted_tokens = self._estimate_tokens(new_messages)
             await world.event_bus.publish(
@@ -328,7 +341,8 @@ class CompactionSystem:
                 if not (message.reasoning_content or message.reasoning_signature):
                     continue
                 result[index] = replace(
-                    message, reasoning_content=None, reasoning_signature=None
+                    message, reasoning_content=None, reasoning_signature=None,
+                    provider_output=None,
                 )
                 changed = True
 
@@ -518,7 +532,7 @@ class CompactionSystem:
         messages: list[Message],
         system_prompt: str,
         context_state: str | None,
-    ) -> str:
+    ) -> str | None:
         formatted_messages = "\n".join(
             f"{message.role}: {message.content}" for message in messages
         )
@@ -538,6 +552,17 @@ class CompactionSystem:
         )
         if not isinstance(result, CompletionResult):
             raise RuntimeError("Provider returned stream iterator for compaction")
+        status = result.message.generation_status or GenerationStatus.UNKNOWN
+        if status is not GenerationStatus.COMPLETED or not result.message.content.strip():
+            if status is GenerationStatus.COMPLETED:
+                status = GenerationStatus.ERROR
+                result.error = "Compaction returned an empty summary"
+            logger.error("compaction_generation_stopped", status=status, error=result.error)
+            world.add_component(entity_id, TerminalComponent(
+                reason=f"compaction_{status.value}",
+                error=result.error if status is GenerationStatus.ERROR else None,
+            ))
+            return None
         return result.message.content
 
 

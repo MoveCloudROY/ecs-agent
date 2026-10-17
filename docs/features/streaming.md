@@ -59,6 +59,7 @@ provider answered:
 | `CONTENT_FILTER` | Provider filtered or refused the output | `content_filter`, `refusal` |
 | `CANCELLED` | Provider reports the response was cancelled | `cancelled` |
 | `UNKNOWN` | The response ended without the provider stating a reason | unrecognised values; a stream closing on a bare `[DONE]` or EOF |
+| `ERROR` | Provider reports generation failure | Responses `failed` |
 
 `UNKNOWN` is a fact about the response, not a parse failure. It is never
 reported as `STOP`: claiming a clean completion the provider never stated would
@@ -67,6 +68,44 @@ hide truncation. Unrecognised dialect values are logged
 
 The same value is on `CompletionResult.finish_reason` for non-streaming calls,
 so both transports answer "why did this end?" identically.
+
+### Agent generation outcomes
+
+`ReasoningSystem` preserves `finish_reason` and `generation_status` on assistant
+messages, invocation / observation events, and `StreamEndEvent`. The outcome is
+one of `completed`, `tool_calls`, `incomplete`, `filtered`, `cancelled`, `unknown`,
+or `error`. Only a completed final answer produces `ReasoningCompleteEvent` and
+`TerminalComponent(reason="reasoning_complete")`; complete tool calls continue
+the tool loop. Other outcomes stop the turn with their corresponding
+`reasoning_<status>` terminal reason. Partial text remains available with its
+outcome, and incomplete or malformed tool arguments are not executed.
+
+Responses generation failures returned in an HTTP-success response produce
+`FinishReason.ERROR` and `CompletionResult.error` / `StreamDelta.error`, retaining
+any reported usage. HTTP / transport errors still raise exceptions. A plain EOF
+without a finish reason is `UNKNOWN`, even if some output was received. Legacy
+non-streaming providers returning a complete `CompletionResult` without a finish
+reason retain their completed-result contract; this compatibility rule does not
+apply to stream iterators.
+
+Usage completeness is independent: an answer truncated at its token limit can
+still have a complete token report. Missing usage is `UNKNOWN`; usage received
+before interruption or failure is retained with its reported completeness. The
+shared observation helper emits streamed invocation accounting after consumption,
+when the usage and terminal outcome are available.
+
+Streams returned by `complete_with_llm_invocation_event` own their underlying
+iterator. When stopping consumption early, call `await stream.aclose()` (or use
+`contextlib.aclosing`) to release the HTTP connection and publish one terminal
+event. Closing before a finish reason arrives reports cancellation; it does not
+infer success from partial text. Repeated close calls do not duplicate accounting.
+Tool fragments use the same aggregation as Reasoning, followed by tool identity
+and JSON Schema validation before a successful tool-call outcome is reported.
+
+Interactive plan/task hosts clear recoverable reasoning terminal markers after
+reporting the outcome and wait for new user input. Child worlds keep their
+terminal markers for task outcome inspection. Truncation does not automatically
+trigger a continuation or model retry.
 
 ## Usage Example
 

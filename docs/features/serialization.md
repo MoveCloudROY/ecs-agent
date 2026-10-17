@@ -6,7 +6,7 @@ The `WorldSerializer` provides a robust mechanism to save the entire state of a 
 
 The `WorldSerializer` class offers several methods for serializing and deserializing `World` states:
 
-- `WorldSerializer.to_dict(world: World) -> dict`: Converts a `World` instance into a serializable dictionary.
+- `WorldSerializer.to_dict(world: World, *, exclude_component_types=()) -> dict`: Converts a `World` instance into a serializable dictionary. `exclude_component_types` omits component types from the payload only (e.g. `Runner.save_checkpoint` excludes `TerminalComponent` for resume-friendly checkpoints) — the live world is never mutated.
 - `WorldSerializer.from_dict(data: dict, providers: dict[str, LLMModel], tool_handlers: dict[str, Callable]) -> World`: Reconstructs a `World` from a dictionary.
 - `WorldSerializer.save(world: World, path: Path | str)`: Directly saves the `World` to a JSON file.
 - `WorldSerializer.load(path: Path | str, providers: dict[str, LLMModel], tool_handlers: dict[str, Callable]) -> World`: Directly loads a `World` from a JSON file.
@@ -103,3 +103,9 @@ if __name__ == "__main__":
 
 - **Private Internals**: The `WorldSerializer` directly accesses private `World` internals (`world._components._components`) to efficiently iterate and extract state.
 - **Dependency Management**: Deserialization requires all necessary models and tool handlers to be available at load time. If a component references a model that is not included in the `providers` map, the field will remain as `"<non-serializable>"`, which may lead to errors when the agent attempts to use it.
+## Generation outcome metadata
+
+Assistant `Message.generation_status` and `Message.finish_reason` are preserved
+by world serialization and checkpoint round trips. Snapshots written before these
+fields existed remain readable with `None` values. Partial output therefore
+retains its cancellation, truncation, or failure marker after restoration.

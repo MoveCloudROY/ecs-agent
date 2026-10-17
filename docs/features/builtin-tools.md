@@ -65,7 +65,7 @@ manager.install(world, agent_entity, skill)
 
 ## Tool Reference
 
-### `read_file(file_path, offset=1, limit=0) -> str`
+### `read_file(file_path, offset=1, limit=0, line_numbers=False) -> str`
 Reads content from a file relative to the workspace root.
 
 | Parameter | Type | Default | Description |
@@ -73,10 +73,12 @@ Reads content from a file relative to the workspace root.
 | `file_path` | `str` | — | Workspace-relative path. |
 | `offset` | `int \| str` | `1` | 1-based starting line number. Numeric strings such as `"10"` are accepted. |
 | `limit` | `int \| str` | `0` | Maximum lines to return. `0` reads all lines. Numeric strings such as `"20"` are accepted. |
+| `line_numbers` | `bool` | `False` | Prefix returned lines with absolute 1-based numbers, including blank lines. Use for `edit_file`. |
 
 - **Security**: Prevents path traversal outside the workspace.
-- **Output**: Clean file content only. The framework records internal line-hash snapshots for later safe edits without exposing hashes, snapshot IDs, or read IDs to the LLM.
+- **Output**: Clean file content by default; `line_numbers=True` yields lines such as `12: content`. Snapshot validation still uses the original file content and never exposes internal hashes or snapshot IDs.
 - **Best practice**: Always specify `offset` and `limit` for large files to avoid reading oversized content into the context window.
+- **Artifact retrieval**: Results stay inline even with a tool-result sink. This lets the model read files and archived results without receiving another archive reference instead of their content.
 
 Example:
 ```python

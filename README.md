@@ -166,7 +166,7 @@ src/ecs_agent/
 │   └── definitions.py        # Component dataclasses
 ├── providers/
 │   ├── protocol.py           # LLMModel Protocol
-│   ├── openai_model.py      # OpenAI-compatible HTTP provider (httpx)
+│   ├── openai_model.py      # OpenAI provider (Responses SDK / Chat HTTP)
 │   ├── claude_model.py      # Anthropic Claude provider
 │   ├── litellm_model.py     # LiteLLM unified provider
 │   ├── fake_model.py        # Deterministic test provider

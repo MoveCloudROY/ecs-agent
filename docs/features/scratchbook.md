@@ -239,6 +239,13 @@ descriptor = await registry.capture_stream(
 print(descriptor.record_path)  # scratchbook/records/subagent/subagent_<uuid24>
 ```
 
+`ToolExecutionSystem` normally replaces persisted tool outputs with their record
+paths. Tools marked `inline_result` keep their results visible: built-in
+`read_file` can retrieve an archived result without recursively archiving the
+read, and subagent control tools preserve their response payloads. Tool failures
+are persisted but their error text also stays inline, so the model can recover
+without first discovering that an opaque record path contains a failure.
+
 ## Constructor and Key Methods
 
 - `ArtifactRegistry(root: Path)`

@@ -232,10 +232,13 @@ async def _replay_anthropic(
 
 
 def _skip_if_no_cache_support(usages: list[Usage], family: str) -> None:
+    # An explicit zero is a reported cache miss, not an unsupported metric.
+    # Skipping all-zero runs would hide the exact gateway regression these
+    # experiments are intended to detect.
     if all(
-        (usage.cache_read_tokens or 0) == 0
-        and (usage.cache_creation_tokens or 0) == 0
-        and (usage.cached_input_tokens or 0) == 0
+        usage.cache_read_tokens is None
+        and usage.cache_creation_tokens is None
+        and usage.cached_input_tokens is None
         for usage in usages
     ):
         pytest.skip(f"{family} endpoint reports no prompt-cache usage fields")

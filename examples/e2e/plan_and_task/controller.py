@@ -14,6 +14,7 @@ from ecs_agent.types import EntityId
 
 from examples.e2e.plan_and_task.phase_graph import (
     PLAN_TASK_PHASE_GRAPH,
+    REVIEW_CATEGORY_BY_PHASE,
     REVIEW_VERDICTS,
 )
 from examples.e2e.plan_and_task.phase_sync import derive_status, save_state
@@ -64,6 +65,56 @@ _FINALIZE_HOPS: dict[str, str] = _derive_finalize_hops(PLAN_TASK_PHASE_GRAPH)
 # this many times before the workflow refuses to keep looping.
 _MAX_TASK_RETRIES = 3
 _MAX_REVIEW_ROUNDS = 5
+
+
+def latest_verdict(state: RuntimeState, phase: str) -> str | None:
+    """The effective verdict recorded for `phase`, or None if there is none.
+
+    The ledger holds at most one verdict per phase (upsert), so the last match
+    is the effective one.
+    """
+    latest: str | None = None
+    for verdict in state.review_verdicts:
+        if verdict.phase == phase:
+            latest = verdict.verdict
+    return latest
+
+
+def describe_review_gate(
+    state: RuntimeState, phase: str, reachable: tuple[str, ...]
+) -> str:
+    """Explain why `phase` is blocking, in terms the caller can act on.
+
+    A refusal must distinguish "no verdict was ever recorded" from "a verdict is
+    on file and it is simply not 'approved'". Conflating the two is not
+    hypothetical: a live run read "DRAFT_ADVISOR_REVIEW is not approved" as
+    "the advisor review is missing" and spent five dispatches and half an hour
+    trying to repair a record that already existed.
+
+    Args:
+        state: runtime state holding the verdict ledger and revise counters.
+        phase: the phase whose gate is blocking.
+        reachable: phases that may legally be recorded from the current one.
+    """
+    reviewer = REVIEW_CATEGORY_BY_PHASE.get(phase, phase)
+    onward = ", ".join(reachable) if reachable else "none"
+    recorded = latest_verdict(state, phase)
+    if recorded is None:
+        return (
+            f"{phase} has no recorded verdict yet — dispatch the {reviewer} "
+            f"reviewer and record its verdict first. Reachable next: {onward}."
+        )
+    if recorded != "approved":
+        rounds = state.review_rounds.get(phase, 0)
+        return (
+            f"{phase} is already recorded with verdict={recorded!r} "
+            f"(revise round {rounds}/{_MAX_REVIEW_ROUNDS}), not 'approved'. "
+            "That record exists and is correct — do not try to repair, "
+            "re-create, or diagnose it. Address the review's notes in the "
+            f"draft, then dispatch the {reviewer} reviewer again until it "
+            f"returns 'approved'. Reachable next: {onward}."
+        )
+    return f"{phase} is recorded as 'approved'. Reachable next: {onward}."
 
 
 class ResumeAction(Enum):
@@ -297,7 +348,8 @@ class PlanController:
         if current != review_phase:
             if review_phase not in allowed:
                 raise ValueError(
-                    f"Cannot record {review_phase} verdict while in phase {current!r}"
+                    f"Cannot record {review_phase} verdict while in phase "
+                    f"{current!r}. {describe_review_gate(state, current, allowed)}"
                 )
             # Forward progression out of a review phase is gated on that phase's
             # own approval. Entering the next review phase to record its verdict
@@ -307,8 +359,8 @@ class PlanController:
                 state, current
             ):
                 raise ValueError(
-                    f"Cannot record {review_phase} verdict while {current} "
-                    "is not approved"
+                    f"Cannot record {review_phase} verdict: "
+                    f"{describe_review_gate(state, current, allowed)}"
                 )
         # Bound the revise loop: a review phase may return revise/blocked at
         # most _MAX_REVIEW_ROUNDS times before we refuse to keep looping and
@@ -398,8 +450,10 @@ class PlanController:
                 f"got {current}"
             )
         if not self._review_approved(state, "DRAFT_QA_REVIEW"):
+            spec = PLAN_TASK_PHASE_GRAPH.phases_by_id["DRAFT_QA_REVIEW"]
             raise ValueError(
-                "Cannot write plan while DRAFT_QA_REVIEW is not approved"
+                "Cannot write plan: "
+                + describe_review_gate(state, "DRAFT_QA_REVIEW", spec.to)
             )
         timestamp = self._utcnow_isoformat()
         await self._advance("WRITE_PLAN", reason="plan:write")
@@ -583,11 +637,7 @@ class PlanController:
         The state ledger holds at most one verdict per phase (upsert), so the
         last match is the effective verdict; approvals are sticky.
         """
-        latest: str | None = None
-        for verdict in state.review_verdicts:
-            if verdict.phase == phase:
-                latest = verdict.verdict
-        return latest == "approved"
+        return latest_verdict(state, phase) == "approved"
 
     def _build_draft_markdown(
         self, *, description: str, workflow_id: str, timestamp: str

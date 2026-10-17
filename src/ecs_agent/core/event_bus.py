@@ -94,3 +94,69 @@ class EventBus:
 
     def clear(self) -> None:
         self._handlers.clear()
+
+
+_PUBLISHER_CLOSE = object()
+
+# Strong references to in-flight publisher drain tasks: asyncio only keeps
+# weak references to tasks, and these intentionally outlive the scope that
+# spawned them (producers finish while subscribers catch up asynchronously).
+_ACTIVE_PUBLISHER_TASKS: set[asyncio.Task[None]] = set()
+
+
+class SequentialEventPublisher:
+    """Order-preserving, non-blocking publisher for a burst of related events.
+
+    Events are enqueued without blocking the producer; a single lazily
+    started consumer task publishes them strictly in FIFO order, so a
+    subscriber can never observe a later event (e.g. a stream end marker)
+    before an earlier one. Publish errors are logged and never reach the
+    producer — matching EventBus.publish's own subscriber-error isolation.
+    """
+
+    def __init__(self, event_bus: "EventBus", label: str) -> None:
+        self._event_bus = event_bus
+        self._label = label
+        self._queue: asyncio.Queue[Any] = asyncio.Queue()
+        self._task: asyncio.Task[None] | None = None
+
+    def publish_nowait(self, event: Any) -> None:
+        """Enqueue an event; the consumer task is started lazily."""
+        if self._task is None:
+            self._task = asyncio.create_task(self._drain_loop())
+            _ACTIVE_PUBLISHER_TASKS.add(self._task)
+            self._task.add_done_callback(_ACTIVE_PUBLISHER_TASKS.discard)
+        self._queue.put_nowait(event)
+
+    async def _drain_loop(self) -> None:
+        while True:
+            event = await self._queue.get()
+            if event is _PUBLISHER_CLOSE:
+                return
+            try:
+                await self._event_bus.publish(event)
+            except Exception as exc:
+                logger.error(
+                    "sequential_publisher_error",
+                    label=self._label,
+                    error=str(exc),
+                )
+
+    def close(self) -> None:
+        """Stop the consumer after the queued tail has been delivered.
+
+        Deliberately not awaited: producers finish immediately while the
+        flush continues in the background. FIFO ordering still guarantees the
+        tail is delivered in order; the task stays alive via
+        _ACTIVE_PUBLISHER_TASKS until the flush completes.
+        """
+        if self._task is None:
+            return
+        self._queue.put_nowait(_PUBLISHER_CLOSE)
+        self._task = None
+
+    def cancel(self) -> None:
+        """Drop queued events (teardown path: the burst is being abandoned)."""
+        if self._task is not None:
+            self._task.cancel()
+            self._task = None

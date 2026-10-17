@@ -10,6 +10,11 @@ package ``__init__``.
 from __future__ import annotations
 
 from contextvars import ContextVar
+from ecs_agent.systems.subagent.results import DelegationOutcomeCapture
+
+_DELEGATION_OUTCOME_CAPTURE: ContextVar[DelegationOutcomeCapture | None] = ContextVar(
+    "_DELEGATION_OUTCOME_CAPTURE", default=None,
+)
 
 _PUBLISH_COMPLETION_EVENT: ContextVar[bool] = ContextVar(
     "_PUBLISH_COMPLETION_EVENT",
@@ -27,6 +32,7 @@ _BACKGROUND_LAUNCH_OBSERVABILITY_CONTEXT: ContextVar[
 )
 
 __all__ = [
+    "_DELEGATION_OUTCOME_CAPTURE",
     "_PUBLISH_COMPLETION_EVENT",
     "_BACKGROUND_RESULT_ENVELOPE_ENABLED",
     "_BACKGROUND_LAUNCH_OBSERVABILITY_CONTEXT",

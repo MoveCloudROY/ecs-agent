@@ -2,6 +2,23 @@
 
 `OpenAIModel` supports the OpenAI `/v1/responses` endpoint when constructed via `Model(..., api_format=ApiFormat.OPENAI_RESPONSES)`, which offers enhanced metadata tracking and streaming capabilities compared to the standard Chat Completions API.
 
+Requests and SSE decoding use the official [OpenAI Python SDK](https://developers.openai.com/api/reference/python)
+(`AsyncOpenAI.responses.create`). The SDK is installed as a project dependency
+and loaded lazily on the first Responses request. The public `Model` and
+`OpenAIModel` interfaces are unchanged.
+
+The SDK uses the model's HTTP client, preserving `base_url`, API keys, extra
+headers and timeout settings. Streaming keeps its separate per-chunk read
+timeout (`stream_read_timeout`, unbounded by default). Call `await model.aclose()`
+to release the shared connection pool.
+
+SDK automatic retries are disabled; `RetryModel` remains responsible for retry
+policy and accounting. HTTP status and connection errors are translated back to
+the existing `httpx.HTTPStatusError` / `httpx.RequestError` contract, including
+transport timeout subtypes. Explicit SDK stream errors and malformed SSE JSON
+propagate rather than being treated as successful completion. Message, tool,
+usage and terminal-event mapping still supports the documented gateway dialects.
+
 ## Overview
 
 The Responses API provides:
@@ -70,8 +87,8 @@ The stream parser understands both SSE dialects found in the wild:
 
 - **Standard OpenAI events** — `response.output_text.delta` (string delta),
   `response.function_call_arguments.delta`, `response.completed`,
-  `response.failed` (raises `ValueError` with the provider's error code and
-  message).
+  `response.failed` (returns `FinishReason.ERROR` with the provider error in
+  `StreamDelta.error`, retaining any usage).
 - **Legacy object-delta events** — `response.output_item.delta` carrying
   `{"type": "content_delta"|"arguments_delta", ...}` payloads, terminated by
   `response.done`.
@@ -102,7 +119,7 @@ report the same [`FinishReason`](./streaming.md#finish-reasons):
 | `completed` | `STOP`, or `TOOL_CALLS` when the turn produced function calls | Matches what Chat Completions reports for the same turn |
 | `incomplete` | `LENGTH` / `CONTENT_FILTER` from `incomplete_details.reason` | The truncated turn's usage is still recorded |
 | `cancelled` | `CANCELLED` | |
-| `failed` | — | Raises `ValueError` with the provider's error code and message |
+| `failed` | `ERROR` | Preserves provider code/message in `error` and any reported usage |
 
 Two degradations are handled explicitly:
 
@@ -125,8 +142,12 @@ dropping it would strand the matching `function_call` in the request. Adapters
 therefore reject such a history with `ValueError` naming the offending message
 index, rather than silently skipping the message. The same check runs on the
 Chat Completions, LiteLLM and Anthropic paths. Assembled outbound histories
-already satisfy it: `repair_dangling_tool_spans` completes unanswered spans
-with placeholder results before the request is built.
+are repaired for interrupted calls by `repair_dangling_tool_spans` before the
+request is built. Validation also rejects orphan/duplicate results, repeated call
+IDs, out-of-order results, and unclosed call spans. Explicit incremental Responses
+input with `previous_response_id` may begin with results for remote calls; its
+locally declared calls must still form complete spans. A declared full local
+history (`covered_message_count > 0`) receives the full-history checks.
 
 ## Structured Output
 
@@ -154,35 +175,79 @@ For reasoning models, `type: "reasoning"` output items are parsed into
 `CompletionResult.reasoning_content` (their `summary_text` blocks joined with
 newlines). Non-reasoning responses leave `reasoning_content` as `None`.
 
-## Stored-Response Chaining (`previous_response_id`)
+## Storage and automatic chaining
 
-`ReasoningSystem` records each `response_id` in `ResponsesAPIStateComponent`
-and passes it to the next request via the `LLMModel` protocol's
-`thread_response_id` parameter. The call site is provider-agnostic: any model
-whose completions return a `response_id` participates, wrapper models such as
-`RetryModel` forward the parameter, and providers without stored-response
-chaining accept and ignore it. The parameter is only passed when a previous
-response id was actually recorded, so custom models predating it keep working
-in non-chaining sessions. Two gates decide whether the chain is actually sent
-on the wire:
+`enable_store` maps directly to the SDK's `store` parameter:
 
-1. **`enable_store`** — the chain is only included when the model was built
-   with `Model(..., enable_store=True)`. With `store=false` the referenced
-   response was never persisted server-side, and providers reject the id.
-2. **Provider support** — some gateways reject `previous_response_id` on the
-   plain HTTP endpoint (e.g. `400: previous_response_id is only supported on
-   Responses WebSocket v2`). When a 400 blames the chain, the adapter retries
-   the request once without it, logs a
-   `responses_previous_response_id_rejected` warning, and stops sending the
-   chain for the lifetime of that model instance. The 400 is attributed to the
-   parameter via the structured error body (`error.param` / `error.message` /
-   `error.code`), so an unrelated 400 that merely echoes the id elsewhere in
-   the payload does not trigger a spurious retry; a non-JSON body falls back to
-   a raw substring scan.
+| Configuration | Wire request |
+|---|---|
+| `True` | `store: true` |
+| `False` | `store: false` |
+| `None` / unset (default) | Parameter omitted; the server default applies |
 
-Both degradations are lossless: the full message history is always sent in
-`input`, so dropping the chain never loses context. `store: true/false` itself
-is still sent according to `enable_store`.
+Framework `None` means SDK omission, not JSON null. Storage is independent of
+Prompt Cache and of `previous_response_id`. A request with `store=False` can
+reference an older stored response; its own response ID does not become the next
+automatic anchor. Explicit `thread_response_id` calls follow this same rule.
+
+Automatic chaining is a separate opt-in: `enable_response_chaining=True`.
+`ReasoningSystem` verifies the provider/endpoint/model/auth scope, conversation
+identity/revision, and a fingerprint of the actual covered protocol items before
+selecting an anchor. Counts alone and legacy state without provenance cannot
+activate a chain. `RetryModel` forwards verified references. Storage must be
+known from explicit `store=True` or the response's reported storage state; an ID
+alone is not evidence of storage.
+
+When chaining, only the uncovered protocol suffix is sent. Message boundaries
+are recomputed from the verified item prefix, so one message containing multiple
+reasoning/tool items is handled correctly. A request with no incremental input
+rebuilds without a chain instead of duplicating all history on the remote chain.
+
+Use `replace_conversation_history` from `ecs_agent.history` for reset, editing or
+compaction. It changes the history revision and invalidates the anchor. Workflow
+reset also starts a new history identity. Restored checkpoints are checked against
+the current provider and actual outbound prefix; an expired remote reference is
+handled by the same error path as any other invalid anchor. Direct list edits
+that change the protocol prefix are detected before the next request.
+
+An attributable 400/404 can trigger one retry without the reference, before any
+stream output, only when full local history is available and known opaque
+reasoning is replayable. An explicit incremental-only caller cannot recover
+missing remote history this way. Unsupported chaining disables automatic chaining
+for that model instance; an expired ID alone does not disable future valid chains.
+Explicit caller-provided references are never silently discarded by that cache.
+
+```toml
+[providers.openai]
+base_url = "https://api.openai.com/v1"
+api_format = "openai_responses"
+api_key_env = "LLM_API_KEY"
+enable_store = true
+enable_response_chaining = true
+```
+
+### Replayable output
+
+Assistant messages retain a JSON-only `ProviderOutput` with all original output
+items, source identity, completeness and storage metadata. `CompletionResult`
+exposes the same object. Streaming aggregates item completion and final snapshots
+without duplicating function calls; world serialization/checkpoints preserve the
+state. Tool execution/display use the normalized message while same-origin replay
+uses the original item order, IDs, opaque reasoning and argument strings.
+
+The adapter requests `reasoning.encrypted_content`, including for stored responses,
+so an expired remote chain can have a local backup. This follows the
+[reasoning replay guidance](https://developers.openai.com/api/docs/guides/reasoning).
+If the provider does not supply replayable opaque state, a reference failure is
+surfaced instead of claiming a lossless recovery. Incomplete output is retained
+for diagnosis and is not replayed as a completed tool turn.
+
+Editing a message projection or changing provider invalidates its native replay
+and uses its portable visible projection, with a `responses_output_projection`
+log entry. Private provider state is never sent to a different source. Such a
+projection is intentionally lossy; the framework does not claim reasoning-state
+continuity across incompatible providers. Compaction keeps pending tool turns
+intact and only removes closed tool spans as units.
 
 ## Automatic Fallback
 
@@ -198,10 +263,10 @@ model = Model(
 )
 ```
 
-The fallback is automatic and transparent — your code doesn't need to change.
-It covers both non-streaming and streaming calls: on a streaming 404 the
-adapter's `raise_for_status` fires before any delta is yielded, so the request
-is replayed against Chat Completions with no duplicated output.
+Endpoint fallback covers ordinary and streaming calls before any output. A 404
+about a previous response is not an unsupported endpoint. Explicit storage
+settings disable Chat fallback because dropping `store=False` or `store=True`
+would change the requested contract; unsupported storage is reported as an error.
 
 ## Response Metadata
 
@@ -256,14 +321,12 @@ Use Chat Completions when:
 
 `OpenAIModel` detects Responses API support by:
 1. Attempting a request to `/v1/responses`
-2. Falling back to `/v1/chat/completions` on HTTP 404
+2. Falling back to `/v1/chat/completions` on endpoint HTTP 404 only when storage is unspecified
 3. Caching the decision for subsequent requests
 
-A 400 that blames `previous_response_id` stays on the Responses endpoint: the
-adapter drops the chain, retries once, and keeps using `/v1/responses` (see
-[Stored-Response Chaining](#stored-response-chaining-previous_response_id)).
-
-This ensures zero-configuration compatibility across providers.
+Reference errors are handled on `/v1/responses`; see
+[Storage and automatic chaining](#storage-and-automatic-chaining) for replay and
+compatibility boundaries.
 
 ## See Also
 

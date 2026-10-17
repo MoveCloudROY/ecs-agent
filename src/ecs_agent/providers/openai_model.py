@@ -13,9 +13,22 @@ from ecs_agent.providers._openai_format import convert_tools_to_openai
 from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.openai_chat_adapter import OpenAIChatAdapter
 from ecs_agent.providers.openai_responses_adapter import OpenAIResponsesAdapter
+from ecs_agent.providers.responses_state import ResponseContext
 from ecs_agent.types import CompletionResult, Message, StreamDelta, ToolSchema, Usage
 
 logger = get_logger(__name__)
+
+
+async def _aclose_if_supported(stream: AsyncIterator[StreamDelta]) -> None:
+    """Close a stream that is an async generator; no-op otherwise.
+
+    The adapters yield (so they are async generators with aclose at runtime),
+    but the declared AsyncIterator type does not expose it — getattr keeps the
+    checker happy and tolerates plain iterators.
+    """
+    aclose = getattr(stream, "aclose", None)
+    if aclose is not None:
+        await aclose()
 
 
 class OpenAIModel:
@@ -59,9 +72,30 @@ class OpenAIModel:
         self._chat_adapter = OpenAIChatAdapter(self)
         self._responses_adapter = OpenAIResponsesAdapter(self)
 
+    async def aclose(self) -> None:
+        """Close the HTTP pool shared by Chat and the Responses SDK client."""
+        await self._client.aclose()
+
     @property
     def model_id(self) -> str:
         return self._model
+
+    def get_response_context(self, messages: list[Message]) -> ResponseContext | None:
+        """Describe the exact protocol prefix used for verified automatic chains."""
+        if self._provider_config.api_format != ApiFormat.OPENAI_RESPONSES or self._responses_api_available is False:
+            return None
+        adapter = self._responses_adapter
+        items: list[dict[str, Any]] = []
+        ends: list[int] = []
+        for message in messages:
+            if message.role == "system":
+                continue
+            items.extend(adapter._convert_messages_to_responses_input([message]))
+            ends.append(len(items))
+        return ResponseContext(
+            origin=adapter.origin, items=items, message_ends=ends,
+            automatic_chaining=self._provider_config.enable_response_chaining and not adapter._previous_response_id_rejected,
+        )
 
     @property
     def provider_id(self) -> str:
@@ -85,6 +119,7 @@ class OpenAIModel:
         tools: list[ToolSchema] | None,
         response_format: dict[str, Any] | None,
         thread_response_id: str | None,
+        covered_message_count: int | None = None,
     ) -> AsyncIterator[StreamDelta]:
         """Stream via the Responses API, falling back to Chat on a 404.
 
@@ -94,14 +129,23 @@ class OpenAIModel:
         against Chat Completions. The ``started`` guard refuses to fall back
         once real output has flowed, so partial responses are never duplicated.
         """
+        # aclosing: closing THIS wrapper generator must close the inner
+        # adapter stream too — PEP 525 gives `async for` no implicit aclose,
+        # so the inner generator (holding the HTTP connection) would otherwise
+        # stay open until garbage collection. The adapters return async
+        # generators (declared AsyncIterator); guard aclose via getattr so the
+        # type-checker stays happy and non-generator iterators are tolerated.
         stream = self._responses_adapter.stream(
-            messages, tools, response_format, thread_response_id
+            messages, tools, response_format, thread_response_id, covered_message_count
         )
         started = False
         try:
-            async for delta in stream:
-                started = True
-                yield delta
+            try:
+                async for delta in stream:
+                    started = True
+                    yield delta
+            finally:
+                await _aclose_if_supported(stream)
         except httpx.HTTPStatusError as exc:
             if started or not self._should_fallback_from_responses(exc):
                 raise
@@ -111,10 +155,14 @@ class OpenAIModel:
                 status_code=exc.response.status_code,
                 endpoint=f"{self._base_url}/responses",
             )
-            async for delta in self._chat_adapter.stream(
+            fallback_stream = self._chat_adapter.stream(
                 messages, tools, response_format
-            ):
-                yield delta
+            )
+            try:
+                async for delta in fallback_stream:
+                    yield delta
+            finally:
+                await _aclose_if_supported(fallback_stream)
 
     async def complete(
         self,
@@ -123,11 +171,15 @@ class OpenAIModel:
         stream: bool = False,
         response_format: dict[str, Any] | None = None,
         thread_response_id: str | None = None,
+        covered_message_count: int | None = None,
     ) -> CompletionResult | AsyncIterator[StreamDelta]:
         api_format = self._provider_config.api_format
 
         if api_format == ApiFormat.OPENAI_RESPONSES:
             if self._responses_api_available is False:
+                if self._provider_config.enable_store is not None:
+                    logger.error("responses_storage_contract_unavailable", store=self._provider_config.enable_store)
+                    raise ValueError("Responses unavailable; explicit store cannot be dropped during Chat fallback")
                 return await self._fallback_to_chat(
                     messages, tools, response_format, stream
                 )
@@ -138,6 +190,7 @@ class OpenAIModel:
                     tools,
                     response_format,
                     thread_response_id,
+                    covered_message_count,
                 )
 
             try:
@@ -146,6 +199,7 @@ class OpenAIModel:
                     tools,
                     response_format,
                     thread_response_id,
+                    covered_message_count,
                 )
                 self._responses_api_available = True
                 return result
@@ -183,7 +237,11 @@ class OpenAIModel:
         return headers
 
     def _should_fallback_from_responses(self, exc: httpx.HTTPStatusError) -> bool:
-        return exc.response.status_code == 404
+        return (
+            exc.response.status_code == 404
+            and not self._responses_adapter._blames_previous_response_id(exc.response.text)
+            and self._provider_config.enable_store is None
+        )
 
     def _usage_from_raw(self, usage_data: Any) -> Usage | None:
         if not isinstance(usage_data, dict):

@@ -8,6 +8,7 @@ from ecs_agent.components import (
     ErrorComponent,
     LLMComponent,
     PendingToolCallsComponent,
+    ToolRegistryComponent,
     PlanComponent,
     PromptContextQueueComponent,
     PromptContextReservationComponent,
@@ -19,7 +20,7 @@ from ecs_agent.prompts.contracts import TriggerSpec
 from ecs_agent.core import World
 from ecs_agent.providers import FakeModel
 from ecs_agent.systems.planning import PlanningSystem
-from ecs_agent.types import CompletionResult, Message, PlanStepCompletedEvent, ToolCall
+from ecs_agent.types import CompletionResult, Message, PlanStepCompletedEvent, ToolCall, ToolSchema
 
 
 class RecordingFakeModel(FakeModel):
@@ -196,6 +197,10 @@ async def test_tool_calls_attach_pending_tool_calls_component() -> None:
     )
     entity_id = world.create_entity()
     world.add_component(entity_id, LLMComponent(model=model))
+    world.add_component(entity_id, ToolRegistryComponent(
+        tools={"lookup": ToolSchema(name="lookup", description="test tool", parameters={"type": "object"})},
+        handlers={},
+    ))
     world.add_component(
         entity_id,
         ConversationComponent(messages=[Message(role="user", content="use tool")]),

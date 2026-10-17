@@ -20,6 +20,8 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.core.world import World
+from ecs_agent.core.run_result import RunStatus
+from ecs_agent.systems.subagent.results import DelegationOutcomeCapture, DelegationResult, normalize_delegation_result
 from ecs_agent.logging import get_logger
 from ecs_agent.systems.subagent_wait import ResumeCallback
 from ecs_agent.scratchbook.artifact_registry import ArtifactRegistry
@@ -29,6 +31,7 @@ from ecs_agent.systems.subagent._contextvars import (
     _BACKGROUND_LAUNCH_OBSERVABILITY_CONTEXT,
     _BACKGROUND_RESULT_ENVELOPE_ENABLED,
     _PUBLISH_COMPLETION_EVENT,
+    _DELEGATION_OUTCOME_CAPTURE,
 )
 from ecs_agent.systems.subagent.background import BackgroundSessionRunner
 from ecs_agent.systems.subagent.child_world import ChildWorldBuilder
@@ -527,34 +530,56 @@ class SubagentSystem:
 
             metadata: SubagentSessionRecord | None = None
 
-            async def execute_with_effective_config() -> tuple[str, bool, str | None]:
-                return await self._execute_subagent_core(
-                    world,
-                    parent_entity_id,
-                    category,
-                    prompt,
-                    correlation_id,
-                    traceparent,
-                    effective_config,
-                    stream=self._stream_subagents,
-                )
+            capture = DelegationOutcomeCapture()
+
+            async def execute_with_effective_config() -> DelegationResult:
+                token = _DELEGATION_OUTCOME_CAPTURE.set(capture)
+                try:
+                    return normalize_delegation_result(await self._execute_subagent_core(
+                        world,
+                        parent_entity_id,
+                        category,
+                        prompt,
+                        correlation_id,
+                        traceparent,
+                        effective_config,
+                        stream=self._stream_subagents,
+                    ))
+                finally:
+                    _DELEGATION_OUTCOME_CAPTURE.reset(token)
 
             if not background:
                 # Sync mode: wrap with timeout
                 try:
-                    if resolved_timeout is not None:
-                        result, success, _ = await asyncio.wait_for(
-                            execute_with_effective_config(), timeout=resolved_timeout
-                        )
-                    else:
-                        result, success, _ = await execute_with_effective_config()
+                    capture.timeout_scope = asyncio.timeout(resolved_timeout)
+                    async with capture.timeout_scope:
+                        outcome = await execute_with_effective_config()
+                    result, success, _ = outcome.as_tuple()
                 except asyncio.TimeoutError:
                     error_msg = f"Error: Subagent timeout after {resolved_timeout}s"
                     logger.error(
                         "subagent_timeout", timeout=resolved_timeout, category=category
                     )
-                    result = error_msg
-                    success = False
+                    outcome = capture.failure(RunStatus.TIMEOUT, error_msg)
+                    result, success, _ = outcome.as_tuple()
+                    await self._publish_delegation_events(
+                        world, parent_entity_id, category,
+                        correlation_id=correlation_id, traceparent=traceparent,
+                        result=result, success=False, error=error_msg,
+                        outcome=outcome,
+                        publish_started=False,
+                    )
+                except asyncio.CancelledError:
+                    error_msg = "Subagent cancelled"
+                    outcome = capture.failure(RunStatus.CANCELLED, error_msg)
+                    await self._publish_delegation_events(
+                        world, parent_entity_id, category,
+                        correlation_id=correlation_id, traceparent=traceparent,
+                        result=outcome.as_tuple()[0], success=False, error=error_msg,
+                        outcome=outcome,
+                        publish_started=False,
+                    )
+                    raise
 
                 if success:
                     self._persist_subagent_result(result)
@@ -612,7 +637,7 @@ class SubagentSystem:
         *,
         session_id: str | None = None,
         stream: bool = False,
-    ) -> tuple[str, bool, str | None]:
+    ) -> DelegationResult:
         """Shared subagent execution core for the subagent API.
 
         Args:
@@ -624,10 +649,9 @@ class SubagentSystem:
             traceparent: W3C trace context
 
         Returns:
-            Tuple of (result, success, error):
-            - result: Result string from delegation
-            - success: True if successful, False otherwise
-            - error: Error message if failed, None otherwise
+            Structured terminal outcome. Legacy tuple-unpacking is supported
+            by DelegationResult.as_tuple; partial content never becomes a
+            successful final result through that adapter.
         """
         publish_completion_event = _PUBLISH_COMPLETION_EVENT.get()
         # Execute delegation
@@ -717,31 +741,33 @@ class SubagentSystem:
             )
 
             try:
-                result = await self._execute_delegation(
+                outcome = await self._execute_delegation(
                     child_world,
                     child_world_entity_id,
                     task,
                     config,
                 )
             finally:
+                # Sync rendered system prompt (populated by SystemPromptRenderSystem) to parent-world stub
+                child_llm = child_world.get_component(child_world_entity_id, LLMComponent)
+                stub_llm = world.get_component(child_entity_id, LLMComponent)
+                if child_llm is not None and stub_llm is not None:
+                    stub_llm.system_prompt = child_llm.system_prompt
+
+                child_conv = child_world.get_component(
+                    child_world_entity_id,
+                    ConversationComponent,
+                )
+                parent_child_conv = world.get_component(
+                    child_entity_id,
+                    ConversationComponent,
+                )
+                if child_conv is not None and parent_child_conv is not None:
+                    parent_child_conv.messages = list(child_conv.messages)
+
                 if bridge_cleanup is not None:
                     bridge_cleanup()
-            # Sync rendered system prompt (populated by SystemPromptRenderSystem) to parent-world stub
-            child_llm = child_world.get_component(child_world_entity_id, LLMComponent)
-            stub_llm = world.get_component(child_entity_id, LLMComponent)
-            if child_llm is not None and stub_llm is not None:
-                stub_llm.system_prompt = child_llm.system_prompt
-
-            child_conv = child_world.get_component(
-                child_world_entity_id,
-                ConversationComponent,
-            )
-            parent_child_conv = world.get_component(
-                child_entity_id,
-                ConversationComponent,
-            )
-            if child_conv is not None and parent_child_conv is not None:
-                parent_child_conv.messages = list(child_conv.messages)
+            result, success, error = outcome.as_tuple()
 
             logger.info(
                 "delegation_completed",
@@ -759,18 +785,20 @@ class SubagentSystem:
                     correlation_id=correlation_id,
                     traceparent=traceparent,
                     result=result,
-                    success=True,
-                    error=None,
+                    success=success,
+                    error=error,
+                    outcome=outcome,
                     child_world_name=child_world.name,
                     observation_id=correlation_id,
                     end_time=datetime.now(timezone.utc),
                     duration_seconds=time.monotonic() - delegation_started_monotonic,
                 )
 
-            return (result, True, None)
+            return outcome
 
         except TimeoutError as exc:
             error_msg = "Error: Subagent timeout"
+            outcome = DelegationResult(status=RunStatus.TIMEOUT, error=error_msg)
             logger.error(
                 "delegation_timeout",
                 parent_entity=parent_entity_id,
@@ -789,8 +817,9 @@ class SubagentSystem:
                     success=False,
                     error=error_msg,
                     observation_id=correlation_id,
+                    outcome=outcome,
                 )
-            return (error_msg, False, error_msg)
+            return outcome
 
         except ValueError as exc:
             error_msg = str(exc)
@@ -834,7 +863,7 @@ class SubagentSystem:
                     error=error_msg,
                     observation_id=correlation_id,
                 )
-            return (error_msg, False, error_msg)
+            return DelegationResult(status=RunStatus.ERROR, error=error_msg)
 
     def _resolve_subagent_config(
         self,
@@ -885,7 +914,7 @@ class SubagentSystem:
         child_entity: EntityId,
         task: str,
         config: SubagentConfig,
-    ) -> str:
+    ) -> DelegationResult:
         """Delegate to DelegationExecutor.run_delegation.
 
         Retained as a thin instance method so white-box tests can monkeypatch this
@@ -919,6 +948,7 @@ class SubagentSystem:
         end_time: datetime | None = None,
         duration_seconds: float | None = None,
         publish_started: bool = True,
+        outcome: DelegationResult | None = None,
     ) -> None:
         """Publish start/completion delegation events via one wrapper API."""
         if task is not None and publish_started:
@@ -943,6 +973,18 @@ class SubagentSystem:
                     result=result,
                     success=success,
                     error=error,
+                    run_result=outcome.run_result if outcome is not None else None,
+                    outcome_status=(
+                        outcome.status.value if outcome is not None
+                        else "completed" if success else "error"
+                    ),
+                    status=(
+                        "succeeded" if success
+                        else "cancelled" if outcome is not None and outcome.status in {RunStatus.CANCELLED, RunStatus.INTERRUPTED}
+                        else "timed_out" if outcome is not None and outcome.status is RunStatus.TIMEOUT
+                        else "failed"
+                    ),
+                    partial_content=outcome.partial_content if outcome is not None else None,
                     task=task or "",
                     correlation_id=correlation_id,
                     traceparent=traceparent,

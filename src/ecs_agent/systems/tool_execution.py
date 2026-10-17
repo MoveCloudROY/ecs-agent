@@ -9,6 +9,7 @@ from typing import Awaitable, Callable
 
 from ecs_agent.components import (
     ConversationComponent,
+    ErrorComponent,
     ContextTrimConfig,
     ContextCacheComponent,
     PendingToolCallsComponent,
@@ -17,6 +18,7 @@ from ecs_agent.components import (
     ToolExecutionConfigComponent,
     ToolRegistryComponent,
     ToolResultsComponent,
+    TerminalComponent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
@@ -25,6 +27,7 @@ from ecs_agent.token_counting import count_tokens
 from ecs_agent.systems._plan_utils import derive_plan_name
 from ecs_agent.tools.context import ToolExecutionContext, use_tool_context
 from ecs_agent.tools.sandbox import sandboxed_execute
+from ecs_agent.tools.validation import tool_call_error
 from ecs_agent.types import (
     CachedToolResultRef,
     EntityId,
@@ -93,6 +96,17 @@ class ToolExecutionSystem:
             assert isinstance(pending, PendingToolCallsComponent)
             assert isinstance(registry, ToolRegistryComponent)
             assert isinstance(conversation, ConversationComponent)
+
+            ids = [call.id for call in pending.tool_calls]
+            if any(not call.id or not call.name for call in pending.tool_calls) or len(set(ids)) != len(ids):
+                error = "Invalid or duplicate tool call identity in execution queue"
+                logger.error("tool_batch_rejected", entity_id=int(entity_id), error=error)
+                world.add_component(entity_id, ErrorComponent(
+                    error=error, system_name="ToolExecutionSystem", timestamp=time.time(),
+                ))
+                world.add_component(entity_id, TerminalComponent(reason="tool_execution_error", error=error))
+                world.remove_component(entity_id, PendingToolCallsComponent)
+                continue
 
             results: dict[str, str] = {}
             plan = world.get_component(entity_id, PlanComponent)
@@ -237,18 +251,19 @@ class ToolExecutionSystem:
             conversation.messages.append(
                 Message(
                     role="tool",
-                    content=persist_result.record_path,
+                    content=persist_result.record_path if success else result,
                     tool_call_id=tool_call.id,
                 )
             )
-            await self._cache_overflowed_tool_result(
-                world=world,
-                entity_id=entity_id,
-                conversation=conversation,
-                tool_call=tool_call,
-                result=result,
-                artifact_path=persist_result.record_path,
-            )
+            if success:
+                await self._cache_overflowed_tool_result(
+                    world=world,
+                    entity_id=entity_id,
+                    conversation=conversation,
+                    tool_call=tool_call,
+                    result=result,
+                    artifact_path=persist_result.record_path,
+                )
         else:
             results[tool_call.id] = result
             conversation.messages.append(
@@ -291,6 +306,14 @@ class ToolExecutionSystem:
             reason = f"Error: unknown tool '{tool_call.name}'"
             logger.error("tool_failed", tool_name=tool_call.name, reason=reason)
             return reason
+
+        registry = world.get_component(entity_id, ToolRegistryComponent)
+        invalid = tool_call_error(
+            [tool_call], list(registry.tools.values()) if registry is not None else None,
+        )
+        if invalid is not None:
+            logger.error("tool_failed", tool_name=tool_call.name, reason=invalid)
+            return f"Error: {invalid}"
 
         start_time = time.monotonic()
         try:
