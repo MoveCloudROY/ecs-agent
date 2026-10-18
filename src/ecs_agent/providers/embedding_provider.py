@@ -54,6 +54,10 @@ class OpenAIEmbeddingProvider:
         self._client = httpx.AsyncClient(trust_env=False, timeout=self._timeout)
         self._last_usage: UsageRecord | None = None
 
+    async def aclose(self) -> None:
+        """Close the owned httpx client, releasing its connection pool."""
+        await self._client.aclose()
+
     @property
     def canonical_model_id(self) -> str:
         return self._canonical_model_id

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import weakref
 import os
 import json
 import re
@@ -21,8 +22,24 @@ logger = get_logger(__name__)
 _INLINE_THRESHOLD_BYTES = 2048
 _ARTIFACT_ID_PATTERN = re.compile(r"^(tool|subagent)_[0-9a-f]{24}$")
 _NON_ALNUM_RUN_PATTERN = re.compile(r"[^a-z0-9]+")
-_boulder_locks: dict[str, asyncio.Lock] = {}
-_boulder_locks_guard = asyncio.Lock()
+# Per-loop boulder locks. asyncio primitives pin themselves to the loop
+# that first contends them; a module-level Lock shared across successive
+# asyncio.run() calls (TUI restart, sequential agents in one process) raises
+# "is bound to a different event loop". Keying by the running loop keeps each
+# loop isolated; WeakKeyDictionary drops entries when a loop is collected.
+_boulder_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _boulder_lock(lock_key: str) -> asyncio.Lock:
+    """Return the current loop's lock for one boulder path.
+
+    dict.setdefault is atomic under cooperative scheduling (no awaits), so no
+    guard lock is needed around lock creation.
+    """
+    loop = asyncio.get_running_loop()
+    return _boulder_locks.setdefault(loop, {}).setdefault(lock_key, asyncio.Lock())
 
 
 class ArtifactKind(Enum):
@@ -187,10 +204,7 @@ class ArtifactRegistry:
         target_path = self.root / record_path
         lock_key = str(target_path)
 
-        async with _boulder_locks_guard:
-            if lock_key not in _boulder_locks:
-                _boulder_locks[lock_key] = asyncio.Lock()
-            lock = _boulder_locks[lock_key]
+        lock = _boulder_lock(lock_key)
 
         async with lock:
             now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

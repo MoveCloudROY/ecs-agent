@@ -17,11 +17,17 @@ logger = get_logger(__name__)
 class CheckpointSystem:
     """Creates and restores tick-level World snapshots for undo functionality."""
     async def process(self, world: World) -> None:
+        checkpoint_entities = world.query(CheckpointComponent)
+        if not checkpoint_entities:
+            # Serializing the whole world every tick just to discard the
+            # result was a fixed per-tick tax on worlds without checkpoints.
+            return
+
         start_time = time.monotonic()
         snapshot = WorldSerializer.to_dict(world)
         timestamp = time.time()
 
-        for entity_id, components in world.query(CheckpointComponent):
+        for entity_id, components in checkpoint_entities:
             checkpoint = components[0]
             checkpoint.snapshots.append(snapshot)
 

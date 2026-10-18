@@ -521,3 +521,27 @@ async def test_stream_capture_returns_registry_descriptor_with_record_path(
         "scratchbook/records/subagent/subagent_"
     )
     assert large_descriptor.inline_content is None
+
+
+def test_boulder_lock_survives_event_loop_replacement(tmp_path: Path) -> None:
+    """Boulder updates must work across successive event loops.
+
+    Regression: the module-level guard asyncio.Lock got pinned to the first
+    loop that contended it; a later asyncio.run() (TUI restart, sequential
+    agents in one process) raised "is bound to a different event loop".
+    """
+    registry = _new_registry(tmp_path)
+    registry.create_boulder(plan_name="Loop Plan", initial_data={})
+
+    async def contend(step: int) -> None:
+        await asyncio.gather(
+            registry.update_boulder(
+                plan_name="Loop Plan", updates={"current_step": step}
+            ),
+            registry.update_boulder(
+                plan_name="Loop Plan", updates={"status": f"running-{step}"}
+            ),
+        )
+
+    asyncio.run(contend(1))
+    asyncio.run(contend(2))  # second loop: must not raise

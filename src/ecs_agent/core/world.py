@@ -62,7 +62,9 @@ class World:
 
     def add_component(self, entity_id: EntityId, component: Any) -> None:
         self._components.add(entity_id, component)
-        logger.info(
+        # DEBUG per LEVEL_POLICY: component adds are a high-frequency
+        # operation (hot path), not a lifecycle event.
+        logger.debug(
             STANDARD_EVENT_NAMES["COMPONENT_ADDED"],
             entity_id=int(entity_id),
             component_type=type(component).__name__,

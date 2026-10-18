@@ -6,7 +6,12 @@ import asyncio
 import uuid
 from typing import Any, Awaitable, Callable, TypeVar, cast
 
-from ecs_agent.logging import get_logger, log_bus_deliver, log_bus_publish
+from ecs_agent.logging import (
+    get_logger,
+    log_bus_deliver,
+    log_bus_publish,
+    logging_enabled_for,
+)
 
 T = TypeVar("T")
 Handler = Callable[[Any], Awaitable[None]]
@@ -44,30 +49,36 @@ class EventBus:
         if not handlers:
             return
 
-        # Generate trace context for this publish operation
-        trace_id = str(uuid.uuid4())
-        correlation_id = str(uuid.uuid4())
         topic = type(event).__name__
 
-        # Log publish event
-        log_bus_publish(
-            logger=logger,
-            topic=topic,
-            trace_id=trace_id,
-            correlation_id=correlation_id,
-            payload_type=type(event).__name__,
-        )
+        # The trace ids exist only for the bus_publish/bus_deliver log lines.
+        # Skip the whole block (2× uuid4 + 1+N log calls per event — a real
+        # tax on per-token stream publishes) when logging would drop it.
+        publish_log_enabled = logging_enabled_for(__name__, "info")
+        deliver_log_enabled = logging_enabled_for(__name__, "debug")
+        if publish_log_enabled or deliver_log_enabled:
+            trace_id = str(uuid.uuid4())
+            correlation_id = str(uuid.uuid4())
 
-        # Deliver to all handlers
-        for idx, handler in enumerate(handlers):
-            subscriber_id = getattr(handler, "__name__", f"handler_{idx}")
-            log_bus_deliver(
-                logger=logger,
-                topic=topic,
-                subscriber_id=subscriber_id,
-                trace_id=trace_id,
-                correlation_id=correlation_id,
-            )
+            if publish_log_enabled:
+                log_bus_publish(
+                    logger=logger,
+                    topic=topic,
+                    trace_id=trace_id,
+                    correlation_id=correlation_id,
+                    payload_type=type(event).__name__,
+                )
+
+            if deliver_log_enabled:
+                for idx, handler in enumerate(handlers):
+                    subscriber_id = getattr(handler, "__name__", f"handler_{idx}")
+                    log_bus_deliver(
+                        logger=logger,
+                        topic=topic,
+                        subscriber_id=subscriber_id,
+                        trace_id=trace_id,
+                        correlation_id=correlation_id,
+                    )
 
         results = await asyncio.gather(
             *(handler(event) for handler in handlers), return_exceptions=True

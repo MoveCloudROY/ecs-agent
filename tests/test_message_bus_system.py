@@ -188,3 +188,43 @@ async def test_publish_with_no_source_conversation_is_safe() -> None:
     assert delivered is True
     assert payload == "pending"
     assert bus.get_conversation(sender) == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_subscriptions_survive_component_snapshot() -> None:
+    """process() must merge the component table, not clobber runtime subscribe().
+
+    Regression: any subscriber registered via subscribe() (e.g. request()
+    inboxes) was silently dropped on the next tick when a
+    MessageBusSubscriptionComponent existed, so published messages stopped
+    reaching its queue.
+    """
+    from ecs_agent.components import MessageBusSubscriptionComponent
+    from ecs_agent.core import World
+    from ecs_agent.systems.message_bus import MessageBusSystem
+
+    world = World()
+    entity = world.create_entity()
+    world.add_component(
+        entity,
+        MessageBusSubscriptionComponent(
+            subscriptions={"topic.component": {"component-subscriber"}}
+        ),
+    )
+
+    system = MessageBusSystem()
+    await system.process(world)
+
+    queue = system.subscribe("topic.runtime", "runtime-subscriber")
+
+    # Next tick re-reads the component snapshot.
+    await system.process(world)
+
+    delivered = await system.publish(
+        "topic.runtime", message={"data": {"hello": "world"}}
+    )
+    assert delivered
+    assert queue.get_nowait() == {"data": {"hello": "world"}}
+
+    # Component-declared subscriptions are still honored.
+    assert "component-subscriber" in system._subscriptions["topic.component"]

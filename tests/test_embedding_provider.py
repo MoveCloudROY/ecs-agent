@@ -11,6 +11,42 @@ from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider
 from ecs_agent.providers.embedding_provider import OpenAIEmbeddingProvider
 
 
+@pytest.mark.parametrize("complete_request", [False, True])
+async def test_openai_embedding_provider_metadata_survives_idempotent_close(
+    complete_request: bool,
+) -> None:
+    """Usage exists before the first request and remains readable after closing."""
+    model = OpenAIEmbeddingProvider(api_key="test-key")
+    try:
+        assert not model._client.is_closed
+        if complete_request:
+            response = httpx.Response(
+                200,
+                request=httpx.Request("POST", "https://api.openai.com/v1/embeddings"),
+                json={
+                    "data": [{"embedding": [0.1, 0.2], "index": 0}],
+                    "usage": {"prompt_tokens": 5, "total_tokens": 5},
+                },
+            )
+            with patch.object(
+                model._client, "post", new=AsyncMock(return_value=response)
+            ):
+                assert await model.embed(["hello"]) == [[0.1, 0.2]]
+            assert model.last_usage is not None
+            assert model.last_usage.prompt_tokens == 5
+        else:
+            assert model.last_usage is None
+            assert await model.embed([]) == []
+
+        usage = model.last_usage
+        await model.aclose()
+        await model.aclose()
+        assert model._client.is_closed
+        assert model.last_usage is usage
+    finally:
+        await model.aclose()
+
+
 @pytest.mark.asyncio
 async def test_fake_embedding_provider_returns_deterministic_vectors() -> None:
     """FakeEmbeddingProvider should return deterministic vectors for same input."""

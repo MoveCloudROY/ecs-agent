@@ -187,3 +187,85 @@ async def test_clear_removes_all_subscriptions() -> None:
     await bus.publish(SampleEvent(value=5))
     assert seen == []
     assert bus._handlers == {}
+
+
+class _TracedEvent:
+    pass
+
+
+@pytest.mark.asyncio
+async def test_publish_skips_bus_tracing_when_logging_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The uuid + per-handler trace logging block is skipped when it cannot log.
+
+    Per-publish trace ids exist only for the bus_publish/bus_deliver log
+    lines; generating two uuid4s and N log calls per event on the streaming
+    hot path is pure waste when logging drops them anyway.
+    """
+    import ecs_agent.core.event_bus as event_bus_module
+    from ecs_agent.logging import reset_logging
+
+    reset_logging()  # unconfigured: all logging disabled
+
+    publish_logs: list[dict[str, object]] = []
+    deliver_logs: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        event_bus_module,
+        "log_bus_publish",
+        lambda **kwargs: publish_logs.append(kwargs),
+    )
+    monkeypatch.setattr(
+        event_bus_module,
+        "log_bus_deliver",
+        lambda **kwargs: deliver_logs.append(kwargs),
+    )
+
+    bus = EventBus()
+    received: list[object] = []
+
+    async def handler(event: _TracedEvent) -> None:
+        received.append(event)
+
+    bus.subscribe(_TracedEvent, handler)
+    await bus.publish(_TracedEvent())
+
+    assert len(received) == 1
+    assert publish_logs == []
+    assert deliver_logs == []
+
+
+@pytest.mark.asyncio
+async def test_publish_emits_bus_tracing_when_debug_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ecs_agent.core.event_bus as event_bus_module
+    from ecs_agent.logging import configure_logging, reset_logging
+
+    publish_logs: list[dict[str, object]] = []
+    deliver_logs: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        event_bus_module,
+        "log_bus_publish",
+        lambda **kwargs: publish_logs.append(kwargs),
+    )
+    monkeypatch.setattr(
+        event_bus_module,
+        "log_bus_deliver",
+        lambda **kwargs: deliver_logs.append(kwargs),
+    )
+
+    configure_logging(level="DEBUG")
+    try:
+        bus = EventBus()
+
+        async def handler(event: _TracedEvent) -> None:
+            return None
+
+        bus.subscribe(_TracedEvent, handler)
+        await bus.publish(_TracedEvent())
+    finally:
+        reset_logging()
+
+    assert len(publish_logs) == 1
+    assert len(deliver_logs) == 1

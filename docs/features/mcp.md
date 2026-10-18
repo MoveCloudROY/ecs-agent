@@ -89,10 +89,10 @@ skill = MCPSkillAdapter(client, server_name="my-server", converter=my_converter)
 ## API Reference
 
 ### MCPClient
--   `connect()`: Establishes connection to the server.
--   `disconnect()`: Closes the connection.
+-   `connect(timeout=30.0)`: Establishes the session, bounded by `timeout` seconds (raises `RuntimeError` on failure or timeout rather than hanging). The session's full lifecycle — transport, `ClientSession` context (which starts the SDK receive loop), and cleanup — lives inside a single owner task, so the session is never used across event loops.
+-   `disconnect()`: Signals the owner task to unwind the session and transport, then awaits it (bounded).
 -   `list_tools()`: Fetches raw tool definitions from the server.
--   `call_tool(name, args)`: Executes a tool on the server.
+-   `call_tool(name, args)`: Executes a tool on the server. If a session was previously established but its loop is gone (e.g. tools were loaded through the synchronous install bridge on a temporary loop), it re-establishes on the calling loop first.
 -   `is_connected`: Property indicating connection status.
 
 ### MCPSkillAdapter

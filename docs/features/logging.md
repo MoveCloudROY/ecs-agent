@@ -25,11 +25,14 @@ The primary way to interact with the logging system is through `configure_loggin
 
 ## Logging Processors
 
-The system applies several standard processors to ensure every log entry is consistent:
+The system applies several standard processors to ensure every log entry is consistent. The drop/filter processors run **first**, so a filtered-out event pays only three cheap checks — never the contextvars merge or the caller-info stack walk:
+- `_drop_if_unconfigured` / `_filter_by_module_level` / `_filter_by_level`: Drop events below the configured (module-specific or global) level.
 - `merge_contextvars`: Merges any thread-local or async-local context variables into the log.
-- `_filter_by_level`: Filters logs according to the configured logging level.
+- `_add_caller_info`: Resolves the calling file/line/function (only for surviving events).
 - `add_log_level`: Adds the severity level (e.g., `info`, `error`) to each entry.
 - `TimeStamper(fmt="iso")`: Adds an ISO-formatted timestamp to every log.
+
+Hot paths can consult `ecs_agent.logging.logging_enabled_for(logger_name, method)` before building log-only context: the EventBus uses it to skip per-publish trace ids and per-handler delivery logs entirely when logging would drop them.
 
 ## Instrumented Modules
 

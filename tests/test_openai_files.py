@@ -1,3 +1,5 @@
+"""Tests for file upload, metadata, and transport lifecycle."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -18,6 +20,42 @@ def _build_files_config() -> ProviderConfig:
         api_key="test-key",
         api_format=ApiFormat.OPENAI_FILES,
     )
+
+
+@pytest.mark.parametrize("complete_request", [False, True])
+async def test_openai_files_metadata_survives_idempotent_close(
+    tmp_path: Path,
+    complete_request: bool,
+) -> None:
+    """Metadata exists before uploading and remains readable after closing."""
+    service = OpenAIFilesService(config=_build_files_config())
+    try:
+        assert not service._client.is_closed
+        if complete_request:
+            file_path = tmp_path / "doc.txt"
+            file_path.write_text("hello", encoding="utf-8")
+            response = httpx.Response(
+                200,
+                request=httpx.Request("POST", "https://api.openai.com/v1/files"),
+                json={"id": "file_123", "filename": "doc.txt", "bytes": 5},
+            )
+            with patch.object(
+                service._client, "post", new=AsyncMock(return_value=response)
+            ):
+                result = await service.upload_file(file_path, "assistants")
+            assert result.file_id == "file_123"
+            assert service.last_upload_metadata is not None
+            assert service.last_upload_metadata["bytes"] == 5
+        else:
+            assert service.last_upload_metadata is None
+
+        metadata = service.last_upload_metadata
+        await service.aclose()
+        await service.aclose()
+        assert service._client.is_closed
+        assert service.last_upload_metadata is metadata
+    finally:
+        await service.aclose()
 
 
 @pytest.mark.asyncio

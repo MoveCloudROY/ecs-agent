@@ -13,6 +13,18 @@ from ecs_agent.skills.web_search import WebSearchSkill
 from ecs_agent.types import EntityId
 
 
+async def test_web_search_close_releases_client_idempotently() -> None:
+    """Retiring the skill closes its owned client, even if called twice."""
+    skill = WebSearchSkill(api_key="test-key")
+    try:
+        assert not skill._client.is_closed
+        await skill.aclose()
+        await skill.aclose()
+        assert skill._client.is_closed
+    finally:
+        await skill.aclose()
+
+
 @pytest.fixture
 def mock_brave_response() -> dict[str, Any]:
     """Return a typical Brave Search API response."""

@@ -1,8 +1,6 @@
 """Skill manager for lifecycle handling and tool registry integration."""
 
 import json
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Coroutine
 
 from ecs_agent.components import (
@@ -22,6 +20,7 @@ from ecs_agent.types import (
     ToolSchema,
 )
 
+from ecs_agent.skills._sync_bridge import run_coroutine_sync
 from ecs_agent.skills.script_skill import ScriptSkill
 
 
@@ -437,16 +436,4 @@ class SkillManager:
 
     def _run_sync(self, operation: Coroutine[object, object, object]) -> object:
         """Run an async operation synchronously, handling both sync and async contexts."""
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            # Not in an event loop, can use asyncio.run()
-            return asyncio.run(operation)
-
-        # In an event loop, need to run in a thread
-        def _run_in_thread() -> object:
-            return asyncio.run(operation)
-
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(_run_in_thread)
-            return future.result()
+        return run_coroutine_sync(operation)

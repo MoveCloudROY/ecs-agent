@@ -1728,3 +1728,121 @@ async def test_plugin_install_mounts_langfuse_sink_on_record_pipeline() -> None:
     composite = getattr(world, "_ecs_agent_observability_sink")
     assert isinstance(composite, CompositeTelemetrySink)
     assert dict(composite.sinks()) == {"langfuse": sink}
+
+
+def _stream_delta_record(seq: int) -> TelemetryRecord:
+    return TelemetryRecord(
+        trace_id="trace-stream",
+        run_id="run-stream",
+        observation_id=f"delta-{seq}",
+        parent_observation_id="generation-1",
+        name="stream.content.delta",
+        kind="event",
+        status="success",
+        metadata={"seq": seq},
+    )
+
+
+def _stream_end_record() -> TelemetryRecord:
+    return TelemetryRecord(
+        trace_id="trace-stream",
+        run_id="run-stream",
+        observation_id="stream-end-1",
+        parent_observation_id="generation-1",
+        name="stream.end",
+        kind="event",
+        status="success",
+    )
+
+
+@pytest.mark.asyncio
+async def test_stream_delta_records_suppressed_by_default() -> None:
+    """Per-delta observations are not exported unless explicitly enabled.
+
+    A 2000-delta response would otherwise create thousands of Langfuse
+    observations and pay full sanitize/deep-convert cost per token.
+    """
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
+
+    client = FakeLangfuseClient()
+    sink = LangfuseTelemetrySink(client=client)
+
+    await sink.emit(_stream_delta_record(0))
+    await sink.emit(_stream_delta_record(1))
+    assert client.calls == []
+
+    await sink.emit(_stream_end_record())
+    assert len(client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_delta_records_exported_when_opted_in() -> None:
+    from ecs_agent.plugins.langfuse import LangfuseConfig, LangfuseTelemetrySink
+
+    client = FakeLangfuseClient()
+    sink = LangfuseTelemetrySink(
+        client=client,
+        config=LangfuseConfig(capture_stream_deltas=True),
+    )
+
+    await sink.emit(_stream_delta_record(0))
+    assert len(client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_config_export_context_computed_once_per_sink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The static config context must not be re-sanitized per record."""
+    import ecs_agent.plugins.langfuse as langfuse_module
+
+    calls = {"count": 0}
+    real_context = langfuse_module._config_export_context
+
+    def counting_context(*args: Any, **kwargs: Any) -> Any:
+        calls["count"] += 1
+        return real_context(*args, **kwargs)
+
+    monkeypatch.setattr(
+        langfuse_module, "_config_export_context", counting_context
+    )
+
+    client = FakeLangfuseClient()
+    sink = langfuse_module.LangfuseTelemetrySink(client=client)
+
+    await sink.emit(_stream_end_record())
+    await sink.emit(_stream_end_record())
+
+    assert calls["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_emit_skips_second_json_safe_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """to_payload() output is already JSON-safe; sanitize must not reconvert it."""
+    import ecs_agent.observability.redaction as redaction_module
+
+    client = FakeLangfuseClient()
+    from ecs_agent.plugins.langfuse import LangfuseTelemetrySink
+
+    sink = LangfuseTelemetrySink(client=client)
+    sink._config_context()  # warm the once-per-sink config cache
+
+    converted: list[Any] = []
+    real_json_safe = redaction_module.json_safe
+
+    def recording_json_safe(value: Any) -> Any:
+        converted.append(value)
+        return real_json_safe(value)
+
+    monkeypatch.setattr(redaction_module, "json_safe", recording_json_safe)
+
+    await sink.emit(_stream_end_record())
+
+    # The tiny redaction-report dict may pass through json_safe; the record
+    # payload itself (already JSON-safe from to_payload) must not.
+    assert not any(
+        isinstance(value, dict) and "observation_id" in value
+        for value in converted
+    )

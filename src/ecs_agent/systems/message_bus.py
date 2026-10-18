@@ -48,6 +48,9 @@ class MessageBusSystem:
         )
         self._dead_subscriber_failures = dead_subscriber_failures
         self._subscriptions: dict[str, set[str]] = {}
+        # Subscriptions registered at runtime via subscribe(); merged on top
+        # of the component snapshot each tick instead of being clobbered.
+        self._runtime_subscriptions: dict[str, set[str]] = {}
         self._queues: dict[str, dict[str, asyncio.Queue[Any]]] = {}
         self._subscriber_failures: dict[tuple[str, str], int] = {}
         self._conversations: dict[str, MessageBusConversationComponent] = {}
@@ -69,10 +72,16 @@ class MessageBusSystem:
         subscription_rows = world.query(MessageBusSubscriptionComponent)
         if subscription_rows:
             _, (subscription_component,) = subscription_rows[0]
-            self._subscriptions = {
+            # Component snapshot is the baseline; runtime subscribe() calls
+            # are merged on top. Replacing wholesale silently disconnected
+            # every runtime subscriber's queue on the next tick.
+            merged = {
                 topic: set(subscribers)
                 for topic, subscribers in subscription_component.subscriptions.items()
             }
+            for topic, subscribers in self._runtime_subscriptions.items():
+                merged.setdefault(topic, set()).update(subscribers)
+            self._subscriptions = merged
 
         conversation_rows = world.query(MessageBusConversationComponent)
         self._conversations = {
@@ -83,6 +92,7 @@ class MessageBusSystem:
     def subscribe(self, topic: str, subscriber_id: str) -> asyncio.Queue[Any]:
         subscribers = self._subscriptions.setdefault(topic, set())
         subscribers.add(subscriber_id)
+        self._runtime_subscriptions.setdefault(topic, set()).add(subscriber_id)
 
         topic_queues = self._queues.setdefault(topic, {})
         queue = topic_queues.get(subscriber_id)

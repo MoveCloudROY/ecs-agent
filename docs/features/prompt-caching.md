@@ -1,11 +1,11 @@
 # Prompt Caching
 
-Provider prompt caches serve the repeated prefix of consecutive LLM calls at
-~10% of the normal input price. They are strict **prefix caches**: request
-N+1 reads cached tokens only for the leading bytes it shares with an earlier
-request. One rewritten message mid-history forfeits everything after it.
+Provider prompt caches can reuse a matching prefix from an earlier LLM
+request. Pricing and cache availability depend on the provider and model.
+Changing an early message reduces the reusable prefix; an unchanged prefix
+makes reuse possible but does not guarantee a server-side hit.
 
-The framework therefore maintains one invariant on every outbound path:
+The framework's cache-preservation contract for append-only conversation paths is:
 
 > **Append-only prompts.** Within a session, each model call's rendered
 > prompt must be a byte-prefix of the next call's prompt, except for content
@@ -122,22 +122,70 @@ clean loop warm hit rate ≈ 96% (anthropic side, deepseek backend) and ≈ 86%
 - **Trim / compaction rewrites of old messages** — destructive by design;
   they trade a one-time cache miss for a permanently smaller prompt.
 
-## Gateway-specific behaviours worth knowing
+## Measured cache behaviour and limits
 
-Observed against an aggregator gateway (`api.rutaceae.com`, 2026-07-16);
-behaviour on first-party endpoints may differ:
+The latest controlled comparison is the
+[2026-10-18 DeepSeek Responses audit](../rfc/2026-10-18-deepseek-context-cache-comparison.md),
+using the same Agent/SDK scenario as the
+[gateway branching audit](../rfc/2026-10-18-context-cache-branching-audit.md).
+Each run covers 23 user turns and 25 HTTP requests, with long histories,
+streaming, tool calls, nested snapshot branches, branch switching, disk
+restore, three identical repeats, and two intentionally cold controls.
 
-- **anthropic format (deepseek backend):** caching is automatic
-  message-prefix matching — `cache_creation_input_tokens` is always 0, reads
-  are quantized (~256-token steps), reads appear immediately, and the
-  ~20-block lookback limitation of anthropic-proper `cache_control` does not
-  apply. Thinking-mode models **require** assistant history to carry
-  thinking blocks back (`Message.reasoning_content` is replayed by the
-  adapter; synthetic replays must supply one).
-- **openai chat:** async cache writes (~1–2 min before a warm read
-  succeeds); back-to-back identical calls in a fast loop read 0.
-- **openai responses:** identical repeats *without* tools hit (~95%), but
-  tool-bearing requests (function tools + `function_call` /
-  `function_call_output` items — every agentic call) reported 0 cached
-  tokens even for byte-identical repeats. For cache-sensitive agentic
-  workloads on this gateway, prefer `openai_chat_completions`.
+| Metric | Gateway `gpt-5.6-sol` | Direct DeepSeek `deepseek-flash` |
+|---|---:|---:|
+| Ideal prefix reuse baseline | 88.69% (computed after the run) | 88.72% (predictions recorded before sending) |
+| Server-reported observed reuse | 57.71% (extension field) | 88.43% (standard field) |
+| Standard `cached_tokens` / input tokens | 54.40% (billing allocation) | 88.43% |
+| Warm requests with positive / zero cache | 16 / 7 | 23 / 0 |
+| Three identical repeats | 68.70%, 77.86%, 99.45% observed | 99.12%, 99.12%, 99.12% |
+
+All client prefix, protocol replay, branch isolation, and usage propagation
+checks passed in both runs. DeepSeek's measured reuse is 0.29 percentage
+points below its preregistered conditional baseline. This demonstrates that
+the tested Agent path can achieve near-ideal reuse. The model and backend
+also changed, so the comparison does not uniquely identify gateway code as
+the cause of the earlier misses.
+
+### Interpreting the metrics
+
+- **Keep observed and billed cache separate.** In the October gateway
+  sample, standard `input_tokens_details.cached_tokens` equals the gateway's
+  billed-cache allocation. Its `linapi_cache_billing.observed_cached_tokens`
+  field reports a different value. The audit retains both. DeepSeek uses
+  the standard field and returned no such extension in this sample. These
+  remain server-reported metrics, not independent measurements of KV cache.
+- **Predict from the actual branch ancestor.** Before sending, the audit
+  verifies the serialized prefix and stable request parameters, then uses
+  the prior ancestor's input-token count as a conservative approximation.
+  Exact repeats use the earlier identical request's input-token count;
+  cold controls predict zero. Do not use another branch's immediately
+  preceding request as the ancestor.
+- **The baseline is conditional.** It assumes the matching cache has been
+  written, remains available, and is reached by the request. Token alignment
+  and server-side rendering can cause small differences. It is not a
+  guaranteed hit rate or a universal block-size formula.
+- **Zero and missing usage differ.** Explicit zero cached tokens is a
+  measured miss. Absent cache details are unknown. An interrupted request
+  can retain usage already received, or have unknown usage if none arrived;
+  inspect invocation status and stream completeness before aggregating.
+- **Snapshot branches are the tested path.** Native `ConversationTree`
+  writeback, protocol-item preservation, and restore still have four strict
+  expected-failure tests. The snapshot result does not establish that the
+  native tree lifecycle is correct.
+
+### Earlier gateway observations
+
+The July 2026 records remain historical evidence in
+`records/review/plan_task_cache_audit_2026-07-29/` and the July 28 endpoint
+comparison. They observed both positive and zero cache reports during tool
+loops; tool-bearing Responses requests did achieve cache hits. Missing
+cache details on some Chat requests were also recorded.
+
+Those runs did not establish the observed-versus-billed distinction used in
+the October audit. Their reported ratios and apparent token steps should
+not be treated as physical cache measurements, a universal cache block size,
+or grounds to recommend one API format for all workloads. The samples also
+do not uniquely distinguish routing, account pools, write visibility,
+eviction, upstream processing, and reporting. See the linked audits for the
+current measurements and their explicit limitations.

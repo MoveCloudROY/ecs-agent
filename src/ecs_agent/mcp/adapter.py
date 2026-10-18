@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-from concurrent.futures import Future, ThreadPoolExecutor
 from collections.abc import Awaitable, Callable, Coroutine
 from typing import TYPE_CHECKING, Any
 
@@ -11,6 +9,7 @@ from ecs_agent.components import ToolRegistryComponent
 from ecs_agent.components.definitions import SkillComponent
 from ecs_agent.core.world import World
 from ecs_agent.skills.manager import SkillManager
+from ecs_agent.skills._sync_bridge import run_coroutine_sync
 from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import (
     EntityId,
@@ -172,14 +171,4 @@ class MCPSkillAdapter(ScriptSkill):
         self._tool_bundle = converted
 
     def _run_sync(self, operation: Coroutine[Any, Any, Any]) -> Any:
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(operation)
-
-        def _run_in_thread() -> Any:
-            return asyncio.run(operation)
-
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future: Future[Any] = executor.submit(_run_in_thread)
-            return future.result()
+        return run_coroutine_sync(operation)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import builtins
 from contextlib import asynccontextmanager
 import importlib
@@ -46,6 +47,21 @@ def _install_fake_mcp(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             self.close = state["close"]
             self.list_tools = state["list_tools"]
             self.call_tool = state["call_tool"]
+
+        async def __aenter__(self) -> "FakeSession":
+            # Entering the session context is what starts the SDK receive
+            # loop; MCPClient now enters it before initialize().
+            return self
+
+        async def __aexit__(
+            self,
+            exc_type: object,
+            exc: object,
+            tb: object,
+        ) -> None:
+            # The real ClientSession cleans up here; the fake routes it to the
+            # close mock so disconnect assertions stay meaningful.
+            await self.close()
 
     mcp_module = types.ModuleType("mcp")
     mcp_module.ClientSession = FakeSession  # type: ignore[attr-defined]
@@ -407,3 +423,87 @@ def test_mcp_components_dataclasses(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.config == {"command": "uvx"}
     assert client.connected is True
     assert client.cached_tools == [{"name": "read_file"}]
+
+
+# ---------------------------------------------------------------------------
+# Real in-memory MCP server integration (verifies the session lifecycle)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_connect_list_call_roundtrip_against_real_inmemory_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """connect/list_tools/call_tool must work against a real MCP session.
+
+    Regression: MCPClient never entered the ClientSession context, so the
+    SDK's receive loop was never started and initialize() awaited a response
+    nobody would ever read — connect() hung forever against any real server.
+    """
+    import contextlib
+
+    # Drop any fake mcp modules a prior test left in sys.modules so this test
+    # binds against the real SDK.
+    _reset_mcp_modules()
+
+    from mcp.server.fastmcp import FastMCP
+    from mcp.shared.memory import create_client_server_memory_streams
+
+    MCPClient = _import_mcp_client_module().MCPClient
+    MCPConfigComponent = importlib.import_module(
+        "ecs_agent.mcp.components"
+    ).MCPConfigComponent
+
+    server = FastMCP("itest")
+
+    @server.tool()
+    def echo(text: str) -> str:
+        return f"echo:{text}"
+
+    async with create_client_server_memory_streams() as (
+        client_streams,
+        server_streams,
+    ):
+        server_read, server_write = server_streams
+        server_task = asyncio.create_task(
+            server._mcp_server.run(
+                server_read,
+                server_write,
+                server._mcp_server.create_initialization_options(),
+                raise_exceptions=True,
+            )
+        )
+
+        config = MCPConfigComponent(
+            server_name="itest",
+            transport_type="stdio",
+            config={"command": "unused"},
+        )
+        client = MCPClient(config)
+
+        async def fake_transport_streams(transport_exit_stack: object) -> object:
+            del transport_exit_stack
+            return client_streams
+
+        monkeypatch.setattr(
+            client, "_create_transport_streams", fake_transport_streams
+        )
+
+        try:
+            await asyncio.wait_for(client.connect(), timeout=5.0)
+            assert client.is_connected
+
+            tools = await asyncio.wait_for(client.list_tools(), timeout=5.0)
+            assert any(tool["name"] == "echo" for tool in tools)
+
+            result = await asyncio.wait_for(
+                client.call_tool("echo", {"text": "hi"}), timeout=5.0
+            )
+            assert result == "echo:hi"
+
+            await asyncio.wait_for(client.disconnect(), timeout=5.0)
+            assert not client.is_connected
+        finally:
+            server_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await server_task

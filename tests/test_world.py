@@ -174,8 +174,8 @@ def test_world_create_entity_logs_entity_created(capsys) -> None:
 
 
 def test_world_add_component_logs_component_added(capsys) -> None:
-    """Test add_component emits component_added info event."""
-    configure_logging(json_output=True, level="INFO")
+    """Test add_component emits component_added at DEBUG (high-frequency op)."""
+    configure_logging(json_output=True, level="DEBUG")
 
     world = World()
     entity = world.create_entity()
@@ -323,7 +323,7 @@ def test_world_create_entity_log_includes_world_name(capsys: pytest.CaptureFixtu
 
 
 def test_world_add_component_log_includes_world_name(capsys: pytest.CaptureFixture[str]) -> None:
-    configure_logging(json_output=True, level="INFO")
+    configure_logging(json_output=True, level="DEBUG")
 
     @dataclass(slots=True)
     class Dummy:

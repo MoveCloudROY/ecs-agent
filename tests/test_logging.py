@@ -1776,3 +1776,49 @@ class TestLoggingLevelPolicy:
         saved_events = [e for e in events if e.get("event") == "checkpoint_saved"]
         assert len(saved_events) >= 1
         assert saved_events[0].get("level") == "info"
+
+
+def test_filter_processors_run_before_caller_info() -> None:
+    """Dropped events must not pay for contextvars merge or stack walking."""
+    from ecs_agent.logging import (
+        _add_caller_info,
+        _drop_if_unconfigured,
+        _filter_by_level,
+        _filter_by_module_level,
+        _shared_processors,
+    )
+
+    processors = _shared_processors()
+    caller_index = processors.index(_add_caller_info)
+    assert processors.index(_drop_if_unconfigured) < caller_index
+    assert processors.index(_filter_by_module_level) < caller_index
+    assert processors.index(_filter_by_level) < caller_index
+
+
+def test_dropped_log_does_not_walk_the_stack(
+    monkeypatch: "pytest.MonkeyPatch",
+) -> None:
+    """A level-filtered log call must skip the caller-info stack walk."""
+    import inspect as inspect_module
+
+    from ecs_agent.logging import configure_logging, get_logger, reset_logging
+
+    configure_logging(json_output=True, level="ERROR")
+    try:
+        calls = {"count": 0}
+        real_currentframe = inspect_module.currentframe
+
+        def counting_currentframe():  # type: ignore[no-untyped-def]
+            calls["count"] += 1
+            return real_currentframe()
+
+        monkeypatch.setattr(inspect_module, "currentframe", counting_currentframe)
+
+        logger = get_logger("ecs_agent.hotpath_probe")
+        logger.debug("dropped_event")
+        assert calls["count"] == 0
+
+        logger.error("kept_event")
+        assert calls["count"] >= 1
+    finally:
+        reset_logging()

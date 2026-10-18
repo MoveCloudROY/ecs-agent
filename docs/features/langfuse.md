@@ -62,6 +62,7 @@ The integration uses the following environment variables for configuration:
 `LangfuseConfig` also exposes runtime safety controls:
 
 - `capture_input` / `capture_output`: Enabled by default for backward-compatible full-fidelity traces. Set either value to `False` to suppress raw inputs or outputs from Langfuse export while preserving metadata, timing, model, usage, and redaction reports.
+- `capture_stream_deltas`: Disabled by default. Per-delta stream records (`stream.*.delta`) are not exported — one observation per token would multiply request volume by the response length and pay the full sanitize cost on the streaming hot path. Stream start/end records are always exported. Set to `True` to export every delta.
 - `enable_private_v4_historical_otel`: Disabled by default. When enabled, the adapter may use Langfuse SDK v4 private OpenTelemetry hooks to backdate observation start times. Keep this off unless you have validated the exact Langfuse SDK version you run in production.
 - `timeout`: Optional Langfuse SDK HTTP timeout in seconds. Use `LangfuseConfig(timeout=30)` or `LANGFUSE_TIMEOUT` for slower self-hosted deployments.
 

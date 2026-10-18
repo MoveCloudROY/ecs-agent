@@ -239,6 +239,33 @@ async def test_undo_restores_entity_tracking() -> None:
     assert not world.has_entity(post_snapshot_entity)
 
 
+async def test_process_skips_serialization_without_checkpoint_component(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No CheckpointComponent means no full-world serialization per tick."""
+    import ecs_agent.systems.checkpoint as checkpoint_module
+    from ecs_agent.components import RunnerStateComponent
+
+    calls = {"count": 0}
+    real_to_dict = checkpoint_module.WorldSerializer.to_dict
+
+    def counting_to_dict(world: Any) -> Any:
+        calls["count"] += 1
+        return real_to_dict(world)
+
+    monkeypatch.setattr(
+        checkpoint_module.WorldSerializer, "to_dict", staticmethod(counting_to_dict)
+    )
+
+    world = World()
+    entity = world.create_entity()
+    world.add_component(entity, RunnerStateComponent(current_tick=1))
+
+    await CheckpointSystem().process(world)
+
+    assert calls["count"] == 0
+
+
 async def test_save_checkpoint_preserves_terminal_component_in_world(
     tmp_path: Any,
 ) -> None:

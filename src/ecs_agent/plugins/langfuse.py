@@ -41,6 +41,11 @@ class LangfuseConfig:
     enabled: bool = True
     capture_input: bool = True
     capture_output: bool = True
+    # Per-delta stream records ("stream.*.delta") are suppressed by default:
+    # exporting one observation per token multiplies request volume by the
+    # response length and pays full sanitize cost on the hot path. Stream
+    # start/end (and everything else) are always exported.
+    capture_stream_deltas: bool = False
     enable_private_v4_historical_otel: bool = False
     timeout: float | None = None
 
@@ -75,16 +80,37 @@ class LangfuseTelemetrySink:
         self._v4_trace_ids: dict[str, str] = {}
         self._v4_trace_names: dict[str, str] = {}
         self._active_v4_root_observations: dict[str, Any] = {}
+        self._config_context_cache: ConfigExportContext | None = None
         self.failure_count = 0
         self.failures_by_operation: dict[str, int] = {}
         self.last_error: str | None = None
+
+    def _config_context(self) -> ConfigExportContext:
+        """Sanitized config-derived export fields, computed once per sink.
+
+        The config is fixed at construction; re-sanitizing it for every
+        record was pure per-event overhead.
+        """
+        if self._config_context_cache is None:
+            self._config_context_cache = _config_export_context(
+                self.config, self.redactor
+            )
+        return self._config_context_cache
 
     async def emit(self, record: TelemetryRecord) -> None:
         """Emit one sanitized telemetry record to Langfuse."""
         if not self.config.enabled:
             return
+        if (
+            not self.config.capture_stream_deltas
+            and record.name.startswith("stream.")
+            and record.name.endswith(".delta")
+        ):
+            return
         try:
-            payload, redaction = sanitize_payload(record.to_payload(), self.redactor)
+            payload, redaction = sanitize_payload(
+                record.to_payload(), self.redactor, assume_json_safe=True
+            )
             record_payload = _apply_capture_policy(_as_dict(payload), self.config)
             redaction_payload = redaction.to_payload()
             if _is_trace_container_payload(record_payload):
@@ -100,13 +126,15 @@ class LangfuseTelemetrySink:
         if not self.config.enabled:
             return
         try:
-            payload, redaction = sanitize_payload(score.to_payload(), self.redactor)
+            payload, redaction = sanitize_payload(
+                score.to_payload(), self.redactor, assume_json_safe=True
+            )
             score_payload = _as_dict(payload)
             metadata = _metadata_with_context(
                 self.config,
                 score_payload.get("metadata"),
                 redaction.to_payload(),
-                _config_export_context(self.config, self.redactor),
+                self._config_context(),
             )
             await self._call_client(
                 ("create_score", "score"),
@@ -151,7 +179,7 @@ class LangfuseTelemetrySink:
         payload: dict[str, JsonSafe],
         redaction: dict[str, JsonSafe],
     ) -> None:
-        config_context = _config_export_context(self.config, self.redactor)
+        config_context = self._config_context()
         metadata = _metadata_with_context(
             self.config,
             payload.get("metadata"),
@@ -185,7 +213,7 @@ class LangfuseTelemetrySink:
             self.config,
             payload.get("metadata"),
             redaction,
-            _config_export_context(self.config, self.redactor),
+            self._config_context(),
         )
         if _first_method(self.client, ("observation", "create_observation")) is None:
             if payload.get("kind") == "event":
@@ -628,7 +656,7 @@ class LangfuseTelemetrySink:
         self,
         payload: dict[str, JsonSafe] | None = None,
     ) -> dict[str, JsonSafe]:
-        config_context = _config_export_context(self.config, self.redactor)
+        config_context = self._config_context()
         return _drop_none(
             {
                 "user_id": config_context.metadata.get("user_id"),

@@ -187,6 +187,46 @@ def _filter_by_level(
     raise structlog.DropEvent()
 
 
+def logging_enabled_for(logger_name: str, method_name: str) -> bool:
+    """Return True when a log call at this level would survive the filters.
+
+    Mirrors ``_drop_if_unconfigured`` + ``_filter_by_module_level`` +
+    ``_filter_by_level`` as a cheap boolean check, so hot paths can skip
+    building log-only context (uuids, formatted payloads) that the processor
+    chain would drop anyway.
+    """
+    if not _logging_configured:
+        return False
+    method_level = _METHOD_LEVEL_MAP.get(method_name, logging.INFO)
+    if _module_levels and method_level < _configured_level_for_logger_name(
+        logger_name
+    ):
+        return False
+    return method_level >= _LEVEL_MAP.get(_log_level, logging.INFO)
+
+
+def _shared_processors() -> list[Any]:
+    """Processor chain for ecs_agent loggers.
+
+    Ordering matters for hot-path cost: the drop/filter processors run FIRST
+    so a filtered-out event pays only three cheap checks — never the
+    contextvars merge or the ``_add_caller_info`` stack walk. The filters
+    depend only on the bound ``logger`` name and module globals, so running
+    them before the enrichment processors is behavior-preserving.
+    """
+    return [
+        _drop_if_unconfigured,
+        _filter_by_module_level,
+        _filter_by_level,
+        merge_contextvars,
+        _add_caller_info,
+        add_log_level,
+        TimeStamper(fmt="iso"),
+        _ensure_exc_info,
+        format_exc_info,
+    ]
+
+
 def _install_silent_defaults() -> None:
     structlog.reset_defaults()
     structlog.configure(
@@ -248,17 +288,7 @@ def configure_logging(
     }
     _logging_configured = True
 
-    shared_processors: list[Any] = [
-        merge_contextvars,
-        _add_caller_info,
-        _drop_if_unconfigured,
-        _filter_by_module_level,
-        _filter_by_level,
-        add_log_level,
-        TimeStamper(fmt="iso"),
-        _ensure_exc_info,
-        format_exc_info,
-    ]
+    shared_processors: list[Any] = _shared_processors()
     foreign_processors: list[Any] = [
         merge_contextvars,
         _add_caller_info,

@@ -38,6 +38,10 @@ class WebSearchSkill(ScriptSkill):
             )
         self._client = httpx.AsyncClient(trust_env=False)
 
+    async def aclose(self) -> None:
+        """Close the owned httpx client, releasing its connection pool."""
+        await self._client.aclose()
+
     def tools(self) -> dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]]:
         """Return web search tool."""
         schema = ToolSchema(

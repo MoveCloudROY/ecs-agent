@@ -79,10 +79,24 @@ class SecretRedactor:
         )
         self._value_rules = self._build_value_rules(source_env, extra_secret_values)
 
-    def sanitize(self, payload: Any) -> tuple[JsonSafe, RedactionReport]:
-        """Return a sanitized JSON-safe payload and redaction report."""
+    def sanitize(
+        self,
+        payload: Any,
+        *,
+        assume_json_safe: bool = False,
+    ) -> tuple[JsonSafe, RedactionReport]:
+        """Return a sanitized JSON-safe payload and redaction report.
+
+        Args:
+            payload: Value to sanitize.
+            assume_json_safe: Skip the json_safe conversion pass when the
+                caller guarantees the payload is already JSON-safe (e.g.
+                ``TelemetryRecord.to_payload()`` output) — avoids a second
+                full deep conversion per record.
+        """
         report = RedactionReport()
-        return self._sanitize_value(json_safe(payload), report), report
+        value = payload if assume_json_safe else json_safe(payload)
+        return self._sanitize_value(value, report), report
 
     def _build_value_rules(
         self,
@@ -193,9 +207,11 @@ class SecretRedactor:
 def sanitize_payload(
     payload: Any,
     redactor: SecretRedactor,
+    *,
+    assume_json_safe: bool = False,
 ) -> tuple[JsonSafe, RedactionReport]:
     """Sanitize telemetry payload before it reaches any sink or adapter."""
-    return redactor.sanitize(payload)
+    return redactor.sanitize(payload, assume_json_safe=assume_json_safe)
 
 
 __all__ = [

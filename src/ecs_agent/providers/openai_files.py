@@ -42,6 +42,10 @@ class OpenAIFilesService:
         self._client = httpx.AsyncClient(trust_env=False, timeout=timeout)
         self.last_upload_metadata: dict[str, str | int] | None = None
 
+    async def aclose(self) -> None:
+        """Close the owned httpx client, releasing its connection pool."""
+        await self._client.aclose()
+
     async def upload_file(self, path: str | Path, purpose: str) -> FileRefPart:
         if purpose not in self._SUPPORTED_PURPOSES:
             raise ValueError(

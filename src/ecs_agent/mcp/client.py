@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable
+import asyncio
+import contextlib
 from contextlib import AsyncExitStack
-import inspect
 from typing import Any
 
 from mcp import ClientSession
@@ -19,73 +19,133 @@ logger = get_logger(__name__)
 
 
 class MCPClient:
+    """Client for one MCP server, holding the session in an owner task.
+
+    The transport and ``ClientSession`` contexts are entered AND exited inside
+    a single background task (`_run_connection`): entering the session context
+    is what starts the SDK's receive loop (without it ``initialize()`` awaits
+    a response nobody reads — a permanent hang), and anyio cancel scopes are
+    task-bound, so exiting from a different task raises. The owner task keeps
+    the session alive until ``disconnect()`` signals it to unwind.
+    """
+
     def __init__(self, config: MCPConfigComponent) -> None:
         self.server_name = config.server_name
         self.transport_type = config.transport_type
         self.config = config.config
         self._session: ClientSession | None = None
-        self._transport_exit_stack: AsyncExitStack | None = None
         self._tools_cache: list[dict[str, Any]] = []
+        self._owner_task: asyncio.Task[None] | None = None
+        self._ready: asyncio.Event | None = None
+        self._stop: asyncio.Event | None = None
+        self._connect_error: BaseException | None = None
+        self._was_connected = False
 
     @property
     def is_connected(self) -> bool:
         return self._session is not None
 
-    async def connect(self) -> None:
+    async def connect(self, timeout: float = 30.0) -> None:
+        """Establish the session, bounded by ``timeout`` seconds.
+
+        Raises:
+            RuntimeError: When the server cannot be reached, rejects the
+                handshake, or does not answer within the timeout.
+        """
         if self.is_connected:
             return
 
-        transport_exit_stack = AsyncExitStack()
+        self._ready = asyncio.Event()
+        self._stop = asyncio.Event()
+        self._connect_error = None
+        self._owner_task = asyncio.create_task(self._run_connection())
         try:
-            read, write = await self._create_transport_streams(transport_exit_stack)
-            session = ClientSession(read, write)
-            await session.initialize()
-            self._session = session
-            self._transport_exit_stack = transport_exit_stack
-            logger.info(
-                "mcp_connect",
-                server=self.server_name,
-                transport=self.transport_type,
-            )
-        except Exception as exc:
-            await transport_exit_stack.aclose()
+            await asyncio.wait_for(self._ready.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            self._owner_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._owner_task
+            self._owner_task = None
             logger.error(
                 "mcp_connect_failed",
                 server=self.server_name,
                 transport=self.transport_type,
-                exception=str(exc),
+                exception=f"timed out after {timeout}s",
             )
             raise RuntimeError(
-                f"Failed to connect to MCP server '{self.server_name}': {exc}"
-            ) from exc
+                f"Failed to connect to MCP server '{self.server_name}': "
+                f"timed out after {timeout}s"
+            )
+
+        if self._connect_error is not None:
+            error = self._connect_error
+            self._owner_task = None
+            logger.error(
+                "mcp_connect_failed",
+                server=self.server_name,
+                transport=self.transport_type,
+                exception=str(error),
+            )
+            raise RuntimeError(
+                f"Failed to connect to MCP server '{self.server_name}': {error}"
+            ) from error
+
+        self._was_connected = True
+        logger.info(
+            "mcp_connect",
+            server=self.server_name,
+            transport=self.transport_type,
+        )
+
+    async def _run_connection(self) -> None:
+        """Owner task: the session's full lifecycle lives in this one task."""
+        try:
+            async with AsyncExitStack() as stack:
+                read, write = await self._create_transport_streams(stack)
+                session = await stack.enter_async_context(
+                    ClientSession(read, write)
+                )
+                await session.initialize()
+                self._session = session
+                assert self._ready is not None and self._stop is not None
+                self._ready.set()
+                await self._stop.wait()
+        except Exception as exc:
+            self._connect_error = exc
+        finally:
+            self._session = None
+            if self._ready is not None:
+                self._ready.set()
 
     async def disconnect(self) -> None:
-        if not self._session:
+        task = self._owner_task
+        if task is None:
             return
 
-        close = getattr(self._session, "close", None)
-        if callable(close):
-            close_result = close()
-            if isinstance(close_result, Awaitable) or inspect.isawaitable(close_result):
-                await close_result
+        assert self._stop is not None
+        self._stop.set()
+        try:
+            await asyncio.wait_for(task, timeout=10.0)
+        except asyncio.TimeoutError:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        finally:
+            self._owner_task = None
+            self._session = None
+            self._tools_cache = []
 
-        if self._transport_exit_stack is not None:
-            await self._transport_exit_stack.aclose()
-            self._transport_exit_stack = None
-
-        self._session = None
-        self._tools_cache = []
         logger.info("mcp_disconnect", server=self.server_name)
 
     async def list_tools(self) -> list[dict[str, Any]]:
-        session = self._require_connected_session()
+        session = await self._connected_session()
         result = await session.list_tools()
         tools = getattr(result, "tools", [])
         self._tools_cache = [self._serialize_tool(tool) for tool in tools]
         return list(self._tools_cache)
 
     async def call_tool(self, name: str, args: dict[str, Any]) -> str:
-        session = self._require_connected_session()
+        session = await self._connected_session()
         if self._tools_cache and name not in {
             tool["name"] for tool in self._tools_cache
         }:
@@ -136,7 +196,19 @@ class MCPClient:
 
         raise ValueError(f"Unknown transport type: {self.transport_type}")
 
-    def _require_connected_session(self) -> ClientSession:
+    async def _connected_session(self) -> ClientSession:
+        """Return the live session, reconnecting on the current loop if needed.
+
+        Self-healing matters for the sync install path: tools loaded through a
+        temporary event loop lose their session when that loop is torn down;
+        the first real tool call then reconnects on the loop that will
+        actually use the session.
+        """
+        if self._session is None and self._was_connected:
+            # A previous session existed but its loop is gone (e.g. tools
+            # loaded through the temporary-loop sync bridge): re-establish on
+            # the loop that is actually calling the tools.
+            await self.connect()
         if self._session is None:
             raise RuntimeError("Not connected to MCP server")
         return self._session
