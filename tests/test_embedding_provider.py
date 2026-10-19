@@ -112,6 +112,24 @@ async def test_fake_embedding_provider_different_texts_different_vectors() -> No
     assert result1 != result2
 
 
+def test_fake_embedding_provider_is_deterministic_across_process_hash_seeds() -> None:
+    """Fake vectors must not depend on Python's per-process randomized hash."""
+    import os
+    import subprocess
+    import sys
+
+    script = (
+        "import asyncio,json; "
+        "from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider; "
+        "print(json.dumps(asyncio.run(FakeEmbeddingProvider(8).embed(['hello', 'world']))))"
+    )
+    results = [
+        subprocess.check_output([sys.executable, "-c", script], env={**os.environ, "PYTHONHASHSEED": seed}, text=True)
+        for seed in ("1", "2")
+    ]
+    assert results[0] == results[1]
+
+
 # OpenAIEmbeddingProvider Tests
 
 

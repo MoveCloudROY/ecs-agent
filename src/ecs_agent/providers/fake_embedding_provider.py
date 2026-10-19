@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 
 class FakeEmbeddingProvider:
     """Fake embedding provider that returns deterministic vectors based on text hash.
@@ -32,8 +34,10 @@ class FakeEmbeddingProvider:
 
         vectors: list[list[float]] = []
         for text in texts:
-            # Use hash of text as deterministic seed
-            seed = hash(text) % 1000 / 1000.0
+            # Python's hash is randomized per process; reducing it to 1000
+            # buckets also caused unrelated inputs to collide in regression tests.
+            digest = hashlib.sha256(text.encode("utf-8")).digest()
+            seed = int.from_bytes(digest[:8], "big") / 2**64
 
             # Generate dimension floats deterministically from seed
             vector = []
