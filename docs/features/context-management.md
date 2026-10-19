@@ -271,3 +271,7 @@ results_b = linearize(tree, get_active_leaf(tree))
 ## Complete Example
 
 See [`examples/context_management_agent.py`](../../examples/context_management_agent.py) for a full working demo combining checkpoint, undo, and compaction.
+
+## Preserve evidence across compaction
+
+Install [session recording](session-records.md) to retain raw messages and complete tool outputs independently of working context. Compaction and trimming append history-change records before replacing context; compaction records retain the summary and covered range. Search and `read_file(session://...)` can still retrieve earlier evidence. New task resets create new record identities, and conversation-tree branch selection preserves separate paths. The database is not a replacement for a runtime checkpoint.

@@ -461,6 +461,17 @@ class SubagentRuntimeManager:
         from ecs_agent.components.definitions import SubagentSessionTableComponent
 
         async with self._lock:
+            if world.session_service is not None:
+                for metadata in self._sessions.values():
+                    if metadata.parent_entity_id != entity_id or metadata.transcript_session_id is None or metadata.status not in _TERMINAL_STATUSES:
+                        continue
+                    status = metadata.outcome_status or {
+                        "succeeded": "completed", "failed": "error", "cancelled": "cancelled", "timed_out": "timeout",
+                    }[metadata.status]
+                    world.session_service.finish_external_session(
+                        metadata.transcript_session_id, status=status,
+                        reason=metadata.error or f"background_{metadata.status}",
+                    )
             table = world.get_component(entity_id, SubagentSessionTableComponent)
             if table is None:
                 logger.warning(

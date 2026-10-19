@@ -71,7 +71,9 @@ class StatusCommandSystem:
             # No rendered result to show — let the normal path handle it.
             return
 
-        conversation.messages.append(
+        from ecs_agent.history import append_conversation_message
+
+        append_conversation_message(world, entity_id,
             Message(role="assistant", content=rendered.text)
         )
         # Skip reasoning this tick (a non-"reasoning_complete" terminal reason is

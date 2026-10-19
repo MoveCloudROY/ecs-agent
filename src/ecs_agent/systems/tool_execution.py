@@ -21,6 +21,7 @@ from ecs_agent.components import (
     TerminalComponent,
 )
 from ecs_agent.core.world import World
+from ecs_agent.history import append_conversation_message, record_conversation_message, record_session_event, replace_conversation_history, tool_record_id
 from ecs_agent.logging import get_logger
 from ecs_agent.scratchbook import ArtifactRegistry, ScratchbookService, ToolResultsSink
 from ecs_agent.token_counting import count_tokens
@@ -87,6 +88,22 @@ class ToolExecutionSystem:
         )
 
     async def process(self, world: World) -> None:
+        try:
+            await self._process_pending(world)
+        except (Exception, asyncio.CancelledError) as exc:
+            # Once a tool might have run, leaving it queued would repeat side
+            # effects on another tick. A durable start without a result means
+            # "completion unconfirmed", never "safe to rerun".
+            if world.session_service is not None:
+                for entity_id, _ in world.query(PendingToolCallsComponent, ToolRegistryComponent, ConversationComponent):
+                    reason = "tool_execution_cancelled" if isinstance(exc, asyncio.CancelledError) else "tool_execution_error"
+                    world.add_component(entity_id, ErrorComponent(error=str(exc) or reason, system_name="ToolExecutionSystem", timestamp=time.time()))
+                    world.add_component(entity_id, TerminalComponent(reason=reason, error=str(exc) or reason))
+                    world.remove_component(entity_id, PendingToolCallsComponent)
+            logger.error("tool_execution_stopped", exception=str(exc) or type(exc).__name__)
+            raise
+
+    async def _process_pending(self, world: World) -> None:
         for entity_id, components in world.query(
             PendingToolCallsComponent,
             ToolRegistryComponent,
@@ -187,6 +204,15 @@ class ToolExecutionSystem:
     ) -> str:
         start_monotonic = time.monotonic()
         tool_start_time = datetime.now(timezone.utc)
+        start_id = tool_record_id(world, entity_id, tool_call.id, "started")
+        if start_id is not None and world.session_service is not None:
+            try:
+                world.session_service.store.get_record(start_id)
+            except FileNotFoundError:
+                pass
+            else:
+                raise RuntimeError("Tool already started in this session; execution must not be repeated, completion may be unconfirmed")
+        record_session_event(world, entity_id, "tool_started", {"tool_call_id": tool_call.id, "tool_name": tool_call.name, "arguments": tool_call.arguments, "status": "started"}, record_id=start_id)
         await world.event_bus.publish(
             ToolExecutionStartedEvent(
                 entity_id=entity_id,
@@ -204,6 +230,10 @@ class ToolExecutionSystem:
 
         success = not result.startswith("Error")
         tool_end_time = datetime.now(timezone.utc)
+        record_conversation_message(
+            world, entity_id, Message(role="tool", content=result, tool_call_id=tool_call.id),
+            record_id=tool_record_id(world, entity_id, tool_call.id, "result"),
+        )
         await world.event_bus.publish(
             ToolExecutionCompletedEvent(
                 entity_id=entity_id,
@@ -248,12 +278,13 @@ class ToolExecutionSystem:
             )
             persisted_record_path = persist_result.record_path
             results[tool_call.id] = persist_result.record_path
-            conversation.messages.append(
+            append_conversation_message(world, entity_id,
                 Message(
                     role="tool",
                     content=persist_result.record_path if success else result,
                     tool_call_id=tool_call.id,
-                )
+                ),
+                recorded_record_id=tool_record_id(world, entity_id, tool_call.id, "result"),
             )
             if success:
                 await self._cache_overflowed_tool_result(
@@ -266,8 +297,9 @@ class ToolExecutionSystem:
                 )
         else:
             results[tool_call.id] = result
-            conversation.messages.append(
-                Message(role="tool", content=result, tool_call_id=tool_call.id)
+            append_conversation_message(world, entity_id,
+                Message(role="tool", content=result, tool_call_id=tool_call.id),
+                recorded_record_id=tool_record_id(world, entity_id, tool_call.id, "result"),
             )
 
         if self._registry is not None and plan_name is not None:
@@ -403,7 +435,8 @@ class ToolExecutionSystem:
             message = conversation.messages[index]
             if message.role != "tool" or message.tool_call_id != tool_call.id:
                 continue
-            conversation.messages[index] = Message(
+            updated_messages = list(conversation.messages)
+            updated_messages[index] = Message(
                 role="tool",
                 content=cached_hint,
                 parts=message.parts,
@@ -411,6 +444,7 @@ class ToolExecutionSystem:
                 tool_call_id=message.tool_call_id,
                 compaction_metadata=message.compaction_metadata,
             )
+            replace_conversation_history(world, entity_id, updated_messages, reason="tool_result_cached")
             break
 
         logger.info(

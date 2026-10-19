@@ -11,8 +11,10 @@ from ecs_agent.components import (
     MessageBusConfigComponent,
     MessageBusConversationComponent,
     MessageBusSubscriptionComponent,
+    SessionRefComponent,
 )
 from ecs_agent.core.world import World
+from ecs_agent.history import record_session_event
 from ecs_agent.logging import get_logger, log_bus_deliver, log_bus_publish
 from ecs_agent.observability import extract_trace_id, generate_traceparent
 from ecs_agent.types import (
@@ -124,6 +126,10 @@ class MessageBusSystem:
             correlation_id=correlation_id,
             payload_type=type(payload).__name__,
         )
+        self._record_bus_event(envelope.source, "bus_message", {
+            "role": "user", "content": f"From: {envelope.source}: {envelope.data}",
+            "envelope_id": envelope.id, "topic": topic, "status": "accepted",
+        })
         await self._emit_published_event(topic=topic, envelope=envelope)
 
         delivered = False
@@ -159,6 +165,7 @@ class MessageBusSystem:
         trace_id: str,
         correlation_id: str,
     ) -> None:
+        self._record_bus_event(subscriber_id, "bus_delivery_started", {"envelope_id": envelope.id, "topic": topic, "source": envelope.source})
         try:
             await asyncio.wait_for(
                 queue.put(payload),
@@ -193,20 +200,30 @@ class MessageBusSystem:
             trace_id=trace_id,
             correlation_id=correlation_id,
         )
+        self._record_bus_event(subscriber_id, "bus_delivered", {"envelope_id": envelope.id, "topic": topic, "source": envelope.source})
         await self._emit_delivered_event(envelope=envelope, subscriber_id=subscriber_id)
 
+    def _record_bus_event(self, source: str, kind: str, payload: dict[str, Any]) -> None:
+        if self._world is None or self._world.session_service is None:
+            return
+        identity = source.removeprefix("ecs://entity/")
+        if not identity.isdigit():
+            return
+        entity = EntityId(int(identity))
+        if self._world.has_component(entity, SessionRefComponent):
+            record_session_event(self._world, entity, kind, payload)
+
     def _append_published_message(self, *, envelope: MessageBusEnvelope) -> None:
-        conversation = self._conversations.get(envelope.source)
+        conversation = self._conversations.get(envelope.source.removeprefix("ecs://entity/"))
         if conversation is None:
             return
 
-        conversation.messages.append(
-            Message(role="user", content=f"From: {envelope.source}: {envelope.data}")
-        )
-        if len(conversation.messages) > conversation.max_messages:
-            overflow = len(conversation.messages) - conversation.max_messages
-            if overflow > 0:
-                del conversation.messages[:overflow]
+        overflow = max(0, len(conversation.messages) + 1 - conversation.max_messages)
+        if overflow:
+            self._record_bus_event(envelope.source, "bus_trim", {"dropped_messages": overflow, "envelope_id": envelope.id})
+        conversation.messages.append(Message(role="user", content=f"From: {envelope.source}: {envelope.data}"))
+        if overflow:
+            del conversation.messages[:overflow]
 
     def get_conversation(self, entity_id: EntityId) -> list[Message]:
         conversation = self._conversations.get(str(entity_id))

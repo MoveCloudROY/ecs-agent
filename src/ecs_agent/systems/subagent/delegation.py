@@ -19,6 +19,7 @@ from ecs_agent.components import ConversationComponent
 from ecs_agent.core.event_bus import SequentialEventPublisher
 from ecs_agent.core.runner import Runner
 from ecs_agent.core.world import World
+from ecs_agent.history import append_conversation_message
 from ecs_agent.observability.context import current_run_id, current_trace_id
 from ecs_agent.plugins import propagate_plugins
 from ecs_agent.systems.subagent.results import DelegationResult
@@ -82,10 +83,13 @@ class DelegationExecutor:
         config: SubagentConfig,
     ) -> DelegationResult:
         """Run the target child and preserve its semantic terminal outcome."""
-        child_world.add_component(
-            child_entity,
-            ConversationComponent(messages=[Message(role="user", content=task)]),
-        )
+        if child_world.session_service is not None:
+            append_conversation_message(child_world, child_entity, Message(role="user", content=task))
+        else:
+            child_world.add_component(
+                child_entity,
+                ConversationComponent(messages=[Message(role="user", content=task)]),
+            )
         runner = Runner()
         capture = _DELEGATION_OUTCOME_CAPTURE.get()
         try:

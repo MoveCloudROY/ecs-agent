@@ -863,6 +863,7 @@ class SubagentSessionRecord:
     launch_parent_observation_id: str | None = None
     outcome_status: str | None = None
     partial_content: str | None = None
+    transcript_session_id: str | None = None
 
     def __post_init__(self) -> None:
         self.status = _normalize_subagent_lifecycle_status(self.status)

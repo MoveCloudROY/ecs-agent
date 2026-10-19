@@ -23,6 +23,8 @@ from ecs_agent.components import (
     LLMComponent,
     OwnerComponent,
     PermissionComponent,
+    SessionRefComponent,
+    SessionPolicyComponent,
     ToolRegistryComponent,
 )
 from ecs_agent.components.definitions import (
@@ -36,7 +38,8 @@ from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfig
 from ecs_agent.skills import catalog as _skill_catalog
 from ecs_agent.skills.manager import SkillManager
 from ecs_agent.skills.script_skill import ScriptSkill
-from ecs_agent.systems.subagent._contextvars import _BACKGROUND_RESULT_ENVELOPE_ENABLED
+from ecs_agent.systems.subagent._contextvars import _BACKGROUND_RESULT_ENVELOPE_ENABLED, _BACKGROUND_TRANSCRIPT_SESSION_ID
+from ecs_agent.sessions.install import install_session_recording
 from ecs_agent.systems.subagent.result_envelope import (
     _build_background_child_prompt_template,
     _build_child_prompt_template,
@@ -241,6 +244,23 @@ class ChildWorldBuilder:
         )
         for spec in profile_builder(profile_ctx):
             child_world.register_system(spec.factory(), priority=spec.priority)
+        if parent_world.session_service is not None:
+            parent_ref = parent_world.get_component(parent_entity, SessionRefComponent)
+            if parent_ref is None:
+                raise RuntimeError("Delegating entity has no session identity")
+            parent_info = parent_world.session_service.store.get_session(parent_ref.session_id)
+            reserved_session_id = _BACKGROUND_TRANSCRIPT_SESSION_ID.get()
+            # Consume the reservation exactly once; nested children need new IDs.
+            _BACKGROUND_TRANSCRIPT_SESSION_ID.set(None)
+            child_ref = install_session_recording(
+                child_world, child_world_entity_id, parent_world.session_service,
+                workspace_id=parent_info.workspace_id, agent_name=config.name,
+                parent_session_id=parent_ref.session_id,
+                policy=parent_world.get_component(parent_entity, SessionPolicyComponent),
+                register_tools=False, session_id=reserved_session_id,
+            )
+            if parent_child_entity is not None:
+                parent_world.add_component(parent_child_entity, replace(child_ref))
         return child_world, child_world_entity_id
 
     def _effective_inherited_tool_names(self, policy: InheritancePolicy) -> list[str]:

@@ -11,6 +11,7 @@ from ecs_agent.components import (
     VectorStoreComponent,
 )
 from ecs_agent.core import World
+from ecs_agent.history import replace_conversation_history
 from ecs_agent.types import Message, RAGRetrievalCompletedEvent
 
 
@@ -56,7 +57,9 @@ class RAGSystem:
 
             if rag_messages:
                 insert_at = _find_last_user_message_index(conversation.messages)
-                conversation.messages[insert_at:insert_at] = rag_messages
+                messages = list(conversation.messages)
+                messages[insert_at:insert_at] = rag_messages
+                replace_conversation_history(world, entity_id, messages, reason="rag_context_inserted")
 
             rag_trigger.retrieved_docs = retrieved_docs
             rag_trigger.query = ""

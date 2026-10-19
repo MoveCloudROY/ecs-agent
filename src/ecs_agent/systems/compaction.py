@@ -177,20 +177,6 @@ class CompactionSystem:
             if summary is None:
                 continue
 
-            archive = world.get_component(entity_id, ConversationArchiveComponent)
-            if archive is None:
-                archive = ConversationArchiveComponent()
-                world.add_component(entity_id, archive)
-            archive.archived_summaries.append(summary)
-
-            # RenderedSystemPromptComponent is deliberately NOT invalidated here:
-            # the render system re-renders when the summary fingerprint in its
-            # cache key changes. Only the render system may delete that component.
-            world.add_component(
-                entity_id,
-                CurrentCompactionSummaryComponent(summary=summary),
-            )
-
             new_messages: list[Message] = []
             if system_message is not None:
                 new_messages.append(system_message)
@@ -203,7 +189,18 @@ class CompactionSystem:
                 )
                 if anchor is not None:
                     new_messages.append(anchor)
-            replace_conversation_history(world, entity_id, new_messages, reason="compaction_summary")
+            replace_conversation_history(
+                world, entity_id, new_messages, reason="compaction_summary",
+                metadata={"summary": summary, "summarized_message_count": len(messages_to_summarize)},
+            )
+            archive = world.get_component(entity_id, ConversationArchiveComponent)
+            if archive is None:
+                archive = ConversationArchiveComponent()
+                world.add_component(entity_id, archive)
+            archive.archived_summaries.append(summary)
+            # Rendering observes the summary fingerprint after the durable
+            # history change; a failed commit leaves both working views intact.
+            world.add_component(entity_id, CurrentCompactionSummaryComponent(summary=summary))
 
             compacted_tokens = self._estimate_tokens(new_messages)
             await world.event_bus.publish(

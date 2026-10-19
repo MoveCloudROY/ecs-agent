@@ -343,10 +343,10 @@ async def resume_workflow(
         )
     state.updated_at = datetime.datetime.now(datetime.UTC).isoformat()
     # Persist-time snapshot: stamps phase, graph hash, and derived status.
-    save_state(world, entity_id, state, adapter)
     _reset_workflow_boundary_state(
         world, entity_id, preserve_user_text=preserve_user_text
     )
+    save_state(world, entity_id, state, adapter)
     world.add_component(entity_id, build_scratchbook_prompt_config(workflow_id))
     actions = (
         [ResumeAction.TRIGGER_PLAN_WRITER]
@@ -443,7 +443,7 @@ async def build_plan_task_world(
                     max_ticks=None,
                     inheritance_policy=InheritancePolicy(
                         inherit_system_prompt=False,
-                        inherit_tools=["read_file", "glob"],
+                        inherit_tools=["read_file", "glob", "sessions_list", "sessions_search"],
                         inherit_permissions=True,
                     ),
                 ),
@@ -455,7 +455,7 @@ async def build_plan_task_world(
                     max_ticks=None,
                     inheritance_policy=InheritancePolicy(
                         inherit_system_prompt=False,
-                        inherit_tools=["read_file", "glob"],
+                        inherit_tools=["read_file", "glob", "sessions_list", "sessions_search"],
                         inherit_permissions=True,
                     ),
                 ),
@@ -467,7 +467,7 @@ async def build_plan_task_world(
                     max_ticks=None,
                     inheritance_policy=InheritancePolicy(
                         inherit_system_prompt=False,
-                        inherit_tools=["read_file", "glob"],
+                        inherit_tools=["read_file", "glob", "sessions_list", "sessions_search"],
                         inherit_permissions=True,
                     ),
                 ),
@@ -480,7 +480,7 @@ async def build_plan_task_world(
                     max_ticks=None,
                     inheritance_policy=InheritancePolicy(
                         inherit_system_prompt=False,
-                        inherit_tools=["read_file", "write_file", "edit_file", "glob"],
+                        inherit_tools=["read_file", "write_file", "edit_file", "glob", "sessions_list", "sessions_search"],
                     ),
                 ),
             }
@@ -500,6 +500,8 @@ async def build_plan_task_world(
             w, eid, [Message(role="user", content=trigger_text)],
             reason="task_boundary", new_conversation=True,
         )
+        if runtime_state[0] is not None and adapter_ref[0] is not None:
+            save_state(w, eid, runtime_state[0], adapter_ref[0])
 
     async def _load_workflow(
         w: World,
@@ -931,7 +933,9 @@ async def build_plan_task_world(
                         plan_path = str(
                             (loaded_adapter.plan_dir / "workflow_plan.md").relative_to(loaded_adapter.base_dir)
                         )
-                        conv.messages.append(
+                        from ecs_agent.history import append_conversation_message
+
+                        append_conversation_message(_world, _entity_id,
                             Message(role="user", content=build_write_plan_prompt(draft_path, plan_path))
                         )
                         logger.info(
@@ -1080,6 +1084,9 @@ async def build_plan_task_world(
     world.register_system(subagent_system, priority=-1)
     subagent_system.install_subagent_tool(world, agent_id, tool_name="subagent")
     subagent_system.install_subagent_control_tools(world, agent_id)
+    from examples.e2e.plan_and_task.session_records import install_session_records
+
+    install_session_records(world, agent_id, _base_dir, subagent_system)
     # Refuse an out-of-order reviewer dispatch before it runs. The controller
     # already refuses one, but only when the verdict is recorded — by then the
     # subagent has done (and billed) its whole run.
@@ -1253,6 +1260,9 @@ async def main() -> None:
     try:
         await runner.run(world, max_ticks=max_ticks)
     finally:
+        from examples.e2e.plan_and_task.session_records import close_session_records
+
+        await close_session_records(world)
         await plugins_handle.flush()
         await plugins_handle.shutdown()
     billing.log_session_summary()

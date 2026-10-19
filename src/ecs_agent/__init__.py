@@ -84,6 +84,16 @@ from ecs_agent.skills.todo import TodoSkill
 from ecs_agent.components.definitions import SkillComponent, SkillMetadata
 from ecs_agent.components.definitions import TodoListComponent
 from ecs_agent.tools.builtins import BuiltinToolsSkill
+from ecs_agent.components import SessionPolicyComponent, SessionRefComponent
+from ecs_agent.history import append_conversation_message
+from ecs_agent.sessions import (
+    InMemorySessionStore,
+    SQLiteSessionStore,
+    SessionService,
+    SessionStore,
+    install_session_recording,
+    release_session_writer,
+)
 from ecs_agent.systems.permission import PermissionSystem
 from ecs_agent.systems.tool_approval import ToolApprovalSystem
 from ecs_agent.systems.tree_search import TreeSearchSystem
@@ -180,6 +190,15 @@ from ecs_agent.conversation_tree import (
 
 
 __all__ = [
+    "SessionService",
+    "SessionStore",
+    "SQLiteSessionStore",
+    "InMemorySessionStore",
+    "SessionRefComponent",
+    "SessionPolicyComponent",
+    "install_session_recording",
+    "release_session_writer",
+    "append_conversation_message",
     "AgentSpec",
     "ApprovalPolicy",
     "ApiFormat",

@@ -376,7 +376,9 @@ class TestComponentCount:
             and dataclasses.is_dataclass(getattr(d, name, None))
             and getattr(d, name).__module__ == "ecs_agent.components.definitions"
         )
-        assert count <= 58, f"Component count {count} exceeds limit of 58"
+        # SessionRefComponent and SessionPolicyComponent add persistent identity
+        # and host-owned read policy without serializing runtime store objects.
+        assert count <= 60, f"Component count {count} exceeds limit of 60"
 
 
 class TestComponentsExportedInInit:

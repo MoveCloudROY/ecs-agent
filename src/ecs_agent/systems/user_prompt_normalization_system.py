@@ -121,6 +121,14 @@ class UserPromptNormalizationSystem:
                 prompt_text=normalized_text[:200],
             )
 
+            if normalized_text != raw_user_text:
+                from ecs_agent.history import record_session_event
+
+                record_session_event(world, entity_id, "prompt_render", {
+                    "role": "user", "content": normalized_text,
+                    "source_message_index": updated_source_index,
+                    "source_fingerprint": source_fingerprint,
+                })
             world.add_component(
                 entity_id,
                 RenderedUserPromptComponent(
@@ -376,7 +384,8 @@ class UserPromptNormalizationSystem:
             return
         if message.content == rendered.text:
             return
-        conversation.messages[index] = Message(
+        messages = list(conversation.messages)
+        messages[index] = Message(
             role="user",
             content=rendered.text,
             parts=message.parts,
@@ -384,6 +393,9 @@ class UserPromptNormalizationSystem:
             tool_call_id=message.tool_call_id,
             compaction_metadata=message.compaction_metadata,
         )
+        from ecs_agent.history import replace_conversation_history
+
+        replace_conversation_history(world, entity_id, messages, reason="user_prompt_render_frozen")
         logger.debug(
             "user_prompt_render_frozen",
             entity_id=entity_id,

@@ -178,6 +178,7 @@ class SubagentSystem:
         normalized_skills: list[str],
         stream: bool,
         timeout_seconds: float | None,
+        source_session_id: str | None = None,
     ) -> tuple[str, SubagentSessionRecord]:
         """Create, enqueue, and sync a background subagent session.
 
@@ -212,6 +213,23 @@ class SubagentSystem:
             launch_parent_observation_id=launch_parent_observation_id,
             timeout_seconds=timeout_seconds,
         )
+        if world.session_service is not None:
+            from ecs_agent.components import SessionRefComponent
+
+            parent_ref = world.get_component(parent_entity_id, SessionRefComponent)
+            if parent_ref is None:
+                raise RuntimeError("Delegating entity has no session identity")
+            parent_info = world.session_service.store.get_session(parent_ref.session_id)
+            info = world.session_service.create_session(
+                agent_name=category, workspace_id=parent_info.workspace_id,
+                parent_session_id=parent_ref.session_id, source_session_id=source_session_id,
+            )
+            metadata.transcript_session_id = info.session_id
+            writer = world.session_service.claim_writer(info.session_id)
+            try:
+                world.session_service.append(SessionRefComponent(info.session_id), "queued", {"status": "queued", "background_session_id": session_id}, writer_id=writer)
+            finally:
+                world.session_service.store.release_writer(info.session_id, writer)
         run_in_background = self._background_runner.build_coroutine(
             world,
             parent_entity_id,
@@ -440,6 +458,7 @@ class SubagentSystem:
             normalized_skills=normalized_skills,
             stream=original.stream,
             timeout_seconds=original.timeout_seconds,
+            source_session_id=original.transcript_session_id,
         )
 
         logger.info(
@@ -620,6 +639,7 @@ class SubagentSystem:
                     "created_at": metadata.created_at,
                     "timeout": timeout,
                     "stream": stream,
+                    **({"transcript_session_id": metadata.transcript_session_id} if metadata.transcript_session_id is not None else {}),
                 }
             )
 
@@ -654,6 +674,9 @@ class SubagentSystem:
             successful final result through that adapter.
         """
         publish_completion_event = _PUBLISH_COMPLETION_EVENT.get()
+        child_world: World | None = None
+        child_world_entity_id: EntityId | None = None
+        setup_failure_status = RunStatus.ERROR
         # Execute delegation
         try:
             child_entity_id = world.create_entity()
@@ -764,6 +787,14 @@ class SubagentSystem:
                 )
                 if child_conv is not None and parent_child_conv is not None:
                     parent_child_conv.messages = list(child_conv.messages)
+                if child_world.session_service is not None:
+                    from ecs_agent.components import SessionRefComponent
+                    from ecs_agent.sessions.install import release_session_writer
+
+                    child_ref = child_world.get_component(child_world_entity_id, SessionRefComponent)
+                    if child_ref is not None:
+                        world.add_component(child_entity_id, replace(child_ref))
+                    release_session_writer(child_world, child_world_entity_id)
 
                 if bridge_cleanup is not None:
                     bridge_cleanup()
@@ -796,7 +827,13 @@ class SubagentSystem:
 
             return outcome
 
+        except asyncio.CancelledError:
+            capture = _DELEGATION_OUTCOME_CAPTURE.get()
+            setup_failure_status = RunStatus.TIMEOUT if capture is not None and capture.cancellation_reason() == "timeout" else RunStatus.CANCELLED
+            raise
+
         except TimeoutError as exc:
+            setup_failure_status = RunStatus.TIMEOUT
             error_msg = "Error: Subagent timeout"
             outcome = DelegationResult(status=RunStatus.TIMEOUT, error=error_msg)
             logger.error(
@@ -864,6 +901,22 @@ class SubagentSystem:
                     observation_id=correlation_id,
                 )
             return DelegationResult(status=RunStatus.ERROR, error=error_msg)
+
+        finally:
+            # Setup can fail after a child identity is installed but before the
+            # runner's inner finally is entered. Settle and release that writer.
+            if child_world is not None and child_world_entity_id is not None and child_world_entity_id in child_world._session_writer_tokens:
+                from ecs_agent.components import SessionRefComponent
+                from ecs_agent.history import record_session_event
+                from ecs_agent.sessions.install import release_session_writer
+
+                try:
+                    record_session_event(child_world, child_world_entity_id, "run_finished", {"status": setup_failure_status.value, "reason": "delegation_setup_failed"})
+                    child_ref = child_world.get_component(child_world_entity_id, SessionRefComponent)
+                    if child_ref is not None:
+                        world.add_component(child_entity_id, replace(child_ref))
+                finally:
+                    release_session_writer(child_world, child_world_entity_id)
 
     def _resolve_subagent_config(
         self,

@@ -4,14 +4,17 @@ import asyncio
 import json
 import time
 import uuid
+from dataclasses import asdict, replace
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from ecs_agent.components.definitions import (
     ChildStubComponent,
+    ErrorComponent,
     InterruptionComponent,
     RunnerStateComponent,
+    SessionRefComponent,
     TerminalComponent,
 )
 from ecs_agent.types import (
@@ -23,7 +26,8 @@ from ecs_agent.types import (
     RunnerTickStartedEvent,
 )
 from ecs_agent.core.world import World
-from ecs_agent.core.run_result import RunResult, snapshot_run_result
+from ecs_agent.core.run_result import RunResult, RunStatus, snapshot_run_result
+from ecs_agent.history import record_session_event
 from ecs_agent.logging import STANDARD_EVENT_NAMES, get_logger
 from ecs_agent.observability.context import current_run_id, reset_run_context, set_run_context
 from ecs_agent.serialization import WorldSerializer
@@ -88,6 +92,9 @@ class Runner:
         tick = start_tick
         completion_published = False
         try:
+            for session_entity, _ in world.query(SessionRefComponent):
+                if not world.has_component(session_entity, ChildStubComponent) and (target_entity is None or session_entity == target_entity):
+                    record_session_event(world, session_entity, "run_started", {"status": "running", "start_tick": start_tick})
             logger.info(
                 STANDARD_EVENT_NAMES["RUN_START"],
                 max_ticks=max_ticks,
@@ -303,6 +310,29 @@ class Runner:
             target_entity=target_entity, error=error,
         )
         self.last_result = result
+        for session_entity, _ in world.query(SessionRefComponent):
+            if world.has_component(session_entity, ChildStubComponent) or (target_entity is not None and session_entity != target_entity):
+                continue
+            entity_result = result if result.entity_id == session_entity else snapshot_run_result(
+                world, run_id=current_run_id(), reason=reason, ticks=ticks, target_entity=session_entity, error=error,
+            )
+            payload = asdict(entity_result)
+            # Messages already have their own records; lifecycle entries retain
+            # outcome flags without duplicating searchable message text.
+            payload["has_final_message"] = payload.pop("final_message") is not None
+            payload["has_partial_message"] = payload.pop("partial_message") is not None
+            try:
+                record_session_event(world, session_entity, "run_finished", payload)
+            except Exception as exc:
+                self.last_result = replace(
+                    result, status=RunStatus.ERROR, reason="session_recording_error",
+                    error=str(exc) or type(exc).__name__, final_message=None,
+                    partial_message=result.final_message or result.partial_message,
+                )
+                world.add_component(session_entity, ErrorComponent(error=str(exc), system_name="Runner", timestamp=time.time()))
+                world.add_component(session_entity, TerminalComponent(reason="session_recording_error", error=str(exc)))
+                logger.error("session_terminal_record_failed", entity_id=int(session_entity), exception=str(exc))
+                raise
         await world.event_bus.publish(
             RunCompletedEvent(
                 status=status,

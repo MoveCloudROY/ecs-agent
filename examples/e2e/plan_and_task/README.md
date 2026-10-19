@@ -368,3 +368,13 @@ This example explicitly enables logging in `main.py` when `DEBUG=1`; the base `e
 - **Status Lifecycle**: `status` is a pure derivation, never assigned by handlers: terminal phases yield `"completed"` (`"aborted"` when `abort_reason` is set), `TASK_READY` → `"ready"`, `TASK_BLOCKED` → `"blocked"`, a review phase awaiting its verdict → `"needs_review"`, everything else `"active"` (`phase_sync.derive_status()`, stamped by the mirror on every transition and on restore — persisted statuses survive `/plan:resume` and `/task:start` auto-load).
 - **Billing Records Invocation Status**: Main-agent, child-agent, and workflow-ID helper calls publish `LLMInvocationEvent`. Usage and generation completion are tracked independently: cancellation preserves any usage already reported; unknown usage stays missing rather than becoming zero. Billing aggregates provider-reported input, output, total, and cached tokens and reports non-success invocation counts. A zero cache count remains distinct from an absent field.
 - **Token Prefix Caching**: Stored-response chaining is off by default (`LLM_ENABLE_RESPONSE_CHAINING=0`). Storage and prompt caching are independent. The adapter replays original Responses output items when not chaining, or sends the verified incremental suffix when chaining. Usage fields are reported as supplied by the provider: a zero cache count is distinct from a missing field, and prefix stability does not guarantee a cache hit.
+
+## Cross-session evidence
+
+The example enables a shared SQLite record store at `<base_dir>/sessions.sqlite3` and uses the existing scratchbook registry for large tool bodies. Advisors, QA, and the plan writer inherit `sessions_list`, `sessions_search`, and `read_file` so they can cite earlier agent execution evidence even after working-context compaction.
+
+Use `sessions_list` to discover the source agent, `sessions_search` to locate evidence, and `read_file` with the returned `read_uri`. A tool record provides `tool_result_uri`; continue pages with the same URI and `next_offset`. Cite `session_id` and `record_id` in the review.
+
+Workflow state now retains `record_session_ids`. Task resets create fresh identities, while saves and `/plan:resume` explicitly share existing record trees belonging to that workflow. Unrelated task roots remain outside the policy. CLI, TUI, and debug-session shutdown settle child jobs before closing the root service; SDK callers should await `session_records.close_session_records(world)`. Older workflow state without record IDs remains loadable.
+
+A standalone offline walkthrough is available as `uv run python -m examples.e2e.cross_session_records --output /tmp/ecs-session-demo`. See the [record API guide](../../../docs/features/session-records.md).

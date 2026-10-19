@@ -79,12 +79,23 @@ class CheckpointSystem:
                 tool_handlers=tool_handlers,
             )
 
+            from ecs_agent.sessions.install import prepare_checkpoint_sessions
+
+            prepare_checkpoint_sessions(world, restored_world)
+
             world._entity_gen = restored_world._entity_gen
             world._components = restored_world._components
             world._entity_registry = restored_world._entity_registry
             world._entity_tags = restored_world._entity_tags
             world._entity_ids = restored_world._entity_ids
             world._query = Query(world._components)
+            world._session_writer_tokens = restored_world._session_writer_tokens
+            if world.session_service is not None:
+                from ecs_agent.components import ConversationTreeComponent
+                from ecs_agent.sessions.tree import bind_conversation_tree
+
+                for tree_entity, (tree,) in world.query(ConversationTreeComponent):
+                    bind_conversation_tree(world, tree_entity, tree, select=False)
 
             restored_checkpoint = world.get_component(entity_id, CheckpointComponent)
             if restored_checkpoint is None:

@@ -119,6 +119,8 @@ class BuiltinToolsSkill(ScriptSkill):
                             return await _h(**injected)
                     return await _h(**injected)
 
+                if getattr(handler, "supports_session_resources", False):
+                    setattr(_bound, "supports_session_resources", True)
                 bound[tool_name] = (new_schema, _bound)
             else:
                 bound[tool_name] = (new_schema, handler)

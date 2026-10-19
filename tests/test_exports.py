@@ -130,3 +130,13 @@ def test_phase_symbols_importable() -> None:
     assert PhaseComponent is not None
     assert callable(advance) and callable(bind_phase_graph)
     assert callable(resume_phase_graph) and ResumeReport is not None
+def test_session_recording_public_api_exports() -> None:
+    import ecs_agent
+
+    for name in (
+        "SessionService", "SessionStore", "SQLiteSessionStore", "InMemorySessionStore",
+        "SessionRefComponent", "SessionPolicyComponent", "install_session_recording",
+        "release_session_writer", "append_conversation_message",
+    ):
+        assert name in ecs_agent.__all__
+        assert getattr(ecs_agent, name) is not None

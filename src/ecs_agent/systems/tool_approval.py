@@ -13,6 +13,7 @@ from ecs_agent.components import (
     ToolApprovalComponent,
 )
 from ecs_agent.core.world import World
+from ecs_agent.history import append_conversation_message
 from ecs_agent.types import (
     ApprovalPolicy,
     EntityId,
@@ -156,7 +157,7 @@ class ToolApprovalSystem:
         reason: str,
     ) -> None:
         approval.denied_calls.append(tool_call.id)
-        conversation.messages.append(
+        append_conversation_message(world, entity_id,
             Message(role="system", content=f"Tool call {tool_call.id} denied by policy")
         )
         await self._publish_denied(

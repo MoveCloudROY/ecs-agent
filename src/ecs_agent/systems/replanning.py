@@ -143,6 +143,7 @@ class ReplanningSystem:
                     continue
                 if context_queue is not None and context_reservation is not None:
                     commit_prompt_context_reservation(
+                        world=world, entity_id=entity_id,
                         queue=context_queue,
                         reservation=context_reservation,
                     )

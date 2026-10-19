@@ -18,6 +18,7 @@ T = TypeVar("T")
 
 if TYPE_CHECKING:
     from ecs_agent.skills.runtime import SkillRuntime
+    from ecs_agent.sessions.service import SessionService
 
 
 class World:
@@ -32,6 +33,9 @@ class World:
         self._entity_registry: dict[str, EntityId] = {}
         self._entity_tags: dict[str, set[EntityId]] = {}
         self._entity_ids: set[EntityId] = set()
+        # Runtime dependencies are deliberately excluded from WorldSerializer.
+        self.session_service: SessionService | None = None
+        self._session_writer_tokens: dict[EntityId, str] = {}
 
     @property
     def event_bus(self) -> EventBus:
@@ -62,6 +66,12 @@ class World:
 
     def add_component(self, entity_id: EntityId, component: Any) -> None:
         self._components.add(entity_id, component)
+        if self.session_service is not None and entity_id in self._session_writer_tokens:
+            from ecs_agent.components import ConversationTreeComponent
+            from ecs_agent.sessions.tree import bind_conversation_tree
+
+            if isinstance(component, ConversationTreeComponent):
+                bind_conversation_tree(self, entity_id, component)
         # DEBUG per LEVEL_POLICY: component adds are a high-frequency
         # operation (hot path), not a lifecycle event.
         logger.debug(

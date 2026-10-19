@@ -55,4 +55,7 @@ def save_state(
         abort_reason=state.abort_reason,
         review_verdicts=state.review_verdicts,
     )
+    from examples.e2e.plan_and_task.session_records import remember_workflow_sessions
+
+    remember_workflow_sessions(world, entity_id, state)
     adapter.write_state(state)

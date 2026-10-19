@@ -5234,7 +5234,9 @@ async def test_advisor_qa_subagents_inherit_readonly_tools_only(tmp_path: Path) 
         assert set(cfg.inheritance_policy.inherit_tools) == {
             "read_file",
             "glob",
-        }, f"{name} inherit_tools should be {{'read_file','glob'}}, got {cfg.inheritance_policy.inherit_tools}"
+            "sessions_list",
+            "sessions_search",
+        }, f"{name} should inherit file and session readers only, got {cfg.inheritance_policy.inherit_tools}"
         assert (
             cfg.inheritance_policy.inherit_permissions is True
         ), f"{name} inherit_permissions should be True"

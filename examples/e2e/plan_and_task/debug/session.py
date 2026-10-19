@@ -375,6 +375,9 @@ class PlanTaskDebugSession:
         if self._close_model:
             with contextlib.suppress(Exception):
                 await self._world_model_aclose()
+        from examples.e2e.plan_and_task.session_records import close_session_records
+
+        await close_session_records(self._world)
 
     async def _world_model_aclose(self) -> None:
         from ecs_agent.components import LLMComponent

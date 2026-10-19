@@ -1108,3 +1108,13 @@ content = resolve_prompt_file(
 )
 # Reads from agents/prompts/assistant.txt
 ```
+
+## Session record API
+
+The top-level package exports `SessionService`, `SessionStore`, `SQLiteSessionStore`, `InMemorySessionStore`, `SessionRefComponent`, `SessionPolicyComponent`, `install_session_recording`, `release_session_writer`, and `append_conversation_message`. `ecs_agent.sessions` also exports `RecordDraft`, `SessionInfo`, `SessionRecord`, and `SessionPage`.
+
+`install_session_recording(world, entity_id, service, *, workspace_id, agent_name, parent_session_id=None, policy=None, restore=False, register_tools=True, source_session_id=None, session_id=None)` binds an agent. The optional host-provided `session_id` attaches a pre-reserved background identity. `restore=True` selects a saved component head as a branch point. `register_tools=False` records without granting model tools. The default installer requires an already-permitted session-capable `read_file`.
+
+`SessionService.list_sessions(caller_id, policy, *, parent_session_id=None, agent_name=None, cursor=None, limit=20)` and `search(caller_id, policy, query, *, session_id=None, agent_name=None, cursor=None, limit=20)` return `SessionPage`. Tool handlers supply caller identity/policy from `ToolExecutionContext`, never model arguments. `SessionService.close()` closes the root-owned service.
+
+`append_conversation_message(world, entity, message)` persists before advancing working context. `ecs_agent.history.replace_conversation_history(..., reason=..., new_conversation=False)` records replacement; `new_conversation=True` starts a new record session. See [session records](features/session-records.md) for schemas, URI forms, pagination, lifecycle ownership, and examples.

@@ -26,6 +26,7 @@ from ecs_agent.systems.subagent._contextvars import (
     _BACKGROUND_LAUNCH_OBSERVABILITY_CONTEXT,
     _PUBLISH_COMPLETION_EVENT,
     _DELEGATION_OUTCOME_CAPTURE,
+    _BACKGROUND_TRANSCRIPT_SESSION_ID,
 )
 from ecs_agent.systems.subagent.notifications import NotificationCoordinator
 from ecs_agent.systems.subagent.result_envelope import parse_background_result_envelope
@@ -80,6 +81,7 @@ class BackgroundSessionRunner:
 
         async def execute_with_config() -> DelegationResult:
             capture_token = _DELEGATION_OUTCOME_CAPTURE.set(capture)
+            transcript_token = _BACKGROUND_TRANSCRIPT_SESSION_ID.set(metadata.transcript_session_id)
             token = _PUBLISH_COMPLETION_EVENT.set(False)
             launch_context_token = _BACKGROUND_LAUNCH_OBSERVABILITY_CONTEXT.set(
                 (
@@ -112,6 +114,7 @@ class BackgroundSessionRunner:
                     config,
                 ))
             finally:
+                _BACKGROUND_TRANSCRIPT_SESSION_ID.reset(transcript_token)
                 _BACKGROUND_LAUNCH_OBSERVABILITY_CONTEXT.reset(launch_context_token)
                 _PUBLISH_COMPLETION_EVENT.reset(token)
                 _DELEGATION_OUTCOME_CAPTURE.reset(capture_token)

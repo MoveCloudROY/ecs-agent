@@ -12,6 +12,7 @@ from ecs_agent.components.definitions import (
     UserInputComponent,
 )
 from ecs_agent.core.world import World
+from ecs_agent.history import append_conversation_message
 from ecs_agent.logging import get_logger
 from ecs_agent.types import EntityId, Message, UserInputReceivedEvent, UserInputRequestedEvent
 
@@ -138,7 +139,7 @@ class UserInputSystem:
 
         conversation = world.get_component(entity_id, ConversationComponent)
         if conversation is not None:
-            conversation.messages.append(
+            append_conversation_message(world, entity_id,
                 Message(role="user", content=result),
             )
 

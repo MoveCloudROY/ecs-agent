@@ -79,6 +79,9 @@ async def main() -> None:
             task_group.create_task(session.app.run_async())
             task_group.create_task(run_world())
     finally:
+        from examples.e2e.plan_and_task.session_records import close_session_records
+
+        await close_session_records(world)
         await plugins_handle.flush()
         await plugins_handle.shutdown()
         billing.log_session_summary()

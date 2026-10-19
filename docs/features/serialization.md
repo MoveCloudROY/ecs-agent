@@ -109,3 +109,9 @@ Assistant `Message.generation_status` and `Message.finish_reason` are preserved
 by world serialization and checkpoint round trips. Snapshots written before these
 fields existed remain readable with `None` values. Partial output therefore
 retains its cancellation, truncation, or failure marker after restoration.
+
+## Session record identities and rebinding
+
+`SessionRefComponent` (session ID and selected record head) and `SessionPolicyComponent` are serialized. `World.session_service`, store connections, and writer tokens are runtime-only. Reopen the same SQLite store and artifact directory, then call `install_session_recording(..., restore=True)` for restored agents. Release any still-live writer first. Normal appends reject stale heads; explicit restore appends a branch from the saved node while preserving later external records. `CheckpointSystem.undo` coordinates in-place rebinding.
+
+Legacy snapshots import only messages they still contain and mark incomplete history. Background metadata's optional `transcript_session_id` remains compatible with older payloads. See [session records](session-records.md) for ownership, paging, permissions, and recovery limits.

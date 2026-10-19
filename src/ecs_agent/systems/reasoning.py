@@ -47,6 +47,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.core.event_bus import SequentialEventPublisher
 from ecs_agent.core.world import World
+from ecs_agent.history import append_conversation_message
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.providers.responses_state import (
     bind_provider_output, canonical_digest, previous_response_error, response_context_for,
@@ -397,6 +398,7 @@ class ReasoningSystem:
                     # this one (prompt-cache stability). Tree conversations are
                     # read-only here, so they keep the transient behaviour.
                     commit_prompt_context_reservation(
+                        world=world, entity_id=entity_id,
                         queue=context_queue,
                         reservation=context_reservation,
                         conversation=conversation,
@@ -405,7 +407,7 @@ class ReasoningSystem:
 
                 # Append result to conversation (tree not yet supported for writing)
                 if conversation is not None:
-                    conversation.messages.append(result.message)
+                    append_conversation_message(world, entity_id, result.message)
 
                 # Keep the response identity for diagnostics. Only a verified,
                 # stored, complete protocol prefix can become an automatic anchor.
@@ -1210,12 +1212,13 @@ class ReasoningSystem:
         reservation = world.get_component(entity_id, PromptContextReservationComponent)
         if reservation is not None:
             commit_prompt_context_reservation(
+                world=world, entity_id=entity_id,
                 queue=world.get_component(entity_id, PromptContextQueueComponent),
                 reservation=reservation,
                 conversation=conversation,
             )
             world.remove_component(entity_id, PromptContextReservationComponent)
-        conversation.messages.append(result.message)
+        append_conversation_message(world, entity_id, result.message)
 
     def _queue_reasoning_context_if_configured(
         self,

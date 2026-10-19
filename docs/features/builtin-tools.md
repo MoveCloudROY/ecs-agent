@@ -253,3 +253,9 @@ Tools that do not operate on the workspace (`webfetch`, `code_execution`) do not
 ## Examples
 
 See [`examples/script_skill_agent.py`](../../examples/script_skill_agent.py) for a demonstration of these tools in a reasoning loop.
+
+## Session resources in read_file
+
+With [session recording](session-records.md) installed, `read_file.file_path` also accepts the `session://` URI returned by `sessions_list` or `sessions_search`. A transcript URI pins its head; a tool record provides a separate `tool_result_uri` for the full output. Session reads default to 80 display lines when `limit=0` and always fit within 12,000 characters. Follow `next_offset` using the same URI. Ordinary file `limit=0` still reads all remaining lines.
+
+Session reads use the actual tool caller's session policy and never create a file-edit snapshot. `write_file` and `edit_file` reject resource URIs. The installer verifies a compatible existing reader without overwriting custom handlers or expanding permissions.

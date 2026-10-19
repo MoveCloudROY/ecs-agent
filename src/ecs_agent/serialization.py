@@ -17,6 +17,8 @@ from ecs_agent.components import (
     CurrentCompactionSummaryComponent,
     ConversationArchiveComponent,
     ConversationComponent,
+    SessionRefComponent,
+    SessionPolicyComponent,
     ConversationTreeComponent,
     EmbeddingComponent,
     EntityRegistryComponent,
@@ -128,6 +130,8 @@ NON_COMPONENT_VALUE_TYPES: tuple[type[Any], ...] = (
 COMPONENT_REGISTRY: dict[str, type[Any]] = {
     LLMComponent.__name__: LLMComponent,
     ConversationComponent.__name__: ConversationComponent,
+    SessionRefComponent.__name__: SessionRefComponent,
+    SessionPolicyComponent.__name__: SessionPolicyComponent,
     ConversationTreeComponent.__name__: ConversationTreeComponent,
     PlanComponent.__name__: PlanComponent,
     ToolRegistryComponent.__name__: ToolRegistryComponent,

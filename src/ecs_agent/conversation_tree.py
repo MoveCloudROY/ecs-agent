@@ -51,6 +51,10 @@ def add_message(
         metadata=metadata or {},
     )
 
+    from ecs_agent.sessions.tree import record_tree_message
+
+    record_tree_message(tree, msg)
+
     tree.messages[message_id] = msg
     return msg
 
@@ -140,6 +144,10 @@ def create_branch(
         leaf_message_id=leaf_message_id,
     )
 
+    from ecs_agent.sessions.tree import record_tree_branch
+
+    record_tree_branch(tree, branch_id, leaf_message_id, operation="tree_branch_created", select=False)
+
     tree.branches[branch_id] = branch
     return branch
 
@@ -157,6 +165,9 @@ def switch_branch(tree: ConversationTreeComponent, branch_id: str) -> None:
     if branch_id not in tree.branches:
         raise KeyError(f"Branch not found: {branch_id}")
 
+    from ecs_agent.sessions.tree import record_tree_branch
+
+    record_tree_branch(tree, branch_id, tree.branches[branch_id].leaf_message_id, operation="tree_branch_switched", select=True)
     tree.current_branch_id = branch_id
 
 
@@ -250,6 +261,9 @@ def revert_to_message(tree: ConversationTreeComponent, target_message_id: str) -
         raise KeyError(f"Target message not found: {target_message_id}")
 
     branch = tree.branches[tree.current_branch_id]
+    from ecs_agent.sessions.tree import record_tree_branch
+
+    record_tree_branch(tree, tree.current_branch_id, target_message_id, operation="tree_reverted", select=True)
     branch.leaf_message_id = target_message_id
 
     return target_message_id

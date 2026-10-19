@@ -17,6 +17,7 @@ from ecs_agent.components import (
     TerminalComponent,
 )
 from ecs_agent.core.world import World
+from ecs_agent.history import append_conversation_message
 from ecs_agent.logging import get_logger
 from ecs_agent.types import (
     COMPLETED_SUBAGENT_STATUSES,
@@ -287,7 +288,7 @@ class SubagentWaitSystem:
         if conversation is None:
             return
 
-        conversation.messages.append(
+        append_conversation_message(world, entity_id,
             Message(
                 role="user",
                 content=self._format_notification_message(unread_notifications),
@@ -491,7 +492,7 @@ class SubagentWaitSystem:
             "then retry with the correct session ID."
         )
 
-        conversation.messages.append(
+        append_conversation_message(world, entity_id,
             Message(role="user", content="\n".join(lines))
         )
         logger.warning(
@@ -532,7 +533,7 @@ class SubagentWaitSystem:
                 "after handling failures."
             )
 
-        conversation.messages.append(
+        append_conversation_message(world, entity_id,
             Message(role="user", content="\n".join(lines))
         )
         logger.info(

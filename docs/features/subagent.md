@@ -909,6 +909,14 @@ semantics live in `ecs_agent.systems.subagent_wait` (`SubagentWaitSystem`).
 
 ## See Also
 
-- [Multi-Agent Collaboration](./multi-agent.md) — Entity-to-entity messaging
+- [Message bus API](../api-reference.md) — Entity-to-entity messaging
 - [Tool Execution System](../systems.md#toolexecutionsystem) — Tool call processing
 - [Event Bus](../core-concepts.md#eventbus) — Pub/sub events
+
+## Persistent execution records
+
+[Session recording](session-records.md) gives every synchronous and background child an independent persistent transcript in the parent's shared service. Background payloads include optional `transcript_session_id` alongside their existing control `session_id`; the transcript exists while the job is queued. Synchronous results remain text and are discovered with `sessions_list`.
+
+Include `sessions_list`, `sessions_search`, and `read_file` in a child's `InheritancePolicy.inherit_tools` to let it inspect authorized records. The default scope permits siblings in the same workspace/task tree. Handlers resolve the actual child caller on every invocation. Child completion releases only its writer. The root application settles background jobs before closing the shared service.
+
+`subagent_resume` still restarts the original task in a fresh child. Its new transcript links `source_session_id` to the earlier transcript; it does not claim to resume the earlier context.

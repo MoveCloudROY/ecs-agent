@@ -55,6 +55,22 @@ class ConversationComponent:
 
 
 @dataclass(slots=True)
+class SessionRefComponent:
+    """Persistent record identity and selected head, independent of working context."""
+
+    session_id: str
+    head_record_id: str | None = None
+
+
+@dataclass(slots=True)
+class SessionPolicyComponent:
+    """Host-controlled session read scope within one workspace."""
+
+    scope: str = "tree"
+    shared_session_ids: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class ConversationTreeComponent:
     """Tree-structured conversation with branching support."""
 

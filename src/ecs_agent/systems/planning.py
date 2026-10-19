@@ -18,6 +18,7 @@ from ecs_agent.components import (
 )
 from ecs_agent.accounting.instrumentation import complete_with_llm_invocation_event
 from ecs_agent.core.world import World
+from ecs_agent.history import append_conversation_message
 from ecs_agent.logging import get_logger
 from ecs_agent.outcomes import GenerationStatus
 from ecs_agent.prompts.message_assembly import (
@@ -116,12 +117,13 @@ class PlanningSystem:
                     )
                 if context_queue is not None and context_reservation is not None:
                     commit_prompt_context_reservation(
+                        world=world, entity_id=entity_id,
                         queue=context_queue,
                         reservation=context_reservation,
                     )
                     world.remove_component(entity_id, PromptContextReservationComponent)
                 # Add the step description to the conversation history
-                conversation.messages.append(result.message)
+                append_conversation_message(world, entity_id, result.message)
                 if result.message.generation_status not in (
                     GenerationStatus.COMPLETED, GenerationStatus.TOOL_CALLS,
                 ):

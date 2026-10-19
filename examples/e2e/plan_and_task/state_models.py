@@ -111,6 +111,7 @@ class RuntimeState:
     # Per review-phase count of recorded non-approved (revise/blocked) rounds,
     # used to bound review revise loops. Reset on a scope-changed replan.
     review_rounds: dict[str, int] = field(default_factory=dict)
+    record_session_ids: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         _require_non_empty(self.workflow_id, field_name="workflow_id")
@@ -204,6 +205,7 @@ class RuntimeState:
                 updated_at=payload["updated_at"],
                 tasks=tasks,
                 review_rounds=dict(payload.get("review_rounds", {})),
+                record_session_ids=list(payload.get("record_session_ids", [])),
             )
         except KeyError as exc:
             logger.error("plan_task_runtime_state_missing_field", field=str(exc))

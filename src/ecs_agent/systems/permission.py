@@ -8,6 +8,7 @@ from ecs_agent.components import (
     PermissionComponent,
 )
 from ecs_agent.core.world import World
+from ecs_agent.history import append_conversation_message
 from ecs_agent.types import Message, ToolDeniedEvent
 
 
@@ -38,7 +39,7 @@ class PermissionSystem:
                         f"Error: tool '{tool_call.name}' denied by permission policy"
                     )
                     if conversation is not None:
-                        conversation.messages.append(
+                        append_conversation_message(world, entity_id,
                             Message(
                                 role="tool",
                                 content=denied_message,

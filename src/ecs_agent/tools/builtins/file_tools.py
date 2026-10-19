@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Annotated
 
 from ecs_agent.logging import get_logger
@@ -17,6 +18,8 @@ logger = get_logger(__name__)
 
 
 def _validate_path(file_path: str, workspace_root: str) -> Path:
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", file_path) or file_path.startswith("session:"):
+        raise ValueError("URI resources are read-only and are not filesystem paths")
     workspace = Path(workspace_root).resolve()
     target = (workspace / file_path).resolve()
 
@@ -28,7 +31,8 @@ def _validate_path(file_path: str, workspace_root: str) -> Path:
 
 @tool(
     description=(
-        "Read clean UTF-8 file content from workspace. "
+        "Read clean UTF-8 file content from workspace, or a session:// read_uri from session discovery/search. "
+        "Session resources are read-only; limit=0 means 80 lines, capped at 12000 characters. Follow next_offset with the same URI. "
         "Always specify offset and limit to avoid reading oversized files. "
         "Use line_numbers=true before edit_file to see exact absolute line positions, including blank lines."
     ),
@@ -36,7 +40,7 @@ def _validate_path(file_path: str, workspace_root: str) -> Path:
     inline_result=True,
 )
 async def read_file(
-    file_path: Annotated[str, "Workspace-relative path to the file to read."],
+    file_path: Annotated[str, "Workspace-relative file path or session:// read_uri."],
     workspace_root: str,
     offset: Annotated[
         int | str,
@@ -44,14 +48,13 @@ async def read_file(
     ] = 1,
     limit: Annotated[
         int | str,
-        "Maximum number of lines to return. Use 0 to read all lines. Accepts an integer or numeric string.",
+        "Maximum lines. 0 means all lines for files, or a bounded 80-line page for session resources. Accepts an integer or numeric string.",
     ] = 0,
     line_numbers: Annotated[
         bool,
         "Prefix each returned line with its absolute 1-based line number. Use true when preparing an edit_file operation.",
     ] = False,
 ) -> str:
-    target = _validate_path(file_path, workspace_root)
     normalized_offset = _parse_non_negative_numeric_input(
         offset,
         field_name="offset",
@@ -62,6 +65,13 @@ async def read_file(
         field_name="limit",
         minimum=0,
     )
+    if file_path.startswith("session:"):
+        from ecs_agent.sessions.resources import read_session_resource
+        from ecs_agent.sessions.tools import session_tool_caller
+
+        service, caller_id, policy = session_tool_caller()
+        return read_session_resource(service, caller_id, policy, file_path, offset=normalized_offset, limit=normalized_limit, line_numbers=line_numbers)
+    target = _validate_path(file_path, workspace_root)
     logger.info(
         "read_file",
         file_path=file_path,
@@ -90,6 +100,12 @@ async def read_file(
     if line_numbers:
         return "\n".join(f"{start + index + 1}: {line}" for index, line in enumerate(selected))
     return "\n".join(selected)
+
+
+# Capability metadata survives the built-in workspace wrapper. Installers verify
+# this before registering query tools and never replace an application's reader.
+setattr(read_file, "supports_session_resources", True)
+setattr(getattr(read_file, "_tool_handler"), "supports_session_resources", True)
 
 
 def _parse_non_negative_numeric_input(

@@ -335,6 +335,8 @@ def commit_prompt_context_reservation(
     queue: PromptContextQueueComponent | None,
     reservation: PromptContextReservationComponent,
     conversation: ConversationComponent | None = None,
+    world: World | None = None,
+    entity_id: EntityId | None = None,
 ) -> None:
     """Consume reserved queue entries and persist the sent context block.
 
@@ -344,17 +346,24 @@ def commit_prompt_context_reservation(
     at the block's position, invalidating the provider prompt cache for every
     later token; persisting keeps outbound requests append-only.
     """
+    if reservation.rendered_block:
+        from ecs_agent.history import append_conversation_message, record_session_event
+
+        message = Message(role="user", content=reservation.rendered_block)
+        if world is not None and entity_id is not None:
+            if conversation is not None:
+                append_conversation_message(world, entity_id, message)
+            else:
+                record_session_event(world, entity_id, "prompt_context", {"role": "user", "content": reservation.rendered_block, "reservation_id": reservation.reservation_id})
+        elif conversation is not None:
+            conversation.messages.append(message)
+
     if queue is not None:
         reserved_ids = {entry.entry_id for entry in reservation.reserved_entries}
         if reserved_ids:
             queue.entries = [
                 entry for entry in queue.entries if entry.entry_id not in reserved_ids
             ]
-
-    if conversation is not None and reservation.rendered_block:
-        conversation.messages.append(
-            Message(role="user", content=reservation.rendered_block)
-        )
 
 
 def resolve_system_prompt_parts(
