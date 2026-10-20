@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from ecs_agent.core.component import ComponentStore
@@ -17,6 +18,11 @@ logger = get_logger(__name__)
 T = TypeVar("T")
 
 if TYPE_CHECKING:
+    from asyncio import Task
+
+    from ecs_agent.authoring.definitions import AssemblyReport, SystemStep
+    from ecs_agent.core.lifecycle import ActiveAgentRun
+    from ecs_agent.core.run_result import RunResult
     from ecs_agent.skills.runtime import SkillRuntime
     from ecs_agent.sessions.service import SessionService
 
@@ -36,6 +42,13 @@ class World:
         # Runtime dependencies are deliberately excluded from WorldSerializer.
         self.session_service: SessionService | None = None
         self._session_writer_tokens: dict[EntityId, str] = {}
+        self._runner_task: Task[Any] | None = None
+        self._processing_task: Task[Any] | None = None
+        self._agent_run: ActiveAgentRun | None = None
+        self._agent_results: dict[EntityId, RunResult] = {}
+        self._authoring_systems: dict[str, tuple[SystemStep, int, str]] = {}
+        self._authoring_instances: dict[str, System] = {}
+        self._assembly_reports: dict[EntityId, AssemblyReport] = {}
 
     @property
     def event_bus(self) -> EventBus:
@@ -180,10 +193,30 @@ class World:
         self._systems.apply_queued_operations()
 
     async def process(self) -> None:
-        self.apply_pending_system_operations()
-        await self._systems.execute(self)
+        driver = self._runner_task or (self._agent_run.task if self._agent_run else None)
+        if self._processing_task is not None or (driver is not None and driver is not asyncio.current_task()):
+            logger.error("world_already_processing", world_name=self.name)
+            raise RuntimeError("This World already has an active execution driver")
+        self._processing_task = asyncio.current_task()
+        try:
+            self.apply_pending_system_operations()
+            await self._systems.execute(self)
+        finally:
+            self._processing_task = None
 
     def query(
         self, *component_types: type[Any]
     ) -> list[tuple[EntityId, tuple[Any, ...]]]:
         return self._query.get(*component_types)
+
+    def query_active(
+        self, *component_types: type[Any]
+    ) -> list[tuple[EntityId, tuple[Any, ...]]]:
+        """Query entities eligible for the current agent execution scope.
+
+        Agent-processing systems should use this instead of query(). Plain
+        queries still expose the complete World for inspection and persistence.
+        """
+        from ecs_agent.core.lifecycle import is_entity_active
+
+        return [row for row in self.query(*component_types) if is_entity_active(self, row[0])]

@@ -434,7 +434,7 @@ async def test_permission_enforcement_mixed_tools() -> None:
         permission = world.get_component(primary_entity, PermissionComponent)
         assert permission is not None
         assert permission.allowed_tools == ["read_file"]
-        assert permission.denied_tools == []
+        assert permission.denied_tools == ["write_file", "execute_code"]
 
 
 # ============================================================================
@@ -643,8 +643,8 @@ async def test_no_tools_no_permission_component() -> None:
 
 
 @pytest.mark.asyncio
-async def test_empty_tools_dict_no_permission_component() -> None:
-    """Verify that PermissionComponent is not added when tools dict is empty."""
+async def test_empty_tools_dict_denies_all() -> None:
+    """Verify that an empty tools dict attaches a deny-all policy."""
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
 
@@ -672,9 +672,10 @@ async def test_empty_tools_dict_no_permission_component() -> None:
         factory = create_fake_provider_factory(responses)
         primary_entity, world = compile_agent_specs(resolved, factory)
 
-        # Verify PermissionComponent is not present
+        # Verify explicit deny-all policy
         permission = world.get_component(primary_entity, PermissionComponent)
-        assert permission is None
+        assert permission is not None
+        assert permission.allowed_tools == []
 
 
 # ============================================================================
@@ -925,10 +926,8 @@ def test_compile_with_skills_installs_skill_component() -> None:
         assert "test-skill" in skill_comp.skills
 
 
-def test_compile_with_skills_no_source_dir_skips_gracefully() -> None:
-    """When source_dir is None and skills declared, compilation succeeds (skills skipped)."""
-    from ecs_agent.components.definitions import SkillComponent
-
+def test_compile_with_skills_no_source_dir_fails_before_running() -> None:
+    """A declared relative skill cannot silently disappear from the runtime."""
     spec = AgentSpec(
         name="bot",
         mode="primary",
@@ -936,17 +935,8 @@ def test_compile_with_skills_no_source_dir_skips_gracefully() -> None:
         prompt="You are a bot.",
         skills=[{"path": "skills/some-skill"}],
     )
-    # No source_dir — should not raise, just skip skills
-    primary_entity, world = compile_agent_specs(
-        resolve_agent_specs([spec]),
-        create_fake_provider_factory([]),
-    )
-
-    # SkillComponent may or may not be present (it wasn't installed)
-    skill_comp = world.get_component(primary_entity, SkillComponent)
-    # If present, our skill was not installed into it
-    if skill_comp is not None:
-        assert "some-skill" not in skill_comp.skills
+    with pytest.raises(ValueError, match="source_dir"):
+        compile_agent_specs(resolve_agent_specs([spec]), create_fake_provider_factory([]))
 
 
 def test_compile_with_empty_skills_list_no_skill_component() -> None:

@@ -35,7 +35,7 @@ from ecs_agent.components import (
     UserPromptConfigComponent,
 )
 from ecs_agent.components.definitions import ScriptHandler
-from ecs_agent.core import Runner, World
+from ecs_agent.core import AgentHandle, Runner, RunStatus, World
 from ecs_agent.logging import configure_logging, get_logger
 from ecs_agent.prompts.contracts import (
     PromptTemplateSource,
@@ -97,7 +97,7 @@ from examples.e2e.plan_and_task.prompts import (
     build_write_plan_prompt,
 )
 from examples.e2e.plan_and_task.runtime import (
-    setup_interactive_input,
+    setup_turn_input,
     derive_workflow_id_from_llm,
 )
 from examples.e2e.plan_and_task.status_command import (
@@ -1244,6 +1244,7 @@ async def main() -> None:
     accounting = AccountingSubscriber()
     accounting.subscribe(world.event_bus)
 
+    read_turn_input = None
     interactive_mode_str = os.environ.get("PLAN_TASK_INTERACTIVE", "1")
     if interactive_mode_str.lower() in ("0", "false"):
         if debug_mode:
@@ -1251,14 +1252,35 @@ async def main() -> None:
     else:
         if debug_mode:
             logger.info("interactive_input_enabled", reason="default_or_env_var_set")
-        await setup_interactive_input(world, agent_id)
+        read_turn_input = await setup_turn_input(world, agent_id)
 
     max_ticks_env = os.environ.get("PLAN_TASK_MAX_AGENT_TICKS")
     max_ticks: int | None = int(max_ticks_env) if max_ticks_env else None
 
     runner = Runner()
     try:
-        await runner.run(world, max_ticks=max_ticks)
+        if read_turn_input is None:
+            await runner.run(world, max_ticks=max_ticks)
+        else:
+            from ecs_agent.outcomes import RECOVERABLE_REASONING_TERMINALS
+
+            handle = AgentHandle(world, agent_id)
+            while (text := await read_turn_input()) is not None:
+                result = await handle.run_turn(text, max_steps=max_ticks)
+                logger.info("plan_task_turn_finished", status=result.status, turn_id=result.turn_id, run_id=result.run_id)
+                if result.success:
+                    continue
+                if result.status is RunStatus.MAX_TICKS:
+                    logger.info("plan_task_budget_exhausted", turn_id=result.turn_id)
+                    break
+                if result.reason in (*RECOVERABLE_REASONING_TERMINALS, STATUS_SHOWN_REASON):
+                    try:
+                        handle.abandon_turn(reason="CLI returns control after a handled command or recoverable failure")
+                    except ValueError as exc:
+                        logger.error("plan_task_recovery_blocked", exception=str(exc))
+                        break
+                else:
+                    break
     finally:
         from examples.e2e.plan_and_task.session_records import close_session_records
 

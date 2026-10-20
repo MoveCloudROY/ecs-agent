@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from pathlib import Path
 
@@ -13,7 +15,8 @@ from ecs_agent.components import (
 )
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
-from ecs_agent.prompts.contracts import SystemPromptConfigSpec, PromptTemplateSource
+from ecs_agent.prompts.contracts import PlaceholderSpec, SystemPromptConfigSpec, PromptTemplateSource
+from ecs_agent.prompts.registry import resolve_placeholder_values
 from ecs_agent.prompts.template_render import (
     PLACEHOLDER_NAME_RE,
     PlaceholderProviderRegistry,
@@ -45,37 +48,35 @@ class SystemPromptRenderSystem:
 
     async def process(self, world: World) -> None:
         for entity_id, prompt_config, template_metadata in _iter_render_targets(world):
-            cache_key = (
-                _render_cache_key(world, entity_id) + template_metadata.cache_suffix
-            )
-            rendered_component = world.get_component(
-                entity_id, RenderedSystemPromptComponent
-            )
-            if rendered_component is not None:
-                previous_cache_key = rendered_component.placeholder_snapshot.get(
-                    "_cache_key"
-                )
-                if previous_cache_key == cache_key:
-                    _bridge_rendered_prompt(world, entity_id, rendered_component.text)
-                    continue
-                world.remove_component(entity_id, RenderedSystemPromptComponent)
-
-                logger.debug(
-                    "system_prompt_render_invalidated",
-                    entity_id=entity_id,
-                    previous_cache_key=previous_cache_key,
-                    current_cache_key=cache_key,
-                )
             try:
                 template_text = _normalized_template_text(
                     world,
                     entity_id,
                     prompt_config,
                 )
+                # Evaluate user callbacks once, including on cache hits. The
+                # same accepted values supply both the cache key and the body.
+                values = resolve_placeholder_values(prompt_config.placeholders)
+                config_digest = hashlib.sha256(json.dumps(
+                    [template_text, values, prompt_config.revision, prompt_config.source_path], sort_keys=True, ensure_ascii=False,
+                ).encode()).hexdigest()
+                cache_key = (
+                    _render_cache_key(world, entity_id)
+                    + template_metadata.cache_suffix + "|config:" + config_digest
+                )
+                rendered_component = world.get_component(entity_id, RenderedSystemPromptComponent)
+                if rendered_component is not None and rendered_component.placeholder_snapshot.get("_cache_key") == cache_key:
+                    _bridge_rendered_prompt(world, entity_id, rendered_component.text)
+                    continue
+                resolved_config = SystemPromptConfigSpec(
+                    template_source=PromptTemplateSource(inline=template_text),
+                    placeholders=[PlaceholderSpec(name, value) for name, value in values.items()],
+                )
                 rendered, stable_text, volatile_text, snapshot = _render_system_prompt(
-                    world, entity_id, prompt_config
+                    world, entity_id, resolved_config
                 )
                 snapshot["_cache_key"] = cache_key
+                snapshot["_config_revision"] = str(prompt_config.revision)
                 if template_metadata.legacy_template is not None:
                     snapshot["_legacy_template"] = template_metadata.legacy_template
                 world.add_component(
@@ -138,6 +139,7 @@ def _render_system_prompt(
         template=template_text,
         world=world,
         entity=entity_id,
+        user_values=resolve_placeholder_values(prompt_config.placeholders),
     )
     stable_text, volatile_text = _split_stable_volatile(template_text, snapshot)
     return full_text, stable_text, volatile_text, snapshot
@@ -239,11 +241,11 @@ def _iter_render_targets(
     targets: list[tuple[EntityId, SystemPromptConfigSpec, _RenderTemplateMetadata]] = []
     configured_entities: set[EntityId] = set()
 
-    for entity_id, (prompt_config,) in world.query(SystemPromptConfigSpec):
+    for entity_id, (prompt_config,) in world.query_active(SystemPromptConfigSpec):
         configured_entities.add(entity_id)
         targets.append((entity_id, prompt_config, _RenderTemplateMetadata()))
 
-    for entity_id, _ in world.query(CompactionConfigComponent):
+    for entity_id, _ in world.query_active(CompactionConfigComponent):
         if entity_id in configured_entities:
             continue
         legacy_template = _resolve_legacy_prompt_template(world, entity_id)
@@ -313,13 +315,17 @@ def _normalize_compaction_summary_template(
 
 def _render_cache_key(world: World, entity_id: EntityId) -> str:
     fingerprints: list[str] = []
+    values: dict[str, dict[str, str]] = {}
     for provider in iter_placeholder_providers(world, entity_id):
         provider_id = placeholder_provider_id(provider)
-        if not provider.resolve_placeholders(world, entity_id):
+        provider_values = provider.resolve_placeholders(world, entity_id)
+        if not provider_values:
             continue
+        values[provider_id] = provider_values
         fingerprint = provider.provider_fingerprint(world, entity_id)
         fingerprints.append(f"{provider_id}:{fingerprint}")
-    return "|".join(fingerprints)
+    digest = hashlib.sha256(json.dumps(values, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    return "|".join(fingerprints) + "|values:" + digest
 
 
 def _bridge_rendered_prompt(world: World, entity_id: EntityId, rendered: str) -> None:

@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 from ecs_agent.logging import get_logger
@@ -29,12 +30,14 @@ class AgentSpec:
     mode: Literal["primary", "subagent"]
     model: str
     prompt: str
-    tools: dict[str, bool] = field(default_factory=dict)
+    tools: dict[str, bool] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     name: str = ""
     placeholders: list[dict[str, str]] = field(default_factory=list)
     triggers: list[dict[str, str | int]] = field(default_factory=list)
     skills: list[dict[str, str]] = field(default_factory=list)
+    # Loader-owned origin; never accepted from DSL user fields or metadata.
+    source_path: Path | None = field(default=None, compare=False, repr=False)
 
 
 def validate_agent_spec(data: dict[str, Any], *, source_name: str = "") -> AgentSpec:
@@ -87,10 +90,10 @@ def validate_agent_spec(data: dict[str, Any], *, source_name: str = "") -> Agent
         )
 
     # Validate tools field type
-    tools = data.get("tools", {})
-    if not isinstance(tools, dict):
+    tools = data.get("tools")
+    if "tools" in data and not isinstance(tools, dict):
         raise TypeError(f"Field 'tools' must be dict[str, bool]{source_context}")
-    for tool_name, enabled in tools.items():
+    for tool_name, enabled in (tools or {}).items():
         if not isinstance(tool_name, str):
             raise TypeError(f"Tool name must be str{source_context}")
         if not isinstance(enabled, bool):
@@ -212,7 +215,7 @@ def validate_agent_spec(data: dict[str, Any], *, source_name: str = "") -> Agent
         mode=mode,
         model=data["model"],
         name=name,
-        tool_count=len(tools),
+        tool_count=len(tools or {}),
         source=source_name,
     )
 

@@ -20,10 +20,17 @@ async def _sum_handler(a: int, b: int) -> str:
 
 
 def _tool(name: str) -> ToolSchema:
+    parameters: dict[str, object] = {"type": "object", "properties": {}}
+    if name == "sum":
+        parameters = {
+            "type": "object",
+            "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+            "required": ["a", "b"],
+        }
     return ToolSchema(
         name=name,
         description=f"{name} tool",
-        parameters={"type": "object", "properties": {}},
+        parameters=parameters,
     )
 
 

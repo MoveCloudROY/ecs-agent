@@ -378,7 +378,8 @@ class TestComponentCount:
         )
         # SessionRefComponent and SessionPolicyComponent add persistent identity
         # and host-owned read policy without serializing runtime store objects.
-        assert count <= 60, f"Component count {count} exceeds limit of 60"
+        # AgentTurnComponent adds persistent turn boundaries and safe recovery.
+        assert count <= 61, f"Component count {count} exceeds limit of 61"
 
 
 class TestComponentsExportedInInit:

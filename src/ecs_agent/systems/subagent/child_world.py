@@ -33,6 +33,7 @@ from ecs_agent.components.definitions import (
     WorkspaceBindingComponent,
 )
 from ecs_agent.core.world import World
+from ecs_agent.core.system import System
 from ecs_agent.logging import get_logger
 from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
 from ecs_agent.skills import catalog as _skill_catalog
@@ -49,6 +50,7 @@ from ecs_agent.systems.subagent.runtime_profiles import (
     resolve_child_runtime_profile,
 )
 from ecs_agent.types import EntityId, InheritancePolicy, SubagentConfig, ToolSchema
+from ecs_agent.tools.permissions import compile_tool_permissions, intersect_permissions
 
 logger = get_logger(__name__)
 
@@ -88,6 +90,12 @@ class ChildWorldBuilder:
         parent_child_entity: EntityId | None = None,
     ) -> tuple[World, EntityId]:
         """Assemble isolated child world and runnable child entity."""
+        from ecs_agent.authoring.definitions import SystemStep
+        from ecs_agent.authoring.normalize import normalize_prompt
+        from ecs_agent.authoring.runtime import delegation_steps, install_components, install_delegation, system_role, validate_complete_systems
+        from ecs_agent.authoring.scheduling import install_steps
+        from ecs_agent.components import EntityRegistryComponent
+
         policy = config.inheritance_policy
         parent_llm = parent_world.get_component(parent_entity, LLMComponent)
         parent_tools = parent_world.get_component(parent_entity, ToolRegistryComponent)
@@ -97,6 +105,9 @@ class ChildWorldBuilder:
         parent_skills = parent_world.get_component(parent_entity, SkillComponent)
 
         effective_system_prompt = config.system_prompt
+        prompt_config = normalize_prompt(config.prompt_config or config.system_prompt)
+        if config.prompt_config is not None:
+            effective_system_prompt = prompt_config.template_source.inline or ""
         if (
             policy.enabled
             and policy.inherit_system_prompt
@@ -108,160 +119,184 @@ class ChildWorldBuilder:
         child_world_name = f"{config.name}-{uuid.uuid4().hex[:8]}"
         child_world = World(name=child_world_name)
         child_world_entity_id = child_world.create_entity()
-        background_result_envelope = _BACKGROUND_RESULT_ENVELOPE_ENABLED.get()
-        child_world.add_component(
-            child_world_entity_id,
-            LLMComponent(
-                model=config.model,
-                system_prompt="",  # SystemPromptRenderSystem will populate this
-            ),
+        previous_stub_skills = (
+            set(parent_world.skill_runtime.installed_skill_names(parent_child_entity))
+            if parent_child_entity is not None else set()
         )
-        child_world.add_component(
-            child_world_entity_id,
-            SystemPromptConfigSpec(
-                template_source=PromptTemplateSource(
-                    inline=(
-                        _build_background_child_prompt_template(
-                            effective_system_prompt or ""
-                        )
-                        if background_result_envelope
-                        else _build_child_prompt_template(effective_system_prompt or "")
-                    ),
-                ),
-            ),
-        )
-        child_world.add_component(
-            child_world_entity_id,
-            ConversationComponent(messages=[]),
-        )
-        child_world.add_component(
-            child_world_entity_id,
-            OwnerComponent(owner_id=parent_entity),
-        )
-
-        target_entities: list[tuple[World, EntityId]] = [
-            (child_world, child_world_entity_id)
-        ]
-        if parent_child_entity is not None:
-            target_entities.append((parent_world, parent_child_entity))
-
-        if policy.enabled and policy.inherit_tools:
-            for target_world, target_entity in target_entities:
-                existing_registry = target_world.get_component(
-                    target_entity, ToolRegistryComponent
-                )
-                if existing_registry is None:
-                    target_world.add_component(
-                        target_entity,
-                        ToolRegistryComponent(tools={}, handlers={}),
-                    )
-
-        skill_manager = SkillManager()
-        explicit_skills = list(dict.fromkeys(config.skills))
-        inherited_tool_names = self._effective_inherited_tool_names(policy)
-        inherited_skills = self._skills_for_inherited_tools(
-            inherited_tool_names,
-            parent_skills,
-        )
-        required_skills = list(dict.fromkeys(explicit_skills + inherited_skills))
-
-        resolved_skills: list[ScriptSkill] = []
-        for skill_name in required_skills:
-            skill = self._resolve_parent_skill(
-                parent_entity,
-                skill_name,
-                parent_skills,
-                parent_tools,
-                policy,
+        try:
+            background_result_envelope = _BACKGROUND_RESULT_ENVELOPE_ENABLED.get()
+            template = (
+                _build_background_child_prompt_template(effective_system_prompt or "")
+                if background_result_envelope else _build_child_prompt_template(effective_system_prompt or "")
             )
-            if skill is not None:
-                resolved_skills.append(skill)
+            install_components(
+                child_world, child_world_entity_id, model=config.model,
+                prompt=replace(prompt_config, template_source=PromptTemplateSource(inline=template)),
+                tools=config.tool_definitions, skills=config.local_skills, triggers=config.triggers,
+            )
+            if config.authoring:
+                child_world.add_component(child_world_entity_id, EntityRegistryComponent(child_world_entity_id, config.name, metadata=dict(config.metadata)))
+            child_world.add_component(
+                child_world_entity_id,
+                OwnerComponent(owner_id=parent_entity),
+            )
 
-        for target_world, target_entity in target_entities:
-            for skill in resolved_skills:
-                skill_manager.install(target_world, target_entity, skill)
+            target_entities: list[tuple[World, EntityId]] = [
+                (child_world, child_world_entity_id)
+            ]
+            if parent_child_entity is not None:
+                target_entities.append((parent_world, parent_child_entity))
 
-        if policy.enabled and parent_tools is not None:
-            for tool_name in inherited_tool_names:
-                self._inherit_tool_to_target_entities(
-                    tool_name,
+            if policy.enabled and policy.inherit_tools:
+                for target_world, target_entity in target_entities:
+                    existing_registry = target_world.get_component(
+                        target_entity, ToolRegistryComponent
+                    )
+                    if existing_registry is None:
+                        target_world.add_component(
+                            target_entity,
+                            ToolRegistryComponent(tools={}, handlers={}),
+                        )
+
+            skill_manager = SkillManager()
+            explicit_skills = list(dict.fromkeys(config.skills))
+            inherited_tool_names = self._effective_inherited_tool_names(policy)
+            inherited_skills = self._skills_for_inherited_tools(
+                inherited_tool_names,
+                parent_skills,
+            )
+            required_skills = list(dict.fromkeys(explicit_skills + inherited_skills))
+
+            resolved_skills: list[ScriptSkill] = []
+            for skill_name in required_skills:
+                skill = self._resolve_parent_skill(
+                    parent_entity,
+                    skill_name,
+                    parent_skills,
                     parent_tools,
-                    target_entities,
                     policy,
                 )
+                if skill is not None:
+                    resolved_skills.append(skill)
 
-        if (
-            policy.enabled
-            and policy.inherit_permissions
-            and parent_permissions is not None
-        ):
             for target_world, target_entity in target_entities:
-                target_world.add_component(
-                    target_entity,
-                    PermissionComponent(
-                        allowed_tools=list(parent_permissions.allowed_tools),
-                        denied_tools=list(parent_permissions.denied_tools),
-                    ),
-                )
+                for skill in resolved_skills:
+                    skill_manager.install(target_world, target_entity, skill)
 
-        # Inherit parent workspace binding onto child entity when policy allows.
-        if policy.enabled:
-            parent_binding = parent_world.get_component(
-                parent_entity, WorkspaceBindingComponent
+            if policy.enabled and parent_tools is not None:
+                for tool_name in inherited_tool_names:
+                    self._inherit_tool_to_target_entities(
+                        tool_name,
+                        parent_tools,
+                        target_entities,
+                        policy,
+                    )
+
+            inherited_permissions = (
+                parent_permissions if policy.enabled and policy.inherit_permissions else None
             )
-            if parent_binding is not None:
-                child_world.add_component(
-                    child_world_entity_id,
-                    WorkspaceBindingComponent(
-                        workspace_root=parent_binding.workspace_root
-                    ),
+            local_permissions = compile_tool_permissions(config.tools)
+            if inherited_permissions is not None or local_permissions is not None:
+                for target_world, target_entity in target_entities:
+                    effective_permissions = intersect_permissions(inherited_permissions, local_permissions)
+                    assert effective_permissions is not None
+                    target_world.add_component(
+                        target_entity,
+                        effective_permissions,
+                    )
+
+            # Inherit parent workspace binding onto child entity when policy allows.
+            if policy.enabled:
+                parent_binding = parent_world.get_component(
+                    parent_entity, WorkspaceBindingComponent
                 )
-                # Also stamp the stub entity in the parent world (for test visibility).
-                if parent_child_entity is not None:
-                    parent_world.add_component(
-                        parent_child_entity,
+                if parent_binding is not None:
+                    child_world.add_component(
+                        child_world_entity_id,
                         WorkspaceBindingComponent(
                             workspace_root=parent_binding.workspace_root
                         ),
                     )
+                    # Also stamp the stub entity in the parent world (for test visibility).
+                    if parent_child_entity is not None:
+                        parent_world.add_component(
+                            parent_child_entity,
+                            WorkspaceBindingComponent(
+                                workspace_root=parent_binding.workspace_root
+                            ),
+                        )
 
-        parent_compaction = parent_world.get_component(
-            parent_entity, CompactionConfigComponent
-        )
-        if parent_compaction is not None:
-            child_world.add_component(
-                child_world_entity_id,
-                replace(parent_compaction),
+            parent_compaction = parent_world.get_component(
+                parent_entity, CompactionConfigComponent
             )
-            child_world.add_component(
-                child_world_entity_id,
-                ConversationArchiveComponent(),
-            )
+            if parent_compaction is not None:
+                child_world.add_component(
+                    child_world_entity_id,
+                    replace(parent_compaction),
+                )
+                child_world.add_component(
+                    child_world_entity_id,
+                    ConversationArchiveComponent(),
+                )
 
-        profile_builder = resolve_child_runtime_profile(config.runtime_profile)
-        profile_ctx = ChildProfileContext(
-            parent_has_compaction=parent_compaction is not None
-        )
-        for spec in profile_builder(profile_ctx):
-            child_world.register_system(spec.factory(), priority=spec.priority)
-        if parent_world.session_service is not None:
-            parent_ref = parent_world.get_component(parent_entity, SessionRefComponent)
-            if parent_ref is None:
-                raise RuntimeError("Delegating entity has no session identity")
-            parent_info = parent_world.session_service.store.get_session(parent_ref.session_id)
-            reserved_session_id = _BACKGROUND_TRANSCRIPT_SESSION_ID.get()
-            # Consume the reservation exactly once; nested children need new IDs.
-            _BACKGROUND_TRANSCRIPT_SESSION_ID.set(None)
-            child_ref = install_session_recording(
-                child_world, child_world_entity_id, parent_world.session_service,
-                workspace_id=parent_info.workspace_id, agent_name=config.name,
-                parent_session_id=parent_ref.session_id,
-                policy=parent_world.get_component(parent_entity, SessionPolicyComponent),
-                register_tools=False, session_id=reserved_session_id,
+            profile_builder = resolve_child_runtime_profile(config.runtime_profile)
+            profile_ctx = ChildProfileContext(
+                parent_has_compaction=parent_compaction is not None,
+                normalize=config.authoring or bool(config.triggers),
             )
+            steps = []
+            for index, spec in enumerate(profile_builder(profile_ctx)):
+                system = spec.factory()
+                name = system_role(system, fallback=f"profile_{index}")
+                def factory(instance: System = system) -> System:
+                    return instance
+                steps.append(SystemStep(name, factory, priority=spec.priority))
+            if config.subagents:
+                installed_roles = {step.name for step in steps}
+                steps.extend(step for step in delegation_steps() if step.name not in installed_roles)
+            installed = install_steps(child_world, tuple(steps))
+            if config.authoring:
+                from dataclasses import asdict
+
+                validate_complete_systems(child_world, delegation=bool(config.subagents))
+                info = child_world.get_component(child_world_entity_id, EntityRegistryComponent)
+                assert info is not None
+                info.metadata["_ecs_authoring"] = {"systems": [asdict(step) for step in installed], "complete": True}
+            install_delegation(child_world, child_world_entity_id, config.subagents)
+            if parent_world.session_service is not None:
+                parent_ref = parent_world.get_component(parent_entity, SessionRefComponent)
+                if parent_ref is None:
+                    raise RuntimeError("Delegating entity has no session identity")
+                parent_info = parent_world.session_service.store.get_session(parent_ref.session_id)
+                reserved_session_id = _BACKGROUND_TRANSCRIPT_SESSION_ID.get()
+                # Consume the reservation exactly once; nested children need new IDs.
+                _BACKGROUND_TRANSCRIPT_SESSION_ID.set(None)
+                child_ref = install_session_recording(
+                    child_world, child_world_entity_id, parent_world.session_service,
+                    workspace_id=parent_info.workspace_id, agent_name=config.name,
+                    parent_session_id=parent_ref.session_id,
+                    policy=parent_world.get_component(parent_entity, SessionPolicyComponent),
+                    register_tools=False, session_id=reserved_session_id,
+                )
+                if parent_child_entity is not None:
+                    parent_world.add_component(parent_child_entity, replace(child_ref))
+            return child_world, child_world_entity_id
+        except Exception as exc:
+            logger.error("child_world_assembly_failed", agent=config.name, exception=str(exc))
+            cleanup_targets: list[tuple[World, EntityId, set[str]]] = [(child_world, child_world_entity_id, set())]
             if parent_child_entity is not None:
-                parent_world.add_component(parent_child_entity, replace(child_ref))
-        return child_world, child_world_entity_id
+                cleanup_targets.append((parent_world, parent_child_entity, previous_stub_skills))
+            for target, target_entity, previous_names in cleanup_targets:
+                for skill_name in reversed(target.skill_runtime.installed_skill_names(target_entity)):
+                    if skill_name not in previous_names:
+                        try:
+                            SkillManager().uninstall(target, target_entity, skill_name)
+                        except Exception as cleanup_error:
+                            logger.error("child_world_cleanup_failed", skill=skill_name, exception=str(cleanup_error))
+            from ecs_agent.sessions.install import release_session_writer
+            release_session_writer(child_world, child_world_entity_id)
+            raise
+
 
     def _effective_inherited_tool_names(self, policy: InheritancePolicy) -> list[str]:
         if not policy.enabled:

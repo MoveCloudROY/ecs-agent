@@ -21,7 +21,7 @@ import os
 import sys
 
 from ecs_agent.components import ConversationComponent, LLMComponent, StreamingComponent
-from ecs_agent.core import Runner, World
+from ecs_agent.core import AgentHandle, World
 from ecs_agent.logging import configure_logging
 from ecs_agent.providers import FakeModel, Model
 from ecs_agent.providers.config import ApiFormat
@@ -93,18 +93,7 @@ async def main() -> None:
         ),
     )
 
-    # Add ConversationComponent with user message
-    world.add_component(
-        agent_id,
-        ConversationComponent(
-            messages=[
-                Message(
-                    role="user",
-                    content="Explain streaming in LLMs in one sentence.",
-                )
-            ]
-        ),
-    )
+    world.add_component(agent_id, ConversationComponent(messages=[]))
 
     # Add StreamingComponent to enable system-level streaming
     world.add_component(
@@ -148,13 +137,14 @@ async def main() -> None:
         """Called when streaming ends."""
         print("\n[Streaming ended]")
 
-    # Register event handlers
-    world.event_bus.subscribe(StreamStartEvent, on_stream_start)
-    world.event_bus.subscribe(StreamContentDeltaEvent, on_stream_delta)
-    world.event_bus.subscribe(StreamReasoningDeltaEvent, on_stream_reasoning_delta)
-    world.event_bus.subscribe(StreamReasoningEndEvent, on_stream_reasoning_end)
-    world.event_bus.subscribe(StreamContentStartEvent, on_stream_content_start)
-    world.event_bus.subscribe(StreamEndEvent, on_stream_end)
+    event_handlers = {
+        StreamStartEvent: on_stream_start,
+        StreamContentDeltaEvent: on_stream_delta,
+        StreamReasoningDeltaEvent: on_stream_reasoning_delta,
+        StreamReasoningEndEvent: on_stream_reasoning_end,
+        StreamContentStartEvent: on_stream_content_start,
+        StreamEndEvent: on_stream_end,
+    }
 
     # --- Register systems ---
     # ReasoningSystem (priority 0) executes the LLM inference
@@ -166,8 +156,18 @@ async def main() -> None:
     print("Running streaming agent...")
     print("-" * 60)
 
-    runner = Runner()
-    await runner.run(world, max_ticks=3)
+    agent = AgentHandle(world, agent_id)
+    try:
+        async with agent.stream_turn("Explain streaming in LLMs in one sentence.", max_steps=3) as events:
+            async for envelope in events:
+                handler = event_handlers.get(type(envelope.event))
+                if handler is not None:
+                    await handler(envelope.event)
+        result = agent.last_result
+        if result is not None:
+            print(f"Run status: {result.status}")
+    finally:
+        await model.aclose()
 
     # --- Print final results ---
     print()

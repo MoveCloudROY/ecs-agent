@@ -20,23 +20,36 @@ permissions = PermissionComponent(allowed_tools=["read_file", "search"])
 permissions = PermissionComponent(denied_tools=["bash", "delete_file"])
 ```
 
-- `allowed_tools`: If not empty, only tools in this list can be executed.
+- `allowed_tools=None` (default): no allowlist restriction.
+- `allowed_tools=[]`: deny every tool.
+- A non-empty `allowed_tools` list permits only its members.
 - `denied_tools`: Tools in this list are always blocked, even if they are in `allowed_tools`.
 
 ### PermissionSystem
 
-The `PermissionSystem` should be registered with a high priority (default -10) so it runs before the `ToolExecutionSystem`. It filters `PendingToolCallsComponent` based on the defined policies.
+ToolExecutionSystem enforces the current permission policy before every handler invocation, even without PermissionSystem. PermissionSystem is optional preflight at priority 1, after ReasoningSystem (0). It records decisions without consuming pending calls or appending messages.
 
 ```python
 from ecs_agent.systems.permission import PermissionSystem
 
-world.register_system(PermissionSystem(priority=-10), priority=-10)
+world.register_system(PermissionSystem(), priority=1)
 ```
 
-When a tool call is denied:
-1. It's removed from `PendingToolCallsComponent`.
-2. An error message is appended to the `ConversationComponent`.
-3. A `ToolDeniedEvent` is published to the `EventBus`.
+When execution denies a call:
+
+1. The handler is not invoked and no execution-start event is emitted.
+2. Execution writes a `role="tool"` result with the original call ID, in batch order.
+3. One `ToolDeniedEvent` is published after the result is recorded.
+
+Preflight systems never remove calls. ToolExecutionSystem owns consumption, result ordering and session persistence.
+
+## Migrating Permission Policies
+
+Replace explicit `allowed_tools=[]` with `allowed_tools=None` if the intended policy is unrestricted. An empty list now means deny all. Deny entries always take precedence.
+
+Checkpoint schema version 2 stores this distinction. Loading a version 1 checkpoint (including a payload without a version) migrates missing or empty allowlists to None to preserve its old runtime behavior. Old DSL denials already lost from a checkpoint cannot be reconstructed; compile the original DSL again.
+
+A phase without a tool declaration sets None; a phase declaring an empty tuple denies all. A child agent preserves inherited restrictions and intersects them with its own `SubagentConfig.tools` policy. Session tool installation uses the same permission evaluator as execution.
 
 ## Sandboxed Execution
 
@@ -83,8 +96,9 @@ agent = world.create_entity()
 
 # Only allow 'read' tool
 world.add_component(agent, PermissionComponent(allowed_tools=["read"]))
-world.register_system(PermissionSystem())
+world.register_system(PermissionSystem(), priority=1)
 
+# Preflight records a decision; execution enforces it and writes the result.
 # This call will be allowed
 world.add_component(agent, PendingToolCallsComponent(
     tool_calls=[ToolCall(id="1", name="read", arguments={})]

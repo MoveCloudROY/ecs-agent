@@ -222,7 +222,7 @@ def test_compile_tools_boolean_mapping_creates_permission_component() -> None:
     permission = world.get_component(primary_entity_id, PermissionComponent)
     assert permission is not None
     assert set(permission.allowed_tools) == {"bash", "read_file"}
-    assert permission.denied_tools == []
+    assert permission.denied_tools == ["web_search"]
 
 
 def test_compile_tools_all_false_creates_empty_allowlist() -> None:
@@ -243,7 +243,7 @@ def test_compile_tools_all_false_creates_empty_allowlist() -> None:
     permission = world.get_component(primary_entity_id, PermissionComponent)
     assert permission is not None
     assert permission.allowed_tools == []
-    assert permission.denied_tools == []
+    assert permission.denied_tools == ["bash", "read_file"]
 
 
 def test_compile_no_tools_no_permission_component() -> None:
@@ -264,7 +264,7 @@ def test_compile_no_tools_no_permission_component() -> None:
     assert permission is None
 
 
-def test_compile_empty_tools_dict_no_permission_component() -> None:
+def test_compile_empty_tools_dict_denies_all() -> None:
     from ecs_agent.dsl.compiler import compile_agent_specs
 
     specs = {
@@ -280,7 +280,8 @@ def test_compile_empty_tools_dict_no_permission_component() -> None:
     primary_entity_id, world = compile_agent_specs(specs, _ProviderFactorySpy())
 
     permission = world.get_component(primary_entity_id, PermissionComponent)
-    assert permission is None
+    assert permission is not None
+    assert permission.allowed_tools == []
 
 
 def test_compiler_primary_entity_has_expected_components_after_compile() -> None:

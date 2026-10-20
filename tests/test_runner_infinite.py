@@ -107,18 +107,17 @@ class TestRunnerInfiniteLoop:
     async def test_run_explicit_max_ticks_still_works(
         self, world: World, runner: Runner
     ) -> None:
-        """Explicit max_ticks=5 still adds TerminalComponent(reason='max_ticks')."""
+        """Explicit max_ticks=5 ends only this invocation."""
         counter = CounterSystem()
         world.register_system(counter, priority=0)
         world.create_entity()
 
-        await runner.run(world, max_ticks=5)
+        result = await runner.run(world, max_ticks=5)
 
         assert counter.run_count == 5
         terminals = list(world.query(TerminalComponent))
-        assert len(terminals) == 1
-        _, (comp,) = terminals[0]
-        assert comp.reason == "max_ticks"
+        assert not terminals
+        assert result.reason == "max_ticks"
 
     @pytest.mark.asyncio
     async def test_run_max_ticks_none_updates_runner_state(

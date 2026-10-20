@@ -51,7 +51,7 @@ class PlanningSystem:
             self._registry = None
 
     async def process(self, world: World) -> None:
-        for entity_id, components in world.query(
+        for entity_id, components in world.query_active(
             PlanComponent, LLMComponent, ConversationComponent
         ):
             plan, llm_component, conversation = components

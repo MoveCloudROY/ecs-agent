@@ -12,7 +12,7 @@ from ecs_agent.tools.builtins.file_snapshot import (
     compute_content_digest,
     current_file_snapshot_state,
 )
-from ecs_agent.tools.discovery import tool
+from ecs_agent.tools.discovery import get_tool_definition, tool
 
 logger = get_logger(__name__)
 
@@ -105,7 +105,7 @@ async def read_file(
 # Capability metadata survives the built-in workspace wrapper. Installers verify
 # this before registering query tools and never replace an application's reader.
 setattr(read_file, "supports_session_resources", True)
-setattr(getattr(read_file, "_tool_handler"), "supports_session_resources", True)
+setattr(get_tool_definition(read_file).handler, "supports_session_resources", True)
 
 
 def _parse_non_negative_numeric_input(

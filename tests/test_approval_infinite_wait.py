@@ -84,9 +84,12 @@ async def test_approval_timeout_none_deny_works() -> None:
 
     pending = world.get_component(entity_id, PendingToolCallsComponent)
     approval = world.get_component(entity_id, ToolApprovalComponent)
-    assert pending is None  # Removed because denied
+    assert pending is not None  # Preflight preserves calls for ordered execution results
     assert approval is not None
-    assert approval.denied_calls == ["call-1"]
+    assert approval.denied_calls == []  # Recorded when execution lands the denial
+    from ecs_agent.tools.authorization import authorize_tool_call
+    decision = await authorize_tool_call(world, entity_id, pending, pending.tool_calls[0])
+    assert decision.reason == "Denied by approval handler"
 
 
 @pytest.mark.asyncio

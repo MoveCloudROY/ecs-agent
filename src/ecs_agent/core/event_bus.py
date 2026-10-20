@@ -44,7 +44,8 @@ class EventBus:
         if not handlers:
             del self._handlers[event_type]
 
-    async def publish(self, event: T) -> None:
+    async def publish(self, event: T, *, raise_subscriber_errors: bool = False) -> None:
+        """Publish an event, optionally propagating subscriber failures to its owner."""
         handlers = list(self._handlers.get(type(event), []))
         if not handlers:
             return
@@ -84,7 +85,7 @@ class EventBus:
             *(handler(event) for handler in handlers), return_exceptions=True
         )
         for idx, result in enumerate(results):
-            if not isinstance(result, Exception):
+            if not isinstance(result, BaseException):
                 continue
             subscriber_id = getattr(handlers[idx], "__name__", f"handler_{idx}")
             logger.error(
@@ -93,6 +94,10 @@ class EventBus:
                 subscriber_id=subscriber_id,
                 exception=str(result),
             )
+        if raise_subscriber_errors:
+            failures = [result for result in results if isinstance(result, BaseException)]
+            if failures:
+                raise RuntimeError(f"Subscriber failed for {topic}") from failures[0]
 
     def has_subscribers(self, event_type: type) -> bool:
         """Return True when at least one handler is subscribed to ``event_type``.

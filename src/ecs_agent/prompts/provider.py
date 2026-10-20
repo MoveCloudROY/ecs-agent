@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import html
-import importlib
+import sys
 from typing import Protocol, cast, runtime_checkable
 
 from ecs_agent.components import (
@@ -19,9 +19,10 @@ from ecs_agent.types import EntityId
 
 
 def _load_mcp_client_component() -> type[object] | None:
-    try:
-        module = importlib.import_module("ecs_agent.mcp.components")
-    except ImportError:
+    # Inspect an explicitly enabled integration, without importing its optional
+    # SDK merely to render a normal agent's inventory.
+    module = sys.modules.get("ecs_agent.mcp.components")
+    if module is None:
         return None
 
     component = getattr(module, "MCPClientComponent", None)
@@ -30,7 +31,7 @@ def _load_mcp_client_component() -> type[object] | None:
     return cast(type[object], component)
 
 
-_MCP_CLIENT_COMPONENT_CLASS = _load_mcp_client_component()
+_MCP_CLIENT_COMPONENT_CLASS: type[object] | None = None
 
 
 @runtime_checkable
@@ -127,10 +128,11 @@ class InventoryPlaceholderProvider:
 
     @staticmethod
     def _mcp_tool_entries(world: World, entity_id: EntityId) -> list[tuple[str, str]]:
-        if _MCP_CLIENT_COMPONENT_CLASS is None:
+        component_type = _MCP_CLIENT_COMPONENT_CLASS or _load_mcp_client_component()
+        if component_type is None:
             return []
 
-        mcp_component = world.get_component(entity_id, _MCP_CLIENT_COMPONENT_CLASS)
+        mcp_component = world.get_component(entity_id, component_type)
         if mcp_component is None:
             return []
 

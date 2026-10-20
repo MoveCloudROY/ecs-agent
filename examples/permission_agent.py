@@ -73,8 +73,8 @@ async def main() -> None:
 ))
     world.add_component(agent, ConversationComponent(messages=[]))
 
-    # 3. Register PermissionSystem (priority -10) and ToolExecutionSystem (priority 5)
-    world.register_system(PermissionSystem(priority=-10), priority=-10)
+    # 3. Register PermissionSystem (priority 1) and ToolExecutionSystem (priority 5)
+    world.register_system(PermissionSystem(priority=1), priority=1)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
 
     # 4. Attempt to call both tools

@@ -159,6 +159,9 @@ async def test_reasoning_after_revert_uses_reverted_branch_context() -> None:
 
     # Revert to child1 (drops child2 from active branch)
     revert_to_message(tree, child1.id)
+    from ecs_agent.components import TerminalComponent
+
+    world.remove_component(entity_id, TerminalComponent)
 
     # Second reasoning call (should use only 2 messages: root, child1)
     await ReasoningSystem().process(world)

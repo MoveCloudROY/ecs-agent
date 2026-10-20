@@ -13,6 +13,8 @@ from ecs_agent.components.definitions import (
 )
 from ecs_agent.core.world import World
 from ecs_agent.tools.bwrap_sandbox import wrap_sandbox_handler
+from ecs_agent.tools.definitions import ToolDefinition
+from ecs_agent.tools.registry import register_framework_tools, register_tools
 from ecs_agent.types import (
     EntityId,
     SkillInstalledEvent,
@@ -114,7 +116,7 @@ class SkillManager:
             agent=getattr(materialized_skill, "agent", None),
             model=getattr(materialized_skill, "model", None),
             hooks=getattr(materialized_skill, "hooks", {}),
-            skill_dir_path=getattr(materialized_skill, "skill_dir_path", None),
+            skill_dir_path=str(path) if (path := getattr(materialized_skill, "skill_dir_path", None)) is not None else None,
             slash_command=getattr(
                 materialized_skill,
                 "slash_command",
@@ -176,12 +178,15 @@ class SkillManager:
 
         sandbox_config = world.get_component(entity_id, SandboxConfigComponent)
 
+        definitions: list[ToolDefinition] = []
         for tool_name, tool_data in skill_tools.items():
             schema, handler = tool_data
+            if schema.name != tool_name:
+                raise ValueError(f"Skill '{skill_name}': tool key '{tool_name}' disagrees with schema name '{schema.name}'")
             if sandbox_config is not None:
                 handler = wrap_sandbox_handler(handler, schema, sandbox_config)
-            registry.tools[tool_name] = schema
-            registry.handlers[tool_name] = handler
+            definitions.append(ToolDefinition(schema, handler))
+        register_tools(world, entity_id, definitions)
 
         prompt = skill.system_prompt()
 
@@ -360,10 +365,13 @@ class SkillManager:
         )
 
     def _ensure_skill_details_tool(
-        self, world: World, entity_id: EntityId, registry: ToolRegistryComponent
+        self, world: World, entity_id: EntityId, registry: ToolRegistryComponent, *, rebind: bool = False,
     ) -> None:
         if self._DETAILS_TOOL_NAME in registry.tools:
-            return
+            if getattr(registry.handlers.get(self._DETAILS_TOOL_NAME), "_ecs_framework_owner", None) == ("skill_details", world, entity_id):
+                return
+            if not rebind:
+                raise ValueError(f"Framework tool name collision: {self._DETAILS_TOOL_NAME}")
 
         async def load_skill_details(skill_name: str) -> str:
             details = self.format_skill_details(world, entity_id, skill_name)
@@ -390,7 +398,7 @@ class SkillManager:
                 )
             return details
 
-        registry.tools[self._DETAILS_TOOL_NAME] = ToolSchema(
+        schema = ToolSchema(
             name=self._DETAILS_TOOL_NAME,
             description=(
                 "Load the full instructions and tool schemas for an installed skill.\n"
@@ -416,7 +424,38 @@ class SkillManager:
                 "required": ["skill_name"],
             },
         )
-        registry.handlers[self._DETAILS_TOOL_NAME] = load_skill_details
+        register_framework_tools(world, entity_id, [ToolDefinition(schema, load_skill_details)], owner=("skill_details", world, entity_id), rebind=rebind)
+
+    def rebind(self, world: World, entity_id: EntityId, skill: ScriptSkill) -> None:
+        """Restore skill tool bindings without rerunning its state initialization hook.
+
+        The host supplies any custom skill's already-bound runtime adapter.
+        File skills can be materialized from their saved source directories.
+        Saved schemas must match; restore is not a tool upgrade operation.
+        """
+        registry = world.get_component(entity_id, ToolRegistryComponent)
+        metadata = self.get_skill_metadata(world, entity_id, skill.name)
+        if registry is None or metadata is None:
+            raise ValueError(f"Cannot rebind undeclared skill '{skill.name}'")
+        materialized = world.skill_runtime.materialize_skill_for_entity(world, entity_id, skill)
+        if not metadata.activated:
+            world.skill_runtime.set_installed_skill(entity_id, skill.name, materialized)
+            self._ensure_skill_details_tool(world, entity_id, registry, rebind=True)
+            return
+        tools = materialized.tools()
+        if set(tools) != set(metadata.tool_names):
+            raise ValueError(f"Skill '{skill.name}' tool names differ from checkpoint")
+        definitions = []
+        sandbox = world.get_component(entity_id, SandboxConfigComponent)
+        for name, (schema, handler) in tools.items():
+            if registry.tools.get(name) != schema:
+                raise ValueError(f"Skill '{skill.name}' schema for '{name}' differs from checkpoint")
+            if sandbox is not None:
+                handler = wrap_sandbox_handler(handler, schema, sandbox)
+            definitions.append(ToolDefinition(schema, handler))
+        register_framework_tools(world, entity_id, definitions, owner=("skill_runtime", world, entity_id, skill.name), rebind=True)
+        world.skill_runtime.set_installed_skill(entity_id, skill.name, materialized)
+        self._ensure_skill_details_tool(world, entity_id, registry, rebind=True)
 
     def _cleanup_skill_details_tool(self, world: World, entity_id: EntityId) -> None:
         skill_component = world.get_component(entity_id, SkillComponent)

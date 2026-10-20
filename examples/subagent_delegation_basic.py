@@ -20,16 +20,9 @@ Dual-mode operation:
 import asyncio
 import os
 
-from ecs_agent.components import (
-    ConversationComponent,
-    LLMComponent,
-    OwnerComponent,
-    SubagentRegistryComponent,
-    SubagentSessionTableComponent,
-    ToolRegistryComponent,
-    UserPromptConfigComponent,
-)
-from ecs_agent.core import Runner, World
+from ecs_agent.components import ConversationComponent, OwnerComponent
+from ecs_agent.core import World
+from ecs_agent import AgentDefinition, build_agent
 from ecs_agent.prompts.contracts import (
     PlaceholderSpec,
     PromptTemplateSource,
@@ -38,20 +31,10 @@ from ecs_agent.prompts.contracts import (
 from ecs_agent.providers import FakeModel, Model
 from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.protocol import LLMModel
-from ecs_agent.systems.error_handling import ErrorHandlingSystem
-from ecs_agent.systems.reasoning import ReasoningSystem
-from ecs_agent.systems.subagent import SubagentSystem
-from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
-from ecs_agent.systems.tool_execution import ToolExecutionSystem
-from ecs_agent.systems.user_prompt_normalization_system import (
-    UserPromptNormalizationSystem,
-)
 from ecs_agent.types import (
     CompletionResult,
     EntityId,
-    InheritancePolicy,
     Message,
-    SubagentConfig,
     ToolCall,
 )
 
@@ -69,7 +52,6 @@ async def main() -> None:
       5. Result is delivered back to the manager conversation.
       6. Manager synthesises a final summary.
     """
-    world = World()
 
     # ── LLM Provider Configuration ──────────────────────────────────
     DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -157,104 +139,33 @@ async def main() -> None:
         )
 
     # ── Manager Entity Setup ────────────────────────────────────────
-    manager_id = world.create_entity()
-
-    # LLMComponent — system_prompt left empty; rendered by SystemPromptRenderSystem
-    world.add_component(
-        manager_id,
-        LLMComponent(
-            model=manager_provider,
-            
+    agent = build_agent(AgentDefinition(
+        model=manager_provider,
+        prompt=SystemPromptConfigSpec(
+            template_source=PromptTemplateSource(inline=(
+                "You are a manager agent. Delegate research to a subagent and summarize its result.\n"
+                "Available tools:\n${_installed_tools}\n"
+                "Available subagents:\n${_installed_subagents}\n"
+                "Session: ${session_label}"
+            )),
+            placeholders=[PlaceholderSpec("session_label", "subagent-delegation-basic")],
         ),
-    )
-
-    # SystemPromptConfigSpec — uses ${_installed_subagents} builtin placeholder
-    world.add_component(
-        manager_id,
-        SystemPromptConfigSpec(
-            template_source=PromptTemplateSource(
-                inline=(
-                    "You are a manager agent. When given a complex question, "
-                    "use the 'subagent' tool to delegate work to a sub-agent. "
-                    "After receiving the result, synthesize it into a concise summary.\n\n"
-                    "Available tools:\n${_installed_tools}\n\n"
-                    "Available subagents:\n${_installed_subagents}\n\n"
-                    "Session: ${session_label}"
-                )
-            ),
-            placeholders=[
-                PlaceholderSpec(
-                    name="session_label", value="subagent-delegation-basic"
-                ),
-            ],
-        ),
-    )
-
-    world.add_component(
-        manager_id,
-        ConversationComponent(
-            messages=[
-                Message(
-                    role="user",
-                    content=(
-                        "What are the most promising near-term applications "
-                        "of quantum computing?"
-                    ),
-                )
-            ]
-        ),
-    )
-
-    # UserPromptConfigComponent — opts the manager into user-prompt normalisation
-    world.add_component(manager_id, UserPromptConfigComponent())
-
-    # Sub-agent registry: one named sub-agent "researcher"
-    world.add_component(
-        manager_id,
-        SubagentRegistryComponent(
-            subagents={
-                "researcher": SubagentConfig(
-                    name="researcher",
-                    model=subagent_provider,
-                    
-                    description="Research and gather information on any topic",
-                    system_prompt=(
-                        "You are a research sub-agent. Investigate the given topic "
-                        "thoroughly and report your findings back to the manager."
-                    ),
-                    max_ticks=10,
-                    inheritance_policy=InheritancePolicy(
-                        inherit_system_prompt=True,
-                        inherit_tools=[],
-                    ),
-                )
-            }
-        ),
-    )
-
-    # Required for subagent tools
-    world.add_component(manager_id, ToolRegistryComponent(tools={}, handlers={}))
-    world.add_component(manager_id, SubagentSessionTableComponent(sessions={}))
-
-    # ── Systems Registration ────────────────────────────────────────
-    # Prompt rendering systems run first (negative priority)
-    world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
-    world.register_system(UserPromptNormalizationSystem(priority=-10), priority=-10)
-
-    subagent_system = SubagentSystem(priority=-1)
-    world.register_system(subagent_system, priority=-1)
-
-    # Install the 'subagent' tool (sync + async/background delegation)
-    subagent_system.install_subagent_tool(world, manager_id, tool_name="subagent")
-    subagent_system.install_subagent_control_tools(world, manager_id)
-
-    world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(ToolExecutionSystem(priority=5), priority=5)
-    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
-
-    # ── Run Agent ───────────────────────────────────────────────────
-    runner = Runner()
-    await runner.run(world, max_ticks=10)
+        subagents={"researcher": AgentDefinition(
+            model=subagent_provider, description="Research and gather information on any topic",
+            prompt="Investigate the delegated topic and report your findings back to the manager.",
+            max_ticks=10,
+        )},
+    ))
+    world, manager_id = agent.world, agent.entity
+    try:
+        result = await agent.run_turn("What are the most promising near-term applications of quantum computing?", max_steps=10)
+        print(f"status: {result.status.value}")
+        if not result.success:
+            raise RuntimeError(f"Delegation did not complete: {result.reason}")
+    finally:
+        for provider in (manager_provider, subagent_provider):
+            if api_key:
+                await provider.aclose()
 
     # ── Print Results ───────────────────────────────────────────────
     print("=" * 60)

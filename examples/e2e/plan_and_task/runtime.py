@@ -6,6 +6,7 @@ import asyncio
 import re
 import re as _re
 import unicodedata
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from ecs_agent.components import UserInputComponent
@@ -154,7 +155,23 @@ async def setup_interactive_input(
     world: World,
     agent_id: EntityId,
 ) -> None:
-    """Wire interactive stdin into the ECS world for the plan-and-task example."""
+    """Retain the legacy component-driven input adapter for existing hosts."""
+    await _setup_input(world, agent_id, managed=False)
+
+
+async def setup_turn_input(
+    world: World, agent_id: EntityId,
+) -> Callable[[], Awaitable[str | None]]:
+    """Return an input reader for AgentHandle without lifecycle re-arming."""
+    reader = await _setup_input(world, agent_id, managed=True)
+    assert reader is not None
+    return reader
+
+
+async def _setup_input(
+    world: World, agent_id: EntityId, *, managed: bool,
+) -> Callable[[], Awaitable[str | None]] | None:
+    """Share CLI input and question presentation between runtime adapters."""
     last_printed_index: list[int] = [0]
 
     async def provide_input(event: UserInputRequestedEvent) -> None:
@@ -281,6 +298,23 @@ async def setup_interactive_input(
     world.event_bus.subscribe(
         UserQuestionRequestedEvent, provide_question_answers
     )
+    if managed:
+        async def read_turn_input() -> str | None:
+            future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+            try:
+                await world.event_bus.publish(UserInputRequestedEvent(
+                    entity_id=agent_id, prompt="You> ", input_future=future,
+                ), raise_subscriber_errors=True)
+                text = await future
+                terminal = world.get_component(agent_id, TerminalComponent)
+                if terminal is not None and terminal.reason in {"user_exit_command", "stdin_eof"}:
+                    return None
+                return text
+            finally:
+                if not future.done():
+                    future.cancel()
+        return read_turn_input
+
     world.event_bus.subscribe(ReasoningCompleteEvent, on_reasoning_complete)
     world.event_bus.subscribe(ErrorOccurredEvent, on_error)
     world.register_system(
@@ -293,3 +327,4 @@ async def setup_interactive_input(
 
     if world.get_component(agent_id, UserInputComponent) is None:
         world.add_component(agent_id, UserInputComponent(prompt="You> "))
+    return None

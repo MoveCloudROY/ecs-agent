@@ -841,7 +841,14 @@ async def test_tool_permission_denied_records_error_observation() -> None:
         ),
     )
     world.add_component(entity_id, PermissionComponent(denied_tools=["bash"]))
+    async def forbidden_handler(**kwargs):
+        raise AssertionError("A denied tool must not execute")
+    world.add_component(entity_id, ToolRegistryComponent(
+        tools={"bash": ToolSchema(name="bash", description="shell", parameters={"type": "object"})},
+        handlers={"bash": forbidden_handler},
+    ))
     world.register_system(PermissionSystem(), priority=0)
+    world.register_system(ToolExecutionSystem(), priority=5)
 
     await Runner().run(world, max_ticks=1)
 
@@ -877,9 +884,11 @@ async def test_tool_permission_denied_nests_under_calling_generation() -> None:
     )
     entity_id = world.create_entity()
     world.add_component(entity_id, LLMComponent(model=model))
+    async def forbidden_handler(**kwargs):
+        raise AssertionError("A denied tool must not execute")
     world.add_component(entity_id, ToolRegistryComponent(
         tools={"bash": ToolSchema(name="bash", description="shell", parameters={"type": "object"})},
-        handlers={},
+        handlers={"bash": forbidden_handler},
     ))
     world.add_component(
         entity_id,
@@ -887,7 +896,8 @@ async def test_tool_permission_denied_nests_under_calling_generation() -> None:
     )
     world.add_component(entity_id, PermissionComponent(denied_tools=["bash"]))
     world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(PermissionSystem(priority=5), priority=5)
+    world.register_system(PermissionSystem(priority=1), priority=1)
+    world.register_system(ToolExecutionSystem(), priority=5)
 
     await Runner().run(world, max_ticks=2)
 

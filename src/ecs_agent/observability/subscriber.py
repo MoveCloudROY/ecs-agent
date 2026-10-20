@@ -249,6 +249,7 @@ class ObservabilitySubscriber:
                 "max_ticks": event.max_ticks,
                 "start_tick": event.start_tick,
                 "active_entities_start": event.active_entities,
+                **({"turn_id": event.turn_id} if event.turn_id is not None else {}),
             },
         )
         self.trace_states[run_id] = TraceState(
@@ -264,6 +265,7 @@ class ObservabilitySubscriber:
                 "max_ticks": event.max_ticks,
                 "start_tick": event.start_tick,
                 "active_entities_start": event.active_entities,
+                **({"turn_id": event.turn_id} if event.turn_id is not None else {}),
             },
             emit_root_trace=event.emit_root_trace,
         )
@@ -285,7 +287,10 @@ class ObservabilitySubscriber:
                 kind="event",
                 entity_id=int(event.entity_id),
                 input={"text": event.text},
-                metadata={"prompt": event.prompt, "source": "user_input_system"},
+                metadata={
+                    "prompt": event.prompt, "source": event.source,
+                    **({"turn_id": event.turn_id} if event.turn_id is not None else {}),
+                },
             )
         )
 
@@ -308,7 +313,9 @@ class ObservabilitySubscriber:
 
         tool_call = state.active_tools.pop((int(event.entity_id), event.tool_call_id), None)
         tool_name = event.tool_name or (tool_call.name if tool_call is not None else "")
-        arguments = tool_call.arguments if tool_call is not None else {}
+        arguments = event.arguments if event.arguments is not None else (
+            tool_call.arguments if tool_call is not None else {}
+        )
         result = event.result
         await self.sink.emit(
             TelemetryRecord(
@@ -634,7 +641,7 @@ class ObservabilitySubscriber:
         trace_id = uuid.uuid4().hex
         metadata = {
             **state.metadata,
-            "source": "user_input_system",
+            "source": event.source,
             "prompt": event.prompt,
             "parent_run_trace_id": state.trace_id,
         }
@@ -1174,7 +1181,7 @@ class ObservabilitySubscriber:
 
     async def _emit_initial_user_messages(self, state: TraceState) -> None:
         """Emit user-input records for existing conversation user messages."""
-        if self.world is None:
+        if self.world is None or state.metadata.get("turn_id") is not None:
             return
 
         for entity_id, components in self.world.query(ConversationComponent):

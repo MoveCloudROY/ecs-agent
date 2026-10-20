@@ -1,8 +1,26 @@
 # Component Reference
 
-This page documents all 26 core component dataclasses used in the ECS agent architecture. All components use `@dataclass(slots=True)` for memory efficiency and can be imported from `ecs_agent.components`.
+This page documents component dataclasses used in the ECS agent architecture. All components use `@dataclass(slots=True)` for memory efficiency and can be imported from `ecs_agent.components`.
 
 ## Core Agent Components
+
+### AgentTurnComponent
+
+Persistent lifecycle for a user turn across one or more Runner invocations.
+AgentHandle creates and transitions it; checkpoint schemas 3 and newer preserve it.
+
+| Field | Meaning |
+| --- | --- |
+| `turn_id` | Stable identity shared by input, generated messages, and run results |
+| `status` | running, paused, completed, failed, blocked, legacy, or abandoned |
+| `reason` | Last transition or recovery-blocking reason |
+| `last_message` | Last assistant message produced by this turn, independent of working-context compaction |
+| `unconfirmed_tool_calls` | Started calls whose results have not been confirmed; automatic replay is blocked |
+| `input_normalization_state` | pending, running or completed; schema 4 retains it so continuation cannot replay input scripts |
+
+Driver tasks, locks, and reusable approvals remain runtime-only. Use the public
+turn operations instead of clearing component fields to force a retry. See
+[agent lifecycle](features/agent-lifecycle.md).
 
 ### LLMComponent
 Links an agent to an LLM model implementation for reasoning and planning.
@@ -76,7 +94,9 @@ New-style prompt spec using `${name}` placeholder templates. Processed by `Syste
 | Name | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `template_source` | `PromptTemplateSource` | required | Inline string or file path for the template |
-| `placeholder_specs` | `dict[str, PlaceholderSpec]` | `{}` | Per-placeholder resolver specs (static, callable, or file) |
+| `placeholders` | `list[PlaceholderSpec]` | `[]` | Named static strings or host-owned callable values |
+| `revision` | `int` | `0` | Configuration version advanced by controlled Prompt updates |
+| `source_path` | `str \| None` | `None` | Diagnostic origin of an accepted file/configuration snapshot |
 
 **Produces:** `RenderedSystemPromptComponent` (via `SystemPromptRenderSystem`)
 
@@ -94,7 +114,7 @@ world.add_component(entity, SystemPromptConfigSpec(
 ---
 
 ### RenderedSystemPromptComponent
-Rendered system prompt cache owned by `SystemPromptRenderSystem`; consumed by `ReasoningSystem`, `PlanningSystem`, `ReplanningSystem`. Reused while the cache-key fingerprint of its render inputs is unchanged; the render system re-renders on mismatch (e.g. after compaction writes a new summary). No other system may delete or mutate it.
+Rendered system prompt cache owned by `SystemPromptRenderSystem`; consumed by `ReasoningSystem`, `PlanningSystem`, `ReplanningSystem`. The key covers template, revision, user values and built-in dependencies. Controlled Prompt updates and checkpoint restoration can discard this derived component; it is not an author-written configuration source.
 
 | Name | Type | Description |
 | :--- | :--- | :--- |
@@ -106,7 +126,7 @@ Rendered system prompt cache owned by `SystemPromptRenderSystem`; consumed by `R
 ---
 
 ### RenderedUserPromptComponent
-Output component written by `UserPromptNormalizationSystem` containing the normalized user message for the current tick. Stored conversation history is never mutated.
+Output component written by `UserPromptNormalizationSystem` containing the normalized input. Original input and render records retain their association; when a later input supersedes a render, the consumed representation is frozen through the coordinated history replacement API. Managed turns normalize once and do not rerun scripts on continuation.
 
 | Name | Type | Description |
 | :--- | :--- | :--- |
@@ -393,7 +413,7 @@ Configures how tool calls are approved or denied before execution.
 | `approved_calls` | `list[str]` | `[]` | History of approved tool call IDs |
 | `denied_calls` | `list[str]` | `[]` | History of denied tool call IDs |
 ,
-**Used by:** `ToolApprovalSystem`
+**Used by:** `ToolExecutionSystem` and optional `ToolApprovalSystem`. Approval ID lists are audit history and do not authorize execution after checkpoint restore.
 
 **Usage:**
 ```python

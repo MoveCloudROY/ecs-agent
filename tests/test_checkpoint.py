@@ -191,7 +191,8 @@ async def test_undo_reinjects_provider_and_tool_handlers() -> None:
     assert restored_llm is not None
     assert restored_tools is not None
     assert restored_llm.model is model
-    assert restored_tools.handlers is handlers
+    assert restored_tools.handlers == handlers
+    assert restored_tools.handlers["ping"] is handlers["ping"]
 
 
 @pytest.mark.asyncio
@@ -271,8 +272,7 @@ async def test_save_checkpoint_preserves_terminal_component_in_world(
 ) -> None:
     """Saving a checkpoint must not mutate the live world.
 
-    TerminalComponent is excluded from the payload (resume-friendly) but the
-    in-memory world keeps it — save is a read-only operation.
+    Completed states survive saving and loading; save is a read-only operation.
     """
     import json as json_module
 
@@ -290,5 +290,6 @@ async def test_save_checkpoint_preserves_terminal_component_in_world(
     assert world.get_component(entity, TerminalComponent) is not None
 
     data = json_module.loads(checkpoint_path.read_text(encoding="utf-8"))
-    for components in data["entities"].values():
-        assert "TerminalComponent" not in components
+    assert data["entities"][str(entity)]["TerminalComponent"]["reason"] == "done"
+    restored, _ = Runner.load_checkpoint(checkpoint_path, {}, {})
+    assert restored.get_component(entity, TerminalComponent).reason == "done"

@@ -380,9 +380,9 @@ def _apply_phase_effects(
     permissions = world.get_component(entity_id, PermissionComponent)
     if spec.tools is None:
         # The graph owns allowed_tools: a phase with no declaration is
-        # unrestricted (empty allowlist == allow-all under PermissionSystem).
+        # unrestricted; an explicitly empty list instead denies every tool.
         if permissions is not None:
-            permissions.allowed_tools = []
+            permissions.allowed_tools = None
         return
     if permissions is None:
         permissions = PermissionComponent()

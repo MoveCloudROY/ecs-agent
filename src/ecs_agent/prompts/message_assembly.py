@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import uuid
+import hashlib
+from dataclasses import replace
 from collections.abc import Sequence
 from ecs_agent.token_counting import count_tokens
 from typing import TYPE_CHECKING, Protocol, TypeVar
@@ -492,10 +494,19 @@ def prepare_outbound_messages(
 
         messages_for_assembly = list(conversation_messages)
         if rendered_user_prompt is not None:
-            messages_for_assembly = _substitute_last_user_message(
-                messages_for_assembly,
-                rendered_user_prompt.text,
-            )
+            index = rendered_user_prompt.source_message_index
+            fingerprint = rendered_user_prompt.source_fingerprint
+            if index is None and fingerprint is None:
+                # Compatibility for explicitly supplied legacy rendered text.
+                messages_for_assembly = _substitute_last_user_message(
+                    messages_for_assembly, rendered_user_prompt.text,
+                )
+            elif index is not None and 0 <= index < len(messages_for_assembly):
+                source = messages_for_assembly[index]
+                if source.role == "user" and hashlib.sha256(source.content.encode("utf-8")).hexdigest() == fingerprint:
+                    # Background notifications and synthetic context may follow
+                    # the actual input. They must not inherit its rendered body.
+                    messages_for_assembly[index] = replace(source, content=rendered_user_prompt.text)
 
         # Inline fallback: if no pre-rendered prompt, apply triggers at call-time
         trigger_specs = None
@@ -661,13 +672,7 @@ def _substitute_last_user_message(
     for index in range(len(messages) - 1, -1, -1):
         message = messages[index]
         if message.role == "user":
-            messages[index] = Message(
-                role="user",
-                content=replacement_text,
-                parts=message.parts,
-                tool_calls=message.tool_calls,
-                tool_call_id=message.tool_call_id,
-            )
+            messages[index] = replace(message, content=replacement_text)
             break
     return messages
 
@@ -685,12 +690,7 @@ def _append_to_last_user_message(
         message = messages[index]
         if message.role != "user":
             continue
-        messages[index] = Message(
-            role="user",
-            content=f"{message.content}\n\n{suffix}",
-            tool_calls=message.tool_calls,
-            tool_call_id=message.tool_call_id,
-        )
+        messages[index] = replace(message, content=f"{message.content}\n\n{suffix}")
         break
     return messages
 

@@ -24,6 +24,8 @@ from ecs_agent.components import (
 from ecs_agent.components.definitions import SubagentSessionTableComponent
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
+from ecs_agent.tools.definitions import ToolDefinition
+from ecs_agent.tools.registry import register_framework_tools
 from ecs_agent.systems.subagent.tool_schemas import (
     build_cancel_schema,
     build_result_schema,
@@ -83,14 +85,10 @@ def install_subagent_tool(
         raise ValueError(f"Entity {entity_id} missing ToolRegistryComponent")
 
     free_mode_enabled = registry.free_subagent_config.enabled
-    tool_registry.tools[tool_name] = build_subagent_schema(
-        tool_name, free_mode_enabled=free_mode_enabled
-    )
-
-    if tool_name in tool_registry.handlers and not override:
-        return
-
-    tool_registry.handlers[tool_name] = system._make_subagent_handler(world, entity_id)
+    register_framework_tools(world, entity_id, [ToolDefinition(
+        build_subagent_schema(tool_name, free_mode_enabled=free_mode_enabled),
+        system._make_subagent_handler(world, entity_id),
+    )], owner=("subagent", system, world, entity_id), rebind=override)
 
     logger.info(
         "subagent_tool_installed",
@@ -104,6 +102,7 @@ def install_subagent_control_tools(
     system: SubagentSystem,
     world: World,
     entity_id: EntityId,
+    override: bool = False,
 ) -> None:
     table = world.get_component(entity_id, SubagentSessionTableComponent)
     if table is None:
@@ -113,32 +112,13 @@ def install_subagent_control_tools(
     if tool_registry is None:
         raise ValueError(f"Entity {entity_id} missing ToolRegistryComponent")
 
-    # Install subagent_status tool
-    tool_registry.tools["subagent_status"] = build_status_schema()
-    tool_registry.handlers["subagent_status"] = make_status_handler(
-        system, world, entity_id
-    )
-
-    tool_registry.tools["subagent_wait"] = build_wait_schema()
-    tool_registry.handlers["subagent_wait"] = make_wait_handler(system, world, entity_id)
-
-    # Install subagent_result tool
-    tool_registry.tools["subagent_result"] = build_result_schema()
-    tool_registry.handlers["subagent_result"] = make_result_handler(
-        system, world, entity_id
-    )
-
-    # Install subagent_cancel tool
-    tool_registry.tools["subagent_cancel"] = build_cancel_schema()
-    tool_registry.handlers["subagent_cancel"] = make_cancel_handler(
-        system, world, entity_id
-    )
-
-    # Install subagent_resume tool
-    tool_registry.tools["subagent_resume"] = build_resume_schema()
-    tool_registry.handlers["subagent_resume"] = make_resume_handler(
-        system, world, entity_id
-    )
+    register_framework_tools(world, entity_id, [
+        ToolDefinition(build_status_schema(), make_status_handler(system, world, entity_id)),
+        ToolDefinition(build_wait_schema(), make_wait_handler(system, world, entity_id)),
+        ToolDefinition(build_result_schema(), make_result_handler(system, world, entity_id)),
+        ToolDefinition(build_cancel_schema(), make_cancel_handler(system, world, entity_id)),
+        ToolDefinition(build_resume_schema(), make_resume_handler(system, world, entity_id)),
+    ], owner=("subagent", system, world, entity_id), rebind=override)
 
     logger.info("subagent_control_tools_installed", entity_id=entity_id)
 

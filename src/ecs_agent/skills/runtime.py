@@ -36,6 +36,10 @@ class SkillRuntime:
     ) -> ScriptSkill | None:
         return self._installed_skills.get((entity_id, skill_name))
 
+    def installed_skill_names(self, entity_id: EntityId) -> tuple[str, ...]:
+        """List owned runtime bindings, including tool bundles, for cleanup."""
+        return tuple(name for (owner, name) in self._installed_skills if owner == entity_id)
+
     def pop_installed_skill(
         self,
         entity_id: EntityId,

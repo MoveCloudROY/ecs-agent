@@ -20,15 +20,9 @@ from ecs_agent.skills.catalog import (
 from ecs_agent.skills.script_skill import ScriptSkill
 from ecs_agent.types import EntityId, SkillDiscoveryEvent
 
-try:
-    from ecs_agent.mcp.adapter import MCPSkillAdapter as _MCPSkillAdapter
-    from ecs_agent.mcp.client import MCPClient as _MCPClient
-
-    MCPSkillAdapter: Any = _MCPSkillAdapter
-    MCPClient: Any = _MCPClient
-except ImportError:
-    MCPClient = None
-    MCPSkillAdapter = None
+_MCP_NOT_LOADED = object()
+MCPSkillAdapter: Any = _MCP_NOT_LOADED
+MCPClient: Any = _MCP_NOT_LOADED
 
 if TYPE_CHECKING:
     from ecs_agent.skills.manager import SkillManager
@@ -254,12 +248,16 @@ class DiscoveryManager:
             server_name = self._server_name_from_config(mcp_config)
 
             try:
-                if MCPClient is None or MCPSkillAdapter is None:
+                client_class, adapter_class = MCPClient, MCPSkillAdapter
+                if client_class is _MCP_NOT_LOADED or adapter_class is _MCP_NOT_LOADED:
+                    from ecs_agent.mcp.adapter import MCPSkillAdapter as adapter_class
+                    from ecs_agent.mcp.client import MCPClient as client_class
+                if client_class is None or adapter_class is None:
                     raise RuntimeError("MCP dependencies are not available")
 
-                client = MCPClient(self._to_mcp_component(server_name, mcp_config))
+                client = client_class(self._to_mcp_component(server_name, mcp_config))
                 await client.connect()
-                skill = MCPSkillAdapter(client, server_name)
+                skill = adapter_class(client, server_name)
                 manager.install(world, entity_id, skill)
                 report.installed_skills.append(skill.name)
 

@@ -24,6 +24,10 @@ DEFAULT_EMBEDDING_DIMENSION = 1024
 class _OpenAIModelStub:
     model_id: str = "stub"
 
+    async def aclose(self) -> None:
+        """Match the provider resource lifecycle contract."""
+        return None
+
     def __init__(self, content: str = "stub response") -> None:
         self.complete: AsyncMock = AsyncMock(
             return_value=CompletionResult(

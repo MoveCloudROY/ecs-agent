@@ -8,7 +8,7 @@ from pathlib import Path
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.skills.script_skill import ScriptSkill
-from ecs_agent.tools.discovery import tool
+from ecs_agent.tools import get_tool_definition, tool
 from ecs_agent.types import EntityId, ToolSchema
 
 logger = get_logger(__name__)
@@ -72,18 +72,8 @@ class LsSkill(ScriptSkill):
 
     def tools(self) -> dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]]:
         """Return ls tool schema and handler."""
-        from ecs_agent.tools.discovery import (
-            _build_parameters_schema,
-            _create_async_handler,
-        )
-
-        schema = ToolSchema(
-            name="ls",
-            description="List directory contents.",
-            parameters=_build_parameters_schema(ls),
-        )
-        handler = _create_async_handler(ls)
-        return {"ls": (schema, handler)}
+        definition = get_tool_definition(ls)
+        return {definition.schema.name: (definition.schema, definition.handler)}
 
     def system_prompt(self) -> str:
         """Return usage guidance for the LLM."""

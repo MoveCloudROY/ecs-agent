@@ -76,6 +76,10 @@ def test_none_runtime_profile_resolves_to_default() -> None:
 
 
 def test_child_world_registers_default_profile_systems() -> None:
+    # Logging tests reload this module; validate the current implementation,
+    # rather than a class object captured during collection before that reload.
+    from ecs_agent.systems import tool_execution
+
     world, parent = _parent_world()
     config = SubagentConfig(name="child", model=FakeModel(responses=[]))
 
@@ -84,7 +88,7 @@ def test_child_world_registers_default_profile_systems() -> None:
 
     assert SystemPromptRenderSystem in types
     assert ReasoningSystem in types
-    assert ToolExecutionSystem in types
+    assert tool_execution.ToolExecutionSystem in types
     assert ErrorHandlingSystem in types
     assert CompactionSystem not in types
 

@@ -26,7 +26,7 @@ class TestAgentSpecValidation:
         assert spec.mode == "primary"
         assert spec.model == "gpt-4"
         assert spec.prompt == "You are a helpful assistant."
-        assert spec.tools == {}
+        assert spec.tools is None
         assert spec.metadata == {}
         assert spec.name == ""
 

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import asdict, fields
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from ecs_agent.components import (
+    AgentTurnComponent,
     CheckpointComponent,
     ChildStubComponent,
     CompactionConfigComponent,
@@ -103,7 +105,7 @@ LEGACY_COMPACTION_SUMMARY_PREFIX = "Previous conversation summary: "
 # Bumped whenever the checkpoint payload shape changes incompatibly.
 # Loading a payload with a NEWER version than this fails loudly instead of
 # silently dropping data it does not understand.
-CHECKPOINT_SCHEMA_VERSION = 1
+CHECKPOINT_SCHEMA_VERSION = 4
 
 # Runtime signals that are intentionally NOT serialized. Every component
 # dataclass must appear in exactly one of COMPONENT_REGISTRY,
@@ -128,6 +130,7 @@ NON_COMPONENT_VALUE_TYPES: tuple[type[Any], ...] = (
 )
 
 COMPONENT_REGISTRY: dict[str, type[Any]] = {
+    AgentTurnComponent.__name__: AgentTurnComponent,
     LLMComponent.__name__: LLMComponent,
     ConversationComponent.__name__: ConversationComponent,
     SessionRefComponent.__name__: SessionRefComponent,
@@ -303,12 +306,70 @@ class WorldSerializer:
                     providers,
                     tool_handlers,
                 )
+                if version < 2 and component_name == PermissionComponent.__name__:
+                    # Version 1 interpreted a missing/empty allowlist as unrestricted.
+                    if not normalized_data.get("allowed_tools"):
+                        normalized_data["allowed_tools"] = None
                 world.add_component(entity_id, component_type(**normalized_data))
                 if current_summary is not None:
                     world.add_component(
                         entity_id,
                         CurrentCompactionSummaryComponent(summary=current_summary),
                     )
+
+        # A canonical config can be rendered again against restored bindings.
+        # Never let a persisted derived body outrank its current inputs.
+        for entity, _ in world.query(SystemPromptConfigSpec):
+            world.remove_component(entity, RenderedSystemPromptComponent)
+
+        for entity, _ in world.query(LLMComponent):
+            turn = world.get_component(entity, AgentTurnComponent)
+            if version < 3 and turn is None and not world.has_component(entity, ChildStubComponent):
+                world.add_component(entity, AgentTurnComponent(
+                    turn_id="", status="legacy",
+                    reason="Legacy checkpoint has no turn boundary; explicitly adopt context before managed continuation",
+                ))
+            elif turn is not None:
+                if version < 4:
+                    # Older managed checkpoints had no script execution state.
+                    # A matching accepted render proves completion; otherwise a
+                    # script may already have changed external state and must
+                    # not be inferred safe to replay from a paused turn alone.
+                    config = world.get_component(entity, UserPromptConfigComponent)
+                    rendered = world.get_component(entity, RenderedUserPromptComponent)
+                    conversation = world.get_component(entity, ConversationComponent)
+                    accepted_render = False
+                    if rendered is not None and conversation is not None:
+                        index = rendered.source_message_index
+                        if index is not None and 0 <= index < len(conversation.messages):
+                            source = conversation.messages[index]
+                            accepted_render = (
+                                source.role == "user"
+                                and source.turn_id == turn.turn_id
+                                and hashlib.sha256(source.content.encode("utf-8")).hexdigest() == rendered.source_fingerprint
+                            )
+                    if accepted_render or turn.status in {"completed", "abandoned"}:
+                        turn.input_normalization_state = "completed"
+                    elif config is not None and any(spec.action == "script" for spec in config.triggers):
+                        turn.input_normalization_state = "running"
+                if turn.input_normalization_state == "running":
+                    turn.status = "blocked"
+                    turn.reason = "Input normalization completion is unconfirmed"
+                elif turn.unconfirmed_tool_calls:
+                    turn.status = "blocked"
+                    turn.reason = "Tool completion is unconfirmed: " + ", ".join(turn.unconfirmed_tool_calls)
+                elif turn.status == "running":
+                    terminal = world.get_component(entity, TerminalComponent)
+                    if terminal is not None:
+                        from ecs_agent.core.lifecycle import finish_turn
+                        from ecs_agent.core.run_result import snapshot_run_result
+
+                        finish_turn(world, snapshot_run_result(
+                            world, run_id=None, reason="terminal_component", ticks=0, target_entity=entity,
+                        ))
+                    else:
+                        turn.status = "paused"
+                        turn.reason = "checkpoint_restore"
 
         next_entity_id = int(data.get("next_entity_id", 1))
         world._entity_gen._counter = max(0, next_entity_id - 1)
@@ -363,6 +424,10 @@ class WorldSerializer:
         - SERIALIZED: Config (timeouts, buffer sizes), subscriptions, conversation history
         - NOT SERIALIZED: Runtime queues, pending futures, in-flight requests
         """
+        if isinstance(component, SystemPromptConfigSpec):
+            from ecs_agent.prompts.bindings import prompt_config_to_dict
+            return prompt_config_to_dict(component)
+
         if isinstance(component, SubagentWaitComponent):
             return {
                 "session_ids": component.session_ids,
@@ -416,6 +481,19 @@ class WorldSerializer:
                 },
             }
 
+        if isinstance(component, AgentTurnComponent):
+            return {
+                "turn_id": component.turn_id,
+                "status": component.status,
+                "reason": component.reason,
+                "last_message": (
+                    WorldSerializer._message_to_dict(component.last_message)
+                    if component.last_message is not None else None
+                ),
+                "unconfirmed_tool_calls": list(component.unconfirmed_tool_calls),
+                "input_normalization_state": component.input_normalization_state,
+            }
+
         if isinstance(component, ConversationComponent):
             # Built by hand: asdict() would deep-copy the entire message
             # history only for _message_to_dict to convert it all over again
@@ -455,6 +533,11 @@ class WorldSerializer:
                 "tools": {name: asdict(schema) for name, schema in component.tools.items()},
                 "handlers": NON_SERIALIZABLE_PLACEHOLDER,
             }
+        if isinstance(component, SkillComponent):
+            return {"skills": {
+                name: {**asdict(metadata), "skill_dir_path": str(metadata.skill_dir_path) if metadata.skill_dir_path is not None else None}
+                for name, metadata in component.skills.items()
+            }}
         if isinstance(component, UserPromptConfigComponent):
             return {
                 "triggers": [asdict(trigger) for trigger in component.triggers],
@@ -468,6 +551,9 @@ class WorldSerializer:
             return {"store": NON_SERIALIZABLE_PLACEHOLDER}
 
         serialized = {} if isinstance(component, SubagentRegistryComponent) else asdict(component)
+
+        if isinstance(component, ToolApprovalComponent):
+            serialized["policy"] = component.policy.value
 
         if isinstance(component, WorkspaceBindingComponent):
             serialized["workspace_root"] = str(component.workspace_root)
@@ -483,10 +569,18 @@ class WorldSerializer:
                     "skills": list(cfg.skills),
                     "max_ticks": cfg.max_ticks,
                     "runtime_profile": cfg.runtime_profile,
-                    "inheritance_policy": {
-                        "inherit_tools": cfg.inheritance_policy.inherit_tools,
-                        "inherit_system_prompt": cfg.inheritance_policy.inherit_system_prompt,
-                    },
+                    "tools": cfg.tools,
+                    "prompt_config": WorldSerializer._serialize_component(cfg.prompt_config) if cfg.prompt_config is not None else None,
+                    "triggers": [asdict(trigger) for trigger in cfg.triggers],
+                    "local_skills": [
+                        {"name": skill.name, "path": str(path) if (path := getattr(skill, "skill_dir_path", None)) is not None else None}
+                        for skill in cfg.local_skills
+                    ],
+                    "tool_definitions": [asdict(definition.schema) for definition in cfg.tool_definitions],
+                    "subagents": WorldSerializer._serialize_component(SubagentRegistryComponent(subagents=cfg.subagents))["subagents"] if cfg.subagents else {},
+                    "metadata": cfg.metadata,
+                    "authoring": cfg.authoring,
+                    "inheritance_policy": asdict(cfg.inheritance_policy),
                     "provider": NON_SERIALIZABLE_PLACEHOLDER,
                 }
             serialized["subagents"] = subagents_serialized
@@ -557,6 +651,14 @@ class WorldSerializer:
     ) -> dict[str, Any]:
         normalized_data = dict(component_data)
 
+        if component_name == AgentTurnComponent.__name__:
+            if normalized_data.get("input_normalization_state", "pending") not in {"pending", "running", "completed"}:
+                raise ValueError("Invalid input normalization state in checkpoint")
+            if normalized_data.get("status", "paused") not in {"running", "paused", "completed", "failed", "blocked", "legacy", "abandoned"}:
+                raise ValueError("Invalid agent turn state in checkpoint")
+            if normalized_data.get("last_message") is not None:
+                normalized_data["last_message"] = WorldSerializer._message_from_dict(normalized_data["last_message"])
+
         if component_name == ConversationComponent.__name__:
             deserialized_messages = [
                 WorldSerializer._message_from_dict(msg)
@@ -585,7 +687,7 @@ class WorldSerializer:
             }
             handlers_value = normalized_data.get("handlers")
             if handlers_value == NON_SERIALIZABLE_PLACEHOLDER:
-                normalized_data["handlers"] = tool_handlers
+                normalized_data["handlers"] = {name: tool_handlers[name] for name in normalized_data["tools"] if name in tool_handlers}
 
         if component_name == OwnerComponent.__name__:
             normalized_data["owner_id"] = EntityId(int(normalized_data["owner_id"]))
@@ -621,20 +723,9 @@ class WorldSerializer:
                 normalized_data["script_handlers"] = {}
 
         if component_name == SystemPromptConfigSpec.__name__:
-            template_source_data = normalized_data.get("template_source")
-            if isinstance(template_source_data, dict):
-                normalized_data["template_source"] = PromptTemplateSource(
-                    **template_source_data
-                )
-
-            placeholders_data = normalized_data.get("placeholders", [])
-            normalized_placeholders: list[PlaceholderSpec] = []
-            for placeholder in placeholders_data:
-                if isinstance(placeholder, dict):
-                    normalized_placeholders.append(PlaceholderSpec(**placeholder))
-                else:
-                    normalized_placeholders.append(placeholder)
-            normalized_data["placeholders"] = normalized_placeholders
+            from ecs_agent.prompts.bindings import prompt_config_from_dict
+            config = prompt_config_from_dict(normalized_data)
+            return {"template_source": config.template_source, "placeholders": config.placeholders, "revision": config.revision, "source_path": config.source_path}
 
         if component_name == LLMComponent.__name__:
             model_str_or_obj = normalized_data.get("model")
@@ -700,7 +791,47 @@ class WorldSerializer:
                     max_ticks=config_data.get("max_ticks", 10),
                     inheritance_policy=inheritance_policy,
                     runtime_profile=config_data.get("runtime_profile"),
+                    tools=config_data.get("tools"),
                 )
+                prompt_data = config_data.get("prompt_config")
+                if prompt_data is not None:
+                    subagent_config.prompt_config = SystemPromptConfigSpec(**WorldSerializer._normalize_component_data(
+                        SystemPromptConfigSpec.__name__, prompt_data, providers, tool_handlers,
+                    ))
+                subagent_config.triggers = [TriggerSpec(**trigger) for trigger in config_data.get("triggers", [])]
+                subagent_config.metadata = dict(config_data.get("metadata", {}))
+                subagent_config.authoring = config_data.get("authoring", False)
+                if config_data.get("subagents"):
+                    subagent_config.subagents = WorldSerializer._normalize_component_data(
+                        SubagentRegistryComponent.__name__, {"subagents": config_data["subagents"]}, providers, tool_handlers,
+                    )["subagents"]
+                from ecs_agent.skills import catalog as skill_catalog
+                from ecs_agent.skills.skill import Skill
+                from ecs_agent.skills.script_skill import ScriptSkill
+                from ecs_agent.tools.definitions import ToolDefinition
+
+                for reference in config_data.get("local_skills", []):
+                    if reference.get("path") is not None:
+                        skill = Skill(skill_path=Path(reference["path"]) / "SKILL.md")
+                        if not skill.valid or skill.name != reference["name"]:
+                            raise ValueError(f"Local skill '{reference['name']}' no longer matches its checkpoint reference")
+                        # File skills expose readonly name/description; the
+                        # legacy protocol declares these attributes writable.
+                        subagent_config.local_skills.append(cast(ScriptSkill, skill))
+                    else:
+                        descriptor = skill_catalog.lookup(reference["name"])
+                        if descriptor is None:
+                            raise ValueError(f"Register a skill descriptor for '{reference['name']}' before restoring this child")
+                        bound_skill = descriptor.materialize()
+                        if not isinstance(bound_skill, ScriptSkill):
+                            raise ValueError(f"Invalid skill binding: {reference['name']}")
+                        subagent_config.local_skills.append(bound_skill)
+                for schema_data in config_data.get("tool_definitions", []):
+                    schema = ToolSchema(**schema_data)
+                    handler = tool_handlers.get(f"{name}:{schema.name}", tool_handlers.get(schema.name))
+                    if handler is None:
+                        raise ValueError(f"Missing tool handler for subagent '{name}': {schema.name}")
+                    subagent_config.tool_definitions.append(ToolDefinition(schema, handler))
                 subagents_dict[name] = subagent_config
             normalized_data["subagents"] = subagents_dict
             free_config_data = normalized_data.get("free_subagent_config", {})
@@ -878,6 +1009,7 @@ class WorldSerializer:
                 if data.get("provider_output") is not None else None
             ),
             cache_control=data.get("cache_control", False),
+            turn_id=data.get("turn_id"),
         )
 
     @staticmethod
@@ -921,6 +1053,8 @@ class WorldSerializer:
             serialized["provider_output"] = asdict(message.provider_output)
         if message.cache_control:
             serialized["cache_control"] = True
+        if message.turn_id is not None:
+            serialized["turn_id"] = message.turn_id
 
         return serialized
 

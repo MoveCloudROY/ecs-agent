@@ -43,7 +43,7 @@ class UserInputSystem:
 
     async def process(self, world: World) -> None:
         """Process all entities that are waiting for user input."""
-        for entity_id, components in world.query(UserInputComponent):
+        for entity_id, components in world.query_active(UserInputComponent):
             user_input = components[0]
             assert isinstance(user_input, UserInputComponent)
 

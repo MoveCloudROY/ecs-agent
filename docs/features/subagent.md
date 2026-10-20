@@ -2,6 +2,12 @@
 
 The `SubagentSystem` enables parent agents to spawn child agents for subtask execution via the `subagent` tool. The system supports synchronous and background execution modes, with isolated environments and policy-based capability inheritance.
 
+For standard setups, `build_agent(AgentDefinition(..., subagents={...}))` installs
+the registry, session table, delegation/control tools and wait support. Python
+and DSL children share the installation path, including local skills, Prompt
+placeholders and input triggers. Local skill references and inherited skill
+names remain separate. See [Agent authoring](agent-authoring.md).
+
 
 ## Overview
 
@@ -717,7 +723,8 @@ policy = InheritancePolicy(
 
 #### Permission Inheritance
 
-When `inherit_permissions=True`, the parent's `PermissionComponent` is copied to the child:
+When `inherit_permissions=True`, the child inherits the parent's PermissionComponent. None remains unrestricted and an empty allowlist remains deny-all. A child-local `SubagentConfig.tools` mapping is a closed allowlist (None adds no local restriction; {} denies all); it intersects with inherited restrictions. ToolExecutionSystem enforces the resulting policy even when the child profile omits PermissionSystem:
+
 
 ```python
 # Parent has PermissionComponent with whitelist=["search", "read"]

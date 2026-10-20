@@ -2,6 +2,11 @@
 
 Define AI agents declaratively using JSON or Markdown configuration files with deterministic loading and fail-fast validation.
 
+Use `build_agent_from_specs()` from `ecs_agent` for a complete runtime and an
+AgentHandle. Python and DSL definitions share the same installer. The older
+`compile_agent_specs()` remains a partial-assembly interface for callers that
+register their own runtime systems. See [Agent authoring](agent-authoring.md).
+
 ## Overview
 
 The Agent DSL (Domain-Specific Language) allows you to define agent configurations in JSON or Markdown files instead of programmatically creating entities and components. The DSL compiler transforms these configurations into ECS entities with properly attached components.
@@ -27,11 +32,11 @@ class AgentSpec:
     mode: Literal["primary", "subagent"]  # Required
     model: str                             # Required
     prompt: str                            # Required
-    tools: dict[str, bool] = {}            # Optional
+    tools: dict[str, bool] | None = None            # Optional
     metadata: dict[str, Any] = {}          # Optional
     name: str = ""                              # Optional
-    placeholders: list[dict[str, str]] = []    # Optional (primary only)
-    triggers: list[dict[str, str | int]] = []  # Optional (primary only)
+    placeholders: list[dict[str, str]] = []    # Optional (primary and subagent)
+    triggers: list[dict[str, str | int]] = []  # Optional (primary and subagent)
 ```
 
 **Required Fields:**
@@ -45,7 +50,7 @@ class AgentSpec:
 - `name`: Agent name (overridden by dict key in JSON)
 - `placeholders`: List of `{name, value}` dicts declaring `${name}` template variables in `prompt`
 - `triggers`: List of trigger dicts enabling `UserPromptNormalizationSystem` (see Triggers section)
-- `skills`: List of skill path dicts (`[{"path": "relative/dir"}]`); installs SKILL.md-based skills on compile (primary only)
+- `skills`: List of skill path dicts (`[{"path": "relative/dir"}]`); installs SKILL.md-based skills on the declared primary or child entity. Paths resolve against the declaring file. In-memory specs need an explicit source_dir for relative resources; missing resources are errors.
 
 ### JSON Example
 
@@ -197,8 +202,7 @@ primary_entity, world = compile_agent_specs(resolved, model_factory)
 - Raises `ValueError` for empty agent names
 
 **5. compile_agent_specs(specs: dict[str, AgentSpec], factory) → tuple[EntityId, World]**
-- Creates exactly ONE runnable primary entity
-- Creates exactly ONE runnable primary entity
+- Creates exactly one primary entity with partial runtime wiring; callers supply the reasoning/execution loop, or use `build_agent_from_specs` instead
 - Attaches `LLMComponent`, `SystemPromptConfigSpec`, `PermissionComponent` (when `tools` present), `SubagentRegistryComponent`, `UserPromptConfigComponent` (always), `ToolRegistryComponent` (always). When subagents are declared, also attaches `SubagentSessionTableComponent` and installs `SubagentSystem` with the `subagent` tool. Auto-registers `SystemPromptRenderSystem` (priority `-20`) and `UserPromptNormalizationSystem` (priority `-10`) unconditionally.
 - Subagents become `SubagentConfig` in registry
 - Raises `ValueError` if zero or multiple primaries
@@ -305,25 +309,26 @@ The `tools` field maps tool names to boolean enabled/disabled flags:
 
 ```python
 # Input: {"read_file": true, "write_file": true, "execute_bash": false}
-# Output: PermissionComponent(allowed_tools=["read_file", "write_file"])
+# Output: PermissionComponent(allowed_tools=["read_file", "write_file"],
+#                             denied_tools=["execute_bash"])
 ```
 
 **Rules:**
-- Only `true` values included in allowlist
+- `true` values enter the allowlist; `false` values enter the denylist
 - Order preserved from dict iteration
 - Empty allowlist (`[]`) means deny-all (no tools allowed)
-- Missing `tools` field → no `PermissionComponent` (default runtime behavior)
+- Missing `tools` field → no local permission restriction
+- Explicit `tools: {}` → deny all tools
+- A non-empty mapping is a closed allowlist; tools not enabled by it are denied
+- The same mapping is applied to subagents in their child World
+- Dynamically installed tools remain subject to the policy
 
-**Integration with PermissionSystem:**
+**Runtime enforcement:**
 
-```python
-# At runtime, PermissionSystem checks:
-if permission.allowed_tools:  # Non-empty list
-    if tool_name not in permission.allowed_tools:
-        raise PermissionError(f"Tool {tool_name} not in allowlist")
-else:  # Empty list
-    raise PermissionError("All tools denied (empty allowlist)")
-```
+ToolExecutionSystem uses the shared permission evaluator on each call, independent of optional PermissionSystem registration. Deny entries take precedence, None means unrestricted, and an empty allowlist denies all. Child-local restrictions intersect with inherited permissions.
+
+**Migration:** remove an explicit `tools: {}` from older DSL files if it was intended to mean unrestricted. Loaders preserve omission separately from an empty mapping. Old checkpoints preserve their original runtime behavior on migration; recompile the source DSL to recover explicit denials lost by the old compiler.
+
 ## Placeholders
 
 Declare `${name}` template variables in your `prompt` field and resolve them via `placeholders`:
@@ -449,7 +454,8 @@ Each `path` entry is a directory (relative to the DSL source file) that contains
 
 ### Compilation
 
-When `skills` are present, pass `source_dir` to `compile_agent_specs`:
+Loader-produced specs retain their declaring file's directory. For in-memory
+specs with relative resources, pass `source_dir` as the fallback:
 
 ```python
 from pathlib import Path
@@ -462,11 +468,16 @@ primary_entity, world = compile_agent_specs(
 ```
 
 For each skill entry, the compiler:
-1. Resolves `(source_dir / path / "SKILL.md").resolve()`
-2. Loads the skill with `Skill(skill_path=...)`
-3. Installs it via `SkillManager().install(world, primary_entity, skill)`
 
-If `source_dir` is `None` and skills are declared, a warning is logged and skills are skipped (no exception raised).
+1. Resolves `(declaring_directory / path / "SKILL.md").resolve()` and checks source containment
+2. Loads the skill with `Skill(skill_path=...)`
+3. Installs it on the declared primary entity or child World through SkillManager and the common tool registry
+
+If neither a loader origin nor a fallback source directory is available, relative
+resources raise an error before any model is created. Missing/invalid skills and
+source-path escapes also fail explicitly. Skill tools are merged with existing
+tools, never overwritten by an empty registry. The complete builder uses the
+same rules and supports placeholders and triggers on child declarations.
 
 ## Error Handling
 
@@ -690,7 +701,7 @@ class AgentSpec:
     mode: Literal["primary", "subagent"]
     model: str
     prompt: str
-    tools: dict[str, bool] = field(default_factory=dict)
+    tools: dict[str, bool] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     name: str = ""
     placeholders: list[dict[str, str]] = field(default_factory=list)
@@ -727,10 +738,10 @@ class AgentSpec:
 
 **compile_agent_specs(specs, model_factory, *, source_dir: Path | None = None) → tuple[EntityId, World]**
 - Compiles agent specs into ECS World with components
-- Creates exactly one runnable primary entity
+- Creates exactly one primary entity with partial runtime wiring
 - Subagents populate `SubagentRegistryComponent`
 - `model_factory: Callable[[str, str], LLMModel]` creates models
-- `source_dir`: Optional base directory for resolving skill paths; required when `skills` are declared
+- `source_dir`: Fallback base directory for in-memory relative resources; loader-provided origins take precedence
 - Raises `ValueError` if zero or multiple primaries
 
 ### ecs_agent.dsl.prompt_resolver

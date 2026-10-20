@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from ecs_agent.core.world import World
 from ecs_agent.logging import get_logger
 from ecs_agent.skills.script_skill import ScriptSkill
-from ecs_agent.tools.discovery import tool
+from ecs_agent.tools import get_tool_definition, tool
 from ecs_agent.types import EntityId, ToolSchema
 
 logger = get_logger(__name__)
@@ -63,18 +63,8 @@ class GrepSkill(ScriptSkill):
 
     def tools(self) -> dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]]:
         """Return grep tool schema and handler."""
-        from ecs_agent.tools.discovery import (
-            _build_parameters_schema,
-            _create_async_handler,
-        )
-
-        schema = ToolSchema(
-            name="grep",
-            description="Search file contents using pattern.",
-            parameters=_build_parameters_schema(grep),
-        )
-        handler = _create_async_handler(grep)
-        return {"grep": (schema, handler)}
+        definition = get_tool_definition(grep)
+        return {definition.schema.name: (definition.schema, definition.handler)}
 
     def system_prompt(self) -> str:
         """Return usage guidance for the LLM."""

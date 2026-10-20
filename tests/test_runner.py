@@ -345,10 +345,10 @@ class TestRunner:
         assert terminator.tick_count == 3
 
     @pytest.mark.asyncio
-    async def test_run_adds_terminal_on_max_ticks(
+    async def test_run_does_not_add_terminal_on_max_ticks(
         self, world: World, runner: Runner
     ) -> None:
-        """Test that run adds TerminalComponent when max_ticks is reached."""
+        """A Run's exhausted budget does not terminate the World."""
         counter = CounterSystem()
         world.register_system(counter, priority=0)
 
@@ -361,24 +361,23 @@ class TestRunner:
             world.has_component(eid, TerminalComponent)
             for eid, _ in world.query(TerminalComponent)
         )
-        assert has_terminal
+        assert not has_terminal
 
     @pytest.mark.asyncio
-    async def test_run_terminal_reason_max_ticks(
+    async def test_run_result_reason_max_ticks(
         self, world: World, runner: Runner
     ) -> None:
-        """Test that TerminalComponent reason is 'max_ticks' when limit reached."""
+        """The budget reason belongs to the returned snapshot."""
         counter = CounterSystem()
         world.register_system(counter, priority=0)
 
         world.create_entity()
 
-        await runner.run(world, max_ticks=5)
+        result = await runner.run(world, max_ticks=5)
 
-        terminal_components = list(world.query(TerminalComponent))
-        assert len(terminal_components) == 1
-        _, (terminal_comp,) = terminal_components[0]
-        assert terminal_comp.reason == "max_ticks"
+        assert result.reason == "max_ticks"
+        assert result.ticks == 5
+        assert not list(world.query(TerminalComponent))
 
     @pytest.mark.asyncio
     async def test_run_default_max_ticks(self, world: World, runner: Runner) -> None:

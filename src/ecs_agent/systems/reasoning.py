@@ -86,7 +86,7 @@ class ReasoningSystem:
         self.priority = priority
 
     async def process(self, world: World) -> None:
-        for entity_id, (llm_component,) in world.query(LLMComponent):
+        for entity_id, (llm_component,) in world.query_active(LLMComponent):
             if world.has_component(entity_id, InterruptionComponent):
                 continue
             if world.has_component(entity_id, PendingToolCallsComponent):
@@ -95,12 +95,10 @@ class ReasoningSystem:
             # not runnable agents. ReasoningSystem must not infer over them.
             if world.has_component(entity_id, ChildStubComponent):
                 continue
-            # Skip entities that have a persistent terminal condition set earlier
-            # in this tick (e.g. user typed "exit").  "reasoning_complete" is
-            # excluded because it is always transient and removed by
-            # TerminalCleanupSystem within the same tick.
+            # Starting a new managed turn explicitly transitions its terminal
+            # state. An old answer alone never authorizes another inference.
             _terminal = world.get_component(entity_id, TerminalComponent)
-            if _terminal is not None and _terminal.reason != "reasoning_complete":
+            if _terminal is not None:
                 continue
 
             start_time = time.time()

@@ -2,6 +2,12 @@
 
 __version__ = "0.1.0"
 
+from ecs_agent.core.agent import AgentHandle
+from ecs_agent.authoring import (
+    AgentDefinition, AssemblyReport, ModelRef, RuntimeConfig, SkillRef, SystemStep,
+    build_agent, build_agent_from_specs, inspect_runtime, restore_runtime,
+)
+
 from ecs_agent.types import (
     ApprovalPolicy,
     BranchCreatedEvent,
@@ -69,7 +75,10 @@ from ecs_agent.types import (
 from ecs_agent.providers.embedding_provider import OpenAIEmbeddingProvider
 from ecs_agent.providers.fake_embedding_provider import FakeEmbeddingProvider
 from ecs_agent.tools import (
+    ToolDefinition,
     bwrap_execute,
+    get_tool_definition,
+    register_tools,
     sandboxed_execute,
     scan_module,
     tool,
@@ -190,6 +199,9 @@ from ecs_agent.conversation_tree import (
 
 
 __all__ = [
+    "AgentDefinition", "AssemblyReport", "ModelRef", "RuntimeConfig", "SkillRef", "SystemStep",
+    "build_agent", "build_agent_from_specs", "inspect_runtime", "restore_runtime",
+    "AgentHandle",
     "SessionService",
     "SessionStore",
     "SQLiteSessionStore",
@@ -322,6 +334,9 @@ __all__ = [
     "ToolExecutionCompletedEvent",
     "ToolExecutionStartedEvent",
     "ToolSchema",
+    "ToolDefinition",
+    "get_tool_definition",
+    "register_tools",
     "ToolTimeoutError",
     "TreeSearchSystem",
     "UserInputComponent",
@@ -355,17 +370,25 @@ __all__ = [
     "wrap_sandbox_handler",
 ]
 
-# MCP (optional dependency)
-try:
-    from ecs_agent.mcp.client import MCPClient as MCPClient
-    from ecs_agent.mcp.adapter import MCPSkillAdapter as MCPSkillAdapter
-    from ecs_agent.mcp.components import (
-        MCPClientComponent as MCPClientComponent,
-        MCPConfigComponent as MCPConfigComponent,
-    )
+# Optional integrations load only when their exported symbol is requested.
+from importlib import import_module as _import_module
+from importlib.util import find_spec as _find_spec
+from typing import Any as _Any
 
-    __all__.extend(
-        ["MCPClient", "MCPSkillAdapter", "MCPConfigComponent", "MCPClientComponent"]
-    )
-except ImportError:
-    pass
+_MCP_EXPORTS = {
+    "MCPClient": "ecs_agent.mcp.client",
+    "MCPSkillAdapter": "ecs_agent.mcp.adapter",
+    "MCPClientComponent": "ecs_agent.mcp.components",
+    "MCPConfigComponent": "ecs_agent.mcp.components",
+}
+if _find_spec("mcp") is not None:
+    __all__.extend(_MCP_EXPORTS)
+
+
+def __getattr__(name: str) -> _Any:
+    """Resolve optional public MCP symbols without eager SDK imports."""
+    if name not in _MCP_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(_import_module(_MCP_EXPORTS[name]), name)
+    globals()[name] = value
+    return value

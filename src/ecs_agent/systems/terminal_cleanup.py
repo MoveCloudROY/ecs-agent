@@ -1,6 +1,6 @@
 """System for clearing selected terminal reasons after processing."""
 
-from ecs_agent.components import OwnerComponent, TerminalComponent
+from ecs_agent.components import AgentTurnComponent, OwnerComponent, TerminalComponent
 from ecs_agent.core.world import World
 
 
@@ -18,8 +18,10 @@ class TerminalCleanupSystem:
         self.include_owned_entities = include_owned_entities
 
     async def process(self, world: World) -> None:
-        for entity_id, (terminal,) in world.query(TerminalComponent):
+        for entity_id, (terminal,) in world.query_active(TerminalComponent):
             assert isinstance(terminal, TerminalComponent)
+            if world.has_component(entity_id, AgentTurnComponent):
+                continue
 
             if not self.include_owned_entities and world.has_component(
                 entity_id, OwnerComponent

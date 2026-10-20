@@ -186,13 +186,15 @@ async def test_render_system_renders_inline_template_and_bridges_to_llm() -> Non
     assert rendered is not None
     assert llm is not None
     assert rendered.text == "Hello roy\n- write_file"
-    assert rendered.placeholder_snapshot == {
+    assert rendered.placeholder_snapshot["_cache_key"].startswith(
+        "inventory:tools:write_file|skills:|subagents:|mcps:|values:"
+    )
+    assert {key: value for key, value in rendered.placeholder_snapshot.items() if key not in {"_cache_key", "_config_revision"}} == {
         "user_name": "roy",
         "_installed_tools": "- write_file",
         "_installed_skills": "- none",
         "_installed_mcps": "- none",
         "_installed_subagents": "- none",
-        "_cache_key": "inventory:tools:write_file|skills:|subagents:|mcps:",
     }
     assert llm.system_prompt == rendered.text
 

@@ -48,7 +48,7 @@ class PromptContextCollectorSystem:
     async def process(self, world: World) -> None:
         self._ensure_subscribed(world)
 
-        for entity_id, components in world.query(
+        for entity_id, components in world.query_active(
             UserPromptConfigComponent,
             PromptContextQueueComponent,
         ):

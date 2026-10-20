@@ -249,6 +249,8 @@ async def test_provider_exhaustion_adds_terminal_component_not_error() -> None:
 
     system = ReasoningSystem()
     await system.process(world)
+    # Explicitly request another legacy inference after the completed answer.
+    world.remove_component(entity_id, TerminalComponent)
     await system.process(world)
 
     terminal = world.get_component(entity_id, TerminalComponent)
@@ -885,6 +887,8 @@ async def test_reasoning_records_api_token_usage_on_entity() -> None:
     assert usage.total_prompt_tokens == 100
     assert usage.call_count == 1
 
+    # Explicitly begin another legacy invocation; completed answers are stable.
+    world.remove_component(entity_id, TerminalComponent)
     # Second call: last_* replaced, total_* accumulated.
     world.add_component(
         entity_id,

@@ -41,7 +41,7 @@ class TreeSearchSystem:
         self._root_id_by_entity: dict[int, int] = {}
 
     async def process(self, world: World) -> None:
-        for entity_id, components in world.query(
+        for entity_id, components in world.query_active(
             PlanSearchComponent, LLMComponent, ConversationComponent
         ):
             plan_search, llm_component, conversation = components

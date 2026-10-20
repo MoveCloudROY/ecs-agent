@@ -1,6 +1,6 @@
 """ErrorHandlingSystem for ECS-based LLM Agent."""
 
-from ecs_agent.components.definitions import ErrorComponent
+from ecs_agent.components.definitions import AgentTurnComponent, ErrorComponent
 from ecs_agent.core.world import World
 from ecs_agent.types import ErrorOccurredEvent
 from ecs_agent.logging import get_logger
@@ -28,7 +28,7 @@ class ErrorHandlingSystem:
         Args:
             world: World instance to query and modify
         """
-        for entity_id, (error_comp,) in world.query(ErrorComponent):
+        for entity_id, (error_comp,) in world.query_active(ErrorComponent):
             logger.error(
                 "entity_error",
                 entity_id=entity_id,
@@ -44,4 +44,5 @@ class ErrorHandlingSystem:
                 )
             )
 
-            world.remove_component(entity_id, ErrorComponent)
+            if not world.has_component(entity_id, AgentTurnComponent):
+                world.remove_component(entity_id, ErrorComponent)

@@ -132,7 +132,9 @@ class SessionService:
         branch: bool = False, select_head: bool = True,
     ) -> SessionRecord:
         """Preserve actual messages and publish large tool bodies before their references."""
-        payload = asdict(message)
+        from ecs_agent.serialization import WorldSerializer
+
+        payload = WorldSerializer._message_to_dict(message)
         if metadata:
             payload["source"] = metadata
         artifact_ref = None
@@ -332,3 +334,35 @@ class SessionService:
     def close(self) -> None:
         """Release writers and close the shared store; called by the root application."""
         self.store.close()
+
+    def replay_history(self, session_id: str, *, head_record_id: str | None = None) -> list[Message]:
+        """Reconstruct a committed model-facing history for host recovery.
+
+        This host API preserves provider-private fields. Agent-visible session
+        tools continue to use authorized, redacted transcript projections.
+        Legacy delta-only replacement records cannot reconstruct a full view.
+        """
+        from ecs_agent.serialization import WorldSerializer
+
+        info = self.store.get_session(session_id)
+        head = head_record_id or info.head_record_id
+        if head is None:
+            return []
+        messages = []
+        complete = True
+        for record in self.store.path(session_id, head):
+            if record.kind == "message":
+                payload = dict(record.payload)
+                if record.artifact_ref is not None:
+                    payload["content"] = self._artifact_path(record).read_text(encoding="utf-8")
+                messages.append(WorldSerializer._message_from_dict(payload))
+            elif record.kind == "history_replaced":
+                if record.payload.get("snapshot_format") != "complete":
+                    complete = False
+                    messages = []
+                else:
+                    complete = True
+                    messages = [WorldSerializer._message_from_dict(data) for data in record.payload["messages"]]
+        if not complete:
+            raise ValueError("Legacy history replacement lacks an ordered snapshot; restore its checkpoint instead")
+        return messages

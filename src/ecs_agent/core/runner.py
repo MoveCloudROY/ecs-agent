@@ -11,8 +11,11 @@ from typing import Any
 
 from ecs_agent.components.definitions import (
     ChildStubComponent,
+    AgentTurnComponent,
+    ConversationComponent,
     ErrorComponent,
     InterruptionComponent,
+    LLMComponent,
     RunnerStateComponent,
     SessionRefComponent,
     TerminalComponent,
@@ -24,9 +27,11 @@ from ecs_agent.types import (
     RunnerLifecycleStatus,
     RunnerTickCompletedEvent,
     RunnerTickStartedEvent,
+    UserInputReceivedEvent,
 )
 from ecs_agent.core.world import World
 from ecs_agent.core.run_result import RunResult, RunStatus, snapshot_run_result
+from ecs_agent.core.lifecycle import finish_turn
 from ecs_agent.history import record_session_event
 from ecs_agent.logging import STANDARD_EVENT_NAMES, get_logger
 from ecs_agent.observability.context import current_run_id, reset_run_context, set_run_context
@@ -40,6 +45,7 @@ class Runner:
 
     def __init__(self) -> None:
         self.last_result: RunResult | None = None
+        self._running = False
 
     async def run(
         self,
@@ -58,18 +64,18 @@ class Runner:
 
         Executes world.process() repeatedly until either:
         1. A TerminalComponent is found on any entity
-        2. max_ticks iterations are reached (from start_tick)
+        2. The legacy absolute max_ticks limit is reached (from start_tick)
 
         When max_ticks is None the loop runs indefinitely until a
         TerminalComponent appears (useful for interactive / chat agents).
 
-        If max_ticks is reached, adds TerminalComponent(reason='max_ticks')
-        to a newly created entity.
+        Budget exhaustion returns MAX_TICKS without adding a terminal entity.
+        Existing terminal states are checked before executing any systems.
 
         Args:
             world: World instance to process
-            max_ticks: Maximum number of ticks to run (default 100).
-                       Pass None for unlimited execution.
+            max_ticks: Absolute tick limit (default 100). With start_tick=5,
+                       max_ticks=8 allows three ticks. None means unlimited.
             start_tick: Starting tick count for resume (default 0)
             target_entity: Only this entity's terminal/interruption stops the
                 run, when supplied. Used by delegation to ignore other entities.
@@ -81,6 +87,22 @@ class Runner:
             cancellation and exceptions still propagate; last_result retains
             their terminal snapshot.
         """
+        if start_tick < 0 or (max_ticks is not None and max_ticks < 0):
+            logger.error("invalid_run_budget", start_tick=start_tick, max_ticks=max_ticks)
+            raise ValueError("start_tick and max_ticks must be non-negative")
+        if any(
+            turn.status == "legacy" and (target_entity is None or entity == target_entity)
+            for entity, (turn,) in world.query(AgentTurnComponent)
+        ):
+            logger.error("legacy_turn_requires_adoption", world_name=world.name)
+            raise ValueError("Legacy checkpoint requires explicit AgentHandle.adopt_turn() before continuation")
+        if world._runner_task is not None or world._processing_task is not None or self._running or (
+            world._agent_run is not None and world._agent_run.task is not asyncio.current_task()
+        ):
+            logger.error("runner_already_active", world_name=world.name)
+            raise RuntimeError("A Runner is already driving this World or Runner instance")
+        world._runner_task = asyncio.current_task()
+        self._running = True
         resolved_trace_id = uuid.uuid4().hex if trace_id is None else trace_id
         resolved_run_id = str(uuid.uuid4()) if run_id is None else run_id
         context_token = set_run_context(
@@ -101,6 +123,7 @@ class Runner:
                 start_tick=start_tick,
                 world_name=world.name,
             )
+            turn = world.get_component(target_entity, AgentTurnComponent) if target_entity is not None else None
             await world.event_bus.publish(
                 RunStartedEvent(
                     max_ticks=max_ticks,
@@ -108,8 +131,18 @@ class Runner:
                     active_entities=self._active_entity_count(world),
                     parent_observation_id=parent_observation_id,
                     emit_root_trace=emit_root_trace,
+                    entity_id=target_entity,
+                    turn_id=turn.turn_id if turn is not None else None,
+                    run_id=resolved_run_id,
                 )
             )
+            active = world._agent_run
+            if active is not None and active.input_text is not None:
+                await world.event_bus.publish(UserInputReceivedEvent(
+                    entity_id=active.entity, prompt="", text=active.input_text,
+                    turn_id=turn.turn_id if turn is not None else None,
+                    run_id=resolved_run_id, source="agent_handle",
+                ))
 
             # Create or update RunnerStateComponent
             runner_state_entities = list(world.query(RunnerStateComponent))
@@ -120,11 +153,24 @@ class Runner:
                 runner_state = RunnerStateComponent(current_tick=start_tick)
                 world.add_component(runner_state_entity, runner_state)
 
+            cumulative_start = max(runner_state.current_tick, start_tick)
+            runner_state.current_tick = cumulative_start
             tick = start_tick
             while True:
+                stopped: RunnerLifecycleStatus | None = None
+                if self._has_top_level_component(world, TerminalComponent, target_entity):
+                    stopped = "terminal_component"
+                elif self._is_interrupted(world, target_entity):
+                    stopped = "interruption_component"
+                if stopped is not None:
+                    result = await self._publish_run_completed(
+                        world=world, status=stopped, reason=stopped,
+                        start_time=run_start_time, ticks=tick - start_tick,
+                        target_entity=target_entity,
+                    )
+                    completion_published = True
+                    return result
                 if max_ticks is not None and tick >= max_ticks:
-                    entity_id = world.create_entity()
-                    world.add_component(entity_id, TerminalComponent(reason="max_ticks"))
                     logger.info(STANDARD_EVENT_NAMES["RUN_COMPLETE"], reason="max_ticks", world_name=world.name)
                     result = await self._publish_run_completed(
                         world=world,
@@ -137,47 +183,19 @@ class Runner:
                     completion_published = True
                     return result
 
-                logger.debug(STANDARD_EVENT_NAMES["TICK_START"], tick=tick, world_name=world.name)
+                cumulative_tick = cumulative_start + tick - start_tick
+                logger.debug(STANDARD_EVENT_NAMES["TICK_START"], tick=cumulative_tick, world_name=world.name)
                 tick_start_time = time.monotonic()
                 await world.event_bus.publish(
                     RunnerTickStartedEvent(
-                        tick=tick,
+                        tick=cumulative_tick,
                         active_entities=self._active_entity_count(world),
                     )
                 )
-                interrupted_before_tick = self._has_top_level_component(
-                    world, InterruptionComponent, target_entity
-                )
-
                 try:
                     world.apply_pending_system_operations()
                     await world.process()
                 except asyncio.CancelledError:
-                    if interrupted_before_tick:
-                        # Pre-existing interruption — intentional stop, swallow
-                        # the CancelledError. uncancel() rebalances the task's
-                        # cancelling count (PEP 654 / 3.11 semantics): without
-                        # it the task stays in a cancelling state after this
-                        # graceful return, corrupting the caller's outer
-                        # wait_for/TaskGroup behavior.
-                        current_task = asyncio.current_task()
-                        if current_task is not None:
-                            current_task.uncancel()
-                        logger.info(
-                            STANDARD_EVENT_NAMES["RUN_COMPLETE"],
-                            reason="interruption_component",
-                            world_name=world.name,
-                        )
-                        result = await self._publish_run_completed(
-                            world=world,
-                            status="interruption_component",
-                            reason="interruption_component",
-                            start_time=run_start_time,
-                            ticks=tick - start_tick,
-                            target_entity=target_entity,
-                        )
-                        completion_published = True
-                        return result
                     # CancelledError arrived from outside (e.g. asyncio.wait_for timeout)
                     # — re-raise so the caller's timeout handler fires correctly
                     logger.info(
@@ -199,7 +217,7 @@ class Runner:
                     tick_duration_ms = (time.monotonic() - tick_start_time) * 1000
                     await world.event_bus.publish(
                         RunnerTickCompletedEvent(
-                            tick=tick,
+                            tick=cumulative_tick,
                             status="error",
                             duration_seconds=tick_duration_ms / 1000,
                             active_entities=self._active_entity_count(world),
@@ -217,16 +235,10 @@ class Runner:
                     completion_published = True
                     raise
 
-                interrupted_after_tick = self._has_top_level_component(
-                    world, InterruptionComponent, target_entity
-                )
-                if interrupted_after_tick and not interrupted_before_tick:
-                    logger.debug("interruption_detected", tick=tick, world_name=world.name)
-
                 tick_duration_ms = (time.monotonic() - tick_start_time) * 1000
                 logger.debug(
                     STANDARD_EVENT_NAMES["TICK_COMPLETE"],
-                    tick=tick,
+                    tick=cumulative_tick,
                     duration_ms=tick_duration_ms,
                     world_name=world.name,
                 )
@@ -236,7 +248,7 @@ class Runner:
                 )
                 await world.event_bus.publish(
                     RunnerTickCompletedEvent(
-                        tick=tick,
+                        tick=cumulative_tick,
                         status=tick_status,
                         duration_seconds=tick_duration_ms / 1000,
                         active_entities=self._active_entity_count(world),
@@ -244,7 +256,7 @@ class Runner:
                 )
 
                 tick += 1
-                runner_state.current_tick = tick
+                runner_state.current_tick = cumulative_start + tick - start_tick
 
                 if has_terminal:
                     logger.info(
@@ -278,6 +290,22 @@ class Runner:
             raise
         finally:
             reset_run_context(context_token)
+            world._runner_task = None
+            self._running = False
+
+    def _is_interrupted(self, world: World, target_entity: EntityId | None) -> bool:
+        if target_entity is not None:
+            return self._has_top_level_component(world, InterruptionComponent, target_entity)
+        agents = {
+            entity
+            for component_type in (LLMComponent, ConversationComponent, InterruptionComponent)
+            for entity, _ in world.query(component_type)
+            if not world.has_component(entity, ChildStubComponent)
+        }
+        # Whole-World execution may keep other agents running after one pauses.
+        return bool(agents) and all(
+            world.has_component(entity, InterruptionComponent) for entity in agents
+        )
 
     def _has_top_level_component(
         self,
@@ -329,10 +357,12 @@ class Runner:
                     error=str(exc) or type(exc).__name__, final_message=None,
                     partial_message=result.final_message or result.partial_message,
                 )
+                finish_turn(world, self.last_result)
                 world.add_component(session_entity, ErrorComponent(error=str(exc), system_name="Runner", timestamp=time.time()))
                 world.add_component(session_entity, TerminalComponent(reason="session_recording_error", error=str(exc)))
                 logger.error("session_terminal_record_failed", entity_id=int(session_entity), exception=str(exc))
                 raise
+        finish_turn(world, result)
         await world.event_bus.publish(
             RunCompletedEvent(
                 status=status,
@@ -348,7 +378,8 @@ class Runner:
     def save_checkpoint(self, world: World, path: str | Path) -> None:
         """Save world state and runner state to checkpoint file.
 
-        TerminalComponent is excluded from checkpoints to allow resuming.
+        Turn completion and failure states are preserved. Loading a managed
+        running turn pauses it or blocks it when tool completion is uncertain.
 
         Args:
             world: World instance to serialize
@@ -356,11 +387,7 @@ class Runner:
         """
         checkpoint_path = Path(path)
 
-        # TerminalComponent is excluded from the payload only (resume-
-        # friendly); saving must not mutate the live world.
-        world_data = WorldSerializer.to_dict(
-            world, exclude_component_types=(TerminalComponent,)
-        )
+        world_data = WorldSerializer.to_dict(world)
 
         # Extract runner state from world
         runner_state_entities = list(world.query(RunnerStateComponent))

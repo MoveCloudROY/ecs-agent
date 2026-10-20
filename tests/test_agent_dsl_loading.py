@@ -30,7 +30,7 @@ def test_load_json_agents_happy_path_single_agent(tmp_path: Path) -> None:
     assert specs[0].mode == "primary"
     assert specs[0].model == "gpt-4"
     assert specs[0].prompt == "You are a research assistant."
-    assert specs[0].tools == {}
+    assert specs[0].tools is None
     assert specs[0].metadata == {}
 
 

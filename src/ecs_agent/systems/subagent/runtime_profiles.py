@@ -46,6 +46,7 @@ class ChildProfileContext:
     """Inputs a profile builder may branch on when composing the child system set."""
 
     parent_has_compaction: bool
+    normalize: bool = False
 
 
 ProfileBuilder = Callable[[ChildProfileContext], list[ChildSystemSpec]]
@@ -83,33 +84,13 @@ def default_child_system_specs(ctx: ChildProfileContext) -> list[ChildSystemSpec
     consumes, so without it the child deadlocks and idles until max_ticks. With no
     tools registered it is a no-op, so unconditional registration is safe.
     """
-    specs: list[ChildSystemSpec] = []
-    if ctx.parent_has_compaction:
-        specs.append(
-            ChildSystemSpec(
-                factory=lambda: CompactionSystem(),
-                priority=_CHILD_COMPACTION_PRIORITY,
-            )
-        )
-    specs.append(
-        ChildSystemSpec(
-            factory=lambda: SystemPromptRenderSystem(priority=-20),
-            priority=-20,
-        )
-    )
-    specs.append(
-        ChildSystemSpec(factory=lambda: ReasoningSystem(priority=0), priority=0)
-    )
-    specs.append(
-        ChildSystemSpec(
-            factory=lambda: ToolExecutionSystem(priority=5),
-            priority=5,
-        )
-    )
-    specs.append(
-        ChildSystemSpec(factory=lambda: ErrorHandlingSystem(priority=99), priority=99)
-    )
-    return specs
+    from ecs_agent.authoring.runtime import core_steps
+
+    return [
+        ChildSystemSpec(factory=step.factory, priority=priority)
+        for step in core_steps(compaction=ctx.parent_has_compaction, normalize=ctx.normalize)
+        if (priority := step.priority) is not None
+    ]
 
 
 def reset_child_runtime_profiles() -> None:

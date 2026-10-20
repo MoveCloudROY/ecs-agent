@@ -802,6 +802,31 @@ class TestStatusBar:
             second = str(app.query_one("#status-label", Static).content)
             assert first != second  # spinner frame advanced
 
+    async def test_status_tick_tolerates_partially_unmounted_status_bar(self) -> None:
+        from textual.widgets import Static
+        from examples.e2e.plan_and_task.tui.app import PlanTaskTuiApp
+
+        class StubSink:
+            input_pending = False
+
+            def submit_input(self, text: str) -> bool:
+                return True
+
+            def request_quit(self) -> None:
+                return None
+
+        vm = make_vm()
+        app = PlanTaskTuiApp(view_model=vm, sink=StubSink())
+        async with app.run_test(size=(100, 30)) as pilot:
+            for change in vm.apply_event(
+                UserInputReceivedEvent(entity_id=AGENT, prompt="You> ", text="hi")
+            ):
+                app.dispatch_change(change)
+            await pilot.pause()
+            await app.query_one("#status-label", Static).remove()
+            app._tick_status()
+            assert app.query_one("#status-bar") is not None
+
 
 class TestBridge:
     async def _build(

@@ -285,7 +285,8 @@ def test_from_dict_reconstructs_world_correctly() -> None:
     assert conv.messages[0].content == "hi"
     assert tool_registry is not None
     assert isinstance(tool_registry.tools["ping"], ToolSchema)
-    assert tool_registry.handlers is handlers
+    assert tool_registry.handlers == handlers
+    assert tool_registry.handlers["ping"] is handlers["ping"]
     assert world.create_entity() == EntityId(5)
 
 
@@ -1893,7 +1894,7 @@ def test_schema_version_written_and_future_version_rejected() -> None:
 
     world = World()
     data = WorldSerializer.to_dict(world)
-    assert data["schema_version"] == 1
+    assert data["schema_version"] == 4
 
     data["schema_version"] = 99
     with pytest.raises(ValueError, match="schema_version"):

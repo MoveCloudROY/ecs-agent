@@ -11,6 +11,7 @@ from ecs_agent.logging import get_logger
 from ecs_agent.sessions import tools as session_tools
 from ecs_agent.sessions.service import SessionService
 from ecs_agent.tools.discovery import scan_module
+from ecs_agent.tools.permissions import tool_is_allowed
 from ecs_agent.types import EntityId
 
 logger = get_logger(__name__)
@@ -45,7 +46,7 @@ def install_session_recording(
             raise ValueError("Install a session-capable read_file before session tools; custom tools are not replaced")
         permissions = world.get_component(entity_id, PermissionComponent)
         for name in ("read_file", *discovered):
-            if permissions and (name in permissions.denied_tools or (permissions.allowed_tools and name not in permissions.allowed_tools)):
+            if not tool_is_allowed(permissions, name):
                 raise PermissionError(f"Session installation requires existing permission for {name}")
         for name, (_, tool_handler) in discovered.items():
             if name in registry.handlers and registry.handlers[name] is not tool_handler:

@@ -31,7 +31,7 @@ from ecs_agent.components import (
     PhaseComponent,
     ToolRegistryComponent,
 )
-from ecs_agent.core import Runner, World
+from ecs_agent.core import AgentHandle, World
 from ecs_agent.logging import configure_logging, get_logger
 from ecs_agent.phases import PhaseSpec, advance, bind_phase_graph, build_graph
 from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
@@ -42,8 +42,8 @@ from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
-from ecs_agent.tools import tool
-from ecs_agent.types import CompletionResult, EntityId, Message, ToolCall, ToolSchema
+from ecs_agent.tools import register_tools, tool
+from ecs_agent.types import CompletionResult, EntityId, Message, ToolCall
 
 logger = get_logger(__name__)
 
@@ -93,16 +93,7 @@ def make_tool_registry(world: World, entity_id: EntityId) -> ToolRegistryCompone
         logger.info("workflow_tool_called", tool="approve_draft", entity_id=entity_id)
         return "Draft approved. Workflow complete."
 
-    fns = [mark_draft_ready, approve_draft]
-    tools_map: dict[str, ToolSchema] = {
-        fn._tool_schema.name: fn._tool_schema  # type: ignore[attr-defined]
-        for fn in fns
-    }
-    handlers_map = {
-        fn._tool_schema.name: fn._tool_handler  # type: ignore[attr-defined]
-        for fn in fns
-    }
-    return ToolRegistryComponent(tools=tools_map, handlers=handlers_map)
+    return register_tools(world, entity_id, [mark_draft_ready, approve_draft])
 
 
 # ---------------------------------------------------------------------------
@@ -166,17 +157,7 @@ async def main() -> None:
 
     # Attach LLM and conversation
     world.add_component(agent, LLMComponent(model=model))
-    world.add_component(
-        agent,
-        ConversationComponent(
-            messages=[
-                Message(
-                    role="user",
-                    content="Please write a short paragraph about the benefits of ECS architecture.",
-                )
-            ]
-        ),
-    )
+    world.add_component(agent, ConversationComponent(messages=[]))
 
     # System prompt: the ${_phase_prompt} placeholder resolves to the current
     # phase's prompt for this entity's bound agent key.
@@ -188,7 +169,7 @@ async def main() -> None:
     )
 
     # Register tools
-    world.add_component(agent, make_tool_registry(world, agent))
+    make_tool_registry(world, agent)
 
     # Bind the phase graph (attaches PhaseComponent + PhaseDefinitionComponent)
     await bind_phase_graph(world, agent, WRITING_GRAPH, agent_key="assistant")
@@ -200,8 +181,14 @@ async def main() -> None:
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     # --- Run ---
-    runner = Runner()
-    await runner.run(world, max_ticks=20)
+    handle = AgentHandle(world, agent)
+    try:
+        result = await handle.run_turn(
+            "Please write a short paragraph about the benefits of ECS architecture.", max_steps=20,
+        )
+        print(f"Run status: {result.status}")
+    finally:
+        await model.aclose()
 
     # --- Print results ---
     component = world.get_component(agent, PhaseComponent)

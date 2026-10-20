@@ -4,6 +4,13 @@ This document provides a comprehensive guide to the fourteen built-in systems av
 
 ## Recommended System Priority Order
 
+Built-in agent-processing systems use `world.query_active()` so AgentHandle can
+restrict execution to its target and skip inactive managed turns. Custom systems
+must use that query or `is_entity_active()` for the same behavior. Inspection and
+World-level infrastructure may still use the unrestricted `world.query()`.
+Managed turns retain terminal and error state; they do not use automatic cleanup
+to authorize another inference. See [agent lifecycle](features/agent-lifecycle.md).
+
 The table below summarizes the recommended priorities for each system. Priority values determine the execution order within each world tick, where lower numbers run first. Systems at the same priority level run concurrently.
 
 ### System Lifecycle and Queue Semantics
@@ -25,7 +32,8 @@ The table below summarizes the recommended priorities for each system. Priority 
 | UserPromptNormalizationSystem | -10 | Injects trigger templates into user messages and produces `RenderedUserPromptComponent`. ContextPool injection happens later at call-time. |
 | SubagentWaitSystem | -5 | Handles `subagent_wait` tool and background session notifications. |
 | PromptContextCollectorSystem | 0 | Collects tool/subagent results into the context pool. |
-| ToolApprovalSystem | -5 | Filters pending tool calls before execution. |
+| PermissionSystem | 1 | Optional permission preflight; execution enforces policy. |
+| ToolApprovalSystem | 2 | Optional approval preflight sharing execution decisions. |
 | ReasoningSystem | 0 | Generates responses using an LLM. |
 | PlanningSystem | 0 | Manages step-by-step execution of a plan. |
 | TreeSearchSystem | 0 | Uses MCTS to find the best plan path. |
@@ -92,7 +100,7 @@ The `SystemPromptRenderSystem` resolves all `${name}` placeholders from a `Syste
 - **Recommended Priority**: -20 (must run before reasoning)
 
 ### Behavior
-The system reads the `SystemPromptConfigSpec.template_source` (inline string or file path) and substitutes all `${name}` occurrences. Built-in placeholders `${_installed_tools}`, `${_installed_skills}`, `${_installed_mcps}`, and `${_installed_subagents}` are populated from entity metadata automatically. The rendered prompt is cached and reused while its cache key (built from placeholder-provider fingerprints) stays unchanged; when a render input changes — e.g. `CompactionSystem` writes a new `CurrentCompactionSummaryComponent` — the fingerprint mismatch triggers a re-render on the next pass. Invalidation is exclusively pull-based: **no other system may delete `RenderedSystemPromptComponent`**; producers just update their own components. Missing or failing placeholders raise `ValueError` immediately — no silent fallback. The placeholder rendering helpers live in the neutral `ecs_agent.prompts.template_render` module so other systems (e.g. compaction prompt templates) can render without importing this system's module.
+The system reads the `SystemPromptConfigSpec.template_source` (inline string or file path) and substitutes all `${name}` occurrences. Built-in placeholders `${_installed_tools}`, `${_installed_skills}`, `${_installed_mcps}`, and `${_installed_subagents}` are populated from entity metadata automatically. The rendered prompt is cached and reused while its cache key (built from placeholder-provider fingerprints) stays unchanged; when a render input changes — e.g. `CompactionSystem` writes a new `CurrentCompactionSummaryComponent` — the fingerprint mismatch triggers a re-render on the next pass. The key also covers template content, configuration revision, resolved user values and built-in output. Producers normally update their inputs; controlled Prompt edits and checkpoint restore can discard this derived component. Missing or failing placeholders raise `ValueError` immediately — no silent fallback. The placeholder rendering helpers live in the neutral `ecs_agent.prompts.template_render` module so other systems (e.g. compaction prompt templates) can render without importing this system's module.
 
 ### Usage Example
 ```python
@@ -111,12 +119,14 @@ world.register_system(SystemPromptRenderSystem(), priority=-20)
 
 ## 1b. UserPromptNormalizationSystem
 
-The `UserPromptNormalizationSystem` processes the latest user message in `ConversationComponent`, injects any matching `@keyword` or `event:<name>` trigger templates, and writes a `RenderedUserPromptComponent`. ContextPool injection is handled separately at call-time by `prepare_outbound_messages()`. Stored conversation history is never mutated.
+The `UserPromptNormalizationSystem` processes the latest user message in `ConversationComponent`, injects any matching `@keyword` or `event:<name>` trigger templates, and writes a `RenderedUserPromptComponent`. ContextPool injection is handled separately at call-time by `prepare_outbound_messages()`. Superseded render representations are frozen through the coordinated history API, while original input remains recorded.
 
 - **Constructor**: `__init__(self)`
 - **Queries**: `UserPromptConfigComponent`, `ConversationComponent`
 - **Produces**: `RenderedUserPromptComponent`
-- **Recommended Priority**: -10 (must run before reasoning)
+- **Recommended Priority**: -25 in the complete authoring runtime, before Prompt rendering; the legacy partial DSL compiler retains -10.
+
+Managed turns persist input-normalization progress. Resume and synthetic context changes do not rerun completed script triggers; interruption before completion blocks automatic replay. Unmanaged low-level loops retain their legacy latest-user-message behavior.
 
 ### Behavior
 Scans the last user message for registered trigger patterns. Matched triggers prepend their template content to the rendered user prompt. The original user text comes last. The `RenderedUserPromptComponent.text` is what LLM callers send to the provider — the stored message is unchanged. Note that ContextPool injection is NOT performed by this system; it is applied at call-time by `prepare_outbound_messages()`.
@@ -338,21 +348,25 @@ world.register_system(ReplanningSystem(priority=7), priority=7)
 
 ## 8. ToolApprovalSystem
 
-The ToolApprovalSystem provides a mechanism to filter or approve tool calls generated by the LLM before they are executed. This is essential for security and human-in-the-loop workflows.
+ToolApprovalSystem performs optional approval preflight after reasoning. ToolExecutionSystem enforces the same authorization path even if preflight is absent or scheduled differently.
 
-- **Constructor**: `__init__(self, priority: int = -5)`
-- **Queries**: `PendingToolCallsComponent`, `ToolApprovalComponent`, `ConversationComponent`
-- **Modifies**: `PendingToolCallsComponent.tool_calls` (filters denied calls), `ConversationComponent.messages` (appends denial notifications).
-- **Events Published**: `ToolApprovalRequestedEvent`, `ToolApprovedEvent`, `ToolDeniedEvent`.
-- **Recommended Priority**: -5 (runs before `ToolExecutionSystem`)
+- **Constructor**: `__init__(self, priority: int = 2)`
+- **Queries**: `PendingToolCallsComponent`, `ToolApprovalComponent`
+- **Modifies**: ephemeral batch authorization state and approval audit history.
+- **Events Published**: `ToolApprovalRequestedEvent`, `ToolApprovedEvent`. Execution publishes `ToolDeniedEvent` after recording a denial.
+- **Recommended Priority**: 2, after ReasoningSystem (0) and optional PermissionSystem (1), before ToolExecutionSystem (5).
 
 ### Behavior
-The system checks the `ApprovalPolicy` on the entity. In `ALWAYS_APPROVE` mode, all calls pass through. In `ALWAYS_DENY`, all calls are removed and a system message is added. In `REQUIRE_APPROVAL`, the system publishes a `ToolApprovalRequestedEvent` and waits (up to a timeout, or indefinitely if `timeout` is `None`) for a response on the provided future. If approved, the call remains; if denied or timed out, it's removed.
+
+The shared gate checks permissions before approval. ALWAYS_APPROVE permits calls that pass permissions; ALWAYS_DENY rejects them. REQUIRE_APPROVAL publishes a request and awaits an explicit true decision. Missing handlers, subscriber failures and timeouts deny execution; cancellation propagates. The timeout includes subscriber execution, and None permits waiting indefinitely when a handler exists.
+
+Preflight keeps the original call queue and never appends result messages. Execution writes both success and denial results in original call order, with each original tool_call_id answered once. Cached approvals are scoped to the entity, batch, call payload and policy, and are not restored from checkpoints.
 
 ### Usage Example
+
 ```python
 from ecs_agent.systems.tool_approval import ToolApprovalSystem
-world.register_system(ToolApprovalSystem(priority=-5), priority=-5)
+world.register_system(ToolApprovalSystem(), priority=2)
 ```
 
 ---
@@ -638,7 +652,7 @@ world.register_system(RAGSystem(priority=-10), priority=-10)
 #BH|world.register_system(PromptContextCollectorSystem(priority=0), priority=0)
 
 # Safety and Filtering
-world.register_system(ToolApprovalSystem(priority=-5), priority=-5)
+world.register_system(ToolApprovalSystem(priority=2), priority=2)
 
 # Cognitive and planning tasks
 world.register_system(ReasoningSystem(priority=0), priority=0)

@@ -1,12 +1,16 @@
 """Session storage protocol and in-memory implementation."""
 
 from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from copy import deepcopy
 from dataclasses import asdict, replace
 from threading import RLock
 from typing import Any, Protocol
 
 from ecs_agent.sessions.types import RecordDraft, SessionInfo, SessionRecord
+from ecs_agent.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class SessionStore(Protocol):
@@ -29,6 +33,7 @@ class SessionStore(Protocol):
     def save_snapshot(self, snapshot_id: str, payload: dict[str, Any]) -> None: ...
     def load_snapshot(self, snapshot_id: str) -> dict[str, Any]: ...
     def close(self) -> None: ...
+    def transaction(self) -> AbstractContextManager[None]: ...
 
 
 def validate_session(session: SessionInfo, parent: SessionInfo | None) -> None:
@@ -98,6 +103,18 @@ class InMemorySessionStore:
                 raise ValueError("session_id already exists")
             self._sessions[session.session_id] = session
             self._order[session.session_id] = []
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Publish a coordinated catalog/record/writer change atomically."""
+        with self._lock:
+            snapshot = deepcopy((self._sessions, self._records, self._order, self._writers, self._snapshots))
+            try:
+                yield
+            except BaseException as exc:
+                self._sessions, self._records, self._order, self._writers, self._snapshots = snapshot
+                logger.error("session_transaction_failed", exception=str(exc))
+                raise
 
     def get_session(self, session_id: str) -> SessionInfo:
         with self._lock:

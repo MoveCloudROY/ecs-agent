@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from ecs_agent.components import ConversationComponent, ConversationTreeComponent
+from ecs_agent.components import ConversationComponent, ConversationTreeComponent, TerminalComponent
 from ecs_agent.conversation_tree import add_message, create_branch, get_active_leaf, linearize, switch_branch
 from ecs_agent.serialization import WorldSerializer
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -32,6 +32,7 @@ async def test_native_tree_reads_long_shared_prefix_without_sibling_messages() -
         switch_branch(tree, "left")
         await ReasoningSystem().process(world)
         switch_branch(tree, "right")
+        world.remove_component(entity, TerminalComponent)
         await ReasoningSystem().process(world)
         bodies = [json.loads(request.content) for request in transport.requests]
         assert bodies[0]["input"][:2] == bodies[1]["input"][:2]
@@ -91,6 +92,7 @@ async def test_native_tree_manual_append_preserves_sdk_output_for_next_turn() ->
                                 tool_calls=generated.tool_calls, tool_call_id=generated.tool_call_id)
         followup = add_message(tree, "user", "Recall the root fact", parent_id=assistant.id)
         tree.branches["main"].leaf_message_id = followup.id
+        world.remove_component(entity, TerminalComponent)
         await ReasoningSystem().process(world)
         sent = json.loads(transport.requests[-1].content)["input"]
         assert sent[1:3] == original, "Native tree projection discarded original SDK output items"

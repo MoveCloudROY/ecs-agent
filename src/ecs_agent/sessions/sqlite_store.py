@@ -9,6 +9,7 @@ from pathlib import Path
 import sqlite3
 from threading import RLock
 from typing import Any
+from uuid import uuid4
 
 from ecs_agent.logging import get_logger
 from ecs_agent.sessions.store import is_same_draft, updated_session, validate_append, validate_session
@@ -59,14 +60,31 @@ class SQLiteSessionStore:
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
         with self._lock:
-            self._db.execute("BEGIN IMMEDIATE")
+            outer = not self._db.in_transaction
+            savepoint = "session_" + uuid4().hex
+            claims = set(self._claims)
+            self._db.execute("BEGIN IMMEDIATE" if outer else f"SAVEPOINT {savepoint}")
             try:
                 yield self._db
-                self._db.commit()
+                if outer:
+                    self._db.commit()
+                else:
+                    self._db.execute(f"RELEASE SAVEPOINT {savepoint}")
             except BaseException as exc:
-                self._db.rollback()
+                if outer:
+                    self._db.rollback()
+                else:
+                    self._db.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    self._db.execute(f"RELEASE SAVEPOINT {savepoint}")
+                self._claims = claims
                 logger.error("session_transaction_failed", exception=str(exc))
                 raise
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Atomically publish a group of catalog, record, and writer operations."""
+        with self._transaction():
+            yield
 
     def create_session(self, session: SessionInfo) -> None:
         with self._transaction() as db:

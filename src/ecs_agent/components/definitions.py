@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Literal
 
 import asyncio
 import time
@@ -52,6 +52,18 @@ class ConversationComponent:
     max_messages: int = 100
     history_id: str = field(default_factory=lambda: uuid4().hex)
     revision: int = 0
+
+
+@dataclass(slots=True)
+class AgentTurnComponent:
+    """Persistent state of one user turn, possibly spanning several runs."""
+
+    turn_id: str
+    status: Literal["running", "paused", "completed", "failed", "blocked", "legacy", "abandoned"] = "paused"
+    reason: str = ""
+    last_message: Message | None = None
+    unconfirmed_tool_calls: list[str] = field(default_factory=list)
+    input_normalization_state: Literal["pending", "running", "completed"] = "pending"
 
 
 @dataclass(slots=True)
@@ -233,7 +245,9 @@ class ToolApprovalComponent:
 
 @dataclass(slots=True)
 class PermissionComponent:
-    allowed_tools: list[str] = field(default_factory=list)
+    """Tool policy: None is unrestricted, an empty allowlist denies all."""
+
+    allowed_tools: list[str] | None = None
     denied_tools: list[str] = field(default_factory=list)
 
 
@@ -614,9 +628,9 @@ class RenderedSystemPromptComponent:
     Invalidation is pull-based: the render system compares the ``_cache_key``
     entry in ``placeholder_snapshot`` (built from placeholder-provider
     fingerprints, e.g. the compaction-summary hash) against its inputs each
-    pass and re-renders on mismatch. No other system may delete or mutate this
-    component; producers refresh a render input (their own component) and let
-    the fingerprint mismatch trigger the re-render."""
+    pass and re-renders on mismatch. Producers refresh render inputs; controlled
+    prompt edits and checkpoint restore may discard this derived component.
+    It is never an independent author-written configuration source."""
 
     text: str
     placeholder_snapshot: dict[str, str] = field(default_factory=dict)

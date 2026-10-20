@@ -7,7 +7,7 @@ The example shows:
   - Defining @tool-decorated functions (get_weather, send_email)
   - Using scan_module() to auto-discover and register tools
   - Setting up ToolApprovalComponent with ALWAYS_APPROVE policy
-  - Running ToolApprovalSystem (priority=-5) before ToolExecutionSystem (priority=5)
+  - Running ToolApprovalSystem (priority=2) before ToolExecutionSystem (priority=5)
   - The LLM autonomously decides which tools to call; approval system gates execution
 
 Usage:
@@ -30,9 +30,8 @@ from ecs_agent.components import (
     ConversationComponent,
     LLMComponent,
     ToolApprovalComponent,
-    ToolRegistryComponent,
 )
-from ecs_agent.core import Runner, World
+from ecs_agent.core import AgentHandle, World
 from ecs_agent.providers import Model
 from ecs_agent.providers.config import ApiFormat
 from ecs_agent.providers.retry_model import RetryModel
@@ -40,8 +39,8 @@ from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_approval import ToolApprovalSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
-from ecs_agent.tools.discovery import scan_module, tool
-from ecs_agent.types import ApprovalPolicy, Message, RetryConfig
+from ecs_agent.tools import register_tools, scan_module, tool
+from ecs_agent.types import ApprovalPolicy, RetryConfig
 
 
 @tool()
@@ -107,33 +106,9 @@ async def main() -> None:
             ),
         ),
     )
-    world.add_component(
-        agent_id,
-        ConversationComponent(
-            messages=[
-                Message(
-                    role="user",
-                    content="What's the weather in San Francisco? Send me an email with the report to user@example.com.",
-                )
-            ]
-        ),
-    )
+    world.add_component(agent_id, ConversationComponent(messages=[]))
 
-    # Scan current module for @tool-decorated functions
-    tool_registry = scan_module(sys.modules[__name__])
-
-    # Convert scan_module output to ToolRegistryComponent format
-    tools = {name: schema for name, (schema, _) in tool_registry.items()}
-    handlers = {name: handler for name, (_, handler) in tool_registry.items()}
-
-    # Register tools
-    world.add_component(
-        agent_id,
-        ToolRegistryComponent(
-            tools=tools,
-            handlers=handlers,
-        ),
-    )
+    register_tools(world, agent_id, scan_module(sys.modules[__name__]))
 
     # Add tool approval component with ALWAYS_APPROVE policy
     world.add_component(
@@ -142,16 +117,27 @@ async def main() -> None:
     )
 
     # Register Systems
-    # ToolApprovalSystem runs at priority -5 (before tool execution)
-    world.register_system(ToolApprovalSystem(priority=-5), priority=-5)
+    # ToolApprovalSystem runs at priority 2 (before tool execution)
+    world.register_system(ToolApprovalSystem(priority=2), priority=2)
     world.register_system(ReasoningSystem(priority=0), priority=0)
     # ToolExecutionSystem runs at priority 5 (after approval)
     world.register_system(ToolExecutionSystem(priority=5), priority=5)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
     # Run
-    runner = Runner()
-    await runner.run(world, max_ticks=5)
+    agent = AgentHandle(world, agent_id)
+    try:
+        result = await agent.run_turn(
+            "What's the weather in San Francisco? Send me an email with the report to user@example.com.",
+            max_steps=5,
+        )
+        print(f"Run status: {result.status}")
+        if result.final_message is not None:
+            print(f"Assistant: {result.final_message.content}")
+        elif result.error:
+            print(f"Error: {result.error}")
+    finally:
+        await model.aclose()
 
     # Print results
     conv = world.get_component(agent_id, ConversationComponent)

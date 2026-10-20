@@ -1133,20 +1133,19 @@ class PlanTaskTuiApp(App[None]):
     def _render_status(self) -> None:
         try:
             bar = self.query_one("#status-bar")
+            label = self.query_one("#status-label", Static)
+            tokens = self.query_one("#status-tokens", Static)
         except NoMatches:
             # A modal (e.g. the subagent inspector) can cover the base screen
             # while a subagent is still running; the recurring status tick must
-            # not crash when the status bar is transiently unreachable.
+            # not crash when the status bar is transiently unreachable. During
+            # teardown the bar may still exist after its children are removed.
             return
         bar.display = self._vm.busy
         if not self._vm.busy:
             return
-        self.query_one("#status-label", Static).update(
-            Text(self._status_label_text())
-        )
-        self.query_one("#status-tokens", Static).update(
-            Text(self._status_tokens_text())
-        )
+        label.update(Text(self._status_label_text()))
+        tokens.update(Text(self._status_tokens_text()))
 
     def _render_input_state(self) -> None:
         field = self.query_one(CommandInput)

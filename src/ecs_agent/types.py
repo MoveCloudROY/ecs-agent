@@ -13,6 +13,9 @@ from ecs_agent.outcomes import GenerationStatus
 
 if TYPE_CHECKING:
     from ecs_agent.core.run_result import RunResult
+    from ecs_agent.prompts.contracts import SystemPromptConfigSpec, TriggerSpec
+    from ecs_agent.skills.script_skill import ScriptSkill
+    from ecs_agent.tools.definitions import ToolDefinition
 
 EntityId = NewType("EntityId", int)
 SystemHandle = NewType("SystemHandle", str)
@@ -132,6 +135,8 @@ class Message:
     generation_status: GenerationStatus | None = None
     finish_reason: FinishReason | None = None
     provider_output: ProviderOutput | None = None
+    turn_id: str | None = None
+    """Authoring turn identity; internal metadata, never a provider parameter."""
 
 
 @dataclass(slots=True)
@@ -217,6 +222,9 @@ class RunStartedEvent:
     active_entities: int
     parent_observation_id: str | None = None
     emit_root_trace: bool = True
+    entity_id: EntityId | None = None
+    turn_id: str | None = None
+    run_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -639,6 +647,9 @@ class UserInputReceivedEvent:
     entity_id: EntityId | int
     prompt: str
     text: str
+    turn_id: str | None = None
+    run_id: str | None = None
+    source: str = "user_input_system"
 
 
 @dataclass(slots=True)
@@ -663,6 +674,7 @@ class ToolExecutionCompletedEvent:
     duration_seconds: float | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None
+    arguments: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         self.status = "success" if self.success else "error"
@@ -767,6 +779,16 @@ class SubagentConfig:
     # Name of the child-world runtime profile (see systems.subagent.runtime_profiles).
     # None resolves to "default", which reproduces the historical child system set.
     runtime_profile: str | None = None
+    # None adds no local restriction; {} explicitly denies every tool.
+    tools: dict[str, bool] | None = None
+    # Authoring payloads are distinct from inherited skill/tool names.
+    prompt_config: SystemPromptConfigSpec | None = None
+    triggers: list[TriggerSpec] = field(default_factory=list)
+    local_skills: list[ScriptSkill] = field(default_factory=list)
+    tool_definitions: list[ToolDefinition] = field(default_factory=list)
+    subagents: dict[str, SubagentConfig] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    authoring: bool = False
 
 
 @dataclass(slots=True)

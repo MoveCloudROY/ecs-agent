@@ -8,6 +8,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from ecs_agent.components import (
+    AgentTurnComponent,
     ChildStubComponent,
     ConversationComponent,
     ErrorComponent,
@@ -48,6 +49,7 @@ class RunResult:
     final_message: Message | None = None
     partial_message: Message | None = None
     error: str | None = None
+    turn_id: str | None = None
 
     @property
     def success(self) -> bool:
@@ -81,6 +83,7 @@ def snapshot_run_result(
         error = terminal.error or error
 
     partial = None
+    turn = world.get_component(entity, AgentTurnComponent) if entity is not None else None
     latest_is_assistant = False
     history_error = None
     if entity is not None:
@@ -91,7 +94,13 @@ def snapshot_run_result(
             partial = next((
                 deepcopy(message) for message in reversed(conversation.messages)
                 if message.role == "assistant"
+                and (turn is None or message.turn_id == turn.turn_id)
             ), None)
+            if turn is not None and turn.last_message is not None:
+                partial = deepcopy(turn.last_message)
+                # Compaction may remove the output from working history, but
+                # cannot change the provenance of the last generated answer.
+                latest_is_assistant = partial.turn_id == turn.turn_id
         pending = world.get_component(entity, PendingToolCallsComponent)
         pending_error = world.get_component(entity, ErrorComponent)
         if pending_error is not None:
@@ -105,10 +114,10 @@ def snapshot_run_result(
         status = RunStatus.TIMEOUT
     elif reason == "budget_exhausted":
         status = RunStatus.BUDGET_EXHAUSTED
-    elif error is not None or reason.endswith("_error") or reason in {"provider_exhausted", "exception"}:
-        status = RunStatus.ERROR
     elif reason == "external_cancellation" or reason.endswith("_cancelled"):
         status = RunStatus.CANCELLED
+    elif error is not None or reason.endswith("_error") or reason in {"provider_exhausted", "exception"}:
+        status = RunStatus.ERROR
     elif reason == "interruption_component":
         status = RunStatus.INTERRUPTED
     elif reason == "max_ticks":
@@ -135,4 +144,5 @@ def snapshot_run_result(
         run_id=run_id, status=status, reason=reason, ticks=ticks,
         entity_id=entity, final_message=final, partial_message=partial,
         error=error,
+        turn_id=turn.turn_id if turn is not None else None,
     )

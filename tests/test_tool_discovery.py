@@ -1,3 +1,5 @@
+"""Decorated tools preserve callables and expose accurate input schemas."""
+
 from __future__ import annotations
 
 import asyncio
@@ -30,6 +32,7 @@ async def test_tool_decorator_on_async_function_builds_schema_from_type_hints() 
             "times": {"type": "integer"},
         },
         "required": ["name"],
+        "additionalProperties": False,
     }
     assert await handler(name="Ada", times=2) == "Hello AdaHello Ada"
 
@@ -117,17 +120,13 @@ def test_tool_without_arguments_uses_function_name_and_docstring() -> None:
     assert schema.description == "Summarize a topic."
 
 
-def test_parameter_type_mapping_str_int_float_bool_and_unknown() -> None:
-    class CustomType:
-        pass
-
+def test_parameter_type_mapping_str_int_float_bool() -> None:
     @tool(name="types", description="Map types")
     async def typed(
         text: str,
         count: int,
         ratio: float,
         enabled: bool,
-        custom: CustomType,
     ) -> str:
         return text
 
@@ -136,7 +135,6 @@ def test_parameter_type_mapping_str_int_float_bool_and_unknown() -> None:
     assert properties["count"]["type"] == "integer"
     assert properties["ratio"]["type"] == "number"
     assert properties["enabled"]["type"] == "boolean"
-    assert properties["custom"]["type"] == "string"
 
 
 def test_parameter_type_mapping_supports_scalar_unions() -> None:

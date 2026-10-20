@@ -439,16 +439,14 @@ async def test_react_terminates_after_plan_completion() -> None:
     world, agent_id = _build_react_world(model, ["Single step"])
 
     runner = Runner()
-    await runner.run(world, max_ticks=5)
+    result = await runner.run(world, max_ticks=5)
 
     plan = world.get_component(agent_id, PlanComponent)
     assert plan is not None
     assert plan.completed is True
 
-    # Should hit max_ticks since no ReasoningSystem is registered
-    # and plan is already done — no TerminalComponent from model exhaustion
-    terminal = world.get_component(agent_id, TerminalComponent)
-    # Either terminal from max_ticks or no terminal (plan just completed)
-    # The runner creates a max_ticks terminal on a NEW entity if no terminal exists
-    terminals = list(world.query(TerminalComponent))
-    assert len(terminals) >= 1  # At least max_ticks terminal exists
+    # No reasoning system remains to produce a final answer; only this run's
+    # budget expires. The completed plan does not create a terminal entity.
+    assert result.reason == "max_ticks"
+    assert result.ticks == 5
+    assert not list(world.query(TerminalComponent))

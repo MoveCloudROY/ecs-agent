@@ -8,14 +8,14 @@ Also demonstrates:
 - Creating a World with ReasoningSystem and ErrorHandlingSystem
 - Creating an Agent Entity with LLMComponent and ConversationComponent
 - Running the agent with a user message
-- Printing the conversation history
+- Reading the final RunResult
 """
 
 import asyncio
 import os
 
 from ecs_agent.components import ConversationComponent, LLMComponent
-from ecs_agent.core import Runner, World
+from ecs_agent.core import AgentHandle, World
 from ecs_agent.logging import configure_logging
 from ecs_agent.providers import FakeModel, Model
 from ecs_agent.providers.config import ApiFormat
@@ -65,29 +65,22 @@ async def main() -> None:
             system_prompt="You are a helpful assistant.",
         ),
     )
-    world.add_component(
-        agent_id,
-        ConversationComponent(
-            messages=[Message(role="user", content="Hello, how are you?")]
-        ),
-    )
+    world.add_component(agent_id, ConversationComponent(messages=[]))
 
     # Register Systems
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
-    # Run
-    runner = Runner()
-    await runner.run(world, max_ticks=3)
-
-    # Print results
-    conv = world.get_component(agent_id, ConversationComponent)
-    if conv is not None:
-        print("Conversation:")
-        for msg in conv.messages:
-            print(f"  {msg.role}: {msg.content}")
-    else:
-        print("No conversation found")
+    agent = AgentHandle(world, agent_id)
+    try:
+        result = await agent.run_turn("Hello, how are you?", max_steps=3)
+        if result.success:
+            assert result.final_message is not None
+            print(f"Assistant: {result.final_message.content}")
+        else:
+            print(f"Run stopped: {result.status} — {result.error or result.reason}")
+    finally:
+        await model.aclose()
 
 
 if __name__ == "__main__":

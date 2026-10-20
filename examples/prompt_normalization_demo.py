@@ -34,7 +34,8 @@ from ecs_agent.components import (
     ToolRegistryComponent,
     UserPromptConfigComponent,
 )
-from ecs_agent.core import Runner, World
+from ecs_agent.core import World
+from ecs_agent import AgentDefinition, RuntimeConfig, ToolDefinition, build_agent
 from ecs_agent.prompts.contracts import (
     PlaceholderSpec,
     PromptTemplateSource,
@@ -120,7 +121,7 @@ def _extract_outbound_user_message(messages: list[Message]) -> Message:
         raise RuntimeError(
             "Provider did not receive expected outbound message sequence"
         )
-    return messages[-1]
+    return next(message for message in reversed(messages) if message.role == "user" and not message.content.startswith("[PROMPT_CONTEXT_POOL]"))
 
 
 def _build_system_prompt_config() -> SystemPromptConfigSpec:
@@ -237,168 +238,66 @@ async def _run_file_template_demo() -> str:
 
 
 async def main() -> None:
-    world = World()
-    base_model, model, mode = _build_provider_from_env()
+    base_model, model_name, mode = _build_provider_from_env()
     model = RecordingProvider(base_model)
 
-    entity = world.create_entity()
-    world.add_component(entity, LLMComponent(model=model))
-    world.add_component(
-        entity,
-        ConversationComponent(
-            messages=[
-                Message(
-                    role="user",
-                    content="Please @code summarize latest findings",
-                )
-            ]
-        ),
-    )
+    async def demo_tool() -> str:
+        return "This demonstration tool has no external effects."
 
-    world.add_component(entity, _build_system_prompt_config())
-    world.add_component(
-        entity,
-        ToolRegistryComponent(
-            tools={
-                "read_file": ToolSchema(
-                    name="read_file",
-                    description="Read file contents",
-                    parameters={"type": "object", "properties": {}},
-                ),
-                "web_search": ToolSchema(
-                    name="web_search",
-                    description="Search the web",
-                    parameters={"type": "object", "properties": {}},
-                ),
-                "summarize": ToolSchema(
-                    name="summarize",
-                    description="Summarize text",
-                    parameters={"type": "object", "properties": {}},
-                ),
-            },
-            handlers={},
-        ),
-    )
-    world.add_component(
-        entity,
-        SkillComponent(
-            skills={
-                "code_review": SkillMetadata(
-                    name="code_review",
-                    description="Review code for issues",
-                    tool_names=["read_file"],
-                    has_system_prompt=True,
-                ),
-                "web_lookup": SkillMetadata(
-                    name="web_lookup",
-                    description="Look up information online",
-                    tool_names=["web_search"],
-                    has_system_prompt=False,
-                ),
-            }
-        ),
-    )
-    world.add_component(
-        entity,
-        SubagentRegistryComponent(
-            subagents={
-                "researcher": SubagentConfig(
-                    name="researcher",
-                    model=base_model,
-                    
-                    description="Research and gather information",
-                    system_prompt="Research assistant",
-                ),
-                "reviewer": SubagentConfig(
-                    name="reviewer",
-                    model=base_model,
-                    
-                    description="Review and critique work products",
-                    system_prompt="Review assistant",
-                ),
-            }
-        ),
-    )
-
+    tools = [ToolDefinition(ToolSchema(name=name, description=description, parameters={"type": "object", "properties": {}}), demo_tool) for name, description in (
+        ("read_file", "Demonstrate a file-tool inventory entry"),
+        ("web_search", "Demonstrate a search-tool inventory entry"),
+        ("summarize", "Demonstrate a summary-tool inventory entry"),
+    )]
+    # Fixture metadata makes the inventory and context-pool display explicit;
+    # production agents use AgentDefinition.skills for actual skill installation.
+    context_entries = [
+        ContextEntry(entry_id="tool-search-0", priority=30, registration_order=0,
+            source_label="tool:search", content="source: tool:search\nstatus: success\nresult: Found 3 relevant documents"),
+        ContextEntry(entry_id="subagent-researcher-1", priority=20, registration_order=1,
+            source_label="subagent:researcher", content="source: subagent:researcher\nstatus: success\nresult: Synthesized findings from 5 sources"),
+    ]
+    components: list[object] = [
+        SkillComponent(skills={
+            "code_review": SkillMetadata(name="code_review", description="Review code for issues", tool_names=["read_file"], has_system_prompt=True),
+            "web_lookup": SkillMetadata(name="web_lookup", description="Look up information online", tool_names=["web_search"], has_system_prompt=False),
+        }),
+        PromptContextQueueComponent(entries=context_entries),
+    ]
     mcp_note = "MCPClientComponent attached"
     try:
         from ecs_agent.mcp.components import MCPClientComponent
-
-        world.add_component(
-            entity,
-            MCPClientComponent(
-                session=None,
-                connected=True,
-                cached_tools=[{"name": "mcp_fetch"}, {"name": "mcp_memory"}],
-            ),
-        )
+        components.append(MCPClientComponent(session=None, connected=True, cached_tools=[{"name": "mcp_fetch"}, {"name": "mcp_memory"}]))
     except ImportError as exc:
         mcp_note = f"MCPClientComponent unavailable, skipping ({exc})"
-
-    context_entries = [
-        ContextEntry(
-            entry_id="tool-search-0",
-            priority=30,
-            registration_order=0,
-            source_label="tool:search",
-            content=(
-                "source: tool:search\n"
-                "status: success\n"
-                "result: Found 3 relevant documents"
-            ),
-        ),
-        ContextEntry(
-            entry_id="subagent-researcher-1",
-            priority=20,
-            registration_order=1,
-            source_label="subagent:researcher",
-            content=(
-                "source: subagent:researcher\n"
-                "status: success\n"
-                "result: Synthesized findings from 5 sources"
-            ),
-        ),
-    ]
-    world.add_component(
-        entity, PromptContextQueueComponent(entries=list(context_entries))
-    )
-    world.add_component(
-        entity,
-        UserPromptConfigComponent(
-            triggers=[
-                TriggerSpec(
-                    pattern="@code",
-                    match_mode="keyword",
-                    action="inject",
-                    content="Prioritize deterministic code-first reasoning.",
-                    priority=0,
-                ),
-                TriggerSpec(
-                    pattern="findings",
-                    match_mode="keyword",
-                    action="inject",
-                    content="Prefer successful tool outputs as evidence.",
-                    priority=0,
-                ),
-            ],
-            enable_context_pool=True,
-        ),
-    )
-
-    world.register_system(SystemPromptRenderSystem(priority=-20), priority=-20)
-    world.register_system(UserPromptNormalizationSystem(priority=-10), priority=-10)
-    world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
-
-    await Runner().run(world, max_ticks=1)
+    agent = build_agent(AgentDefinition(
+        model=model, prompt=_build_system_prompt_config(), tools=tools,
+        subagents={
+            "researcher": AgentDefinition(base_model, prompt="Research assistant", description="Research and gather information"),
+            "reviewer": AgentDefinition(base_model, prompt="Review assistant", description="Review and critique work products"),
+        },
+    ), runtime=RuntimeConfig(
+        components=tuple(components),
+        user_prompt=UserPromptConfigComponent(triggers=[
+            TriggerSpec(pattern="@code", match_mode="keyword", action="inject", content="Prioritize deterministic code-first reasoning."),
+            TriggerSpec(pattern="findings", match_mode="keyword", action="inject", content="Prefer successful tool outputs as evidence."),
+        ], enable_context_pool=True),
+    ))
+    world, entity = agent.world, agent.entity
+    try:
+        result = await agent.run_turn("Please @code summarize latest findings", max_steps=3)
+        print(f"status: {result.status.value}")
+        if not result.success:
+            raise RuntimeError(f"Prompt demo did not complete: {result.reason}")
+    finally:
+        if os.getenv("LLM_API_KEY"):
+            await base_model.aclose()
 
     outbound_user = _extract_outbound_user_message(model.last_messages)
     rendered_system = world.get_component(entity, RenderedSystemPromptComponent)
     rendered_user = world.get_component(entity, RenderedUserPromptComponent)
     context_queue = world.get_component(entity, PromptContextQueueComponent)
-    placeholder_snapshot = (
-        rendered_system.placeholder_snapshot if rendered_system is not None else {}
-    )
+    placeholder_snapshot = dict(agent.inspect_prompt().placeholders)
 
     triggers = {
         "@code": "Prioritize deterministic code-first reasoning.",
@@ -413,7 +312,7 @@ async def main() -> None:
 
     rendered_system_text = rendered_system.text if rendered_system is not None else ""
     rendered_user_text = rendered_user.text if rendered_user is not None else ""
-    outbound_text = outbound_user.content
+    outbound_text = "\n\n".join(message.content for message in model.last_messages if message.role == "user")
     original_user_text = "Please @code summarize latest findings"
 
     print(f"[mode] {mode}")
@@ -471,7 +370,7 @@ async def main() -> None:
     print(
         f"[PROMPT_CONTEXT_POOL] in outbound: {'[PROMPT_CONTEXT_POOL]' in outbound_text}"
     )
-    print(f"user text preserved: {outbound_text.endswith(original_user_text)}")
+    print(f"user text preserved: {outbound_user.content.endswith(original_user_text)}")
     print(
         "${_installed_tools} resolved (no literal ${_installed_tools} in rendered): "
         f"{'${_installed_tools}' not in rendered_system_text}"

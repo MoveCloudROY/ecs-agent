@@ -111,6 +111,7 @@ def test_telemetry_record_serializes_raw_input_output() -> None:
                 "generation_status": None,
                 "finish_reason": None,
                 "provider_output": None,
+                "turn_id": None,
             }
         ],
         "tool_calls": [
@@ -135,6 +136,7 @@ def test_telemetry_record_serializes_raw_input_output() -> None:
                 "generation_status": None,
                 "finish_reason": None,
                 "provider_output": None,
+                "turn_id": None,
         }
     }
     assert payload["redaction"] == {"applied": False, "fields": []}
@@ -233,6 +235,7 @@ def test_telemetry_record_payload_contains_schema_fields_and_json_safe_values() 
                 "generation_status": None,
                 "finish_reason": None,
                 "provider_output": None,
+                "turn_id": None,
             },
             {
                 "nested": {
@@ -271,6 +274,7 @@ def test_telemetry_record_payload_contains_schema_fields_and_json_safe_values() 
                 "generation_status": None,
                 "finish_reason": None,
                 "provider_output": None,
+                "turn_id": None,
             },
             "object": "<ReprOnly stable>",
         },

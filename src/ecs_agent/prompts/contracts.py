@@ -43,6 +43,8 @@ class PlaceholderSpec:
 class SystemPromptConfigSpec:
     template_source: PromptTemplateSource
     placeholders: list[PlaceholderSpec] = field(default_factory=list)
+    revision: int = 0
+    source_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,5 +65,4 @@ class PromptTemplate:
     content: str
     description: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
-
 

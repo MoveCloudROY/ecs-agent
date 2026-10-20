@@ -249,6 +249,9 @@ class SubagentSystem:
             metadata,
             run_in_background,
         )
+        # This runtime owns the live task. Subsequent ticks must not treat
+        # its component projection as a checkpoint lacking that task handle.
+        self._reconciled_session_ids.add(session_id)
         await self._runtime_manager.sync_to_component(world, parent_entity_id)
         return session_id, metadata
 
@@ -338,7 +341,7 @@ class SubagentSystem:
         SubagentRegistryComponent and ToolRegistryComponent.
         """
         if self._free_subagent_config.enabled:
-            for entity_id, (tool_registry,) in world.query(ToolRegistryComponent):
+            for entity_id, (tool_registry,) in world.query_active(ToolRegistryComponent):
                 registry_comp = world.get_component(entity_id, SubagentRegistryComponent)
                 if registry_comp is None:
                     registry_comp = SubagentRegistryComponent(
@@ -365,7 +368,7 @@ class SubagentSystem:
                 )
             return
 
-        for entity_id, components in world.query(
+        for entity_id, components in world.query_active(
             SubagentRegistryComponent, ToolRegistryComponent
         ):
             registry_comp, tool_registry = components
@@ -393,8 +396,9 @@ class SubagentSystem:
         self,
         world: World,
         entity_id: EntityId,
+        override: bool = False,
     ) -> None:
-        subagent_tools.install_subagent_control_tools(self, world, entity_id)
+        subagent_tools.install_subagent_control_tools(self, world, entity_id, override=override)
 
     def _terminal_result_payload(
         self,

@@ -20,7 +20,7 @@ class RAGSystem:
         self.priority = priority
 
     async def process(self, world: World) -> None:
-        for entity_id, components in world.query(
+        for entity_id, components in world.query_active(
             RAGTriggerComponent,
             EmbeddingComponent,
             VectorStoreComponent,

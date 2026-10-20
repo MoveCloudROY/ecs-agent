@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import time
+from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
 from ecs_agent.components import (
+    AgentTurnComponent,
     ConversationComponent,
     ErrorComponent,
     ContextTrimConfig,
@@ -26,6 +29,13 @@ from ecs_agent.logging import get_logger
 from ecs_agent.scratchbook import ArtifactRegistry, ScratchbookService, ToolResultsSink
 from ecs_agent.token_counting import count_tokens
 from ecs_agent.systems._plan_utils import derive_plan_name
+from ecs_agent.tools.authorization import (
+    AuthorizationBatch,
+    authorization_batch,
+    authorization_fingerprint,
+    authorize_tool_call,
+    publish_tool_denial,
+)
 from ecs_agent.tools.context import ToolExecutionContext, use_tool_context
 from ecs_agent.tools.sandbox import sandboxed_execute
 from ecs_agent.tools.validation import tool_call_error
@@ -41,6 +51,17 @@ from ecs_agent.types import (
 )
 
 logger = get_logger(__name__)
+
+
+@dataclass(slots=True)
+class _ToolOutcome:
+    """A call result awaiting ordered, durable publication."""
+
+    call: ToolCall
+    result: str
+    started_at: datetime | None = None
+    duration_seconds: float = 0.0
+    denial_reason: str | None = None
 
 
 def _plan_execution_groups(
@@ -94,8 +115,17 @@ class ToolExecutionSystem:
             # Once a tool might have run, leaving it queued would repeat side
             # effects on another tick. A durable start without a result means
             # "completion unconfirmed", never "safe to rerun".
-            if world.session_service is not None:
-                for entity_id, _ in world.query(PendingToolCallsComponent, ToolRegistryComponent, ConversationComponent):
+            for entity_id, _ in world.query_active(PendingToolCallsComponent, ToolRegistryComponent, ConversationComponent):
+                turn = world.get_component(entity_id, AgentTurnComponent)
+                if turn is not None:
+                    # Cancellation while awaiting approval has not started a
+                    # side effect. Keep the queue for safe explicit continuation.
+                    if isinstance(exc, asyncio.CancelledError) and not turn.unconfirmed_tool_calls:
+                        continue
+                    reason = "tool_execution_cancelled" if isinstance(exc, asyncio.CancelledError) else "tool_execution_error"
+                    world.add_component(entity_id, ErrorComponent(error=str(exc) or reason, system_name="ToolExecutionSystem", timestamp=time.time()))
+                    world.add_component(entity_id, TerminalComponent(reason=reason, error=str(exc) or reason))
+                elif world.session_service is not None:
                     reason = "tool_execution_cancelled" if isinstance(exc, asyncio.CancelledError) else "tool_execution_error"
                     world.add_component(entity_id, ErrorComponent(error=str(exc) or reason, system_name="ToolExecutionSystem", timestamp=time.time()))
                     world.add_component(entity_id, TerminalComponent(reason=reason, error=str(exc) or reason))
@@ -104,7 +134,7 @@ class ToolExecutionSystem:
             raise
 
     async def _process_pending(self, world: World) -> None:
-        for entity_id, components in world.query(
+        for entity_id, components in world.query_active(
             PendingToolCallsComponent,
             ToolRegistryComponent,
             ConversationComponent,
@@ -114,59 +144,80 @@ class ToolExecutionSystem:
             assert isinstance(registry, ToolRegistryComponent)
             assert isinstance(conversation, ConversationComponent)
 
-            ids = [call.id for call in pending.tool_calls]
-            if any(not call.id or not call.name for call in pending.tool_calls) or len(set(ids)) != len(ids):
-                error = "Invalid or duplicate tool call identity in execution queue"
-                logger.error("tool_batch_rejected", entity_id=int(entity_id), error=error)
-                world.add_component(entity_id, ErrorComponent(
-                    error=error, system_name="ToolExecutionSystem", timestamp=time.time(),
-                ))
-                world.add_component(entity_id, TerminalComponent(reason="tool_execution_error", error=error))
-                world.remove_component(entity_id, PendingToolCallsComponent)
-                continue
+            batch = authorization_batch(world, entity_id, pending)
+            async with batch.execution_lock:
+                if batch.completed or world.get_component(entity_id, PendingToolCallsComponent) is not pending:
+                    continue
+                await self._process_entity(world, entity_id, pending, registry, conversation, batch)
 
-            results: dict[str, str] = {}
-            plan = world.get_component(entity_id, PlanComponent)
-            plan_name: str | None = None
-            if self._registry is not None and plan is not None:
-                plan_name = derive_plan_name(
-                    plan=plan,
-                    conversation=conversation,
-                    entity_id=entity_id,
-                )
-
-            config = world.get_component(entity_id, ToolExecutionConfigComponent)
-            if config is None:
-                config = ToolExecutionConfigComponent()
-            max_concurrency = max(1, config.max_concurrency)
-
-            # Execute group by group: within a group calls run concurrently,
-            # groups are barriers.  Results land strictly in the original
-            # tool_calls order so conversation appends stay deterministic.
-            for group in _plan_execution_groups(pending.tool_calls, registry.tools):
-                group_results = await self._execute_group(
-                    entity_id,
-                    world,
-                    group,
-                    registry.handlers,
-                    max_concurrency,
-                )
-                for tool_call, result in zip(group, group_results):
-                    schema = registry.tools.get(tool_call.name)
-                    await self._land_result(
-                        world=world,
-                        entity_id=entity_id,
-                        conversation=conversation,
-                        tool_call=tool_call,
-                        result=result,
-                        results=results,
-                        plan_name=plan_name,
-                        inline_result=bool(schema and schema.inline_result),
-                    )
-
+    async def _process_entity(
+        self,
+        world: World,
+        entity_id: EntityId,
+        pending: PendingToolCallsComponent,
+        registry: ToolRegistryComponent,
+        conversation: ConversationComponent,
+        batch: AuthorizationBatch,
+    ) -> None:
+        ids = [call.id for call in pending.tool_calls]
+        if any(not call.id or not call.name for call in pending.tool_calls) or len(set(ids)) != len(ids):
+            error = "Invalid or duplicate tool call identity in execution queue"
+            logger.error("tool_batch_rejected", entity_id=int(entity_id), error=error)
+            world.add_component(entity_id, ErrorComponent(
+                error=error, system_name="ToolExecutionSystem", timestamp=time.time(),
+            ))
+            world.add_component(entity_id, TerminalComponent(reason="tool_execution_error", error=error))
             world.remove_component(entity_id, PendingToolCallsComponent)
-            if results:
-                world.add_component(entity_id, ToolResultsComponent(results=results))
+            return
+
+        results: dict[str, str] = {}
+        plan = world.get_component(entity_id, PlanComponent)
+        plan_name: str | None = None
+        if self._registry is not None and plan is not None:
+            plan_name = derive_plan_name(
+                plan=plan,
+                conversation=conversation,
+                entity_id=entity_id,
+            )
+
+        config = world.get_component(entity_id, ToolExecutionConfigComponent)
+        if config is None:
+            config = ToolExecutionConfigComponent()
+        max_concurrency = max(1, config.max_concurrency)
+
+        # Execute group by group: within a group calls run concurrently,
+        # groups are barriers.  Results land strictly in the original
+        # tool_calls order so conversation appends stay deterministic.
+        for group in _plan_execution_groups(pending.tool_calls, registry.tools):
+            group_results = await self._execute_group(
+                entity_id,
+                world,
+                group,
+                registry.handlers,
+                max_concurrency,
+                batch,
+            )
+            for source_call, outcome in zip(group, group_results, strict=True):
+                tool_call = outcome.call
+                schema = registry.tools.get(tool_call.name)
+                await self._land_result(
+                    world=world,
+                    entity_id=entity_id,
+                    conversation=conversation,
+                    tool_call=tool_call,
+                    source_call=source_call,
+                    outcome=outcome,
+                    batch=batch,
+                    results=results,
+                    plan_name=plan_name,
+                    inline_result=bool(schema and schema.inline_result),
+                )
+
+        batch.completed = True
+        if world.get_component(entity_id, PendingToolCallsComponent) is pending:
+            world.remove_component(entity_id, PendingToolCallsComponent)
+        if results:
+            world.add_component(entity_id, ToolResultsComponent(results=results))
 
     async def _execute_group(
         self,
@@ -175,20 +226,21 @@ class ToolExecutionSystem:
         group: list[ToolCall],
         handlers: dict[str, Callable[..., Awaitable[str]]],
         max_concurrency: int,
-    ) -> list[str]:
+        batch: AuthorizationBatch,
+    ) -> list[_ToolOutcome]:
         """Execute one group, concurrently when it holds multiple safe calls."""
         if len(group) == 1 or max_concurrency == 1:
             return [
-                await self._execute_with_events(entity_id, world, tool_call, handlers)
+                await self._execute_with_events(entity_id, world, tool_call, handlers, batch)
                 for tool_call in group
             ]
 
         semaphore = asyncio.Semaphore(max_concurrency)
 
-        async def bounded(tool_call: ToolCall) -> str:
+        async def bounded(tool_call: ToolCall) -> _ToolOutcome:
             async with semaphore:
                 return await self._execute_with_events(
-                    entity_id, world, tool_call, handlers
+                    entity_id, world, tool_call, handlers, batch
                 )
 
         async with asyncio.TaskGroup() as task_group:
@@ -201,10 +253,41 @@ class ToolExecutionSystem:
         world: World,
         tool_call: ToolCall,
         handlers: dict[str, Callable[..., Awaitable[str]]],
-    ) -> str:
+        batch: AuthorizationBatch,
+    ) -> _ToolOutcome:
+        state = batch.call_state(tool_call)
+        if state.consumed:
+            raise RuntimeError("Tool call already consumed; refusing to repeat execution")
+        registry = world.get_component(entity_id, ToolRegistryComponent)
+        invalid = tool_call_error(
+            [tool_call], list(registry.tools.values()) if registry else None,
+        )
+        if tool_call.name not in handlers:
+            invalid = f"unknown tool '{tool_call.name}'"
+        if invalid is not None:
+            logger.error("tool_failed", tool_name=tool_call.name, reason=invalid)
+            state.consumed = True
+            return _ToolOutcome(deepcopy(tool_call), f"Error: {invalid}")
+
+        decision = await authorize_tool_call(world, entity_id, batch.pending, tool_call)
+        snapshot = deepcopy(tool_call)
+        reason = decision.reason
+        if reason is None and decision.fingerprint != authorization_fingerprint(world, entity_id, tool_call):
+            reason = "Tool authorization changed before execution"
+        # Approval handlers may have changed arguments while awaiting a decision.
+        invalid = tool_call_error([snapshot], list(registry.tools.values()) if registry else None)
+        state.consumed = True
+        if reason is not None:
+            return _ToolOutcome(snapshot, f"Error: {reason}", denial_reason=reason)
+        if invalid is not None:
+            return _ToolOutcome(snapshot, f"Error: {invalid}")
+
+        # Authorization commits at execution start. Freeze payload/handler before
+        # any await; subsequent policy changes apply to calls not yet started.
+        selected_handlers = dict(handlers)
         start_monotonic = time.monotonic()
         tool_start_time = datetime.now(timezone.utc)
-        start_id = tool_record_id(world, entity_id, tool_call.id, "started")
+        start_id = tool_record_id(world, entity_id, snapshot.id, "started")
         if start_id is not None and world.session_service is not None:
             try:
                 world.session_service.store.get_record(start_id)
@@ -212,41 +295,26 @@ class ToolExecutionSystem:
                 pass
             else:
                 raise RuntimeError("Tool already started in this session; execution must not be repeated, completion may be unconfirmed")
-        record_session_event(world, entity_id, "tool_started", {"tool_call_id": tool_call.id, "tool_name": tool_call.name, "arguments": tool_call.arguments, "status": "started"}, record_id=start_id)
-        await world.event_bus.publish(
-            ToolExecutionStartedEvent(
-                entity_id=entity_id,
-                tool_call=tool_call,
-                start_time=tool_start_time,
-            )
-        )
-
-        result = await self._execute_tool_call(
-            entity_id,
-            world,
-            tool_call,
-            handlers,
-        )
-
-        success = not result.startswith("Error")
-        tool_end_time = datetime.now(timezone.utc)
-        record_conversation_message(
-            world, entity_id, Message(role="tool", content=result, tool_call_id=tool_call.id),
-            record_id=tool_record_id(world, entity_id, tool_call.id, "result"),
-        )
-        await world.event_bus.publish(
-            ToolExecutionCompletedEvent(
-                entity_id=entity_id,
-                tool_call_id=tool_call.id,
-                result=result,
-                success=success,
-                tool_name=tool_call.name,
-                duration_seconds=time.monotonic() - start_monotonic,
-                start_time=tool_start_time,
-                end_time=tool_end_time,
-            )
-        )
-        return result
+        record_session_event(world, entity_id, "tool_started", {"tool_call_id": snapshot.id, "tool_name": snapshot.name, "arguments": snapshot.arguments, "status": "started"}, record_id=start_id)
+        turn = world.get_component(entity_id, AgentTurnComponent)
+        if turn is not None:
+            if snapshot.id in turn.unconfirmed_tool_calls:
+                raise RuntimeError("Tool completion is unconfirmed; refusing to repeat execution")
+            turn.unconfirmed_tool_calls.append(snapshot.id)
+        start_publication = asyncio.create_task(world.event_bus.publish(ToolExecutionStartedEvent(
+            entity_id=entity_id, tool_call=deepcopy(snapshot), start_time=tool_start_time,
+        )))
+        try:
+            # Enter the handler before yielding to observation subscribers. A
+            # subscriber cannot alter an approved call between the gate and start.
+            result = await self._execute_tool_call(entity_id, world, snapshot, selected_handlers)
+            duration = time.monotonic() - start_monotonic
+            await start_publication
+            return _ToolOutcome(snapshot, result, tool_start_time, duration)
+        finally:
+            if not start_publication.done():
+                start_publication.cancel()
+                await asyncio.gather(start_publication, return_exceptions=True)
 
     async def _land_result(
         self,
@@ -255,7 +323,9 @@ class ToolExecutionSystem:
         entity_id: EntityId,
         conversation: ConversationComponent,
         tool_call: ToolCall,
-        result: str,
+        source_call: ToolCall,
+        outcome: _ToolOutcome,
+        batch: AuthorizationBatch,
         results: dict[str, str],
         plan_name: str | None,
         inline_result: bool = False,
@@ -267,6 +337,11 @@ class ToolExecutionSystem:
         results — the model must always see them, so they are never replaced by
         an artifact path it might not fetch.
         """
+        result = outcome.result
+        record_conversation_message(
+            world, entity_id, Message(role="tool", content=result, tool_call_id=tool_call.id),
+            record_id=tool_record_id(world, entity_id, tool_call.id, "result"),
+        )
         success = not result.startswith("Error")
         persisted_record_path: str | None = None
         if self.tool_sink is not None and not inline_result:
@@ -286,6 +361,7 @@ class ToolExecutionSystem:
                 ),
                 recorded_record_id=tool_record_id(world, entity_id, tool_call.id, "result"),
             )
+            self._confirm_managed_result(world, entity_id, tool_call.id, source_call, batch.pending)
             if success:
                 await self._cache_overflowed_tool_result(
                     world=world,
@@ -301,6 +377,20 @@ class ToolExecutionSystem:
                 Message(role="tool", content=result, tool_call_id=tool_call.id),
                 recorded_record_id=tool_record_id(world, entity_id, tool_call.id, "result"),
             )
+            self._confirm_managed_result(world, entity_id, tool_call.id, source_call, batch.pending)
+
+        if outcome.denial_reason is not None:
+            await publish_tool_denial(
+                world, entity_id, batch.call_state(tool_call), tool_call, outcome.denial_reason,
+            )
+        else:
+            await world.event_bus.publish(ToolExecutionCompletedEvent(
+                entity_id=entity_id, tool_call_id=tool_call.id, result=result,
+                success=success, tool_name=tool_call.name,
+                duration_seconds=outcome.duration_seconds,
+                start_time=outcome.started_at, end_time=datetime.now(timezone.utc),
+                arguments=deepcopy(tool_call.arguments),
+            ))
 
         if self._registry is not None and plan_name is not None:
             if success:
@@ -321,6 +411,24 @@ class ToolExecutionSystem:
                         "last_error": result,
                     },
                 )
+
+    @staticmethod
+    def _confirm_managed_result(
+        world: World, entity: EntityId, call_id: str,
+        source_call: ToolCall, original_pending: PendingToolCallsComponent,
+    ) -> None:
+        turn = world.get_component(entity, AgentTurnComponent)
+        if turn is None:
+            return
+        if call_id in turn.unconfirmed_tool_calls:
+            turn.unconfirmed_tool_calls.remove(call_id)
+        pending = world.get_component(entity, PendingToolCallsComponent)
+        if pending is original_pending:
+            # Remove exactly the admitted object, even if an observer changed
+            # its id after start. Do not consume a replacement queue or call.
+            pending.tool_calls = [call for call in pending.tool_calls if call is not source_call]
+            if not pending.tool_calls:
+                world.remove_component(entity, PendingToolCallsComponent)
 
     async def _execute_tool_call(
         self,

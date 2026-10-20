@@ -1,6 +1,7 @@
 """ECS Components for Agent system."""
 
 from ecs_agent.components.definitions import (
+    AgentTurnComponent,
     CheckpointComponent,
     CompactionConfigComponent,
     ContextTrimConfig,
@@ -65,6 +66,7 @@ from ecs_agent.components.definitions import (
 from ecs_agent.types import TodoItem, TodoStatus
 
 __all__ = [
+    "AgentTurnComponent",
     "CheckpointComponent",
     "CompactionConfigComponent",
     "ContextTrimConfig",

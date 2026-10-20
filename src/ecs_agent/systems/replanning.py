@@ -68,7 +68,7 @@ class ReplanningSystem:
 
     async def process(self, world: World) -> None:
         """Check each plan entity and replan if a new step was completed."""
-        for entity_id, components in world.query(
+        for entity_id, components in world.query_active(
             PlanComponent, LLMComponent, ConversationComponent
         ):
             plan, llm_component, conversation = components

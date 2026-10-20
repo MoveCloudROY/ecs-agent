@@ -1,3 +1,5 @@
+"""Optional approval preflight and execution-owned denial results."""
+
 import asyncio
 
 import pytest
@@ -6,8 +8,10 @@ from ecs_agent.components import (
     ConversationComponent,
     PendingToolCallsComponent,
     ToolApprovalComponent,
+    ToolRegistryComponent,
 )
 from ecs_agent.core import World
+from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.systems.tool_approval import ToolApprovalSystem
 from ecs_agent.types import (
     ApprovalPolicy,
@@ -15,8 +19,21 @@ from ecs_agent.types import (
     ToolApprovedEvent,
     ToolApprovalRequestedEvent,
     ToolCall,
+    ToolSchema,
     ToolDeniedEvent,
 )
+
+
+async def _finish_calls(world, entity_id) -> None:
+    pending = world.get_component(entity_id, PendingToolCallsComponent)
+    async def handler() -> str:
+        return "ok"
+    names = {call.name for call in pending.tool_calls}
+    world.add_component(entity_id, ToolRegistryComponent(
+        tools={name: ToolSchema(name=name, description=name, parameters={}) for name in names},
+        handlers={name: handler for name in names},
+    ))
+    await ToolExecutionSystem().process(world)
 
 
 @pytest.mark.asyncio
@@ -82,6 +99,8 @@ async def test_always_deny_removes_tool_call_adds_message_and_publishes_denied_e
     world.event_bus.subscribe(ToolDeniedEvent, on_denied)
 
     await ToolApprovalSystem().process(world)
+    assert world.get_component(entity_id, PendingToolCallsComponent) is not None
+    await _finish_calls(world, entity_id)
 
     pending = world.get_component(entity_id, PendingToolCallsComponent)
     approval = world.get_component(entity_id, ToolApprovalComponent)
@@ -92,7 +111,7 @@ async def test_always_deny_removes_tool_call_adds_message_and_publishes_denied_e
     assert approval.denied_calls == ["call-1"]
     assert conversation is not None
     assert conversation.messages[-1] == Message(
-        role="system", content="Tool call call-1 denied by policy"
+        role="tool", content="Error: Denied by ALWAYS_DENY policy", tool_call_id="call-1"
     )
     assert len(seen) == 1
     assert seen[0].entity_id == entity_id
@@ -165,6 +184,8 @@ async def test_require_approval_timeout_denies_call_when_future_is_never_resolve
     world.event_bus.subscribe(ToolApprovalRequestedEvent, on_request)
 
     await ToolApprovalSystem().process(world)
+    assert world.get_component(entity_id, PendingToolCallsComponent) is not None
+    await _finish_calls(world, entity_id)
 
     pending = world.get_component(entity_id, PendingToolCallsComponent)
     approval = world.get_component(entity_id, ToolApprovalComponent)
@@ -175,7 +196,7 @@ async def test_require_approval_timeout_denies_call_when_future_is_never_resolve
     assert approval.denied_calls == ["call-1"]
     assert conversation is not None
     assert conversation.messages[-1] == Message(
-        role="system", content="Tool call call-1 denied by policy"
+        role="tool", content="Error: Approval timeout after 0.01s", tool_call_id="call-1"
     )
 
 
@@ -226,17 +247,18 @@ async def test_require_approval_processes_each_call_individually() -> None:
     world.event_bus.subscribe(ToolApprovalRequestedEvent, on_request)
 
     await ToolApprovalSystem().process(world)
+    assert world.get_component(entity_id, PendingToolCallsComponent) is not None
+    await _finish_calls(world, entity_id)
 
     pending = world.get_component(entity_id, PendingToolCallsComponent)
     approval = world.get_component(entity_id, ToolApprovalComponent)
     conversation = world.get_component(entity_id, ConversationComponent)
-    assert pending is not None
+    assert pending is None
     assert approval is not None
-    assert [call.id for call in pending.tool_calls] == ["call-1"]
     assert approval.approved_calls == ["call-1"]
     assert approval.denied_calls == ["call-2"]
     assert requested_ids == ["call-1", "call-2"]
     assert conversation is not None
     assert conversation.messages[-1] == Message(
-        role="system", content="Tool call call-2 denied by policy"
+        role="tool", content="Error: Denied by approval handler", tool_call_id="call-2"
     )

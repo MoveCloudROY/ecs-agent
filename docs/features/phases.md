@@ -252,16 +252,15 @@ Ownership contract, keyed on `PhaseGraph.manages_tools`:
 
 - **Some phase declares `tools`** (`manages_tools=True`): the graph owns
   `PermissionComponent.allowed_tools`. Entering a declaring phase sets it to
-  that list; entering a phase with **no** declaration clears it to `[]` —
-  which means *unrestricted* under `PermissionSystem` semantics (an empty
-  allowlist allows everything).
+  that list; entering a phase with **no** declaration sets it to `None`
+  (unrestricted). An explicitly empty tuple sets `[]` and denies all tools.
 - **No phase declares `tools`** (`manages_tools=False`): the graph never
   touches `PermissionComponent` — it remains entirely yours.
 - `denied_tools` is never touched in any case.
 
-Enforcement is the existing `PermissionSystem` (see
-[permissions.md](permissions.md)); the phase graph only writes the policy on
-entry. Register `PermissionSystem` before `ToolExecutionSystem` as usual.
+ToolExecutionSystem enforces the current policy (see
+[permissions.md](permissions.md)); the phase graph writes the policy on entry.
+PermissionSystem is optional preflight at priority 1, after reasoning and before execution.
 
 ## Prompt Integration
 

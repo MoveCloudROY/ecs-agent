@@ -21,7 +21,9 @@ The following types and classes are re-exported for convenience:
 - `OpenAIEmbeddingProvider`, `FakeEmbeddingProvider` from `ecs_agent.providers`
 - `MessageBusSystem`, `RAGSystem`, `TreeSearchSystem`, `ToolApprovalSystem`, `CheckpointSystem`, `CompactionSystem`, `UserInputSystem`, `TerminalCleanupSystem`, `SubagentSystem` from `ecs_agent.systems`
 - `StreamStartEvent`, `StreamReasoningDeltaEvent`, `StreamReasoningEndEvent`, `StreamContentStartEvent`, `StreamContentDeltaEvent`, `StreamEndEvent`, `CheckpointCreatedEvent`, `CheckpointRestoredEvent`, `CompactionCompleteEvent`, `ToolApprovalRequestedEvent`, `ToolApprovedEvent`, `ToolDeniedEvent`, `RAGRetrievalCompletedEvent`, `UserInputRequestedEvent`, `MCTSNodeScoredEvent`, `MessageBusPublishedEvent`, `MessageBusDeliveredEvent`, `MessageBusResponseEvent`, `MessageBusTimeoutEvent` from `ecs_agent.types`
-- `scan_module`, `sandboxed_execute`, `tool` from `ecs_agent.tools`
+- `AgentHandle` from `ecs_agent.core`
+- `AgentDefinition`, `RuntimeConfig`, `ModelRef`, `SkillRef`, `SystemStep`, `build_agent`, `build_agent_from_specs`, `inspect_runtime`, `restore_runtime` from `ecs_agent.authoring` or `ecs_agent`
+- `ToolDefinition`, `get_tool_definition`, `register_tools`, `scan_module`, `sandboxed_execute`, `tool` from `ecs_agent.tools`
 - `ScratchbookRef`, `ScratchbookRefComponent`, `ScratchbookIndexComponent` from `ecs_agent.types` and `ecs_agent.components`
 - `SubagentConfig`, `FreeSubagentConfig`, `SubagentLifecycleStatus`, `SubagentSessionRecord`, `InheritancePolicy` from `ecs_agent.types`
 - `TodoSkill` from `ecs_agent.skills.todo`; `TodoItem`, `TodoStatus`, `TodoListUpdatedEvent` from `ecs_agent.types`; `TodoListComponent` from `ecs_agent.components`
@@ -30,6 +32,20 @@ The following types and classes are re-exported for convenience:
 
 
 ---
+
+## ecs_agent.authoring
+
+See [Agent authoring and controlled context changes](features/agent-authoring.md) for complete examples, dependency ordering, source resolution and restore contracts.
+
+- `build_agent(definition, *, runtime=None, model_factory=None, session_service=None, workspace_id="default") -> AgentHandle`: validate all definitions, create a fresh complete World, and borrow host-owned providers/services.
+- `build_agent_from_specs(specs, model_factory, *, source_dir=None, runtime=None, session_service=None, workspace_id="default") -> AgentHandle`: use the same installer for DSL declarations; child skills, placeholders and triggers are supported.
+- `inspect_runtime(agent) -> AssemblyReport`: read component names, tool sources, system roles and resolved execution priorities.
+- `restore_runtime(world, *, runtime=None, skill_bindings=None)`: rebind systems and framework tools on a loaded World; preserve history and lifecycle state and verify the installation manifest.
+- `AgentHandle.set_prompt(config_or_text)`, `adopt_prompt(source=...)`, `inspect_prompt()`: controlled configuration updates, legacy migration and side-effect-free diagnostics.
+- `AgentHandle.history_snapshot()`, `replace_history(messages, reason=..., expected_history_id=..., expected_revision=...)`, `reset_session(reason=...)`: isolated reads and durable edits between completed turns.
+- `PromptBinding` and `register_prompt_binding` from `ecs_agent.prompts`: explicit persistent references for dynamic placeholder callbacks.
+
+`compile_agent_specs()` remains a partial-assembly compatibility API. Complete construction and controlled editing do not remove the lower-level ECS interfaces.
 
 ## ecs_agent.plugins
 
@@ -450,11 +466,36 @@ world.apply_pending_system_operations()
 
 ```python
 class Runner:
-    async def run(self, world: World, max_ticks: int | None = 100, start_tick: int = 0) -> None: ...
+    async def run(self, world: World, max_ticks: int | None = 100, start_tick: int = 0, *, target_entity: EntityId | None = None, ...) -> RunResult: ...
     def save_checkpoint(self, world: World, path: str | Path) -> None: ...
     @classmethod
     def load_checkpoint(cls, path: str | Path, providers: dict[str, LLMModel], tool_handlers: dict[str, Callable]) -> tuple[World, int]: ...
 ```
+
+`max_ticks` is the legacy absolute limit relative to `start_tick`; exhaustion
+returns `RunStatus.MAX_TICKS` without adding a terminal entity. `target_entity`
+limits termination and result selection, not the low-level World's execution
+scope. Use AgentHandle for scoped turns and per-invocation budgets.
+
+### AgentHandle
+
+```python
+class AgentHandle:
+    def __init__(self, world: World, entity: EntityId) -> None: ...
+    async def run_turn(self, message: str | Message, *, max_steps: int | None = 100) -> RunResult: ...
+    async def resume(self, *, max_steps: int | None = 100) -> RunResult: ...
+    async def cancel(self) -> RunResult | None: ...
+    def abandon_turn(self, *, reason: str) -> None: ...
+    def adopt_turn(self) -> str: ...
+    def stream_turn(self, message: str | Message, *, max_steps: int | None = 100) -> AbstractAsyncContextManager[AsyncIterator[AgentStreamEvent]]: ...
+    def stream_resume(self, *, max_steps: int | None = 100) -> AbstractAsyncContextManager[AsyncIterator[AgentStreamEvent]]: ...
+```
+
+`last_result` is shared by handles bound to the same entity. Streaming envelopes
+contain `entity_id`, `turn_id`, `run_id`, and `event`, including the final
+RunCompletedEvent. Custom systems use `world.query_active(...)` or
+`is_entity_active(world, entity)` from `ecs_agent.core` to respect the active
+scope. See [turn lifecycle and migration](features/agent-lifecycle.md).
 
 ### EventBus
 
@@ -508,6 +549,7 @@ All components are implemented as `@dataclass(slots=True)`.
  `RunnerStateComponent(current_tick: int, is_paused: bool = False, checkpoint_path: str | None = None)`
  `UserInputComponent(prompt: str = "", future: asyncio.Future[str] | None = None, timeout: float | None = None, result: str | None = None)`
  `ToolApprovalComponent(policy: ApprovalPolicy, timeout: float | None = 30.0, approved_calls: list[str] = [], denied_calls: list[str] = [])`
+ `PermissionComponent(allowed_tools: list[str] | None = None, denied_tools: list[str] = [])`
  `SandboxConfigComponent(timeout: float = 30.0, max_output_size: int = 10000)`
  `ToolExecutionConfigComponent(max_concurrency: int = 8)`
  `PlanSearchComponent(max_depth: int = 5, max_branching: int = 3, exploration_weight: float = 1.414, best_plan: list[str] = [], search_active: bool = False)`
@@ -579,7 +621,7 @@ class ReplanningSystem(priority: int = 7):
 ### ToolApprovalSystem
 
 ```python
-class ToolApprovalSystem(priority: int = -5):
+class ToolApprovalSystem(priority: int = 2):
     async def process(self, world: World) -> None: ...
 ```
 
@@ -780,10 +822,17 @@ def get_logger(name: str) -> BoundLogger: ...
 ## ecs_agent.tools
 
 ```python
-def scan_module(module: ModuleType) -> tuple[dict[str, ToolSchema], dict[str, Callable[..., Awaitable[str]]]]: ...
+def scan_module(module: ModuleType) -> dict[str, tuple[ToolSchema, Callable[..., Awaitable[str]]]]: ...
+def get_tool_definition(fn: Callable[..., Any]) -> ToolDefinition: ...
+def register_tools(world: World, entity: EntityId, tools: ToolInputs) -> ToolRegistryComponent: ...
 async def sandboxed_execute(func: Callable[..., Awaitable[str]], args: dict[str, Any], timeout: float = 30.0, max_output_size: int = 10000) -> str: ...
-def tool(name: str | None = None, description: str | None = None, concurrency_safe: bool = False) -> Callable: ...
+def tool(name: str | None = None, description: str | None = None, concurrency_safe: bool = False, inline_result: bool = False) -> Callable[[F], F]: ...
 ```
+
+`ToolDefinition(schema, handler)` pairs a schema with an async handler.
+`ToolInputs` accepts an iterable of decorated functions/ToolDefinition objects,
+or the mapping returned by `scan_module()`. Registration is a validated merge
+and rejects collisions. See [tool authoring](features/tool-discovery.md).
 
 ---
 
@@ -896,7 +945,7 @@ Normalized agent specification. All loaders produce this canonical representatio
 - `mode` — Execution mode (`"primary"` creates runnable entity, `"library"` for config-only templates)
 - `model` — LLM model identifier
 - `prompt` — System prompt (string or `{"file": "path/to/prompt.txt"}`)
-- `tools` — Optional tool permission mapping (`{"tool_name": true/false}`)
+- `tools` — Optional closed tool permission mapping (`{"tool_name": true/false}`). Omission adds no restriction; `{}` denies all.
 - `metadata` — Optional arbitrary metadata dictionary
 
 ### validate_agent_spec

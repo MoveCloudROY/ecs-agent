@@ -128,7 +128,7 @@ class SubagentWaitSystem:
         self._defensive_recheck_interval = defensive_recheck_interval
 
     async def process(self, world: World) -> None:
-        for entity_id, components in world.query(SubagentWaitComponent):
+        for entity_id, components in world.query_active(SubagentWaitComponent):
             wait_component = components[0]
             assert isinstance(wait_component, SubagentWaitComponent)
 

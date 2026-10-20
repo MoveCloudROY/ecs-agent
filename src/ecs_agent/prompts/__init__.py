@@ -1,5 +1,7 @@
 """Public API for the ecs_agent prompts package."""
 
+from ecs_agent.prompts.bindings import PromptBinding, register_prompt_binding
+
 from ecs_agent.prompts.contracts import (
     PlaceholderSpec,
     SystemPromptConfigSpec,
@@ -18,6 +20,8 @@ from ecs_agent.prompts.message_assembly import assemble_messages, build_keyword_
 from ecs_agent.prompts.user_prompt_rendering import render_user_prompt_text
 
 __all__ = [
+    "PromptBinding",
+    "register_prompt_binding",
     "CORE_PLACEHOLDER_KEYS",
     "PlaceholderSpec",
     "SystemPromptConfigSpec",

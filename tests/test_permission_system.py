@@ -1,194 +1,52 @@
+"""Permission preflight and execution contracts for allowlists and denylists."""
+
 import pytest
 
-from ecs_agent.components import (
-    ConversationComponent,
-    PendingToolCallsComponent,
-    PermissionComponent,
-)
-from ecs_agent.core import World
+from ecs_agent.components import ConversationComponent, PendingToolCallsComponent, PermissionComponent
+from ecs_agent.core import Runner
+from ecs_agent.providers._message_contract import tool_span_error
 from ecs_agent.systems.permission import PermissionSystem
-from ecs_agent.types import Message, ToolCall, ToolDeniedEvent
+from ecs_agent.systems.reasoning import ReasoningSystem
+from ecs_agent.systems.tool_execution import ToolExecutionSystem
+from ecs_agent.types import ToolDeniedEvent
+from tests.authorization_support import scenario
 
 
-def _call(call_id: str, name: str) -> ToolCall:
-    return ToolCall(id=call_id, name=name, arguments={})
+@pytest.mark.parametrize("policy,expected", [
+    (None, ["read", "write"]),
+    (PermissionComponent(), ["read", "write"]),
+    (PermissionComponent(allowed_tools=[]), []),
+    (PermissionComponent(allowed_tools=["read"]), ["read"]),
+    (PermissionComponent(denied_tools=["write"]), ["read"]),
+    (PermissionComponent(allowed_tools=["read"], denied_tools=["read"]), []),
+])
+async def test_permission_policy_is_enforced_without_optional_preflight(policy, expected) -> None:
+    case = scenario()
+    if policy is not None:
+        case.world.add_component(case.entity, policy)
+    case.world.register_system(ToolExecutionSystem(), priority=5)
+    assert (await Runner().run(case.world, max_ticks=4)).success
+    assert [name for name, _ in case.called] == expected
+    conversation = case.world.get_component(case.entity, ConversationComponent)
+    assert tool_span_error(conversation.messages) is None
+    denied = [event for event in case.events if isinstance(event, ToolDeniedEvent)]
+    assert len(denied) == 2 - len(expected)
 
 
-@pytest.mark.asyncio
-async def test_denied_tool_is_removed_adds_conversation_message_and_publishes_event() -> (
-    None
-):
-    world = World()
-    entity_id = world.create_entity()
-    world.add_component(entity_id, ConversationComponent(messages=[]))
-    world.add_component(
-        entity_id,
-        PendingToolCallsComponent(
-            tool_calls=[_call("c1", "bash"), _call("c2", "read")]
-        ),
-    )
-    world.add_component(entity_id, PermissionComponent(denied_tools=["bash"]))
-
-    seen: list[ToolDeniedEvent] = []
-
-    async def on_denied(event: ToolDeniedEvent) -> None:
-        seen.append(event)
-
-    world.event_bus.subscribe(ToolDeniedEvent, on_denied)
-
-    await PermissionSystem().process(world)
-
-    pending = world.get_component(entity_id, PendingToolCallsComponent)
-    conversation = world.get_component(entity_id, ConversationComponent)
-    assert pending is not None
-    assert [call.id for call in pending.tool_calls] == ["c2"]
-    assert conversation is not None
-    assert conversation.messages[-1].role == "tool"
-    assert conversation.messages[-1].tool_call_id == "c1"
-    assert "denied" in conversation.messages[-1].content.lower()
-    assert len(seen) == 1
-    assert seen[0].entity_id == entity_id
-    assert seen[0].tool_call_id == "c1"
-
-
-@pytest.mark.asyncio
-async def test_allowed_tools_list_allows_only_explicit_tools() -> None:
-    world = World()
-    entity_id = world.create_entity()
-    world.add_component(entity_id, ConversationComponent(messages=[]))
-    world.add_component(
-        entity_id,
-        PendingToolCallsComponent(
-            tool_calls=[_call("c1", "bash"), _call("c2", "read")]
-        ),
-    )
-    world.add_component(entity_id, PermissionComponent(allowed_tools=["bash"]))
-
-    await PermissionSystem().process(world)
-
-    pending = world.get_component(entity_id, PendingToolCallsComponent)
-    assert pending is not None
-    assert [call.id for call in pending.tool_calls] == ["c1"]
-
-
-@pytest.mark.asyncio
-async def test_allowed_tools_empty_allows_all_except_denied() -> None:
-    world = World()
-    entity_id = world.create_entity()
-    world.add_component(entity_id, ConversationComponent(messages=[]))
-    world.add_component(
-        entity_id,
-        PendingToolCallsComponent(
-            tool_calls=[_call("c1", "bash"), _call("c2", "read")]
-        ),
-    )
-    world.add_component(entity_id, PermissionComponent())
-
-    await PermissionSystem().process(world)
-
-    pending = world.get_component(entity_id, PendingToolCallsComponent)
-    assert pending is not None
-    assert [call.id for call in pending.tool_calls] == ["c1", "c2"]
-
-
-@pytest.mark.asyncio
-async def test_denied_list_has_priority_over_allowed_list() -> None:
-    world = World()
-    entity_id = world.create_entity()
-    world.add_component(entity_id, ConversationComponent(messages=[]))
-    world.add_component(
-        entity_id, PendingToolCallsComponent(tool_calls=[_call("c1", "bash")])
-    )
-    world.add_component(
-        entity_id,
-        PermissionComponent(allowed_tools=["bash"], denied_tools=["bash"]),
-    )
-
-    await PermissionSystem().process(world)
-
-    assert world.get_component(entity_id, PendingToolCallsComponent) is None
-
-
-@pytest.mark.asyncio
-async def test_all_denied_calls_remove_pending_component() -> None:
-    world = World()
-    entity_id = world.create_entity()
-    world.add_component(entity_id, ConversationComponent(messages=[]))
-    world.add_component(
-        entity_id, PendingToolCallsComponent(tool_calls=[_call("c1", "bash")])
-    )
-    world.add_component(entity_id, PermissionComponent(denied_tools=["bash"]))
-
-    await PermissionSystem().process(world)
-
-    assert world.get_component(entity_id, PendingToolCallsComponent) is None
-
-
-@pytest.mark.asyncio
-async def test_entity_without_permission_component_is_skipped() -> None:
-    world = World()
-    entity_id = world.create_entity()
-    world.add_component(
-        entity_id, PendingToolCallsComponent(tool_calls=[_call("c1", "bash")])
-    )
-
-    await PermissionSystem().process(world)
-
-    pending = world.get_component(entity_id, PendingToolCallsComponent)
-    assert pending is not None
-    assert [call.id for call in pending.tool_calls] == ["c1"]
-
-
-@pytest.mark.asyncio
-async def test_denied_message_is_added_when_conversation_exists() -> None:
-    world = World()
-    entity_id = world.create_entity()
-    world.add_component(
-        entity_id,
-        ConversationComponent(messages=[Message(role="user", content="hi")]),
-    )
-    world.add_component(
-        entity_id, PendingToolCallsComponent(tool_calls=[_call("c1", "bash")])
-    )
-    world.add_component(entity_id, PermissionComponent(denied_tools=["bash"]))
-
-    await PermissionSystem().process(world)
-
-    conversation = world.get_component(entity_id, ConversationComponent)
-    assert conversation is not None
-    assert len(conversation.messages) == 2
-    assert conversation.messages[-1].tool_call_id == "c1"
-    assert "denied" in conversation.messages[-1].content.lower()
-
-
-@pytest.mark.asyncio
-async def test_multiple_calls_mixed_allow_and_deny() -> None:
-    world = World()
-    entity_id = world.create_entity()
-    world.add_component(entity_id, ConversationComponent(messages=[]))
-    world.add_component(
-        entity_id,
-        PendingToolCallsComponent(
-            tool_calls=[
-                _call("c1", "bash"),
-                _call("c2", "read"),
-                _call("c3", "write"),
-            ]
-        ),
-    )
-    world.add_component(
-        entity_id,
-        PermissionComponent(allowed_tools=["read", "write"], denied_tools=["write"]),
-    )
-
-    await PermissionSystem().process(world)
-
-    pending = world.get_component(entity_id, PendingToolCallsComponent)
-    conversation = world.get_component(entity_id, ConversationComponent)
-    assert pending is not None
-    assert [call.id for call in pending.tool_calls] == ["c2"]
-    assert conversation is not None
-    denied_ids = [
-        msg.tool_call_id for msg in conversation.messages if msg.role == "tool"
-    ]
-    assert denied_ids == ["c1", "c3"]
+async def test_preflight_keeps_original_queue_and_defers_messages_and_events() -> None:
+    case = scenario()
+    case.world.add_component(case.entity, PermissionComponent(allowed_tools=["read"]))
+    await ReasoningSystem().process(case.world)
+    pending = case.world.get_component(case.entity, PendingToolCallsComponent)
+    conversation = case.world.get_component(case.entity, ConversationComponent)
+    before = list(conversation.messages)
+    await PermissionSystem().process(case.world)
+    assert case.world.get_component(case.entity, PendingToolCallsComponent) is pending
+    assert [call.id for call in pending.tool_calls] == ["read-1", "write-1"]
+    assert conversation.messages == before
+    assert not any(isinstance(event, ToolDeniedEvent) for event in case.events)
+    await ToolExecutionSystem().process(case.world)
+    assert case.called == [("read", 1)]
+    assert case.world.get_component(case.entity, PendingToolCallsComponent) is None
+    assert tool_span_error(conversation.messages) is None
+    assert [message.tool_call_id for message in conversation.messages if message.role == "tool"] == ["read-1", "write-1"]

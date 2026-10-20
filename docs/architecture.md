@@ -16,6 +16,12 @@ Benefits include:
 
 ## Architecture Overview
 
+The authoring layer normalizes Python and DSL definitions, validates their
+installation plan, and returns an AgentHandle over the same ECS state. Main and
+child Worlds share base component and loop installation. It introduces no second
+conversation store or driver. See [Agent authoring](features/agent-authoring.md)
+for complete construction, context editing and restore contracts.
+
 The World acts as the central container that coordinates all other parts of the system.
 
 ```mermaid
@@ -69,18 +75,20 @@ Typical tick cycle steps:
 3. Systems with the same priority run at the same time using `asyncio.TaskGroup`.
 4. Systems use the `Query` tool to find entities that match specific component requirements.
 5. After processing logic, systems update data in the `ComponentStore` or trigger events through the `EventBus`.
-6. The Runner checks for a `TerminalComponent` at the end of every tick to decide whether to stop the execution loop.
+6. The Runner checks terminal state before processing and at the end of each tick. Budget exhaustion ends the invocation without creating a terminal entity.
 
-Interactive runtimes can use the opt-in `TerminalCleanupSystem` to clear specific terminal reasons after reasoning and before the next tick proceeds. This helper does not change core Runner semantics; it is a scoped system-level policy that is typically registered at `priority=1` and defaults to clearing only `reasoning_complete`.
+`AgentHandle` binds a turn to one entity and uses `AgentTurnComponent` for its lifecycle. Built-in agent systems query eligible entities through `world.query_active()`, while `world.query()` remains unrestricted for inspection. The World owns the exclusive driver and runtime stream subscriptions; handles do not duplicate conversation storage. See [agent lifecycle](features/agent-lifecycle.md).
+
+Legacy interactive runtimes can retain `TerminalCleanupSystem`, typically at priority 1. Managed turns retain their terminal state until a new turn is explicitly started, so cleanup skips entities with AgentTurnComponent.
 
 ## System Execution Order
 
 Systems run based on their priority. Lower numbers execute first. We recommend the following priority ordering for agent workflows:
 
 - **Priority -10**: `RAGSystem`, `UserInputSystem`. Pre-processing: vector search retrieval and user input before reasoning.
-- **Priority -5**: `ToolApprovalSystem`. Filters tool calls before execution.
 - **Priority 0**: `ReasoningSystem` or `PlanningSystem`. These systems usually handle LLM calls to decide the next action.
 - **Priority 1**: `TerminalCleanupSystem`. Optional post-reasoning cleanup for interactive flows that must continue after `reasoning_complete`.
+- **Priority 1 and 2**: Optional `PermissionSystem` and `ToolApprovalSystem` preflight. Execution independently enforces current authorization.
 - **Priority 5**: `ToolExecutionSystem` or `MessageBusSystem`. These handle the actual work or interactions with other agents.
 - **Priority 7**: `ReplanningSystem`. This checks results and updates the plan if needed.
 - **Priority 99**: `ErrorHandlingSystem`. This runs last to catch and process any issues that occurred during the tick.

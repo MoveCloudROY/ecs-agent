@@ -60,6 +60,7 @@ def load_json_agents(path: Path | str) -> list[AgentSpec]:
         # Validate and normalize
         source_name = f"{file_path}:{agent_name}"
         spec = validate_agent_spec(config_with_name, source_name=source_name)
+        spec.source_path = file_path.resolve()
         specs.append(spec)
 
     logger.info(

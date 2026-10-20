@@ -128,10 +128,8 @@ async def test_max_ticks_enforcement() -> None:
     world.register_system(counter, priority=0)
 
     runner = Runner()
-    await runner.run(world, max_ticks=1)
+    result = await runner.run(world, max_ticks=1)
 
-    terminal_components = list(world.query(TerminalComponent))
-    assert len(terminal_components) == 1
-    _, (terminal,) = terminal_components[0]
-    assert terminal.reason == "max_ticks"
+    assert not list(world.query(TerminalComponent))
+    assert result.reason == "max_ticks"
     assert counter.run_count == 1

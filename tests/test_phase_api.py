@@ -187,15 +187,15 @@ async def test_phase_without_tools_clears_allowlist_when_graph_manages_tools() -
     permissions = world.get_component(eid, PermissionComponent)
     assert permissions is not None
     # OPEN declares no tools: the managing graph clears the restriction
-    # (empty allowed_tools == unrestricted under PermissionSystem semantics).
-    assert permissions.allowed_tools == []
+    # (None is unrestricted; an empty list explicitly denies all).
+    assert permissions.allowed_tools is None
 
 
 async def test_denied_tools_never_touched_by_phase_effects() -> None:
     world = World()
     eid = world.create_entity()
     world.add_component(
-        eid, PermissionComponent(allowed_tools=[], denied_tools=["rm_rf"])
+        eid, PermissionComponent(allowed_tools=None, denied_tools=["rm_rf"])
     )
     await bind_phase_graph(world, eid, _tool_graph())
     await advance(world, eid, "OPEN", reason="r")

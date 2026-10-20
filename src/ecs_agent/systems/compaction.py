@@ -68,7 +68,7 @@ class CompactionSystem:
         )
 
     async def process(self, world: World) -> None:
-        for entity_id, (config, conversation) in world.query(
+        for entity_id, (config, conversation) in world.query_active(
             CompactionConfigComponent, ConversationComponent
         ):
             if world.has_component(entity_id, TerminalComponent):

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 
 from ecs_agent.components import (
     ConversationComponent,
     ConversationTreeComponent,
+    ErrorComponent,
     RenderedUserPromptComponent,
+    TerminalComponent,
     UserPromptConfigComponent,
 )
 from ecs_agent.conversation_tree import get_active_leaf, linearize
@@ -47,15 +50,26 @@ class UserPromptNormalizationSystem:
             self._registry = None
 
     async def process(self, world: World) -> None:
+        from ecs_agent.components import AgentTurnComponent
+        from ecs_agent.history import input_normalization_record_id, record_session_event
+
         entity_ids: set[EntityId] = set()
         entity_ids.update(
-            entity_id for entity_id, _ in world.query(ConversationComponent)
+            entity_id for entity_id, _ in world.query_active(ConversationComponent)
         )
         entity_ids.update(
-            entity_id for entity_id, _ in world.query(ConversationTreeComponent)
+            entity_id for entity_id, _ in world.query_active(ConversationTreeComponent)
         )
 
         for entity_id in entity_ids:
+            turn = world.get_component(entity_id, AgentTurnComponent)
+            if turn is not None and turn.input_normalization_state == "completed":
+                # Synthetic context/history edits are not new user input.
+                # Reusing the completed turn must never execute its scripts again.
+                continue
+            if turn is not None and turn.input_normalization_state == "running":
+                self._block_unconfirmed_script(world, entity_id, "Input normalization is already in progress or its completion is unconfirmed")
+                continue
             conversation_messages = self._resolve_conversation_messages(
                 world, entity_id
             )
@@ -91,13 +105,28 @@ class UserPromptNormalizationSystem:
                 entity_id, RenderedUserPromptComponent
             )
             if (
-                rendered_user_prompt is not None
+                turn is None
+                and rendered_user_prompt is not None
                 and rendered_user_prompt.source_fingerprint == source_fingerprint
                 and rendered_user_prompt.trigger_key == trigger_key
                 and rendered_user_prompt.source_message_index == last_user_index
             ):
                 continue
 
+            has_scripts = any(spec.action == "script" for spec in (trigger_specs or []))
+            started_id = input_normalization_record_id(world, entity_id, turn.turn_id, "started") if turn is not None else None
+            if turn is not None and has_scripts:
+                if started_id is not None and world.session_service is not None:
+                    try:
+                        previous_attempt = world.session_service.store.get_record(started_id)
+                    except FileNotFoundError:
+                        previous_attempt = None
+                    if previous_attempt is not None:
+                        turn.input_normalization_state = "running"
+                        self._block_unconfirmed_script(world, entity_id, "This turn's input script was already started on another checkpoint branch; reconcile its effects before continuing")
+                        continue
+                record_session_event(world, entity_id, "input_normalization_started", {"source_fingerprint": source_fingerprint, "source_message_index": last_user_index}, record_id=started_id)
+                turn.input_normalization_state = "running"
             normalized_text = await self._apply_triggers(
                 world=world,
                 entity_id=entity_id,
@@ -122,13 +151,16 @@ class UserPromptNormalizationSystem:
             )
 
             if normalized_text != raw_user_text:
-                from ecs_agent.history import record_session_event
-
                 record_session_event(world, entity_id, "prompt_render", {
                     "role": "user", "content": normalized_text,
                     "source_message_index": updated_source_index,
                     "source_fingerprint": source_fingerprint,
                 })
+            if turn is not None and has_scripts:
+                record_session_event(world, entity_id, "input_normalization_completed", {
+                    "source_fingerprint": source_fingerprint, "source_message_index": updated_source_index,
+                    "content": normalized_text,
+                }, record_id=input_normalization_record_id(world, entity_id, turn.turn_id, "completed"))
             world.add_component(
                 entity_id,
                 RenderedUserPromptComponent(
@@ -138,6 +170,8 @@ class UserPromptNormalizationSystem:
                     source_message_index=updated_source_index,
                 ),
             )
+            if turn is not None:
+                turn.input_normalization_state = "completed"
             if normalized_text != raw_user_text:
                 matched_spec = self._matching_trigger_spec(
                     raw_user_text,
@@ -164,6 +198,13 @@ class UserPromptNormalizationSystem:
                         metadata=metadata,
                     )
                 )
+
+    @staticmethod
+    def _block_unconfirmed_script(world: World, entity: EntityId, reason: str) -> None:
+        """Stop a turn while retaining evidence of a potentially executed script."""
+        logger.error("input_script_replay_blocked", entity_id=entity, reason=reason)
+        world.add_component(entity, ErrorComponent(error=reason, system_name="UserPromptNormalizationSystem", timestamp=time.time()))
+        world.add_component(entity, TerminalComponent(reason="input_script_replay_blocked"))
 
     @staticmethod
     def apply_trigger_specs(user_text: str, trigger_specs: list[TriggerSpec]) -> str:
@@ -385,14 +426,9 @@ class UserPromptNormalizationSystem:
         if message.content == rendered.text:
             return
         messages = list(conversation.messages)
-        messages[index] = Message(
-            role="user",
-            content=rendered.text,
-            parts=message.parts,
-            tool_calls=message.tool_calls,
-            tool_call_id=message.tool_call_id,
-            compaction_metadata=message.compaction_metadata,
-        )
+        from dataclasses import replace
+
+        messages[index] = replace(message, content=rendered.text)
         from ecs_agent.history import replace_conversation_history
 
         replace_conversation_history(world, entity_id, messages, reason="user_prompt_render_frozen")

@@ -82,7 +82,9 @@ def load_markdown_agent(path: Path | str) -> AgentSpec:
     config["prompt"] = markdown_body
 
     # Validate and return AgentSpec
-    return validate_agent_spec(config, source_name=str(file_path))
+    spec = validate_agent_spec(config, source_name=str(file_path))
+    spec.source_path = file_path.resolve()
+    return spec
 
 
 __all__ = ["load_markdown_agent"]
