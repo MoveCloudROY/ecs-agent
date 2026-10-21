@@ -156,3 +156,7 @@ uv run pytest -q --tb=short \
 | Python 3.12.12，原开发环境 | 3408 passed，131 skipped，4 xfailed；54.74 秒 |
 
 三组均没有失败项，均有 6 条既有 structlog warning。MCP 组比基础组多通过的用例是实际 SDK 的内存服务往返测试；各环境的跳过数量取决于可选依赖，4 个既有 native conversation tree 预期失败保持不变。此次只调整测试隔离、可选依赖测试边界及 CI 覆盖，没有将 MCP 变成基础运行依赖。
+
+复验期间还发现 `uv.lock` 原先被 `.gitignore` 排除，导致启用 `--locked` 后的首个远端运行在安装阶段停止。现将上述测试实际使用的锁文件纳入版本控制，让干净 checkout 和本地复验使用相同依赖版本。
+
+使用 `git checkout-index` 导出仅含待提交文件的干净目录后，两组 `uv sync --locked` 均成功；对应 MCP 定向测试分别为基础组 42 passed、1 skipped，MCP 组 43 passed。
