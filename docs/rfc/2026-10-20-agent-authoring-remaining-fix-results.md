@@ -93,7 +93,7 @@ AgentHandle 增加 `set_prompt()`、`inspect_prompt()`、`adopt_prompt()`、`his
 
 | 检查 | 最终结果 |
 | --- | --- |
-| 全量测试 | **3407 passed，132 skipped，4 xfailed，6 warnings**；54.47 秒 |
+| 本地全量测试（Python 3.12，已安装 MCP 的开发环境） | **3407 passed，132 skipped，4 xfailed，6 warnings**；54.47 秒 |
 | 严格类型检查 | **183 个源码文件全部通过** |
 | DeepSeek Responses API | **19 passed**；44.74 秒 |
 | 迁移示例 | 5 个离线示例通过 subprocess 实际运行，纳入全量测试；多轮与磁盘 checkpoint 另有集成测试 |
@@ -138,3 +138,21 @@ uv run pytest -q --tb=short \
 - 原生 conversation tree 写入缺陷、同 World 多请求调度器、工具热替换和任意既有实体通用补装仍不在本轮范围。新入口继续拒绝未支持的原生树配置，相关预期失败不计为通过。
 
 此前 [P1](2026-10-19-agent-authoring-p1-fix-results.md) 与 [首轮 P2](2026-10-20-agent-authoring-p2-fix-results.md) 的测试数量保留为各轮历史记录。本文件记录本轮工作区的最终验证，不覆盖其历史数据。
+
+## 2026-10-21 CI 环境复验
+
+提交 `ef6b318` 的 [CI 运行](https://github.com/MoveCloudROY/ecs-agent/actions/runs/39463706804) 实际结果为 **2 failed，3403 passed，134 skipped，4 xfailed**。此前本地通过结果未覆盖 CI 的依赖环境：CI 使用 Python 3.11 和基础 dev 依赖，不安装可选 MCP SDK。
+
+两项失败分别是缺少 MCP 时仍断言旧版导入错误文案，以及真实 MCP 服务测试未检查 SDK 是否存在。修复保留惰性导入的安装指引；缺失依赖测试改在独立子进程中模拟 SDK 不可用，验证基础导入、全部四个 MCP 公共符号及明确的安装错误，避免本机安装 MCP 后跳过此项。
+
+真实 SDK 测试仅在 MCP 未安装时跳过，已安装但导入损坏时仍会失败。CI 增加基础依赖和 MCP 两组任务，均执行完整 pytest；MCP 任务实际执行连接、工具发现、调用及断开测试。两组都使用锁定依赖，pytest 通过 `uv run --no-sync` 复用各自已同步的环境。
+
+修复后本地全量复验：
+
+| 环境 | 结果 |
+| --- | --- |
+| Python 3.11.16，独立基础 dev 环境 | 3405 passed，134 skipped，4 xfailed；60.91 秒 |
+| Python 3.11.16，独立 dev + MCP 环境 | 3406 passed，133 skipped，4 xfailed；56.93 秒 |
+| Python 3.12.12，原开发环境 | 3408 passed，131 skipped，4 xfailed；54.74 秒 |
+
+三组均没有失败项，均有 6 条既有 structlog warning。MCP 组比基础组多通过的用例是实际 SDK 的内存服务往返测试；各环境的跳过数量取决于可选依赖，4 个既有 native conversation tree 预期失败保持不变。此次只调整测试隔离、可选依赖测试边界及 CI 覆盖，没有将 MCP 变成基础运行依赖。

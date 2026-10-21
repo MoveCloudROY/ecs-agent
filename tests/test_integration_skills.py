@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sys
+import subprocess
+from textwrap import dedent
 from pathlib import Path
 
 import pytest
@@ -100,32 +102,47 @@ def test_import_skill_metadata() -> None:
 
 
 def test_mcp_import_without_package_raises_helpful_error() -> None:
-    """Verify MCPClient import raises ImportError when mcp package not installed."""
-    # Remove any mock mcp modules from previous tests
-    mcp_modules_to_remove = [k for k in sys.modules if k.startswith("mcp")]
-    for mod in mcp_modules_to_remove:
-        del sys.modules[mod]
+    """Missing optional SDKs preserve base imports and explain how to enable MCP."""
+    # A fresh process avoids cached lazy exports and fake SDK modules from other
+    # tests. Simulate absence even on developer machines with the extra installed.
+    script = dedent('''
+        import builtins
+        import importlib.util
+        import sys
+        from unittest.mock import patch
 
-    # Ensure mcp is not available
-    try:
-        import mcp  # noqa: F401
+        real_import = builtins.__import__
+        real_find_spec = importlib.util.find_spec
 
-        pytest.skip("mcp package is installed, cannot test ImportError behavior")
-    except ImportError:
-        pass
+        def without_mcp_import(name, *args, **kwargs):
+            if name == "mcp" or name.startswith("mcp."):
+                raise ModuleNotFoundError("No module named 'mcp'", name="mcp")
+            return real_import(name, *args, **kwargs)
 
-    # Now verify that importing MCPClient from ecs_agent doesn't crash
-    # but simply doesn't export it
-    try:
-        from ecs_agent import MCPClient as _MCPClient  # type: ignore[attr-defined]
+        def without_mcp_spec(name, *args, **kwargs):
+            if name == "mcp" or name.startswith("mcp."):
+                return None
+            return real_find_spec(name, *args, **kwargs)
 
-        assert _MCPClient is not None
+        with patch("builtins.__import__", without_mcp_import), patch("importlib.util.find_spec", without_mcp_spec):
+            import ecs_agent
 
-        # If we get here, mcp WAS available (shouldn't happen with guard above)
-        pytest.fail("MCPClient should not be importable without mcp package")
-    except ImportError as exc:
-        # This is expected - the symbol doesn't exist in __all__
-        assert "MCPClient" in str(exc) or "cannot import" in str(exc)
+            assert "mcp" not in sys.modules
+            assert ecs_agent.build_agent is not None
+            for name in ("MCPClient", "MCPSkillAdapter", "MCPClientComponent", "MCPConfigComponent"):
+                assert name not in ecs_agent.__all__
+                try:
+                    exec("from ecs_agent import " + name)
+                except ImportError as exc:
+                    assert "requires the 'mcp' package" in str(exc), str(exc)
+                    assert 'pip install "ecs-agent[mcp]"' in str(exc), str(exc)
+                    assert isinstance(exc.__cause__, ModuleNotFoundError)
+                    assert exc.__cause__.name == "mcp"
+                else:
+                    raise AssertionError(name + " imported without its optional SDK")
+    ''')
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_full_skill_lifecycle() -> None:

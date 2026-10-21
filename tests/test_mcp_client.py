@@ -4,6 +4,7 @@ import asyncio
 import builtins
 from contextlib import asynccontextmanager
 import importlib
+from importlib.util import find_spec
 import sys
 import types
 from dataclasses import dataclass, field
@@ -445,6 +446,9 @@ async def test_connect_list_call_roundtrip_against_real_inmemory_server(
     # Drop any fake mcp modules a prior test left in sys.modules so this test
     # binds against the real SDK.
     _reset_mcp_modules()
+
+    if find_spec("mcp") is None:
+        pytest.skip("Requires ecs-agent[mcp]; the CI MCP job exercises the real SDK")
 
     from mcp.server.fastmcp import FastMCP
     from mcp.shared.memory import create_client_server_memory_streams
