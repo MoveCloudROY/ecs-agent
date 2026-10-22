@@ -1,4 +1,7 @@
-"""Live subagent delegation tests."""
+"""Live subagent delegation tests.
+
+Select a profile with --live; see docs/testing.md.
+"""
 
 import asyncio
 import json
@@ -17,14 +20,15 @@ from ecs_agent.components.definitions import (
     SubagentWaitComponent,
 )
 from ecs_agent.core import World
-from ecs_agent.providers import ApiFormat, OpenAIModel, ProviderConfig
 from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.systems.subagent_wait import SubagentWaitSystem
 from ecs_agent.types import (
     SubagentConfig,
     SubagentStreamStartEvent,
 )
-from tests.live.api_format import live_openai_base_url, live_openai_model
+
+from tests.support.models import LiveModelFactory
+
 
 BACKGROUND_PROMPT = (
     "Say 'hello' in one word. "
@@ -36,41 +40,19 @@ BACKGROUND_PROMPT = (
 )
 
 
-def _build_provider(
-    api_key: str, *, base_url: str, api_format: ApiFormat
-) -> OpenAIModel:
-    model = live_openai_model()
-    return OpenAIModel(
-        config=ProviderConfig(
-            provider_id="aliyun",
-            base_url=base_url,
-            api_key=api_key,
-            api_format=api_format,
-        ),
-        model=model,
-    )
-
-
 async def _execute_live_subagent(
-    live_api_key: str,
     *,
-    base_url: str,
-    api_format: ApiFormat,
     stream: bool = False,
+    live_model_factory: LiveModelFactory,
 ) -> None:
     world = World(name="subagent-live")
     entity_id = world.create_entity()
-    model = _build_provider(
-        live_api_key,
-        base_url=base_url,
-        api_format=api_format,
-    )
+    model = live_model_factory.openai()
 
     world.add_component(
         entity_id,
         LLMComponent(
             model=model,
-            
             system_prompt="You are a helpful parent agent.",
         ),
     )
@@ -83,7 +65,6 @@ async def _execute_live_subagent(
                 "worker": SubagentConfig(
                     name="worker",
                     model=model,
-                    
                     system_prompt="Answer the user's request directly and briefly.",
                     max_ticks=3,
                 )
@@ -166,24 +147,16 @@ async def _execute_live_subagent(
 
 
 async def _execute_live_notification_flow(
-    live_api_key: str,
-    *,
-    base_url: str,
-    api_format: ApiFormat,
+    *, live_model_factory: LiveModelFactory
 ) -> None:
     world = World(name="subagent-live-notification")
     entity_id = world.create_entity()
-    model = _build_provider(
-        live_api_key,
-        base_url=base_url,
-        api_format=api_format,
-    )
+    model = live_model_factory.openai()
 
     world.add_component(
         entity_id,
         LLMComponent(
             model=model,
-            
             system_prompt="You are a helpful parent agent.",
         ),
     )
@@ -196,7 +169,6 @@ async def _execute_live_notification_flow(
                 "worker": SubagentConfig(
                     name="worker",
                     model=model,
-                    
                     system_prompt="Answer the user's request directly and briefly.",
                     max_ticks=3,
                 )
@@ -225,8 +197,7 @@ async def _execute_live_notification_flow(
 
     wait_ack = await tools.handlers["subagent_wait"](session_ids=[session_id])
     assert (
-        wait_ack
-        == "Waiting for background subagents. "
+        wait_ack == "Waiting for background subagents. "
         "Will be notified when all sessions complete."
     )
     assert world.has_component(entity_id, SubagentWaitComponent)
@@ -278,51 +249,57 @@ async def _execute_live_notification_flow(
     assert "hello" in full_result["inline_content"].lower()
 
 
+@pytest.mark.live(formats=["openai_chat_completions"], capabilities=["text", "tools"])
+@pytest.mark.subagent
 @pytest.mark.asyncio
-async def test_subagent_compatible_mode(live_api_key: str) -> None:
+async def test_subagent_compatible_mode(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     await _execute_live_subagent(
-        live_api_key,
-        base_url=live_openai_base_url(ApiFormat.OPENAI_CHAT_COMPLETIONS),
-        api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+        live_model_factory=live_model_factory,
     )
 
 
+@pytest.mark.live(formats=["openai_responses"], capabilities=["text", "tools"])
+@pytest.mark.subagent
 @pytest.mark.asyncio
-async def test_subagent_responses_mode(live_api_key: str) -> None:
+async def test_subagent_responses_mode(*, live_model_factory: LiveModelFactory) -> None:
     await _execute_live_subagent(
-        live_api_key,
-        base_url=live_openai_base_url(ApiFormat.OPENAI_RESPONSES),
-        api_format=ApiFormat.OPENAI_RESPONSES,
+        live_model_factory=live_model_factory,
     )
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions"], capabilities=["text", "tools", "streaming"]
+)
+@pytest.mark.subagent
 @pytest.mark.asyncio
-async def test_subagent_streaming_smoke(live_api_key: str) -> None:
+async def test_subagent_streaming_smoke(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     await _execute_live_subagent(
-        live_api_key,
-        base_url=live_openai_base_url(ApiFormat.OPENAI_CHAT_COMPLETIONS),
-        api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
         stream=True,
+        live_model_factory=live_model_factory,
     )
 
 
+@pytest.mark.live(formats=["openai_chat_completions"], capabilities=["text", "tools"])
+@pytest.mark.subagent
 @pytest.mark.asyncio
 async def test_aliyun_completions_background_completion_notification_flow(
-    live_api_key: str,
+    *, live_model_factory: LiveModelFactory
 ) -> None:
     await _execute_live_notification_flow(
-        live_api_key,
-        base_url=live_openai_base_url(ApiFormat.OPENAI_CHAT_COMPLETIONS),
-        api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
+        live_model_factory=live_model_factory,
     )
 
 
+@pytest.mark.live(formats=["openai_responses"], capabilities=["text", "tools"])
+@pytest.mark.subagent
 @pytest.mark.asyncio
 async def test_aliyun_responses_background_completion_notification_flow(
-    live_api_key: str,
+    *, live_model_factory: LiveModelFactory
 ) -> None:
     await _execute_live_notification_flow(
-        live_api_key,
-        base_url=live_openai_base_url(ApiFormat.OPENAI_RESPONSES),
-        api_format=ApiFormat.OPENAI_RESPONSES,
+        live_model_factory=live_model_factory,
     )

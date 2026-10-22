@@ -149,16 +149,11 @@ Metrics are recorded from explicit event-bus events rather than log scraping:
 
 ## Live Smoke Test
 
-The live smoke test is optional and environment-gated. It skips cleanly without `LLM_API_KEY` and uses only environment variables for live configuration:
+The live smoke uses the shared [test profile and selection rules](../testing.md):
 
 ```bash
-LLM_API_KEY="$LLM_API_KEY" \
-  LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
-  LLM_MODEL=qwen3.5-flash \
-  LLM_API_FORMAT=openai_chat_completions \
-  uv run pytest tests/live/test_prometheus_metrics_live.py -v
+uv run pytest --live --live-config tests/live/profiles.local.toml \
+  tests/live/test_prometheus_metrics_live.py -v
 ```
 
-Supported `LLM_API_FORMAT` values are `openai_chat_completions`, `openai_responses`, and `anthropic_messages`; shorthand values `openai`, `chat`, `responses`, and `anthropic` are also accepted. All live tests resolve the variable through the shared helper in `tests/live/api_format.py`, so the same value drives every live file.
-
-The smoke's per-request LLM timeout defaults to 30 seconds and can be raised for slower models with `LLM_LIVE_TIMEOUT` (seconds). Transient endpoint errors — timeouts, rate limits, 5xx, connection drops — skip the smoke with a diagnostic reason instead of failing; auth and request-mapping errors still fail.
+The selected profile determines the protocol, model, credentials and independent request/stream/case budgets. Missing configuration fails preflight; actual request errors fail the test. Prometheus does not require Langfuse credentials.

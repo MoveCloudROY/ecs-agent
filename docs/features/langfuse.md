@@ -184,32 +184,23 @@ Telemetry failures (e.g., network issues or Langfuse API downtime) do not fail a
 
 ## Live Smoke Tests
 
-The project includes live integration tests that verify the Langfuse adapter with real LLM calls. These tests are optional and skip automatically if the required environment variables are missing.
-
-To run the live tests, set the following environment variables in your shell:
-
-- `RUN_LANGFUSE_LIVE_TESTS`: Set to `1`
-- `LANGFUSE_PUBLIC_KEY`: Your public key
-- `LANGFUSE_SECRET_KEY`: Your secret key
-- `LANGFUSE_HOST`: Your host
-- `LLM_API_KEY`: Your LLM API key
-- `LLM_BASE_URL`: Your LLM base URL
-- `LLM_MODEL`: Your LLM model
-- `LLM_LIVE_TIMEOUT` (optional): per-request LLM timeout in seconds for the
-  smoke, default `30`. Raise it (e.g. `120`) for slower models; timeouts are
-  otherwise reported as transient skips, not failures.
-
-Then execute the full suite or specific node tests:
+Live tests use a model profile plus a separate `[services.langfuse]` configuration. See the [testing guide](../testing.md) for credential references and timeouts. The SDK and service credentials are required only for selected, protocol-compatible Langfuse cases.
 
 ```bash
-# Run all Langfuse live tests
-uv run pytest tests/live/test_langfuse_observability_live.py -v
-
-# Run specific provider tests
-uv run pytest tests/live/test_langfuse_observability_live.py::test_live_langfuse_openai_chat_agent_run -v
-uv run pytest tests/live/test_langfuse_observability_live.py::test_live_langfuse_openai_responses_agent_run -v
-uv run pytest tests/live/test_langfuse_observability_live.py::test_live_langfuse_anthropic_messages_agent_run -v
+uv sync --locked --group dev --extra langfuse
+uv run --no-sync pytest --live --live-config tests/live/profiles.local.toml \
+  tests/live/test_langfuse_observability_live.py -v
 ```
+
+To select one protocol, append `::NODE` to the test file path using a matching profile:
+
+| Protocol | Node |
+| --- | --- |
+| Chat Completions | `test_live_langfuse_openai_chat_agent_run` |
+| Responses | `test_live_langfuse_openai_responses_agent_run` |
+| Anthropic Messages | `test_live_langfuse_anthropic_messages_agent_run` |
+
+The explicit `--live` flag replaces `RUN_LANGFUSE_LIVE_TESTS`. Missing configuration fails before requests; LLM authentication, timeout, rate-limit and service errors are failures, not transient skips. Production telemetry resilience remains as described above.
 
 For the plan-and-task example against an Anthropic-compatible endpoint, enable the example installer and flush on process exit:
 

@@ -1,10 +1,10 @@
+"""Live scenarios using explicit model profiles and shared resource ownership."""
+
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
-import yaml
 
 from ecs_agent.components import (
     ConversationComponent,
@@ -12,14 +12,11 @@ from ecs_agent.components import (
     PendingToolCallsComponent,
     PlanComponent,
     ToolRegistryComponent,
-    ToolResultsComponent,
     UserPromptConfigComponent,
 )
-from ecs_agent.components.definitions import RenderedUserPromptComponent
 from ecs_agent.core import World
 from ecs_agent.prompts.contracts import TriggerSpec
-from ecs_agent.providers import OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.scratchbook import ArtifactRegistry
 from ecs_agent.systems.planning import PlanningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
@@ -28,7 +25,8 @@ from ecs_agent.systems.user_prompt_normalization_system import (
 )
 from ecs_agent.types import EntityId, Message, ToolCall, ToolSchema
 
-from tests.live.api_format import live_openai_base_url, live_openai_model
+from tests.support.models import LiveModelFactory
+
 
 _ENDPOINT_PARAMS = [
     pytest.param(ApiFormat.OPENAI_CHAT_COMPLETIONS, id="chat-completions"),
@@ -36,86 +34,17 @@ _ENDPOINT_PARAMS = [
 ]
 
 
-def _make_provider(api_key: str, api_format: ApiFormat) -> OpenAIModel:
-    return OpenAIModel(
-        config=ProviderConfig(
-            provider_id="aliyun",
-            base_url=live_openai_base_url(api_format),
-            api_key=api_key,
-            api_format=api_format,
-        ),
-        model=live_openai_model(),
-    )
-
-
-@pytest.mark.asyncio
-async def test_live_tool_execution_persists_canonical_artifact(
-    live_api_key: str, tmp_path: Path
-) -> None:
-    _ = live_api_key
-    registry = ArtifactRegistry(root=tmp_path)
-    world = World()
-    entity = world.create_entity()
-
-    async def live_tool(payload: str) -> str:
-        return f"tool-ok:{payload}"
-
-    world.add_component(
-        entity,
-        ConversationComponent(messages=[Message(role="user", content="run live tool")]),
-    )
-    world.add_component(
-        entity,
-        ToolRegistryComponent(
-            tools={
-                "live_tool": ToolSchema(
-                    name="live_tool",
-                    description="Live tool execution",
-                    parameters={"type": "object"},
-                )
-            },
-            handlers={"live_tool": live_tool},
-        ),
-    )
-    world.add_component(
-        entity,
-        PendingToolCallsComponent(
-            tool_calls=[
-                ToolCall(
-                    id="live-tool-1",
-                    name="live_tool",
-                    arguments={"payload": "artifact"},
-                )
-            ]
-        ),
-    )
-
-    await ToolExecutionSystem(registry=registry).process(world)
-
-    tool_files = list((tmp_path / "scratchbook" / "records" / "tool").glob("tool_*"))
-    assert len(tool_files) == 1
-
-    results = world.get_component(entity, ToolResultsComponent)
-    assert results is not None
-    record_path = results.results["live-tool-1"]
-    assert record_path.startswith("scratchbook/records/tool/tool_")
-    assert (tmp_path / record_path).exists()
-
-    payload = yaml.safe_load((tmp_path / record_path).read_text(encoding="utf-8"))
-    assert payload["metadata"]["tool_call_id"] == "live-tool-1"
-    assert payload["metadata"]["tool_name"] == "live_tool"
-    assert payload["metadata"]["arguments"] == {"payload": "artifact"}
-    assert payload["content"] == "tool-ok:artifact"
-
-
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.tools
 @pytest.mark.asyncio
 @pytest.mark.parametrize("api_format", _ENDPOINT_PARAMS)
 async def test_live_planning_writes_canonical_plan_md(
-    live_api_key: str,
-    tmp_path: Path,
-    api_format: ApiFormat,
+    tmp_path: Path, api_format: ApiFormat, *, live_model_factory: LiveModelFactory
 ) -> None:
-    model = _make_provider(api_key=live_api_key, api_format=api_format)
+    model = live_model_factory.openai()
 
     registry = ArtifactRegistry(root=tmp_path)
     world = World()
@@ -144,71 +73,17 @@ async def test_live_planning_writes_canonical_plan_md(
     assert not content.lstrip().startswith("{")
 
 
-@pytest.mark.asyncio
-async def test_live_trigger_creates_boulder_on_plan_script(
-    live_api_key: str, tmp_path: Path
-) -> None:
-    _ = live_api_key
-    registry = ArtifactRegistry(root=tmp_path)
-    world = World()
-    entity = world.create_entity()
-
-    async def plan_handler(
-        world: World,
-        entity_id: EntityId,
-        user_text: str,
-    ) -> str | None:
-        _ = world
-        _ = entity_id
-        return user_text
-
-    world.add_component(
-        entity,
-        ConversationComponent(
-            messages=[Message(role="user", content="@plan Live Boulder state")]
-        ),
-    )
-    world.add_component(
-        entity,
-        UserPromptConfigComponent(
-            triggers=[
-                TriggerSpec(
-                    pattern="@plan",
-                    match_mode="keyword",
-                    action="script",
-                    content="plan_handler",
-                )
-            ],
-            script_handlers={"plan_handler": plan_handler},
-        ),
-    )
-
-    await UserPromptNormalizationSystem(registry=registry).process(world)
-
-    rendered = world.get_component(entity, RenderedUserPromptComponent)
-    assert rendered is not None
-    assert rendered.text == "@plan Live Boulder state"
-
-    plan_slug = registry.normalize_plan_name("@plan Live Boulder state")
-    boulder_file = tmp_path / "scratchbook" / plan_slug / "executes" / "boulder.json"
-    assert boulder_file.exists()
-
-    payload = json.loads(boulder_file.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == "1"
-    assert payload["plan_name"] == plan_slug
-    assert payload["status"] == "created"
-    assert isinstance(payload["started_at"], str)
-    assert payload["active_plan"] == "@plan Live Boulder state"
-
-
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.tools
 @pytest.mark.asyncio
 @pytest.mark.parametrize("api_format", _ENDPOINT_PARAMS)
 async def test_live_no_legacy_category_paths_written(
-    live_api_key: str,
-    tmp_path: Path,
-    api_format: ApiFormat,
+    tmp_path: Path, api_format: ApiFormat, *, live_model_factory: LiveModelFactory
 ) -> None:
-    model = _make_provider(api_key=live_api_key, api_format=api_format)
+    model = live_model_factory.openai()
 
     registry = ArtifactRegistry(root=tmp_path)
     world = World()

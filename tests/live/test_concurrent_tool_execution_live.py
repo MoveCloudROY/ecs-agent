@@ -1,16 +1,11 @@
 """Live smoke: concurrency-safe tools batched by a real LLM run concurrently.
 
-Drives an OpenAI-family endpoint (``LLM_BASE_URL``/``LLM_MODEL``/``LLM_API_FORMAT``,
-gated on ``LLM_API_KEY``) with two artificially slow, concurrency-safe lookup
-tools and asks the model to call both in one response.  Verifies that
-ToolExecutionSystem overlaps their execution and still lands tool results in
-the model's original tool_calls order.
+Select a profile with --live; see docs/testing.md.
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 
 import pytest
@@ -21,41 +16,15 @@ from ecs_agent.components import (
     ToolRegistryComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import ErrorOccurredEvent, Message, ToolSchema
-from tests.live.api_format import (
-    live_openai_base_url,
-    live_openai_model,
-    live_transient_error_reason,
-    resolve_live_api_format,
-)
+
+from tests.support.models import LiveModelFactory
+
 
 TOOL_DELAY_SECONDS = 1.0
-
-
-def _make_model(live_api_key: str) -> OpenAIModel:
-    api_format = resolve_live_api_format()
-    if api_format is None:
-        pytest.skip(
-            "Unsupported LLM_API_FORMAT for live concurrency smoke: "
-            f"{os.getenv('LLM_API_FORMAT')!r}"
-        )
-    if api_format is ApiFormat.ANTHROPIC_MESSAGES:
-        pytest.skip(
-            "Concurrency smoke drives OpenAI-family endpoints; "
-            "unset LLM_API_FORMAT or use chat/responses"
-        )
-    config = ProviderConfig(
-        provider_id="live",
-        base_url=live_openai_base_url(api_format),
-        api_key=live_api_key,
-        api_format=api_format,
-    )
-    return OpenAIModel(config=config, model=live_openai_model())
 
 
 def _lookup_schema(name: str, param: str, description: str) -> ToolSchema:
@@ -71,9 +40,14 @@ def _lookup_schema(name: str, param: str, description: str) -> ToolSchema:
     )
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools", "parallel_tools"],
+)
+@pytest.mark.tools
 @pytest.mark.asyncio
 async def test_live_batched_safe_tools_overlap_and_land_in_order(
-    live_api_key: str,
+    *, live_model_factory: LiveModelFactory
 ) -> None:
     spans: dict[str, tuple[float, float]] = {}
 
@@ -92,7 +66,7 @@ async def test_live_batched_safe_tools_overlap_and_land_in_order(
     world.add_component(
         agent,
         LLMComponent(
-            model=_make_model(live_api_key),
+            model=live_model_factory.openai(),
             system_prompt=(
                 "You are a precise assistant. When a request needs several "
                 "independent lookups, call all the needed tools in parallel "
@@ -154,18 +128,7 @@ async def test_live_batched_safe_tools_overlap_and_land_in_order(
     # LLM failures never raise through Runner.run: ReasoningSystem swallows
     # them into ErrorComponent and ErrorHandlingSystem removes it after
     # publishing ErrorOccurredEvent, so the event is the durable signal.
-    if llm_errors:
-        hard_failures = [
-            event.error
-            for event in llm_errors
-            if live_transient_error_reason(event.error) is None
-        ]
-        if hard_failures:
-            pytest.fail(f"Live agent run failed: {hard_failures[0][:200]}")
-        pytest.skip(
-            "Transient live endpoint error: "
-            f"{live_transient_error_reason(llm_errors[0].error)}"
-        )
+    assert not llm_errors, f"Live agent run failed: {llm_errors[0].error[:200]}"
 
     conversation = world.get_component(agent, ConversationComponent)
     assert conversation is not None
@@ -181,7 +144,7 @@ async def test_live_batched_safe_tools_overlap_and_land_in_order(
         None,
     )
     if batched is None:
-        pytest.skip("Model did not batch both tool calls into one response")
+        pytest.fail("Model did not batch both tool calls into one response")
     assert batched.tool_calls is not None
 
     # Both concurrency-safe tools must have executed with overlapping spans.

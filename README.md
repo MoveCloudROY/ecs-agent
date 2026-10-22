@@ -148,7 +148,7 @@ Mix 35+ components to build custom agents without inheritance bloat. The Entity-
 - **Tool Ecosystem** — Auto-discovery via `@tool` decorator, concurrent execution of batched tool calls (opt-in per tool via `ToolSchema.concurrency_safe`; results land in original order, mutating tools stay serial barriers, bound configurable with `ToolExecutionConfigComponent(max_concurrency=...)`), manual approval flows, secure `bwrap` sandboxing, and composable skills.
 - **MCP Integration** — Connect to external MCP tool servers via stdio, SSE, or HTTP transports with namespaced tool mapping.
 - **Prometheus Metrics**, Mount `PrometheusPlugin` on any `World` via `install_plugins()` for low-cardinality runtime, LLM, tool, streaming, and runtime-control metrics, exposed via an embedded `/metrics` server, render, or ASGI/WSGI adapters. Installs with `ecs-agent[prometheus]`.
-- **Langfuse Observability**, Capture traces, spans, and observations via `ecs-agent[langfuse]`. Mount `LangfusePlugin` on any `World` via `install_plugins()` to export user input, LLM generations, tool calls, retries, subagent runs, and errors to Langfuse; raw input and output capture remains enabled by default for backward compatibility and can be disabled with `LangfuseConfig(capture_input=False, capture_output=False)`. Supports mandatory redaction, one trace per interactive user turn (with one-shot run compatibility), nested `subagent.<name>` spans with child LLM/tool observations, tool calls that nest under the generation that requested them, recorded operation end timing through the Langfuse SDK v4 public lifecycle, optional private historical start-time backdating with `enable_private_v4_historical_otel=True`, readable model identifiers from `LLM_MODEL`, integer token usage, resilient background export, and Langfuse Sessions by propagating `session_id` as a trace-level attribute rather than metadata-only. See [`docs/features/langfuse.md`](docs/features/langfuse.md) for configuration via `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_HOST`, plus live test commands (OpenAI/Anthropic) and skip behavior when credentials are missing. Credential rotation is recommended if keys are exposed.
+- **Langfuse Observability**, Capture traces, spans, and observations via `ecs-agent[langfuse]`. Mount `LangfusePlugin` on any `World` via `install_plugins()` to export user input, LLM generations, tool calls, retries, subagent runs, and errors to Langfuse; raw input and output capture remains enabled by default for backward compatibility and can be disabled with `LangfuseConfig(capture_input=False, capture_output=False)`. Supports mandatory redaction, one trace per interactive user turn (with one-shot run compatibility), nested `subagent.<name>` spans with child LLM/tool observations, tool calls that nest under the generation that requested them, recorded operation end timing through the Langfuse SDK v4 public lifecycle, optional private historical start-time backdating with `enable_private_v4_historical_otel=True`, readable model identifiers from `LLM_MODEL`, integer token usage, resilient background export, and Langfuse Sessions by propagating `session_id` as a trace-level attribute rather than metadata-only. See [`docs/features/langfuse.md`](docs/features/langfuse.md) for configuration via `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_HOST`, plus explicit live test commands and required service configuration. Credential rotation is recommended if keys are exposed.
 
 ## Architecture
 
@@ -367,38 +367,14 @@ uv run pytest -v
 ```
 ### Real-LLM Integration Tests
 
-Live tests are optional and skip cleanly when `LLM_API_KEY` is not set. Run the suite you care about with the same environment variables you use for examples:
+Plain `pytest` stays offline even when credentials are present. Real-service tests require `--live` and an atomic model profile. Copy `tests/live/profiles.example.toml` to `tests/live/profiles.local.toml`, inject the referenced `LLM_API_KEY`, then select a scenario:
 
 ```bash
-LLM_API_KEY="$LLM_API_KEY" \
-  LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
-  LLM_MODEL=qwen3.5-flash \
-  uv run pytest tests/live/test_llm_api_live.py -v
-
-LLM_API_KEY="$LLM_API_KEY" \
-  uv run pytest tests/live/test_compaction_live.py -v
-
-LLM_API_KEY="$LLM_API_KEY" \
-  LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 \
-  LLM_MODEL=qwen3.5-flash \
-  uv run pytest tests/live/test_prometheus_metrics_live.py -v
+uv run pytest --live --llm-profile deepseek-responses -m "live and smoke and not vision"
+uv run pytest --live --llm-profile deepseek-responses -m "live and authoring"
 ```
 
-`tests/live/test_compaction_live.py` additionally honors `LLM_BASE_URL`,
-`LLM_RESPONSES_BASE_URL` (falls back to `LLM_BASE_URL`), and `LLM_MODEL` to
-target any OpenAI-compatible endpoint.
-
-Anthropic-protocol tests (`tests/test_real_llm_prompt_caching.py`,
-`tests/test_real_llm_context_trim.py`) gate on their own variables:
-
-```bash
-ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
-  ANTHROPIC_BASE_URL=https://api.anthropic.com \
-  ANTHROPIC_MODEL=claude-3-5-haiku-20241022 \
-  uv run pytest tests/test_real_llm_prompt_caching.py tests/test_real_llm_context_trim.py -v
-```
-
-See `tests/live/` for the available live suites.
+Missing required configuration fails before requests. Authentication, timeout and service errors fail tests; protocol/capability mismatches are reported separately as not-applicable skips. See [Testing and configuration](docs/testing.md) for profiles, optional services, legacy-variable migration and release coverage.
 
 ### Type Checking
 
@@ -422,7 +398,7 @@ uv run mypy src/ecs_agent/core/world.py
 - Pushes and pull requests run `uv run pytest` via GitHub Actions.
 - Tags matching `v*` trigger the release pipeline.
 - Release tags must match the package version in both `pyproject.toml` and `src/ecs_agent/__init__.py`.
-- Tagged releases run the full `tests/live/` suite before publishing.
+- Tagged releases require every case in `tests/live/required-responses-core.json` to pass using the checked-in Responses profile. Optional protocol and service matrices are reported separately; see [test coverage](docs/testing.md).
 - Release notes are manual and versioned at `docs/releases/vX.Y.Z.md`.
 - GitHub Release body content comes directly from the matching release-notes file.
 

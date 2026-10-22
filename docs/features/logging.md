@@ -173,7 +173,7 @@ For model-implementation logging, see the individual model implementations (`Ope
 All logging behavior is verified through comprehensive tests:
 - `tests/test_logging.py`: 42 tests covering event contracts, sensitive data policy, and level enforcement
 - `tests/test_enhanced_logging.py`: Module-level filtering and caller info tests
-- `tests/test_real_llm_integration.py`: Real LLM logging verification (env-gated)
+- `tests/live/test_real_llm_integration.py`: Real LLM logging verification (explicit live profile)
 
 Run logging tests:
 ```bash
@@ -183,6 +183,6 @@ uv run pytest tests/test_logging.py tests/test_enhanced_logging.py -v
 # Sensitive data policy tests only
 uv run pytest tests/test_logging.py::TestSensitiveDataPolicy -v
 
-# Real LLM logging (requires LLM_API_KEY)
-LLM_API_KEY=$YOUR_KEY uv run pytest tests/test_real_llm_integration.py -k "logging" -v
+# Real LLM logging (see docs/testing.md for profiles and credential injection)
+uv run pytest --live --live-config tests/live/profiles.local.toml tests/live/test_real_llm_integration.py -k "logging" -v
 ```

@@ -1,6 +1,7 @@
-"""Live TodoSkill behavior test: a real model plans and completes a checklist."""
+"""Live TodoSkill behavior test: a real model plans and completes a checklist.
 
-import os
+Select a profile with --live; see docs/testing.md.
+"""
 
 import pytest
 
@@ -11,34 +12,25 @@ from ecs_agent.components import (
     TodoListComponent,
 )
 from ecs_agent.core import Runner, World
-from ecs_agent.providers import ApiFormat, OpenAIModel, ProviderConfig
 from ecs_agent.skills import SkillManager
 from ecs_agent.skills.todo import TodoSkill
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import Message, TodoListUpdatedEvent
 
+from tests.support.models import LiveModelFactory
+
 _NETWORK_ERROR_MARKERS = ("timeout", "timed out", "connect", "unreachable")
 
 
-def _build_model(api_key: str) -> OpenAIModel:
-    model = os.getenv("LLM_MODEL") or "qwen3.5-flash"
-    return OpenAIModel(
-        config=ProviderConfig(
-            provider_id="aliyun",
-            base_url=os.getenv(
-                "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-            ),
-            api_key=api_key,
-            api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-        ),
-        model=model,
-    )
-
-
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.tools
 @pytest.mark.asyncio
 async def test_live_todo_agent_plans_and_completes_checklist(
-    live_api_key: str,
+    *, live_model_factory: LiveModelFactory
 ) -> None:
     world = World(name="todo-live")
     agent = world.create_entity()
@@ -46,7 +38,7 @@ async def test_live_todo_agent_plans_and_completes_checklist(
     world.add_component(
         agent,
         LLMComponent(
-            model=_build_model(live_api_key),
+            model=live_model_factory.openai(),
             system_prompt=(
                 "You are a careful assistant. You MUST track this task with the "
                 "todo_write tool: first call todo_write with a checklist of the "
@@ -94,15 +86,13 @@ async def test_live_todo_agent_plans_and_completes_checklist(
     error = world.get_component(agent, ErrorComponent)
     if error is not None:
         if any(marker in error.error.lower() for marker in _NETWORK_ERROR_MARKERS):
-            pytest.skip(f"Live endpoint network failure: {error.error}")
+            pytest.fail(f"Live endpoint network failure: {error.error}")
         pytest.fail(f"Agent errored during live run: {error.error}")
 
     assert len(events) >= 2, "expected the model to update its todo list at least twice"
 
     for event in events:
-        in_progress = sum(
-            1 for item in event.items if item.status == "in_progress"
-        )
+        in_progress = sum(1 for item in event.items if item.status == "in_progress")
         assert in_progress <= 1, "invariant violated: multiple in_progress items"
 
     component = world.get_component(agent, TodoListComponent)

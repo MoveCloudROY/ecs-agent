@@ -1,18 +1,10 @@
 """Live tests for conversation compaction behavior.
 
-Run:
-    LLM_API_KEY=your-api-key \\
-        uv run pytest tests/live/test_compaction_live.py -v
-
-Optional overrides (default: Aliyun DashScope + qwen3.5-flash):
-    LLM_BASE_URL            chat-completions base URL
-    LLM_RESPONSES_BASE_URL  Responses API base URL (falls back to LLM_BASE_URL)
-    LLM_MODEL               model identifier
+Select a profile with --live; see docs/testing.md.
 """
 
 from __future__ import annotations
 
-import os
 
 import pytest
 
@@ -27,53 +19,20 @@ from ecs_agent.components import (
 from ecs_agent.components.definitions import EntityRegistryComponent
 from ecs_agent.core import World
 from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
-from ecs_agent.types import CompletionResult, Message
+from ecs_agent.types import CompletionResult, EntityId, Message
 
-_registry_module = pytest.importorskip("ecs_agent.providers.registry")
-ProviderRegistry = _registry_module.ProviderRegistry
-get_model = _registry_module.get_model
+from ecs_agent.providers.registry import ProviderRegistry, get_model
 
-COMPLETIONS_URL = os.getenv(
-    "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-)
-RESPONSES_URL = os.getenv(
-    "LLM_RESPONSES_BASE_URL",
-    os.getenv(
-        "LLM_BASE_URL",
-        "https://dashscope.aliyuncs.com/api/v2/apps/protocols/compatible-mode/v1",
-    ),
-)
-MODEL = os.getenv("LLM_MODEL", "qwen3.5-flash")
+from tests.support.models import LiveModelFactory
 
 
-def _live_registry() -> ProviderRegistry:
+def _live_registry(*, live_model_factory: LiveModelFactory) -> ProviderRegistry:
     return ProviderRegistry.from_dict(
         {
-            "aliyun": {
-                "base_url": COMPLETIONS_URL,
-                "api_format": "openai_chat_completions",
-            },
-            "aliyun-responses": {
-                "base_url": RESPONSES_URL,
-                "api_format": "openai_responses",
-            },
+            "live": live_model_factory.registry_entry(),
         }
-    )
-
-
-def _make_manual_chat_provider(api_key: str) -> OpenAIModel:
-    return OpenAIModel(
-        config=ProviderConfig(
-            provider_id="aliyun",
-            base_url=COMPLETIONS_URL,
-            api_key=api_key,
-            api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-        ),
-        model=MODEL,
     )
 
 
@@ -134,14 +93,18 @@ def _build_compaction_world(model: object) -> tuple[World, EntityId]:
     return world, entity_id
 
 
+@pytest.mark.live(formats=["openai_chat_completions"], capabilities=["text"])
+@pytest.mark.compaction
 @pytest.mark.asyncio
 async def test_live_compaction_xml_summary_visible_chat_completions(
-    live_api_key: str,
+    live_api_key: str, *, live_model_factory: LiveModelFactory
 ) -> None:
-    model = get_model(
-        f"aliyun/{MODEL}",
-        registry=_live_registry(),
-        api_key=live_api_key,
+    model = live_model_factory.track(
+        get_model(
+            f"live/{live_model_factory.profile.model}",
+            registry=_live_registry(live_model_factory=live_model_factory),
+            api_key=live_api_key,
+        )
     )
     world = World()
     entity_id = world.create_entity()
@@ -149,7 +112,6 @@ async def test_live_compaction_xml_summary_visible_chat_completions(
         entity_id,
         LLMComponent(
             model=model,
-            
             system_prompt="You are a helpful assistant.",
         ),
     )
@@ -189,14 +151,18 @@ async def test_live_compaction_xml_summary_visible_chat_completions(
     assert "orchid-47" in result.message.content
 
 
+@pytest.mark.live(formats=["openai_responses"], capabilities=["text"])
+@pytest.mark.compaction
 @pytest.mark.asyncio
 async def test_live_compaction_xml_summary_visible_responses_api(
-    live_api_key: str,
+    live_api_key: str, *, live_model_factory: LiveModelFactory
 ) -> None:
-    model = get_model(
-        f"aliyun-responses/{MODEL}",
-        registry=_live_registry(),
-        api_key=live_api_key,
+    model = live_model_factory.track(
+        get_model(
+            f"live/{live_model_factory.profile.model}",
+            registry=_live_registry(live_model_factory=live_model_factory),
+            api_key=live_api_key,
+        )
     )
     world = World()
     entity_id = world.create_entity()
@@ -204,7 +170,6 @@ async def test_live_compaction_xml_summary_visible_responses_api(
         entity_id,
         LLMComponent(
             model=model,
-            
             system_prompt="You are a helpful assistant.",
         ),
     )
@@ -242,14 +207,18 @@ async def test_live_compaction_xml_summary_visible_responses_api(
     assert "orchid-47" in result.message.content
 
 
+@pytest.mark.live(formats=["openai_chat_completions"], capabilities=["text"])
+@pytest.mark.compaction
 @pytest.mark.asyncio
 async def test_live_compaction_system_triggers_and_summarizes_chat(
-    live_api_key: str,
+    live_api_key: str, *, live_model_factory: LiveModelFactory
 ) -> None:
-    model = get_model(
-        f"aliyun/{MODEL}",
-        registry=_live_registry(),
-        api_key=live_api_key,
+    model = live_model_factory.track(
+        get_model(
+            f"live/{live_model_factory.profile.model}",
+            registry=_live_registry(live_model_factory=live_model_factory),
+            api_key=live_api_key,
+        )
     )
     world, entity_id = _build_compaction_world(model)
     world.add_component(
@@ -276,14 +245,18 @@ async def test_live_compaction_system_triggers_and_summarizes_chat(
     assert all(message.role != "compaction" for message in conv.messages)
 
 
+@pytest.mark.live(formats=["openai_responses"], capabilities=["text"])
+@pytest.mark.compaction
 @pytest.mark.asyncio
 async def test_live_compaction_system_triggers_and_summarizes_responses(
-    live_api_key: str,
+    live_api_key: str, *, live_model_factory: LiveModelFactory
 ) -> None:
-    model = get_model(
-        f"aliyun-responses/{MODEL}",
-        registry=_live_registry(),
-        api_key=live_api_key,
+    model = live_model_factory.track(
+        get_model(
+            f"live/{live_model_factory.profile.model}",
+            registry=_live_registry(live_model_factory=live_model_factory),
+            api_key=live_api_key,
+        )
     )
     world, entity_id = _build_compaction_world(model)
     world.add_component(
@@ -310,12 +283,20 @@ async def test_live_compaction_system_triggers_and_summarizes_responses(
     assert all(message.role != "compaction" for message in conv.messages)
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"], capabilities=["text"]
+)
+@pytest.mark.compaction
 @pytest.mark.asyncio
-async def test_live_compaction_full_history_method(live_api_key: str) -> None:
-    model = get_model(
-        f"aliyun/{MODEL}",
-        registry=_live_registry(),
-        api_key=live_api_key,
+async def test_live_compaction_full_history_method(
+    live_api_key: str, *, live_model_factory: LiveModelFactory
+) -> None:
+    model = live_model_factory.track(
+        get_model(
+            f"live/{live_model_factory.profile.model}",
+            registry=_live_registry(live_model_factory=live_model_factory),
+            api_key=live_api_key,
+        )
     )
     world, entity_id = _build_compaction_world(model)
     world.add_component(
@@ -341,12 +322,20 @@ async def test_live_compaction_full_history_method(live_api_key: str) -> None:
     assert all(message.role != "compaction" for message in conv.messages)
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"], capabilities=["text"]
+)
+@pytest.mark.compaction
 @pytest.mark.asyncio
-async def test_live_compaction_custom_prompt_template(live_api_key: str) -> None:
-    model = get_model(
-        f"aliyun/{MODEL}",
-        registry=_live_registry(),
-        api_key=live_api_key,
+async def test_live_compaction_custom_prompt_template(
+    live_api_key: str, *, live_model_factory: LiveModelFactory
+) -> None:
+    model = live_model_factory.track(
+        get_model(
+            f"live/{live_model_factory.profile.model}",
+            registry=_live_registry(live_model_factory=live_model_factory),
+            api_key=live_api_key,
+        )
     )
     world, entity_id = _build_compaction_world(model)
     world.add_component(
@@ -372,15 +361,21 @@ async def test_live_compaction_custom_prompt_template(live_api_key: str) -> None
     assert archive.archived_summaries[0] == current_summary.summary
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"], capabilities=["text"]
+)
+@pytest.mark.compaction
 @pytest.mark.asyncio
-async def test_live_compaction_summary_model_id_routing(live_api_key: str) -> None:
-    model = _make_manual_chat_provider(live_api_key)
+async def test_live_compaction_summary_model_id_routing(
+    *, live_model_factory: LiveModelFactory
+) -> None:
+    model = live_model_factory.openai()
     world, entity_id = _build_compaction_world(model)
     world.add_component(
         entity_id,
         CompactionConfigComponent(
             threshold_tokens=30,
-            summary_model_id=f"aliyun/{MODEL}",
+            summary_model_id=f"live/{live_model_factory.profile.model}",
         ),
     )
     world.add_component(
@@ -388,7 +383,11 @@ async def test_live_compaction_summary_model_id_routing(live_api_key: str) -> No
         EntityRegistryComponent(
             entity_id=entity_id,
             name="test-agent",
-            metadata={"provider_registry": _live_registry()},
+            metadata={
+                "provider_registry": _live_registry(
+                    live_model_factory=live_model_factory
+                )
+            },
         ),
     )
 
@@ -406,10 +405,12 @@ async def test_live_compaction_summary_model_id_routing(live_api_key: str) -> No
     assert archive.archived_summaries[0] == current_summary.summary
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"], capabilities=["text"]
+)
+@pytest.mark.compaction
 @pytest.mark.asyncio
-async def test_live_memory_system_preserves_post_compaction_turns(
-    live_api_key: str,
-) -> None:
+async def test_live_memory_system_preserves_post_compaction_turns() -> None:
     world = World()
     entity_id = world.create_entity()
     world.add_component(

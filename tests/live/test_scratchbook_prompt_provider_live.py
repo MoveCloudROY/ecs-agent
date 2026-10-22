@@ -1,6 +1,8 @@
+"""Capture real outbound prompts with HTTP hooks for both OpenAI protocols."""
+
 from __future__ import annotations
 
-import os
+import json
 from typing import Any
 
 import httpx
@@ -10,8 +12,7 @@ from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.components.definitions import RenderedSystemPromptComponent
 from ecs_agent.core import Runner, World
 from ecs_agent.prompts.contracts import PromptTemplateSource, SystemPromptConfigSpec
-from ecs_agent.providers import OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers.config import ApiFormat
 from ecs_agent.scratchbook.prompt_definition import (
     ScratchbookArtifactPromptDef,
     ScratchbookPromptConfig,
@@ -21,7 +22,8 @@ from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
 from ecs_agent.types import Message
 
-from tests.live.api_format import live_openai_base_url
+from tests.support.models import LiveModelFactory
+
 
 _ENDPOINT_PARAMS = [
     pytest.param(ApiFormat.OPENAI_CHAT_COMPLETIONS, id="chat-completions"),
@@ -56,111 +58,29 @@ def _build_scratchbook_prompt_config() -> ScratchbookPromptConfig:
     )
 
 
-def _make_provider(api_key: str, api_format: ApiFormat) -> OpenAIModel:
-    model = os.getenv("LLM_MODEL") or "qwen3.5-flash"
-    return OpenAIModel(
-        config=ProviderConfig(
-            provider_id="aliyun",
-            base_url=live_openai_base_url(api_format),
-            api_key=api_key,
-            api_format=api_format,
-        ),
-        model=model,
-    )
-
-
-class _CapturingAsyncClient:
-    def __init__(self, inner: httpx.AsyncClient) -> None:
-        self._inner = inner
-        self.last_url: str | None = None
-        self.last_json: dict[str, Any] | None = None
-
-    async def post(self, url: str, **kwargs: Any) -> httpx.Response:
-        self.last_url = url
-        body = kwargs.get("json")
-        if isinstance(body, dict):
-            self.last_json = body
-        else:
-            self.last_json = None
-        return await self._inner.post(url, **kwargs)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("api_format", _ENDPOINT_PARAMS)
-async def test_live_scratchbook_placeholders_render_into_system_prompt_snapshot(
-    live_api_key: str,
-    api_format: ApiFormat,
-) -> None:
-    model = _make_provider(live_api_key, api_format)
-    world = World()
-    entity_id = world.create_entity()
-
-    world.add_component(
-        entity_id,
-        LLMComponent(model=model,
-),
-    )
-    world.add_component(
-        entity_id,
-        SystemPromptConfigSpec(
-            template_source=PromptTemplateSource(
-                inline=(
-                    "SB-LIVE-CHECK\n"
-                    "${_scratchbook_overview}\n"
-                    "plan_path=${_scratchbook_artifact_path_plan_notes}\n"
-                    "run_log_path=${_scratchbook_artifact_path_run_log}"
-                )
-            )
-        ),
-    )
-    world.add_component(entity_id, _build_scratchbook_prompt_config())
-
-    await SystemPromptRenderSystem().process(world)
-
-    rendered = world.get_component(entity_id, RenderedSystemPromptComponent)
-    assert rendered is not None
-    assert "${_scratchbook_overview}" not in rendered.text
-    assert "SB-LIVE-CHECK" in rendered.text
-    assert (
-        "Scratchbook path: .sisyphus/notepads/scratchbook-prompt-model"
-        in rendered.text
-    )
-    assert (
-        "plan_path=.sisyphus/notepads/scratchbook-prompt-model/plan.md"
-        in rendered.text
-    )
-    assert (
-        "run_log_path=.sisyphus/notepads/scratchbook-prompt-model/live-run.log"
-        in rendered.text
-    )
-    assert {
-        "_scratchbook_path",
-        "_scratchbook_artifact_types",
-        "_scratchbook_artifacts",
-        "_scratchbook_overview",
-        "_scratchbook_artifact_plan_notes",
-        "_scratchbook_artifact_path_plan_notes",
-        "_scratchbook_artifact_run_log",
-        "_scratchbook_artifact_path_run_log",
-    }.issubset(set(rendered.placeholder_snapshot))
-
-
+@pytest.mark.live(formats=["openai_chat_completions"], capabilities=["text", "tools"])
+@pytest.mark.prompts
 @pytest.mark.asyncio
 @pytest.mark.parametrize("api_format", _ENDPOINT_PARAMS)
 async def test_live_scratchbook_rendered_prompt_reaches_aliyun_outbound_channel(
-    live_api_key: str,
-    api_format: ApiFormat,
+    api_format: ApiFormat, *, live_model_factory: LiveModelFactory
 ) -> None:
-    model = _make_provider(live_api_key, api_format)
-    capturing_client = _CapturingAsyncClient(model._client)
-    model._client = capturing_client  # type: ignore[assignment]  # test-only: monkeypatching private attr for HTTP capture
+    model = live_model_factory.openai()
+    captured: dict[str, Any] = {}
+
+    async def capture(request: httpx.Request) -> None:
+        captured["url"] = str(request.url)
+        captured["payload"] = json.loads(request.content)
+
+    model._client.event_hooks["request"].append(capture)
 
     world = World()
     entity_id = world.create_entity()
     world.add_component(
         entity_id,
-        LLMComponent(model=model,
-),
+        LLMComponent(
+            model=model,
+        ),
     )
     world.add_component(
         entity_id,
@@ -193,8 +113,8 @@ async def test_live_scratchbook_rendered_prompt_reaches_aliyun_outbound_channel(
     assert rendered is not None
     assert "SB-LIVE-OUTBOUND" in rendered.text
 
-    outbound_url = capturing_client.last_url
-    outbound_payload = capturing_client.last_json
+    outbound_url = captured.get("url")
+    outbound_payload = captured.get("payload")
     assert outbound_url is not None
     assert outbound_payload is not None
 

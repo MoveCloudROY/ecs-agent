@@ -1,0 +1,23 @@
+[
+  "tests/live/test_agent_authoring_p2_live.py::test_responses_typed_tools_budget_resume_and_next_turn[allow-False]",
+  "tests/live/test_agent_authoring_p2_live.py::test_responses_typed_tools_budget_resume_and_next_turn[allow-True]",
+  "tests/live/test_agent_authoring_p2_live.py::test_responses_typed_tools_budget_resume_and_next_turn[approval_deny-False]",
+  "tests/live/test_agent_authoring_p2_live.py::test_responses_typed_tools_budget_resume_and_next_turn[approval_deny-True]",
+  "tests/live/test_agent_authoring_p2_live.py::test_responses_typed_tools_budget_resume_and_next_turn[permission_deny-False]",
+  "tests/live/test_agent_authoring_p2_live.py::test_responses_typed_tools_budget_resume_and_next_turn[permission_deny-True]",
+  "tests/live/test_agent_authoring_remaining_live.py::test_complete_authoring_tools_and_context_edits[False]",
+  "tests/live/test_agent_authoring_remaining_live.py::test_complete_authoring_tools_and_context_edits[True]",
+  "tests/live/test_agent_authoring_remaining_live.py::test_dsl_subagent_skill_and_trigger_use_responses",
+  "tests/live/test_llm_api_live.py::test_live_openai_responses_text_response",
+  "tests/live/test_model_constructor_live.py::test_model_openai_responses_api_live",
+  "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[allow-False]",
+  "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[allow-True]",
+  "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[approval_deny-False]",
+  "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[approval_deny-True]",
+  "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[dsl_deny-False]",
+  "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[dsl_deny-True]",
+  "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[permission_deny-False]",
+  "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[permission_deny-True]",
+  "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[require_approval-False]",
+  "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[require_approval-True]"
+]

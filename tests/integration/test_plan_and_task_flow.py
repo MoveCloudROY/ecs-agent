@@ -484,80 +484,10 @@ async def test_plan_task_terminal_cleanup_guard() -> None:
     )
 
 
-@pytest.mark.asyncio
-@pytest.mark.skipif(
-    not os.environ.get("LLM_API_KEY"),
-    reason="LLM_API_KEY not set",
-)
-async def test_plan_task_cli_automation() -> None:
-    input_sequence = b"exit\n"
-
-    result = subprocess.run(
-        ["uv", "run", "python", "examples/e2e/plan_and_task/main.py"],
-        input=input_sequence,
-        capture_output=True,
-        timeout=120,
-        env={**os.environ, "PLAN_TASK_INTERACTIVE": "1"},
-        cwd=Path(__file__).parent.parent.parent,
-    )
-
-    assert result.returncode == 0, (
-        f"Expected exit code 0, got {result.returncode}. "
-        f"stderr: {result.stderr.decode('utf-8', errors='replace')}"
-    )
-
-    output = result.stdout.decode("utf-8", errors="replace")
-    assert (
-        "Using model:" in output
-        or "Using Anthropic Messages API with model:" in output
-    ), (
-        f"Expected model selection indication in output. Got:\n{output}"
-    )
 
 
-@pytest.mark.asyncio
-@pytest.mark.skipif(
-    not os.environ.get("LLM_API_KEY"),
-    reason="LLM_API_KEY not set",
-)
-async def test_cli_slash_command_plan_start_and_status() -> None:
-    """Test CLI slash command execution: /plan:start and /plan:status.
 
-    This test pipes slash commands to main.py and verifies:
-    - Exit code is 0
-    - Output contains PLAN_INTERVIEW phase
-    - Output contains workflow_id
-    - Runtime state file exists with correct phase
-    """
-    input_sequence = b"/plan:start Build demo\n/plan:status\nexit\n"
 
-    env = {
-        **os.environ,
-        "PLAN_TASK_INTERACTIVE": "1",
-        "PLAN_TASK_WORKFLOW_ID": "cli-slash-cmd-test",
-        # Limit ticks so the test exits before spawning the full advisor/QA cycle.
-        # The plan status (with DRAFT_INTERVIEW + workflow_id) is emitted in tick 1.
-        "PLAN_TASK_MAX_AGENT_TICKS": "10",
-    }
-    result = subprocess.run(
-        ["uv", "run", "python", "examples/e2e/plan_and_task/main.py"],
-        input=input_sequence,
-        capture_output=True,
-        timeout=120,
-        env=env,
-        cwd=Path(__file__).parent.parent.parent,
-    )
-
-    assert result.returncode == 0, (
-        f"Expected exit code 0, got {result.returncode}. "
-        f"stderr: {result.stderr.decode('utf-8', errors='replace')}"
-    )
-
-    output = result.stdout.decode("utf-8", errors="replace")
-    assert "DRAFT_INTERVIEW" in output, (
-        f"Expected 'DRAFT_INTERVIEW' phase in output. Got:\n{output}"
-    )
-    assert "workflow_id" in output, f"Expected 'workflow_id' in output. Got:\n{output}"
 
 
 def test_plan_schema_parse_plan_extracts_strict_task_blocks() -> None:

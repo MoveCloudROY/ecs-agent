@@ -1,0 +1,31 @@
+# Copy to profiles.local.toml or select explicitly with --live-config.
+# Only credential variable names belong here, never credential values.
+[timeouts]
+request_seconds = 60
+stream_read_seconds = 60
+case_seconds = 180
+
+[profiles.deepseek-responses]
+base_url = "https://api.deepseek.com"
+model = "deepseek-flash"
+api_format = "openai_responses"
+api_key_env = "LLM_API_KEY"
+capabilities = ["text", "tools", "streaming"]
+
+[roles]
+primary = "deepseek-responses"
+# secondary = "another-complete-profile"
+# vision = "a-complete-vision-profile"
+
+# [assets]
+# image_url_env = "IMAGE_URL"
+
+# [services.langfuse]
+# host = "https://your-langfuse-host.example"
+# public_key_env = "LANGFUSE_PUBLIC_KEY"
+# secret_key_env = "LANGFUSE_SECRET_KEY"
+
+[cache]
+write_lag_seconds = 150
+poll_interval_seconds = 30
+case_seconds = 1200

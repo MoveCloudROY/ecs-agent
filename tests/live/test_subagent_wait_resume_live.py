@@ -1,10 +1,12 @@
-"""Live tests for subagent_wait wait-all semantics and subagent_resume with real LLM."""
+"""Live tests for subagent_wait wait-all semantics and subagent_resume with real LLM.
+
+Select a profile with --live; see docs/testing.md.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import os
 
 import pytest
 
@@ -21,59 +23,28 @@ from ecs_agent.components.definitions import (
 )
 from ecs_agent.core import World
 from ecs_agent.logging import configure_logging
-from ecs_agent.providers import ApiFormat, OpenAIModel, ProviderConfig
-from ecs_agent.providers.claude_model import ClaudeModel
 from ecs_agent.systems.subagent import SubagentSystem
 from ecs_agent.systems.subagent_wait import SubagentWaitSystem
 from ecs_agent.types import SubagentConfig
 
-
-def _build_openai_provider(api_key: str, base_url: str, model: str) -> OpenAIModel:
-    return OpenAIModel(
-        config=ProviderConfig(
-            provider_id="mimo",
-            base_url=base_url,
-            api_key=api_key,
-            api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-        ),
-        model=model,
-    )
+from tests.support.models import LiveModelFactory
 
 
-def _build_anthropic_provider(
-    api_key: str, base_url: str, model: str
-) -> ClaudeModel:
-    return ClaudeModel(
-        config=ProviderConfig(
-            provider_id="mimo-anthropic",
-            base_url=base_url,
-            api_key=api_key,
-            api_format=ApiFormat.ANTHROPIC_MESSAGES,
-        ),
-        model=model,
-    )
-
-
-def _live_env() -> tuple[str, str, str] | None:
-    api_key = os.getenv("LLM_API_KEY")
-    base_url = os.getenv("LLM_BASE_URL")
-    model = os.getenv("LLM_MODEL")
-    if not api_key or not base_url or not model:
-        return None
-    return api_key, base_url, model
-
-
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.subagent
 @pytest.mark.asyncio
-async def test_live_wait_all_resolves_when_all_sessions_complete() -> None:
-    env = _live_env()
-    if env is None:
-        pytest.skip("LLM_API_KEY / LLM_BASE_URL / LLM_MODEL not set")
-    api_key, base_url, model = env
+async def test_live_wait_all_resolves_when_all_sessions_complete(
+    *, live_model_factory: LiveModelFactory
+) -> None:
+
     configure_logging(json_output=False, level="WARNING")
 
     world = World(name="live-wait-all")
     parent = world.create_entity()
-    provider = _build_openai_provider(api_key, base_url, model)
+    provider = live_model_factory.openai()
 
     world.add_component(
         parent,
@@ -136,34 +107,35 @@ async def test_live_wait_all_resolves_when_all_sessions_complete() -> None:
     conversation = world.get_component(parent, ConversationComponent)
     assert conversation is not None
     user_notifications = [
-        m for m in conversation.messages
+        m
+        for m in conversation.messages
         if m.role == "user" and "Background subagent updates:" in m.content
     ]
     assert len(user_notifications) == 1
     assert sid_a in user_notifications[0].content
     assert sid_b in user_notifications[0].content
 
-    result_a = json.loads(
-        await tools.handlers["subagent_result"](session_id=sid_a)
-    )
-    result_b = json.loads(
-        await tools.handlers["subagent_result"](session_id=sid_b)
-    )
+    result_a = json.loads(await tools.handlers["subagent_result"](session_id=sid_a))
+    result_b = json.loads(await tools.handlers["subagent_result"](session_id=sid_b))
     assert result_a["status"] == "success"
     assert result_b["status"] == "success"
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.subagent
 @pytest.mark.asyncio
-async def test_live_wait_all_does_not_wake_on_partial_completion() -> None:
-    env = _live_env()
-    if env is None:
-        pytest.skip("LLM_API_KEY / LLM_BASE_URL / LLM_MODEL not set")
-    api_key, base_url, model = env
+async def test_live_wait_all_does_not_wake_on_partial_completion(
+    *, live_model_factory: LiveModelFactory
+) -> None:
+
     configure_logging(json_output=False, level="WARNING")
 
     world = World(name="live-wait-all-partial")
     parent = world.create_entity()
-    provider = _build_openai_provider(api_key, base_url, model)
+    provider = live_model_factory.openai()
 
     world.add_component(
         parent,
@@ -234,7 +206,8 @@ async def test_live_wait_all_does_not_wake_on_partial_completion() -> None:
     conversation = world.get_component(parent, ConversationComponent)
     assert conversation is not None
     user_notifications = [
-        m for m in conversation.messages
+        m
+        for m in conversation.messages
         if m.role == "user" and "Background subagent updates:" in m.content
     ]
     assert len(user_notifications) == 1
@@ -242,17 +215,21 @@ async def test_live_wait_all_does_not_wake_on_partial_completion() -> None:
     assert sid_slow in user_notifications[0].content
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.subagent
 @pytest.mark.asyncio
-async def test_live_subagent_resume_restarts_failed_session() -> None:
-    env = _live_env()
-    if env is None:
-        pytest.skip("LLM_API_KEY / LLM_BASE_URL / LLM_MODEL not set")
-    api_key, base_url, model = env
+async def test_live_subagent_resume_restarts_failed_session(
+    *, live_model_factory: LiveModelFactory
+) -> None:
+
     configure_logging(json_output=False, level="WARNING")
 
     world = World(name="live-resume")
     parent = world.create_entity()
-    provider = _build_openai_provider(api_key, base_url, model)
+    provider = live_model_factory.openai()
 
     world.add_component(
         parent,
@@ -296,9 +273,7 @@ async def test_live_subagent_resume_restarts_failed_session() -> None:
         error="simulated failure for resume test",
         background=True,
     )
-    await subagent_system._runtime_manager.restore_session_metadata(
-        failed_metadata
-    )
+    await subagent_system._runtime_manager.restore_session_metadata(failed_metadata)
     await subagent_system._runtime_manager.sync_to_component(world, parent)
 
     resume_payload = json.loads(
@@ -320,17 +295,21 @@ async def test_live_subagent_resume_restarts_failed_session() -> None:
     assert new_session.status == "succeeded"
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.subagent
 @pytest.mark.asyncio
-async def test_live_notification_role_is_user_not_system() -> None:
-    env = _live_env()
-    if env is None:
-        pytest.skip("LLM_API_KEY / LLM_BASE_URL / LLM_MODEL not set")
-    api_key, base_url, model = env
+async def test_live_notification_role_is_user_not_system(
+    *, live_model_factory: LiveModelFactory
+) -> None:
+
     configure_logging(json_output=False, level="WARNING")
 
     world = World(name="live-role-check")
     parent = world.create_entity()
-    provider = _build_openai_provider(api_key, base_url, model)
+    provider = live_model_factory.openai()
 
     world.add_component(
         parent,
@@ -379,36 +358,28 @@ async def test_live_notification_role_is_user_not_system() -> None:
     assert conversation is not None
     system_role_msgs = [m for m in conversation.messages if m.role == "system"]
     user_notification_msgs = [
-        m for m in conversation.messages
+        m
+        for m in conversation.messages
         if m.role == "user" and "Background subagent updates:" in m.content
     ]
     assert len(user_notification_msgs) == 1
     assert all(
-        "Background subagent updates:" not in m.content
-        for m in system_role_msgs
+        "Background subagent updates:" not in m.content for m in system_role_msgs
     )
 
 
-def _anthropic_env() -> tuple[str, str, str] | None:
-    api_key = os.getenv("LLM_API_KEY")
-    base_url = os.getenv("ANTHROPIC_BASE_URL")
-    model = os.getenv("LLM_MODEL")
-    if not api_key or not base_url or not model:
-        return None
-    return api_key, base_url, model
-
-
+@pytest.mark.live(formats=["anthropic_messages"], capabilities=["text", "tools"])
+@pytest.mark.subagent
 @pytest.mark.asyncio
-async def test_live_anthropic_wait_all_and_notification_role() -> None:
-    env = _anthropic_env()
-    if env is None:
-        pytest.skip("LLM_API_KEY / ANTHROPIC_BASE_URL / LLM_MODEL not set")
-    api_key, base_url, model = env
+async def test_live_anthropic_wait_all_and_notification_role(
+    *, live_model_factory: LiveModelFactory
+) -> None:
+
     configure_logging(json_output=False, level="WARNING")
 
     world = World(name="live-anthropic-wait-all")
     parent = world.create_entity()
-    provider = _build_anthropic_provider(api_key, base_url, model)
+    provider = live_model_factory.claude()
 
     world.add_component(
         parent,
@@ -470,29 +441,30 @@ async def test_live_anthropic_wait_all_and_notification_role() -> None:
     assert conversation is not None
     system_role_msgs = [m for m in conversation.messages if m.role == "system"]
     user_notification_msgs = [
-        m for m in conversation.messages
+        m
+        for m in conversation.messages
         if m.role == "user" and "Background subagent updates:" in m.content
     ]
     assert len(user_notification_msgs) == 1
     assert sid_a in user_notification_msgs[0].content
     assert sid_b in user_notification_msgs[0].content
     assert all(
-        "Background subagent updates:" not in m.content
-        for m in system_role_msgs
+        "Background subagent updates:" not in m.content for m in system_role_msgs
     )
 
 
+@pytest.mark.live(formats=["anthropic_messages"], capabilities=["text", "tools"])
+@pytest.mark.subagent
 @pytest.mark.asyncio
-async def test_live_anthropic_subagent_resume() -> None:
-    env = _anthropic_env()
-    if env is None:
-        pytest.skip("LLM_API_KEY / ANTHROPIC_BASE_URL / LLM_MODEL not set")
-    api_key, base_url, model = env
+async def test_live_anthropic_subagent_resume(
+    *, live_model_factory: LiveModelFactory
+) -> None:
+
     configure_logging(json_output=False, level="WARNING")
 
     world = World(name="live-anthropic-resume")
     parent = world.create_entity()
-    provider = _build_anthropic_provider(api_key, base_url, model)
+    provider = live_model_factory.claude()
 
     world.add_component(
         parent,
@@ -532,9 +504,7 @@ async def test_live_anthropic_subagent_resume() -> None:
         error="simulated failure for anthropic resume test",
         background=True,
     )
-    await subagent_system._runtime_manager.restore_session_metadata(
-        failed_metadata
-    )
+    await subagent_system._runtime_manager.restore_session_metadata(failed_metadata)
     await subagent_system._runtime_manager.sync_to_component(world, parent)
 
     tools = world.get_component(parent, ToolRegistryComponent)

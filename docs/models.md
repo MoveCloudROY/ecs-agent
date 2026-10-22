@@ -888,7 +888,7 @@ Use `FileRefPart` with IDs returned by `OpenAIFilesService` (see **File Upload**
 
 ### Live Vision Test Note
 
-For live vision tests, set env vars such as `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, and `IMAGE_URL` (never hardcode secrets).
+For live vision tests, select a complete profile declaring `vision` and configure `assets.image_url` or `assets.image_url_env`. Run with `--live -m "live and vision"`; see [test configuration](testing.md).
 
 ---
 

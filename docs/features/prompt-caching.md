@@ -86,26 +86,15 @@ formats, and asserts the append-only property call-over-call. Run with
 `-s` to see byte-level divergence diagnostics
 (`tests/cache_audit/harness.py` is the reusable audit toolkit).
 
-### Live experiments (env-gated)
+### Live experiments
 
-`tests/live/test_prompt_cache_experiment_live.py` replays the captured
-sequences against real endpoints and prints per-call tables
-(`prompt` / `cached_read` / `cache_write` / `hit_rate`):
+`tests/live/test_prompt_cache_experiment_live.py` replays captured sequences against real endpoints and prints per-call cache usage. Select a profile that explicitly declares `cache`; see [test configuration](../testing.md).
 
 ```bash
-# Anthropic side (ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL / ANTHROPIC_MODEL)
-uv run pytest tests/live/test_prompt_cache_experiment_live.py -k anthropic -s
-
-# OpenAI side (LLM_API_KEY / LLM_BASE_URL / LLM_RESPONSES_BASE_URL / LLM_MODEL)
-uv run pytest tests/live/test_prompt_cache_experiment_live.py -k openai -s
+uv run pytest --live --live-config tests/live/profiles.local.toml -m "live and cache" -s
 ```
 
-Scenarios: the clean agentic tool loop, the context-pool loop, an Anthropic
-breakpoint-lookback probe (narrow vs wide tool batches), and
-Responses-endpoint cache-support probes. `LLM_CACHE_WRITE_LAG_SECONDS`
-(default 150) bounds the polling budget for gateways whose cache writes
-commit asynchronously; each warm step prints both the first-attempt read and
-the final poll.
+Scenarios cover clean agentic loops, context-pool injection, Anthropic breakpoint lookback and Responses cache probes. `[cache]` controls write lag (default 150 seconds), polling interval (30 seconds) and total case budget (1200 seconds). Missing cache metrics fail a declared-capable profile; reported zero hits remain measured results. Request errors fail instead of skipping.
 
 Reference numbers measured against an aggregator gateway (2026-07-16):
 clean loop warm hit rate ≈ 96% (anthropic side, deepseek backend) and ≈ 86%

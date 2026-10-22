@@ -1,0 +1,10 @@
+# Required Responses core matrix. Credentials come from Actions secrets.
+[profiles.deepseek-responses]
+base_url = "https://api.deepseek.com"
+model = "deepseek-flash"
+api_format = "openai_responses"
+api_key_env = "LLM_API_KEY"
+capabilities = ["text", "tools", "streaming"]
+
+[roles]
+primary = "deepseek-responses"

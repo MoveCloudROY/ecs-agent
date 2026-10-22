@@ -230,3 +230,6 @@ records/
 
 
 .claude/
+
+# Local live-test profiles
+tests/live/profiles.local.toml

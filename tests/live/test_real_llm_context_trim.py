@@ -1,14 +1,7 @@
-"""Env-gated real-LLM validation of the ISSUE-5 trim -> compaction pipeline.
-
-With ``ANTHROPIC_API_KEY`` set, runs ``CompactionSystem`` against a real
-Anthropic-format endpoint: an over-budget conversation is first trimmed
-(oldest tool span dropped, permanently) and, when trimming is not enough, the
-real model produces a compaction summary. Skips cleanly without a key.
-"""
+"""Live LLM scenarios selected explicitly with --live and a model profile."""
 
 from __future__ import annotations
 
-import os
 
 import pytest
 
@@ -22,33 +15,28 @@ from ecs_agent.components import (
 )
 from ecs_agent.core import World
 from ecs_agent.providers.claude_model import ClaudeModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.systems.compaction import CompactionSystem
 from ecs_agent.types import Message, ToolCall
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-20241022")
+from tests.support.models import LiveModelFactory
 
 
-def _claude_model() -> ClaudeModel:
-    config = ProviderConfig(
-        provider_id="anthropic",
-        base_url=ANTHROPIC_BASE_URL,
-        api_key=ANTHROPIC_API_KEY,
-        api_format=ApiFormat.ANTHROPIC_MESSAGES,
-    )
-    return ClaudeModel(config=config, model=ANTHROPIC_MODEL, max_tokens=256)
+def _claude_model(*, live_model_factory: LiveModelFactory) -> ClaudeModel:
+    return live_model_factory.claude(max_tokens=256)
 
 
-@pytest.mark.skipif(
-    not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY environment variable not set"
-)
+@pytest.mark.live(formats=["anthropic_messages"], capabilities=["text"])
+@pytest.mark.compaction
 @pytest.mark.asyncio
-async def test_real_trim_then_summarize_pipeline() -> None:
+async def test_real_trim_then_summarize_pipeline(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     world = World()
     entity_id = world.create_entity()
-    world.add_component(entity_id, LLMComponent(model=_claude_model()))
+    world.add_component(
+        entity_id,
+        LLMComponent(model=_claude_model(live_model_factory=live_model_factory)),
+    )
     # Oldest turn is a tool span (trimmable); the rest is essential prose that
     # cannot be trimmed, so trimming alone won't fit -> real summary is produced.
     world.add_component(
@@ -66,15 +54,17 @@ async def test_real_trim_then_summarize_pipeline() -> None:
                     role="assistant",
                     content="The capital of France is Paris. " * 40,
                 ),
-                Message(role="user", content="Now summarize our whole discussion. " * 40),
+                Message(
+                    role="user", content="Now summarize our whole discussion. " * 40
+                ),
             ]
         ),
     )
     world.add_component(entity_id, ConversationArchiveComponent())
+    world.add_component(entity_id, CompactionConfigComponent(threshold_tokens=50))
     world.add_component(
-        entity_id, CompactionConfigComponent(threshold_tokens=50)
+        entity_id, ContextTrimConfig(max_tokens=50, protect_recent_turns=0)
     )
-    world.add_component(entity_id, ContextTrimConfig(max_tokens=50, protect_recent_turns=0))
 
     await CompactionSystem().process(world)
 

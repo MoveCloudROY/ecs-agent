@@ -1,6 +1,7 @@
+"""Live scenarios using explicit model profiles and shared resource ownership."""
+
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -10,10 +11,7 @@ from ecs_agent.components import (
     LLMComponent,
     ToolRegistryComponent,
 )
-from ecs_agent.components.definitions import TerminalComponent
 from ecs_agent.core import Runner, World
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.skills import SkillManager
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
@@ -21,29 +19,16 @@ from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.tools.builtins import BuiltinToolsSkill
 from ecs_agent.types import Message
 
-
-def _make_provider(live_api_key: str) -> OpenAIModel:
-    model = os.getenv("LLM_MODEL") or "qwen3.5-flash"
-    base_url = os.getenv(
-        "LLM_BASE_URL",
-        "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    )
-    config = ProviderConfig(
-        provider_id="aliyun",
-        base_url=base_url,
-        api_key=live_api_key,
-        api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-    )
-    return OpenAIModel(config=config, model=model)
+from tests.support.models import LiveModelFactory
 
 
 def _build_world(
-    live_api_key: str, tmp_path: Path, user_message: str
+    tmp_path: Path, user_message: str, *, live_model_factory: LiveModelFactory
 ) -> tuple[World, int]:
     workspace = tmp_path / "workspace"
 
     world = World()
-    model = _make_provider(live_api_key)
+    model = live_model_factory.openai()
     agent = world.create_entity()
 
     skill = BuiltinToolsSkill().bind_workspace(str(workspace))
@@ -57,7 +42,6 @@ def _build_world(
         agent,
         LLMComponent(
             model=model,
-            
             system_prompt=(
                 "You are a helpful assistant with access to file and shell tools. "
                 "Use the tools as instructed. Be precise and concise."
@@ -76,9 +60,14 @@ def _build_world(
     return world, agent
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.tools
 @pytest.mark.asyncio
 async def test_live_edit_file_tool_called_by_llm(
-    live_api_key: str, tmp_path: Path
+    tmp_path: Path, *, live_model_factory: LiveModelFactory
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -91,7 +80,9 @@ async def test_live_edit_file_tool_called_by_llm(
         "the function with op='replace', pos='1', and content='def greet():'."
     )
 
-    world, agent = _build_world(live_api_key, tmp_path, user_msg)
+    world, agent = _build_world(
+        tmp_path, user_msg, live_model_factory=live_model_factory
+    )
     runner = Runner()
     await runner.run(world, max_ticks=5)
 
@@ -99,9 +90,14 @@ async def test_live_edit_file_tool_called_by_llm(
     assert "def greet():" in updated or "greet" in updated
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.tools
 @pytest.mark.asyncio
 async def test_live_read_file_tool_called_by_llm(
-    live_api_key: str, tmp_path: Path
+    tmp_path: Path, *, live_model_factory: LiveModelFactory
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -110,9 +106,9 @@ async def test_live_read_file_tool_called_by_llm(
     )
 
     world, agent = _build_world(
-        live_api_key,
         tmp_path,
         "Read info.txt and tell me the project name listed in it.",
+        live_model_factory=live_model_factory,
     )
     runner = Runner()
     await runner.run(world, max_ticks=5)
@@ -129,39 +125,53 @@ async def test_live_read_file_tool_called_by_llm(
     )
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+    dependencies=["tmux"],
+)
+@pytest.mark.tools
 @pytest.mark.asyncio
 async def test_live_interactive_bash_tool_called_by_llm(
-    live_api_key: str, tmp_path: Path
+    tmp_path: Path, *, live_model_factory: LiveModelFactory
 ) -> None:
-    session_name = "test-ecs-live-ib"
+    import asyncio
+    from uuid import uuid4
+
+    session_name = f"test-ecs-live-{uuid4().hex[:12]}"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-
     world, agent = _build_world(
-        live_api_key,
         tmp_path,
         f"Use interactive_bash to create a new tmux session named '{session_name}' "
         f"with the command: new-session -d -s {session_name}. "
         "Then confirm you did it.",
+        live_model_factory=live_model_factory,
     )
-    runner = Runner()
-    await runner.run(world, max_ticks=5)
-
-    import asyncio
-
-    result = await asyncio.create_subprocess_exec(
-        "tmux",
-        "has-session",
-        "-t",
-        session_name,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    await result.communicate()
-
-    if result.returncode == 0:
-        await asyncio.create_subprocess_exec("tmux", "kill-session", "-t", session_name)
-
-    conv = world.get_component(agent, ConversationComponent)
-    assert conv is not None
-    assert any(m.role == "assistant" for m in conv.messages)
+    try:
+        await Runner().run(world, max_ticks=5)
+        result = await asyncio.create_subprocess_exec(
+            "tmux",
+            "has-session",
+            "-t",
+            session_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await result.communicate()
+        assert result.returncode == 0, (
+            "The agent must create the requested tmux session"
+        )
+        conv = world.get_component(agent, ConversationComponent)
+        assert conv is not None
+        assert any(m.role == "assistant" for m in conv.messages)
+    finally:
+        cleanup = await asyncio.create_subprocess_exec(
+            "tmux",
+            "kill-session",
+            "-t",
+            session_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await cleanup.communicate()

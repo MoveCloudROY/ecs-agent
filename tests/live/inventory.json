@@ -1,0 +1,2377 @@
+[
+  {
+    "previous_nodeid": "tests/hashline/test_multi_model.py::test_real_llm_clean_read_snapshot_edit_workflow",
+    "nodeid": "tests/live/test_hashline_live.py::test_real_llm_clean_read_snapshot_edit_workflow",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/integration/test_plan_and_task_flow.py::test_plan_task_cli_automation",
+    "nodeid": "tests/live/test_plan_task_cli_live.py::test_plan_task_cli_automation",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/integration/test_plan_and_task_flow.py::test_cli_slash_command_plan_start_and_status",
+    "nodeid": "tests/live/test_plan_task_cli_live.py::test_cli_slash_command_plan_start_and_status",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/integration/test_ui_design_flow.py::test_ui_design_flow_real_llm",
+    "nodeid": "tests/live/test_ui_design_live.py::test_ui_design_flow_real_llm",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_agent_authoring_p2_live.py::test_responses_typed_tools_budget_resume_and_next_turn[allow-False]",
+    "nodeid": "tests/live/test_agent_authoring_p2_live.py::test_responses_typed_tools_budget_resume_and_next_turn[allow-False]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_agent_authoring_p2_live.py::test_responses_typed_tools_budget_resume_and_next_turn[allow-True]",
+    "nodeid": "tests/live/test_agent_authoring_p2_live.py::test_responses_typed_tools_budget_resume_and_next_turn[allow-True]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_agent_authoring_p2_live.py::test_responses_typed_tools_budget_resume_and_next_turn[permission_deny-False]",
+    "nodeid": "tests/live/test_agent_authoring_p2_live.py::test_responses_typed_tools_budget_resume_and_next_turn[permission_deny-False]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_agent_authoring_p2_live.py::test_responses_typed_tools_budget_resume_and_next_turn[permission_deny-True]",
+    "nodeid": "tests/live/test_agent_authoring_p2_live.py::test_responses_typed_tools_budget_resume_and_next_turn[permission_deny-True]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_agent_authoring_p2_live.py::test_responses_typed_tools_budget_resume_and_next_turn[approval_deny-False]",
+    "nodeid": "tests/live/test_agent_authoring_p2_live.py::test_responses_typed_tools_budget_resume_and_next_turn[approval_deny-False]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_agent_authoring_p2_live.py::test_responses_typed_tools_budget_resume_and_next_turn[approval_deny-True]",
+    "nodeid": "tests/live/test_agent_authoring_p2_live.py::test_responses_typed_tools_budget_resume_and_next_turn[approval_deny-True]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_agent_authoring_remaining_live.py::test_complete_authoring_tools_and_context_edits[False]",
+    "nodeid": "tests/live/test_agent_authoring_remaining_live.py::test_complete_authoring_tools_and_context_edits[False]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_agent_authoring_remaining_live.py::test_complete_authoring_tools_and_context_edits[True]",
+    "nodeid": "tests/live/test_agent_authoring_remaining_live.py::test_complete_authoring_tools_and_context_edits[True]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_agent_authoring_remaining_live.py::test_dsl_subagent_skill_and_trigger_use_responses",
+    "nodeid": "tests/live/test_agent_authoring_remaining_live.py::test_dsl_subagent_skill_and_trigger_use_responses",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_artifact_registry_live.py::test_live_tool_execution_persists_canonical_artifact",
+    "nodeid": "tests/test_artifact_registry_scenarios.py::test_live_tool_execution_persists_canonical_artifact",
+    "live": false,
+    "requirements": {}
+  },
+  {
+    "previous_nodeid": "tests/live/test_artifact_registry_live.py::test_live_planning_writes_canonical_plan_md[chat-completions]",
+    "nodeid": "tests/live/test_artifact_registry_live.py::test_live_planning_writes_canonical_plan_md[chat-completions]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_artifact_registry_live.py::test_live_planning_writes_canonical_plan_md[responses]",
+    "nodeid": "tests/live/test_artifact_registry_live.py::test_live_planning_writes_canonical_plan_md[responses]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_artifact_registry_live.py::test_live_trigger_creates_boulder_on_plan_script",
+    "nodeid": "tests/test_artifact_registry_scenarios.py::test_live_trigger_creates_boulder_on_plan_script",
+    "live": false,
+    "requirements": {}
+  },
+  {
+    "previous_nodeid": "tests/live/test_artifact_registry_live.py::test_live_no_legacy_category_paths_written[chat-completions]",
+    "nodeid": "tests/live/test_artifact_registry_live.py::test_live_no_legacy_category_paths_written[chat-completions]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_artifact_registry_live.py::test_live_no_legacy_category_paths_written[responses]",
+    "nodeid": "tests/live/test_artifact_registry_live.py::test_live_no_legacy_category_paths_written[responses]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_builtin_tools_live.py::test_live_edit_file_tool_called_by_llm",
+    "nodeid": "tests/live/test_builtin_tools_live.py::test_live_edit_file_tool_called_by_llm",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_builtin_tools_live.py::test_live_read_file_tool_called_by_llm",
+    "nodeid": "tests/live/test_builtin_tools_live.py::test_live_read_file_tool_called_by_llm",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_builtin_tools_live.py::test_live_interactive_bash_tool_called_by_llm",
+    "nodeid": "tests/live/test_builtin_tools_live.py::test_live_interactive_bash_tool_called_by_llm",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [
+        "tmux"
+      ],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_compaction_live.py::test_live_compaction_xml_summary_visible_chat_completions",
+    "nodeid": "tests/live/test_compaction_live.py::test_live_compaction_xml_summary_visible_chat_completions",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_compaction_live.py::test_live_compaction_xml_summary_visible_responses_api",
+    "nodeid": "tests/live/test_compaction_live.py::test_live_compaction_xml_summary_visible_responses_api",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_compaction_live.py::test_live_compaction_system_triggers_and_summarizes_chat",
+    "nodeid": "tests/live/test_compaction_live.py::test_live_compaction_system_triggers_and_summarizes_chat",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_compaction_live.py::test_live_compaction_system_triggers_and_summarizes_responses",
+    "nodeid": "tests/live/test_compaction_live.py::test_live_compaction_system_triggers_and_summarizes_responses",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_compaction_live.py::test_live_compaction_full_history_method",
+    "nodeid": "tests/live/test_compaction_live.py::test_live_compaction_full_history_method",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_compaction_live.py::test_live_compaction_custom_prompt_template",
+    "nodeid": "tests/live/test_compaction_live.py::test_live_compaction_custom_prompt_template",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_compaction_live.py::test_live_compaction_summary_model_id_routing",
+    "nodeid": "tests/live/test_compaction_live.py::test_live_compaction_summary_model_id_routing",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_compaction_live.py::test_live_memory_system_preserves_post_compaction_turns",
+    "nodeid": "tests/live/test_compaction_live.py::test_live_memory_system_preserves_post_compaction_turns",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_concurrent_tool_execution_live.py::test_live_batched_safe_tools_overlap_and_land_in_order",
+    "nodeid": "tests/live/test_concurrent_tool_execution_live.py::test_live_batched_safe_tools_overlap_and_land_in_order",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "parallel_tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_free_subagent_live.py::test_live_openai_chat_free_subagent_allows_unregistered_category",
+    "nodeid": "tests/live/test_free_subagent_live.py::test_live_openai_chat_free_subagent_allows_unregistered_category",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_free_subagent_live.py::test_live_openai_responses_free_subagent_allows_unregistered_category",
+    "nodeid": "tests/live/test_free_subagent_live.py::test_live_openai_responses_free_subagent_allows_unregistered_category",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_free_subagent_live.py::test_live_anthropic_free_subagent_allows_unregistered_category",
+    "nodeid": "tests/live/test_free_subagent_live.py::test_live_anthropic_free_subagent_allows_unregistered_category",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_langfuse_observability_live.py::test_live_langfuse_openai_chat_agent_run",
+    "nodeid": "tests/live/test_langfuse_observability_live.py::test_live_langfuse_openai_chat_agent_run",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [
+        "langfuse"
+      ],
+      "dependencies": [
+        "langfuse"
+      ],
+      "formats": [
+        "openai_chat_completions"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_langfuse_observability_live.py::test_live_langfuse_openai_responses_agent_run",
+    "nodeid": "tests/live/test_langfuse_observability_live.py::test_live_langfuse_openai_responses_agent_run",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [
+        "langfuse"
+      ],
+      "dependencies": [
+        "langfuse"
+      ],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_langfuse_observability_live.py::test_live_langfuse_anthropic_messages_agent_run",
+    "nodeid": "tests/live/test_langfuse_observability_live.py::test_live_langfuse_anthropic_messages_agent_run",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [
+        "langfuse"
+      ],
+      "dependencies": [
+        "langfuse"
+      ],
+      "formats": [
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_llm_api_live.py::test_live_openai_chat_text_response",
+    "nodeid": "tests/live/test_llm_api_live.py::test_live_openai_chat_text_response",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_llm_api_live.py::test_live_openai_responses_text_response",
+    "nodeid": "tests/live/test_llm_api_live.py::test_live_openai_responses_text_response",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_llm_api_live.py::test_live_openai_responses_vision_response",
+    "nodeid": "tests/live/test_llm_api_live.py::test_live_openai_responses_vision_response",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "vision"
+      ],
+      "role": "vision",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_llm_api_live.py::test_live_anthropic_messages_text_response",
+    "nodeid": "tests/live/test_llm_api_live.py::test_live_anthropic_messages_text_response",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_model_constructor_live.py::test_model_anthropic_messages_live",
+    "nodeid": "tests/live/test_model_constructor_live.py::test_model_anthropic_messages_live",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_model_constructor_live.py::test_model_anthropic_messages_via_model_type_live",
+    "nodeid": "tests/live/test_model_constructor_live.py::test_model_anthropic_messages_via_model_type_live",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_model_constructor_live.py::test_model_openai_chat_completions_live",
+    "nodeid": "tests/live/test_model_constructor_live.py::test_model_openai_chat_completions_live",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_model_constructor_live.py::test_model_openai_chat_completions_via_model_type_live",
+    "nodeid": "tests/live/test_model_constructor_live.py::test_model_openai_chat_completions_via_model_type_live",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_model_constructor_live.py::test_model_openai_responses_api_live",
+    "nodeid": "tests/live/test_model_constructor_live.py::test_model_openai_responses_api_live",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_model_constructor_live.py::test_model_api_format_string_live",
+    "nodeid": "tests/live/test_model_constructor_live.py::test_model_api_format_string_live",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_model_constructor_live.py::test_model_model_id_preserved_after_live_call",
+    "nodeid": "tests/live/test_model_constructor_live.py::test_model_model_id_preserved_after_live_call",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_new_builtin_tools_live.py::test_live_grep_tool",
+    "nodeid": "tests/live/test_new_builtin_tools_live.py::test_live_grep_tool",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses",
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_new_builtin_tools_live.py::test_live_read_file_with_range",
+    "nodeid": "tests/live/test_new_builtin_tools_live.py::test_live_read_file_with_range",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses",
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_new_builtin_tools_live.py::test_live_explore_tool",
+    "nodeid": "tests/live/test_new_builtin_tools_live.py::test_live_explore_tool",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses",
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_new_builtin_tools_live.py::test_live_code_execution_tool",
+    "nodeid": "tests/live/test_new_builtin_tools_live.py::test_live_code_execution_tool",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses",
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_new_builtin_tools_live.py::test_live_webfetch_tool",
+    "nodeid": "tests/live/test_new_builtin_tools_live.py::test_live_webfetch_tool",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses",
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_phases_live.py::test_live_phase_transition_swaps_effective_system_prompt",
+    "nodeid": "tests/live/test_phases_live.py::test_live_phase_transition_swaps_effective_system_prompt",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_plan_and_task_debug_harness_live.py::test_live_debug_session_starts_and_drafts",
+    "nodeid": "tests/live/test_plan_and_task_debug_harness_live.py::test_live_debug_session_starts_and_drafts",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses",
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_plan_and_task_flow_live.py::test_live_plan_controller_starts_plan_interview",
+    "nodeid": "tests/test_plan_task_scenarios.py::test_live_plan_controller_starts_plan_interview",
+    "live": false,
+    "requirements": {}
+  },
+  {
+    "previous_nodeid": "tests/live/test_plan_and_task_flow_live.py::test_live_plan_controller_completes_review_cycle",
+    "nodeid": "tests/test_plan_task_scenarios.py::test_live_plan_controller_completes_review_cycle",
+    "live": false,
+    "requirements": {}
+  },
+  {
+    "previous_nodeid": "tests/live/test_plan_and_task_flow_live.py::test_live_task_exec_loads_finalized_plan",
+    "nodeid": "tests/live/test_plan_and_task_flow_live.py::test_live_task_exec_loads_finalized_plan",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_plan_and_task_flow_live.py::test_live_derive_workflow_id_from_llm_returns_valid_slug",
+    "nodeid": "tests/live/test_plan_and_task_flow_live.py::test_live_derive_workflow_id_from_llm_returns_valid_slug",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_plan_and_task_flow_live.py::test_live_controller_advisor_retry_loop_revise_then_approved",
+    "nodeid": "tests/live/test_plan_and_task_flow_live.py::test_live_controller_advisor_retry_loop_revise_then_approved",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_plan_and_task_flow_live.py::test_anthropic_model_completes_simple_message",
+    "nodeid": "tests/live/test_plan_and_task_flow_live.py::test_anthropic_model_completes_simple_message",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_plan_and_task_flow_live.py::test_anthropic_plan_task_auto_compaction_summarizes_context",
+    "nodeid": "tests/live/test_plan_and_task_flow_live.py::test_anthropic_plan_task_auto_compaction_summarizes_context",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_plan_and_task_flow_live.py::test_anthropic_derive_workflow_id_returns_valid_slug",
+    "nodeid": "tests/live/test_plan_and_task_flow_live.py::test_anthropic_derive_workflow_id_returns_valid_slug",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_plan_and_task_flow_live.py::test_anthropic_plan_controller_starts_plan_interview",
+    "nodeid": "tests/live/test_plan_and_task_flow_live.py::test_anthropic_plan_controller_starts_plan_interview",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_prometheus_metrics_live.py::test_live_prometheus_metrics_smoke",
+    "nodeid": "tests/live/test_prometheus_metrics_live.py::test_live_prometheus_metrics_smoke",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [
+        "prometheus_client"
+      ],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses",
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_prompt_cache_experiment_live.py::test_anthropic_clean_agentic_loop_cache_hits",
+    "nodeid": "tests/live/test_prompt_cache_experiment_live.py::test_anthropic_clean_agentic_loop_cache_hits",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "cache"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_prompt_cache_experiment_live.py::test_anthropic_context_pool_injection_cache_penalty",
+    "nodeid": "tests/live/test_prompt_cache_experiment_live.py::test_anthropic_context_pool_injection_cache_penalty",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "cache"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_prompt_cache_experiment_live.py::test_anthropic_breakpoint_lookback_window_probe",
+    "nodeid": "tests/live/test_prompt_cache_experiment_live.py::test_anthropic_breakpoint_lookback_window_probe",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "cache"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_prompt_cache_experiment_live.py::test_openai_chat_clean_agentic_loop_cache_hits",
+    "nodeid": "tests/live/test_prompt_cache_experiment_live.py::test_openai_chat_clean_agentic_loop_cache_hits",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "cache"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_prompt_cache_experiment_live.py::test_openai_responses_clean_agentic_loop_cache_hits",
+    "nodeid": "tests/live/test_prompt_cache_experiment_live.py::test_openai_responses_clean_agentic_loop_cache_hits",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "cache"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_prompt_cache_experiment_live.py::test_openai_responses_identical_repeat_probe",
+    "nodeid": "tests/live/test_prompt_cache_experiment_live.py::test_openai_responses_identical_repeat_probe",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "cache"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_prompt_cache_experiment_live.py::test_openai_responses_tool_request_repeat_probe",
+    "nodeid": "tests/live/test_prompt_cache_experiment_live.py::test_openai_responses_tool_request_repeat_probe",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "cache"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_prompt_cache_experiment_live.py::test_openai_chat_context_pool_injection_cache_penalty",
+    "nodeid": "tests/live/test_prompt_cache_experiment_live.py::test_openai_chat_context_pool_injection_cache_penalty",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "cache"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_scratchbook_prompt_provider_live.py::test_live_scratchbook_placeholders_render_into_system_prompt_snapshot[chat-completions]",
+    "nodeid": "tests/test_scratchbook_prompt_scenarios.py::test_live_scratchbook_placeholders_render_into_system_prompt_snapshot[chat-completions]",
+    "live": false,
+    "requirements": {}
+  },
+  {
+    "previous_nodeid": "tests/live/test_scratchbook_prompt_provider_live.py::test_live_scratchbook_placeholders_render_into_system_prompt_snapshot[responses]",
+    "nodeid": "tests/test_scratchbook_prompt_scenarios.py::test_live_scratchbook_placeholders_render_into_system_prompt_snapshot[responses]",
+    "live": false,
+    "requirements": {}
+  },
+  {
+    "previous_nodeid": "tests/live/test_scratchbook_prompt_provider_live.py::test_live_scratchbook_rendered_prompt_reaches_aliyun_outbound_channel[chat-completions]",
+    "nodeid": "tests/live/test_scratchbook_prompt_provider_live.py::test_live_scratchbook_rendered_prompt_reaches_aliyun_outbound_channel[chat-completions]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_scratchbook_prompt_provider_live.py::test_live_scratchbook_rendered_prompt_reaches_aliyun_outbound_channel[responses]",
+    "nodeid": "tests/live/test_scratchbook_prompt_provider_live.py::test_live_scratchbook_rendered_prompt_reaches_aliyun_outbound_channel[responses]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_session_access_live.py::test_live_reviewer_reads_compacted_coder_tool_evidence",
+    "nodeid": "tests/live/test_session_access_live.py::test_live_reviewer_reads_compacted_coder_tool_evidence",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_subagent_live.py::test_subagent_compatible_mode",
+    "nodeid": "tests/live/test_subagent_live.py::test_subagent_compatible_mode",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_subagent_live.py::test_subagent_responses_mode",
+    "nodeid": "tests/live/test_subagent_live.py::test_subagent_responses_mode",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_subagent_live.py::test_subagent_streaming_smoke",
+    "nodeid": "tests/live/test_subagent_live.py::test_subagent_streaming_smoke",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_subagent_live.py::test_aliyun_completions_background_completion_notification_flow",
+    "nodeid": "tests/live/test_subagent_live.py::test_aliyun_completions_background_completion_notification_flow",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_subagent_live.py::test_aliyun_responses_background_completion_notification_flow",
+    "nodeid": "tests/live/test_subagent_live.py::test_aliyun_responses_background_completion_notification_flow",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_subagent_wait_resume_live.py::test_live_wait_all_resolves_when_all_sessions_complete",
+    "nodeid": "tests/live/test_subagent_wait_resume_live.py::test_live_wait_all_resolves_when_all_sessions_complete",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_subagent_wait_resume_live.py::test_live_wait_all_does_not_wake_on_partial_completion",
+    "nodeid": "tests/live/test_subagent_wait_resume_live.py::test_live_wait_all_does_not_wake_on_partial_completion",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_subagent_wait_resume_live.py::test_live_subagent_resume_restarts_failed_session",
+    "nodeid": "tests/live/test_subagent_wait_resume_live.py::test_live_subagent_resume_restarts_failed_session",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_subagent_wait_resume_live.py::test_live_notification_role_is_user_not_system",
+    "nodeid": "tests/live/test_subagent_wait_resume_live.py::test_live_notification_role_is_user_not_system",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_subagent_wait_resume_live.py::test_live_anthropic_wait_all_and_notification_role",
+    "nodeid": "tests/live/test_subagent_wait_resume_live.py::test_live_anthropic_wait_all_and_notification_role",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_subagent_wait_resume_live.py::test_live_anthropic_subagent_resume",
+    "nodeid": "tests/live/test_subagent_wait_resume_live.py::test_live_anthropic_subagent_resume",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_todo_live.py::test_live_todo_agent_plans_and_completes_checklist",
+    "nodeid": "tests/live/test_todo_live.py::test_live_todo_agent_plans_and_completes_checklist",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[allow-False]",
+    "nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[allow-False]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[allow-True]",
+    "nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[allow-True]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[permission_deny-False]",
+    "nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[permission_deny-False]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[permission_deny-True]",
+    "nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[permission_deny-True]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[approval_deny-False]",
+    "nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[approval_deny-False]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[approval_deny-True]",
+    "nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[approval_deny-True]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[require_approval-False]",
+    "nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[require_approval-False]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[require_approval-True]",
+    "nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[require_approval-True]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[dsl_deny-False]",
+    "nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[dsl_deny-False]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[dsl_deny-True]",
+    "nodeid": "tests/live/test_tool_authorization_live.py::test_responses_tool_authorization[dsl_deny-True]",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_trigger_script_live.py::test_live_script_action_rewrites_prompt_before_llm",
+    "nodeid": "tests/live/test_trigger_script_live.py::test_live_script_action_rewrites_prompt_before_llm",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/live/test_trigger_script_live.py::test_live_script_action_world_mutation_persists",
+    "nodeid": "tests/live/test_trigger_script_live.py::test_live_script_action_world_mutation_persists",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_integration_features.py::test_responses_api_with_real_llm",
+    "nodeid": "tests/live/test_responses_reasoning_live.py::test_responses_api_with_real_llm",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_context_trim.py::test_real_trim_then_summarize_pipeline",
+    "nodeid": "tests/live/test_real_llm_context_trim.py::test_real_trim_then_summarize_pipeline",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_openai_streaming_produces_deltas",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_openai_streaming_produces_deltas",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_openai_provider_non_streaming",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_openai_provider_non_streaming",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_openai_provider_streaming",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_openai_provider_streaming",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_full_agent_loop_streaming",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_full_agent_loop_streaming",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_multi_turn_conversation",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_multi_turn_conversation",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_llm_reasoning_logging_contracts",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_llm_reasoning_logging_contracts",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_llm_streaming_logging_metadata",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_llm_streaming_logging_metadata",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_llm_error_logging_contracts",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_llm_error_logging_contracts",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_llm_prompt_keyword_injection_smoke",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_llm_prompt_keyword_injection_smoke",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_llm_prompt_event_injection_smoke",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_llm_prompt_event_injection_smoke",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_llm_model_switching",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_llm_model_switching",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "multi_model"
+      ],
+      "role": "primary",
+      "roles": [
+        "secondary"
+      ],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_llm_graceful_interruption",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_llm_graceful_interruption",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_llm_conversation_tree_revert",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_llm_conversation_tree_revert",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_llm_complete_runtime_workflow",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_llm_complete_runtime_workflow",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "multi_model"
+      ],
+      "role": "primary",
+      "roles": [
+        "secondary"
+      ],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_provider_smoke_with_dashscope_defaults",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_provider_smoke_with_dashscope_defaults",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools",
+        "streaming"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_read_file_returns_clean_content",
+    "nodeid": "tests/test_builtin_tools_scenarios.py::test_real_read_file_returns_clean_content",
+    "live": false,
+    "requirements": {}
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_glob_finds_files_in_workspace",
+    "nodeid": "tests/test_builtin_tools_scenarios.py::test_real_glob_finds_files_in_workspace",
+    "live": false,
+    "requirements": {}
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_llm_builtin_tools_read_file_smoke",
+    "nodeid": "tests/test_builtin_tools_scenarios.py::test_real_llm_builtin_tools_read_file_smoke",
+    "live": false,
+    "requirements": {}
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_llm_agent_uses_glob_to_find_files",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_llm_agent_uses_glob_to_find_files",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_llm_agent_reads_and_reports_file_content",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_llm_agent_reads_and_reports_file_content",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_llm_rendered_system_prompt_reaches_provider",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_llm_rendered_system_prompt_reaches_provider",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_llm_rendered_user_prompt_trigger_injection",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_llm_rendered_user_prompt_trigger_injection",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_slash_skill_context_injection_real_llm",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_slash_skill_context_injection_real_llm",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_llm_load_skill_details_returns_context_in_tool_message",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_llm_load_skill_details_returns_context_in_tool_message",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_subagent_child_world_name_in_logs",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_subagent_child_world_name_in_logs",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_subagent_rendered_prompt",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_subagent_rendered_prompt",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_integration.py::test_real_subagent_workspace_inherits",
+    "nodeid": "tests/live/test_real_llm_integration.py::test_real_subagent_workspace_inherits",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_real_llm_prompt_caching.py::test_real_anthropic_prompt_cache_hits_on_second_call",
+    "nodeid": "tests/live/test_real_llm_prompt_caching.py::test_real_anthropic_prompt_cache_hits_on_second_call",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "streaming",
+        "cache"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "anthropic_messages"
+      ]
+    }
+  },
+  {
+    "previous_nodeid": "tests/test_subagent_result_future.py::test_subagent_result_background_real_llm",
+    "nodeid": "tests/live/test_subagent_result_live.py::test_subagent_result_background_real_llm",
+    "live": true,
+    "requirements": {
+      "capabilities": [
+        "text",
+        "tools"
+      ],
+      "role": "primary",
+      "roles": [],
+      "services": [],
+      "dependencies": [],
+      "formats": [
+        "openai_chat_completions",
+        "openai_responses"
+      ]
+    }
+  }
+]

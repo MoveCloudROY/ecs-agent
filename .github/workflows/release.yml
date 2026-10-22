@@ -63,26 +63,22 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --locked --group dev
 
       - name: Run pytest
-        run: uv run pytest
+        run: uv run --no-sync pytest
 
   live-tests:
     runs-on: ubuntu-latest
     needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: deepseek-responses
+            required: tests/live/required-responses-core.json
     env:
       LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-      ANTHROPIC_LIVE_API_KEY: ${{ secrets.ANTHROPIC_LIVE_API_KEY }}
-      IMAGE_URL: ${{ secrets.IMAGE_URL }}
-      LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
-      LLM_MODEL: ${{ vars.LLM_MODEL }}
-      LLM_API_FORMAT: ${{ vars.LLM_API_FORMAT }}
-      ANTHROPIC_LIVE_BASE_URL: ${{ vars.ANTHROPIC_LIVE_BASE_URL }}
-      ANTHROPIC_LIVE_MODEL: ${{ vars.ANTHROPIC_LIVE_MODEL }}
-      ALIYUN_LIVE_CHAT_BASE_URL: ${{ vars.ALIYUN_LIVE_CHAT_BASE_URL }}
-      ALIYUN_LIVE_RESPONSES_BASE_URL: ${{ vars.ALIYUN_LIVE_RESPONSES_BASE_URL }}
-      ALIYUN_LIVE_MODEL: ${{ vars.ALIYUN_LIVE_MODEL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -92,17 +88,30 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install tmux
-        run: sudo apt-get update && sudo apt-get install -y tmux
-
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
 
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --locked --group dev
 
-      - name: Run full live test suite
-        run: uv run pytest tests/live -v
+      - name: Run required Responses core cases
+        run: >-
+          uv run --no-sync pytest --live
+          --live-config tests/live/profiles.release.toml
+          --llm-profile ${{ matrix.profile }}
+          -m "live and (smoke or authoring) and not vision"
+          --live-required ${{ matrix.required }}
+          --live-report .artifacts/live-${{ matrix.profile }}.json
+          --junitxml .artifacts/live-${{ matrix.profile }}.xml
+          -v
+
+      - name: Upload live test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-${{ matrix.profile }}
+          path: .artifacts/
+          if-no-files-found: ignore
 
   build-and-release:
     runs-on: ubuntu-latest

@@ -1,24 +1,18 @@
 """Live acceptance tests for the plan-and-task E2E example.
 
-These tests require LLM_API_KEY to be set and will skip otherwise.
-They use the DashScope-compatible model configuration.
-
-Anthropic tests additionally require LLM_API_FORMAT=anthropic_messages plus
-compatible LLM_BASE_URL / LLM_MODEL (e.g. cc2.caaa.tech / kimi-for-coding).
+Select a profile with --live; see docs/testing.md.
 """
 
-import os
 import re
 from pathlib import Path
 
 import pytest
+from tests.support.plan_task import write_plan
 
 from ecs_agent.core import World
 from ecs_agent.phases import bind_phase_graph
 from ecs_agent.providers import OpenAIModel
 from ecs_agent.providers.claude_model import ClaudeModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.types import CompletionResult, EntityId, Message
 from ecs_agent.systems.compaction import CompactionSystem
 from examples.e2e.plan_and_task.scratchbook_adapter import (
@@ -28,7 +22,8 @@ from examples.e2e.plan_and_task.controller import PlanController
 from examples.e2e.plan_and_task.phase_graph import PLAN_TASK_PHASE_GRAPH
 from examples.e2e.plan_and_task.runtime import derive_workflow_id_from_llm
 from examples.e2e.plan_and_task.task_exec import TaskExec
-from tests.live.api_format import resolve_live_api_format
+
+from tests.support.models import LiveModelFactory
 
 
 _WRITING_SOFTWARE_DESCRIPTION = """我希望开发一份辅助写作软件，目前实现的前端位于 @frontend/，请为其在 @backend/ 中补全后端，并与前端进行对接
@@ -59,19 +54,8 @@ _WRITING_SOFTWARE_DESCRIPTION = """我希望开发一份辅助写作软件，目
 
 
 @pytest.fixture
-def live_model(live_api_key: str) -> OpenAIModel:
-    """Create a real OpenAIModel for live tests."""
-    base_url = os.getenv(
-        "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    )
-    model = os.getenv("LLM_MODEL") or "qwen3.5-flash"
-    config = ProviderConfig(
-        provider_id="openai",
-        base_url=base_url,
-        api_key=live_api_key,
-        api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-    )
-    return OpenAIModel(config=config, model=model)
+def live_model(*, live_model_factory: LiveModelFactory) -> OpenAIModel:
+    return live_model_factory.openai()
 
 
 async def _bound_world() -> tuple[World, EntityId]:
@@ -86,54 +70,11 @@ async def _bound_world() -> tuple[World, EntityId]:
     return world, entity_id
 
 
-@pytest.mark.asyncio
-async def test_live_plan_controller_starts_plan_interview(
-    live_model: OpenAIModel, tmp_path: Path
-) -> None:
-    """Verify handle_plan_start creates artifacts and transitions to DRAFT_INTERVIEW."""
-    workflow_id = "live-test-workflow-start"
-    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id=workflow_id)
-    world, entity_id = await _bound_world()
-    controller = PlanController(world, entity_id)
-
-    state = await controller.handle_plan_start(adapter, _WRITING_SOFTWARE_DESCRIPTION)
-
-    assert state.phase == "DRAFT_INTERVIEW"
-    assert state.workflow_id == workflow_id
-    assert (adapter.plan_dir / "draft.md").exists()
-
-    reloaded = adapter.read_state()
-    assert reloaded.phase == "DRAFT_INTERVIEW"
-    assert reloaded.workflow_id == workflow_id
-
-
-@pytest.mark.asyncio
-async def test_live_plan_controller_completes_review_cycle(
-    live_model: OpenAIModel, tmp_path: Path
-) -> None:
-    """Verify review verdicts allow transition to finalized state."""
-    workflow_id = "live-test-workflow-review"
-    adapter = ArtifactAdapter(base_dir=tmp_path, workflow_id=workflow_id)
-    world, entity_id = await _bound_world()
-    controller = PlanController(world, entity_id)
-
-    state = await controller.handle_plan_start(adapter, "Review cycle test")
-
-    # Full review cycle: advisor → qa → write_plan_completed → plan_qa
-    state = await controller.handle_advisor_review(
-        state, adapter, "approved", notes="Advisor approved"
-    )
-    state = await controller.handle_qa_review(state, adapter, "approved", notes="QA approved")
-    # handle_qa_review auto-transitions to WRITE_PLAN when approved
-    state = await controller.handle_write_plan_completed(state, adapter)
-    state = await controller.handle_plan_qa_review(state, adapter, "approved", notes="Plan QA approved")
-
-    state = await controller.handle_plan_finalize(state, adapter)
-
-    assert state.phase == "TASK_READY"
-    assert (adapter.plan_dir / "workflow_plan.md").exists()
-
-
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
 async def test_live_task_exec_loads_finalized_plan(
     live_model: OpenAIModel, tmp_path: Path
@@ -147,6 +88,7 @@ async def test_live_task_exec_loads_finalized_plan(
     state = await controller.handle_plan_start(adapter, "Task exec test")
     state = await controller.handle_advisor_review(state, adapter, "approved")
     state = await controller.handle_qa_review(state, adapter, "approved")
+    write_plan(adapter.plan_dir, workflow_id)
     state = await controller.handle_write_plan_completed(state, adapter)
     state = await controller.handle_plan_qa_review(state, adapter, "approved")
     state = await controller.handle_plan_finalize(state, adapter)
@@ -190,13 +132,16 @@ async def test_live_task_exec_loads_finalized_plan(
     assert "task-001" in completed_state.completed_task_ids
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
 async def test_live_derive_workflow_id_from_llm_returns_valid_slug(
     live_model: OpenAIModel,
 ) -> None:
-    slug = await derive_workflow_id_from_llm(
-        _WRITING_SOFTWARE_DESCRIPTION, live_model
-    )
+    slug = await derive_workflow_id_from_llm(_WRITING_SOFTWARE_DESCRIPTION, live_model)
 
     assert re.match(r"^[a-z][a-z0-9-]*$", slug), (
         f"Expected a valid slug (lowercase letters, digits, hyphens), got: {slug!r}"
@@ -205,6 +150,11 @@ async def test_live_derive_workflow_id_from_llm_returns_valid_slug(
     assert len(slug) >= 3, f"Slug too short: {slug!r}"
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
 async def test_live_controller_advisor_retry_loop_revise_then_approved(
     live_model: OpenAIModel, tmp_path: Path
@@ -249,26 +199,13 @@ async def test_live_controller_advisor_retry_loop_revise_then_approved(
     assert result.message.content.strip()
 
 
-_ANTHROPIC_SKIP = pytest.mark.skipif(
-    resolve_live_api_format() is not ApiFormat.ANTHROPIC_MESSAGES,
-    reason="Set LLM_API_FORMAT=anthropic_messages to run Anthropic live tests",
-)
-
-
 @pytest.fixture
-def anthropic_model(live_api_key: str) -> ClaudeModel:
-    base_url = os.getenv("LLM_BASE_URL") or "https://api.anthropic.com"
-    model = os.getenv("LLM_MODEL") or "claude-3-5-haiku-20241022"
-    config = ProviderConfig(
-        provider_id="anthropic",
-        base_url=base_url,
-        api_key=live_api_key,
-        api_format=ApiFormat.ANTHROPIC_MESSAGES,
-    )
-    return ClaudeModel(config=config, model=model)
+def anthropic_model(*, live_model_factory: LiveModelFactory) -> ClaudeModel:
+    return live_model_factory.claude()
 
 
-@_ANTHROPIC_SKIP
+@pytest.mark.live(formats=["anthropic_messages"], capabilities=["text", "tools"])
+@pytest.mark.workflow
 @pytest.mark.asyncio
 async def test_anthropic_model_completes_simple_message(
     anthropic_model: ClaudeModel,
@@ -280,7 +217,8 @@ async def test_anthropic_model_completes_simple_message(
     assert result.message.content.strip()
 
 
-@_ANTHROPIC_SKIP
+@pytest.mark.live(formats=["anthropic_messages"], capabilities=["text", "tools"])
+@pytest.mark.workflow
 @pytest.mark.asyncio
 async def test_anthropic_plan_task_auto_compaction_summarizes_context(
     anthropic_model: ClaudeModel,
@@ -333,19 +271,21 @@ async def test_anthropic_plan_task_auto_compaction_summarizes_context(
     assert all(message.role != "compaction" for message in conversation.messages)
 
 
-@_ANTHROPIC_SKIP
+@pytest.mark.live(formats=["anthropic_messages"], capabilities=["text", "tools"])
+@pytest.mark.workflow
 @pytest.mark.asyncio
 async def test_anthropic_derive_workflow_id_returns_valid_slug(
     anthropic_model: ClaudeModel,
 ) -> None:
-    slug = await derive_workflow_id_from_llm("Build a simple todo list app", anthropic_model)
-    assert re.match(r"^[a-z][a-z0-9-]*$", slug), (
-        f"Expected a valid slug, got: {slug!r}"
+    slug = await derive_workflow_id_from_llm(
+        "Build a simple todo list app", anthropic_model
     )
+    assert re.match(r"^[a-z][a-z0-9-]*$", slug), f"Expected a valid slug, got: {slug!r}"
     assert 3 <= len(slug) <= 50
 
 
-@_ANTHROPIC_SKIP
+@pytest.mark.live(formats=["anthropic_messages"], capabilities=["text", "tools"])
+@pytest.mark.workflow
 @pytest.mark.asyncio
 async def test_anthropic_plan_controller_starts_plan_interview(
     anthropic_model: ClaudeModel, tmp_path: Path

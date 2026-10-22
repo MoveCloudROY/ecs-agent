@@ -1,18 +1,10 @@
 """Live LLM tests for TriggerSpec script action.
 
-Environment variables required (skip gracefully if absent):
-    LLM_API_KEY   — Aliyun DashScope key
-    LLM_BASE_URL  — https://dashscope.aliyuncs.com/compatible-mode/v1
-    LLM_MODEL     — qwen3.5-flash
-
-Run:
-    LLM_API_KEY=sk-... LLM_BASE_URL=... LLM_MODEL=qwen3.5-flash \
-        uv run pytest tests/live/test_trigger_script_live.py -v
+Select a profile with --live; see docs/testing.md.
 """
 
 from __future__ import annotations
 
-import os
 
 import pytest
 
@@ -24,8 +16,6 @@ from ecs_agent.components import (
 from ecs_agent.components.definitions import KVStoreComponent
 from ecs_agent.core import Runner, World
 from ecs_agent.prompts.contracts import TriggerSpec
-from ecs_agent.providers import OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.user_prompt_normalization_system import (
@@ -33,26 +23,19 @@ from ecs_agent.systems.user_prompt_normalization_system import (
 )
 from ecs_agent.types import EntityId, Message
 
-
-def _make_provider(api_key: str, base_url: str, model: str) -> OpenAIModel:
-    return OpenAIModel(
-        config=ProviderConfig(
-            provider_id="aliyun",
-            base_url=base_url,
-            api_key=api_key,
-            api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-        ),
-        model=model,
-    )
+from tests.support.models import LiveModelFactory
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.prompts
 @pytest.mark.asyncio
-async def test_live_script_action_rewrites_prompt_before_llm(live_api_key: str) -> None:
-    base_url = os.getenv(
-        "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    )
-    model = os.getenv("LLM_MODEL") or "qwen3.5-flash"
-    model = _make_provider(api_key=live_api_key, base_url=base_url, model=model)
+async def test_live_script_action_rewrites_prompt_before_llm(
+    *, live_model_factory: LiveModelFactory
+) -> None:
+    model = live_model_factory.openai()
 
     async def tag_handler(
         world: World,
@@ -72,9 +55,7 @@ async def test_live_script_action_rewrites_prompt_before_llm(live_api_key: str) 
     entity = world.create_entity()
     world.add_component(
         entity,
-        LLMComponent(
-            model=model, system_prompt="You are a helpful assistant."
-        ),
+        LLMComponent(model=model, system_prompt="You are a helpful assistant."),
     )
     world.add_component(
         entity,
@@ -106,13 +87,16 @@ async def test_live_script_action_rewrites_prompt_before_llm(live_api_key: str) 
     assert "TAGGED_OK" in last_assistant.content
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.prompts
 @pytest.mark.asyncio
-async def test_live_script_action_world_mutation_persists(live_api_key: str) -> None:
-    base_url = os.getenv(
-        "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    )
-    model = os.getenv("LLM_MODEL") or "qwen3.5-flash"
-    model = _make_provider(api_key=live_api_key, base_url=base_url, model=model)
+async def test_live_script_action_world_mutation_persists(
+    *, live_model_factory: LiveModelFactory
+) -> None:
+    model = live_model_factory.openai()
 
     async def store_handler(
         world: World,
@@ -136,9 +120,7 @@ async def test_live_script_action_world_mutation_persists(live_api_key: str) -> 
     entity = world.create_entity()
     world.add_component(
         entity,
-        LLMComponent(
-            model=model, system_prompt="You are a helpful assistant."
-        ),
+        LLMComponent(model=model, system_prompt="You are a helpful assistant."),
     )
     world.add_component(
         entity,

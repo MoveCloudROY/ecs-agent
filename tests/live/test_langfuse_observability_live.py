@@ -1,13 +1,10 @@
 """Live smoke tests for Langfuse observability with real LLM calls.
 
-The suite skips unless RUN_LANGFUSE_LIVE_TESTS is set to 1 and the required
-LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_HOST or LANGFUSE_BASE_URL,
-LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL variables are present.
+Select a profile with --live; see docs/testing.md.
 """
 
 from __future__ import annotations
 
-import os
 import re
 
 import pytest
@@ -16,13 +13,13 @@ from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.core import Runner, World
 from ecs_agent.plugins import install_plugins
 from ecs_agent.plugins.langfuse import LangfuseConfig, LangfusePlugin
-from ecs_agent.providers import Model
 from ecs_agent.providers.config import ApiFormat
-from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import ErrorOccurredEvent, Message
-from tests.live.api_format import live_llm_timeout, live_transient_error_reason
+
+from tests.support.models import LiveModelFactory
+
 
 _LANGFUSE_KEY_ENV = ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
 _LLM_ENV = ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL")
@@ -31,47 +28,16 @@ _SECRET_LIKE_PATTERN = re.compile(
 )
 
 
-@pytest.fixture
-def langfuse_live_env() -> None:
-    """Skip live Langfuse tests unless the explicit live gate is enabled."""
-    skip_reason = _langfuse_live_skip_reason()
-    if skip_reason is not None:
-        pytest.skip(skip_reason)
-    pytest.importorskip("langfuse", reason="Langfuse live dependency unavailable")
-
-
-def _langfuse_live_skip_reason() -> str | None:
-    if os.getenv("RUN_LANGFUSE_LIVE_TESTS") != "1":
-        return "RUN_LANGFUSE_LIVE_TESTS is not 1"
-
-    missing = [
-        name for name in (*_LANGFUSE_KEY_ENV, *_LLM_ENV) if not os.getenv(name)
-    ]
-    if not (os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL")):
-        missing.append("LANGFUSE_HOST or LANGFUSE_BASE_URL")
-    if missing:
-        return "Missing required live environment variables: " + ", ".join(missing)
-    return None
-
-
-def _make_live_model(api_format: ApiFormat) -> LLMModel:
-    return Model(
-        os.environ["LLM_MODEL"],
-        base_url=os.environ["LLM_BASE_URL"],
-        api_key=os.environ["LLM_API_KEY"],
-        api_format=api_format,
-        provider_id="live",
-        timeout=live_llm_timeout(),
-    )
-
-
-async def _run_live_langfuse_agent(api_format: ApiFormat) -> None:
+async def _run_live_langfuse_agent(
+    api_format: ApiFormat, *, live_model_factory: LiveModelFactory
+) -> None:
     world = World(name="langfuse-live-test")
     handle = await install_plugins(
         world,
         [
             LangfusePlugin(
                 LangfuseConfig(
+                    **live_model_factory.settings.service("langfuse"),
                     environment="live-test",
                     tags=["live-test", api_format.value],
                     metadata={"LLM_API_FORMAT": api_format.value},
@@ -85,7 +51,7 @@ async def _run_live_langfuse_agent(api_format: ApiFormat) -> None:
     world.add_component(
         agent,
         LLMComponent(
-            model=_make_live_model(api_format),
+            model=live_model_factory.create(),
             system_prompt=(
                 "Reply with exactly one short sentence. Do not include secrets, "
                 "credentials, tokens, keys, environment values, or URLs."
@@ -119,20 +85,7 @@ async def _run_live_langfuse_agent(api_format: ApiFormat) -> None:
     # LLM failures never raise through Runner.run: ReasoningSystem swallows
     # them into ErrorComponent and ErrorHandlingSystem removes that component
     # after publishing ErrorOccurredEvent, so the event is the durable signal.
-    if llm_errors:
-        hard_failures = [
-            event.error
-            for event in llm_errors
-            if live_transient_error_reason(event.error) is None
-        ]
-        if hard_failures:
-            pytest.fail(
-                f"Live Langfuse observability agent run failed: {hard_failures[0][:200]}"
-            )
-        pytest.skip(
-            "Transient live endpoint error during Langfuse observability smoke: "
-            f"{live_transient_error_reason(llm_errors[0].error)}"
-        )
+    assert not llm_errors, f"Live agent run failed: {llm_errors[0].error[:200]}"
 
     conversation = world.get_component(agent, ConversationComponent)
     assert conversation is not None
@@ -146,22 +99,49 @@ async def _run_live_langfuse_agent(api_format: ApiFormat) -> None:
         pytest.fail("Assistant output matched a secret-like pattern")
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions"],
+    capabilities=["text"],
+    services=["langfuse"],
+    dependencies=["langfuse"],
+)
+@pytest.mark.observability
 @pytest.mark.asyncio
 async def test_live_langfuse_openai_chat_agent_run(
-    langfuse_live_env: None,
+    *, live_model_factory: LiveModelFactory
 ) -> None:
-    await _run_live_langfuse_agent(ApiFormat.OPENAI_CHAT_COMPLETIONS)
+    await _run_live_langfuse_agent(
+        ApiFormat.OPENAI_CHAT_COMPLETIONS, live_model_factory=live_model_factory
+    )
 
 
+@pytest.mark.live(
+    formats=["openai_responses"],
+    capabilities=["text"],
+    services=["langfuse"],
+    dependencies=["langfuse"],
+)
+@pytest.mark.observability
 @pytest.mark.asyncio
 async def test_live_langfuse_openai_responses_agent_run(
-    langfuse_live_env: None,
+    *, live_model_factory: LiveModelFactory
 ) -> None:
-    await _run_live_langfuse_agent(ApiFormat.OPENAI_RESPONSES)
+    await _run_live_langfuse_agent(
+        ApiFormat.OPENAI_RESPONSES, live_model_factory=live_model_factory
+    )
 
 
+@pytest.mark.live(
+    formats=["anthropic_messages"],
+    capabilities=["text"],
+    services=["langfuse"],
+    dependencies=["langfuse"],
+)
+@pytest.mark.observability
 @pytest.mark.asyncio
 async def test_live_langfuse_anthropic_messages_agent_run(
-    langfuse_live_env: None,
+    *, live_model_factory: LiveModelFactory
 ) -> None:
-    await _run_live_langfuse_agent(ApiFormat.ANTHROPIC_MESSAGES)
+    await _run_live_langfuse_agent(
+        ApiFormat.ANTHROPIC_MESSAGES, live_model_factory=live_model_factory
+    )

@@ -1,36 +1,19 @@
-"""Live prompt-cache experiments for both API families (env-gated).
+"""Live prompt-cache experiments for both API families .
 
-Replays the exact multi-turn agentic sequences the framework produces (captured
-via ``tests.cache_audit.harness`` with production systems) against real
-endpoints, recording per-call cache usage:
-
-- Anthropic Messages: ``cache_creation_input_tokens`` / ``cache_read_input_tokens``
-- OpenAI Chat/Responses: ``prompt_tokens_details.cached_tokens`` /
-  ``input_tokens_details.cached_tokens``
-
-Gating: OpenAI scenarios need ``LLM_API_KEY`` (+ ``LLM_BASE_URL`` /
-``LLM_RESPONSES_BASE_URL`` / ``LLM_MODEL``); Anthropic scenarios need
-``ANTHROPIC_API_KEY`` (+ ``ANTHROPIC_BASE_URL`` / ``ANTHROPIC_MODEL``).
-
-OpenAI-side note: some gateways commit prompt-cache writes asynchronously
-(observed ~1-2 min), so warm calls poll with ``LLM_CACHE_WRITE_LAG_SECONDS``
-budget (default 150s, interval 30s) before concluding "miss". Run with ``-s``
-to see the per-call experiment tables.
+Select a profile with --live; see docs/testing.md.
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
 
 import httpx
 import pytest
 
 from ecs_agent.accounting.normalization import compute_cache_stats
 from ecs_agent.providers.claude_model import ClaudeModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.providers.openai_model import OpenAIModel
-from ecs_agent.types import CompletionResult, Message, ToolCall, ToolSchema, Usage
+from ecs_agent.types import CompletionResult, Message, ToolCall, Usage
 
 from tests.cache_audit.harness import (
     CapturedCall,
@@ -39,23 +22,11 @@ from tests.cache_audit.harness import (
     run_turn,
     scripted_two_turn_responses,
 )
-from tests.live.api_format import live_openai_base_url, live_openai_model
 
-LLM_API_KEY = os.getenv("LLM_API_KEY", "")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-20241022")
+from tests.support.models import LiveModelFactory
+
 
 # Async cache-write budget for OpenAI-family gateways.
-CACHE_WRITE_LAG_BUDGET = float(os.getenv("LLM_CACHE_WRITE_LAG_SECONDS", "150"))
-CACHE_POLL_INTERVAL = float(os.getenv("LLM_CACHE_POLL_INTERVAL_SECONDS", "30"))
-
-_openai_gate = pytest.mark.skipif(
-    not LLM_API_KEY, reason="LLM_API_KEY environment variable not set"
-)
-_anthropic_gate = pytest.mark.skipif(
-    not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY environment variable not set"
-)
 
 
 # ---------------------------------------------------------------------------
@@ -112,36 +83,15 @@ async def _captured_sequence(
     return recorder.calls
 
 
-def _openai_model(api_format: ApiFormat) -> OpenAIModel:
-    config = ProviderConfig(
-        provider_id="live-cache-experiment",
-        base_url=live_openai_base_url(api_format),
-        api_key=LLM_API_KEY,
-        api_format=api_format,
-    )
-    return OpenAIModel(config=config, model=live_openai_model())
-
-
-def _claude_model() -> ClaudeModel:
-    config = ProviderConfig(
-        provider_id="live-cache-experiment",
-        base_url=ANTHROPIC_BASE_URL,
-        api_key=ANTHROPIC_API_KEY,
-        api_format=ApiFormat.ANTHROPIC_MESSAGES,
-        enable_prompt_caching=True,
-    )
-    return ClaudeModel(config=config, model=ANTHROPIC_MODEL, max_tokens=64)
-
-
 async def _complete(model: object, call: CapturedCall) -> Usage:
-    """One live completion; returns usage or skips on transient endpoint noise."""
+    """One live completion; returns usage or fails on endpoint errors."""
     try:
         result = await model.complete(call.messages, tools=call.tools, stream=False)  # type: ignore[attr-defined]
     except (httpx.TimeoutException, httpx.TransportError) as exc:
-        pytest.skip(f"transient live endpoint error: {type(exc).__name__}: {exc}")
+        pytest.fail(f"transient live endpoint error: {type(exc).__name__}: {exc}")
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code in (429,) or exc.response.status_code >= 500:
-            pytest.skip(f"transient live endpoint error: {exc.response.status_code}")
+            pytest.fail(f"transient live endpoint error: {exc.response.status_code}")
         raise
     assert isinstance(result, CompletionResult)
     assert result.usage is not None, "live endpoint returned no usage"
@@ -166,7 +116,11 @@ def _row(scenario: str, index: int, usage: Usage) -> str:
 
 
 async def _replay_openai(
-    model: OpenAIModel, calls: list[CapturedCall], scenario: str
+    model: OpenAIModel,
+    calls: list[CapturedCall],
+    scenario: str,
+    *,
+    live_model_factory: LiveModelFactory,
 ) -> list[Usage]:
     """Replay a captured sequence; poll warm calls through async cache writes.
 
@@ -186,9 +140,11 @@ async def _replay_openai(
         first_attempt = usage
         if call.call_index > 0 and _cached_tokens(usage) == 0:
             waited = 0.0
-            while waited < CACHE_WRITE_LAG_BUDGET:
-                await asyncio.sleep(CACHE_POLL_INTERVAL)
-                waited += CACHE_POLL_INTERVAL
+            while waited < live_model_factory.settings.cache_write_lag_seconds:
+                await asyncio.sleep(
+                    live_model_factory.settings.cache_poll_interval_seconds
+                )
+                waited += live_model_factory.settings.cache_poll_interval_seconds
                 usage = await _complete(model, call)
                 if _cached_tokens(usage) > 0:
                     break
@@ -231,7 +187,7 @@ async def _replay_anthropic(
     return usages
 
 
-def _skip_if_no_cache_support(usages: list[Usage], family: str) -> None:
+def _require_cache_usage(usages: list[Usage], family: str) -> None:
     # An explicit zero is a reported cache miss, not an unsupported metric.
     # Skipping all-zero runs would hide the exact gateway regression these
     # experiments are intended to detect.
@@ -241,7 +197,7 @@ def _skip_if_no_cache_support(usages: list[Usage], family: str) -> None:
         and usage.cached_input_tokens is None
         for usage in usages
     ):
-        pytest.skip(f"{family} endpoint reports no prompt-cache usage fields")
+        pytest.fail(f"{family} endpoint reports no prompt-cache usage fields")
 
 
 def _aggregate_hit_rate(usages: list[Usage], *, warm_only: bool = True) -> float:
@@ -267,15 +223,18 @@ def _run_salt(scenario: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-@_anthropic_gate
+@pytest.mark.live(formats=["anthropic_messages"], capabilities=["text", "cache"])
+@pytest.mark.cache
 @pytest.mark.asyncio
-async def test_anthropic_clean_agentic_loop_cache_hits() -> None:
+async def test_anthropic_clean_agentic_loop_cache_hits(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """Default framework loop: each later call must read the previous prefix."""
-    calls = await _captured_sequence(
-        context_pool=False, salt=_run_salt("clean")
+    calls = await _captured_sequence(context_pool=False, salt=_run_salt("clean"))
+    usages = await _replay_anthropic(
+        live_model_factory.claude(max_tokens=64), calls, "anthropic-clean-loop"
     )
-    usages = await _replay_anthropic(_claude_model(), calls, "anthropic-clean-loop")
-    _skip_if_no_cache_support(usages, "anthropic")
+    _require_cache_usage(usages, "anthropic")
 
     print(
         f"[cache-experiment] anthropic-clean-loop warm hit_rate="
@@ -290,14 +249,19 @@ async def test_anthropic_clean_agentic_loop_cache_hits() -> None:
     assert warm_reads[-1] >= warm_reads[0], warm_reads
 
 
-@_anthropic_gate
+@pytest.mark.live(formats=["anthropic_messages"], capabilities=["text", "cache"])
+@pytest.mark.cache
 @pytest.mark.asyncio
-async def test_anthropic_context_pool_injection_cache_penalty() -> None:
+async def test_anthropic_context_pool_injection_cache_penalty(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """Context-pool injection rewrites the last user message per call; measure
     the cache penalty against the clean loop (see the printed tables)."""
     calls = await _captured_sequence(context_pool=True, salt=_run_salt("pool"))
-    usages = await _replay_anthropic(_claude_model(), calls, "anthropic-context-pool")
-    _skip_if_no_cache_support(usages, "anthropic")
+    usages = await _replay_anthropic(
+        live_model_factory.claude(max_tokens=64), calls, "anthropic-context-pool"
+    )
+    _require_cache_usage(usages, "anthropic")
 
     print(
         f"[cache-experiment] anthropic-context-pool warm hit_rate="
@@ -309,9 +273,12 @@ async def test_anthropic_context_pool_injection_cache_penalty() -> None:
     assert len(usages) == 4
 
 
-@_anthropic_gate
+@pytest.mark.live(formats=["anthropic_messages"], capabilities=["text", "cache"])
+@pytest.mark.cache
 @pytest.mark.asyncio
-async def test_anthropic_breakpoint_lookback_window_probe() -> None:
+async def test_anthropic_breakpoint_lookback_window_probe(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """Measure whether a wide parallel tool batch (>20 new content blocks
     between consecutive trailing breakpoints) forfeits the message-prefix read.
 
@@ -358,7 +325,7 @@ async def test_anthropic_breakpoint_lookback_window_probe() -> None:
             CapturedCall(call_index=1, messages=follow_up, tools=tools),
         ]
 
-    model = _claude_model()
+    model = live_model_factory.claude(max_tokens=64)
     salt = _run_salt("probe")
     narrow = await _replay_anthropic(
         model, _probe_calls(3, f"{salt}-narrow"), "anthropic-narrow"
@@ -366,7 +333,7 @@ async def test_anthropic_breakpoint_lookback_window_probe() -> None:
     wide = await _replay_anthropic(
         model, _probe_calls(12, f"{salt}-wide"), "anthropic-wide"
     )
-    _skip_if_no_cache_support([*narrow, *wide], "anthropic")
+    _require_cache_usage([*narrow, *wide], "anthropic")
 
     narrow_read = _cached_tokens(narrow[1])
     wide_read = _cached_tokens(wide[1])
@@ -390,15 +357,20 @@ def _claude_system_prompt() -> str:
 # ---------------------------------------------------------------------------
 
 
-@_openai_gate
+@pytest.mark.live(formats=["openai_chat_completions"], capabilities=["text", "cache"])
+@pytest.mark.cache
 @pytest.mark.asyncio
-async def test_openai_chat_clean_agentic_loop_cache_hits() -> None:
+async def test_openai_chat_clean_agentic_loop_cache_hits(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     calls = (
         await _captured_sequence(context_pool=False, salt=_run_salt("chat-clean"))
     )[:3]
-    model = _openai_model(ApiFormat.OPENAI_CHAT_COMPLETIONS)
-    usages = await _replay_openai(model, calls, "openai-chat-clean-loop")
-    _skip_if_no_cache_support(usages, "openai-chat")
+    model = live_model_factory.openai()
+    usages = await _replay_openai(
+        model, calls, "openai-chat-clean-loop", live_model_factory=live_model_factory
+    )
+    _require_cache_usage(usages, "openai-chat")
 
     print(
         f"[cache-experiment] openai-chat-clean-loop warm hit_rate="
@@ -410,17 +382,23 @@ async def test_openai_chat_clean_agentic_loop_cache_hits() -> None:
     )
 
 
-@_openai_gate
+@pytest.mark.live(formats=["openai_responses"], capabilities=["text", "cache"])
+@pytest.mark.cache
 @pytest.mark.asyncio
-async def test_openai_responses_clean_agentic_loop_cache_hits() -> None:
+async def test_openai_responses_clean_agentic_loop_cache_hits(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     calls = (
-        await _captured_sequence(
-            context_pool=False, salt=_run_salt("responses-clean")
-        )
+        await _captured_sequence(context_pool=False, salt=_run_salt("responses-clean"))
     )[:3]
-    model = _openai_model(ApiFormat.OPENAI_RESPONSES)
-    usages = await _replay_openai(model, calls, "openai-responses-clean-loop")
-    _skip_if_no_cache_support(usages, "openai-responses")
+    model = live_model_factory.openai()
+    usages = await _replay_openai(
+        model,
+        calls,
+        "openai-responses-clean-loop",
+        live_model_factory=live_model_factory,
+    )
+    _require_cache_usage(usages, "openai-responses")
 
     print(
         f"[cache-experiment] openai-responses-clean-loop warm hit_rate="
@@ -432,9 +410,12 @@ async def test_openai_responses_clean_agentic_loop_cache_hits() -> None:
     )
 
 
-@_openai_gate
+@pytest.mark.live(formats=["openai_responses"], capabilities=["text", "cache"])
+@pytest.mark.cache
 @pytest.mark.asyncio
-async def test_openai_responses_identical_repeat_probe() -> None:
+async def test_openai_responses_identical_repeat_probe(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """Minimal cache-support probe for the Responses endpoint: the same
     system+user request twice (no tools). Distinguishes 'endpoint does not
     cache / report today' from 'the framework's agentic request shape misses'.
@@ -445,15 +426,19 @@ async def test_openai_responses_identical_repeat_probe() -> None:
     call = CapturedCall(
         call_index=1,  # index>0 so the poll loop applies on the repeat
         messages=[
-            Message(role="system", content=f"Experiment {salt}.\n" + LARGE_SYSTEM_PROMPT),
+            Message(
+                role="system", content=f"Experiment {salt}.\n" + LARGE_SYSTEM_PROMPT
+            ),
             Message(role="user", content="Reply with the single word: ok"),
         ],
         tools=None,
     )
-    model = _openai_model(ApiFormat.OPENAI_RESPONSES)
+    model = live_model_factory.openai()
     prime = await _complete(model, CapturedCall(0, call.messages, None))
     print(_row("openai-responses-probe", 0, prime))
-    usages = await _replay_openai(model, [call], "openai-responses-probe")
+    usages = await _replay_openai(
+        model, [call], "openai-responses-probe", live_model_factory=live_model_factory
+    )
     print(
         "[cache-experiment] responses-probe verdict: "
         + (
@@ -464,9 +449,12 @@ async def test_openai_responses_identical_repeat_probe() -> None:
     )
 
 
-@_openai_gate
+@pytest.mark.live(formats=["openai_responses"], capabilities=["text", "cache"])
+@pytest.mark.cache
 @pytest.mark.asyncio
-async def test_openai_responses_tool_request_repeat_probe() -> None:
+async def test_openai_responses_tool_request_repeat_probe(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """Second bisection probe: identical repeat of a tool-loop request
     (tools + function_call/function_call_output input items). Together with
     the plain probe this separates 'endpoint caches nothing' / 'tool-bearing
@@ -475,13 +463,14 @@ async def test_openai_responses_tool_request_repeat_probe() -> None:
         context_pool=False, salt=_run_salt("responses-tools-probe")
     )
     step = calls[1]  # tools + function items present
-    model = _openai_model(ApiFormat.OPENAI_RESPONSES)
+    model = live_model_factory.openai()
     prime = await _complete(model, CapturedCall(0, step.messages, step.tools))
     print(_row("openai-responses-tools-probe", 0, prime))
     usages = await _replay_openai(
         model,
         [CapturedCall(1, step.messages, step.tools)],
         "openai-responses-tools-probe",
+        live_model_factory=live_model_factory,
     )
     print(
         "[cache-experiment] responses-tools-probe verdict: "
@@ -493,16 +482,21 @@ async def test_openai_responses_tool_request_repeat_probe() -> None:
     )
 
 
-@_openai_gate
+@pytest.mark.live(formats=["openai_chat_completions"], capabilities=["text", "cache"])
+@pytest.mark.cache
 @pytest.mark.asyncio
-async def test_openai_chat_context_pool_injection_cache_penalty() -> None:
+async def test_openai_chat_context_pool_injection_cache_penalty(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """Measure the injected-context penalty on the chat endpoint (report)."""
-    calls = (
-        await _captured_sequence(context_pool=True, salt=_run_salt("chat-pool"))
-    )[:3]
-    model = _openai_model(ApiFormat.OPENAI_CHAT_COMPLETIONS)
-    usages = await _replay_openai(model, calls, "openai-chat-context-pool")
-    _skip_if_no_cache_support(usages, "openai-chat")
+    calls = (await _captured_sequence(context_pool=True, salt=_run_salt("chat-pool")))[
+        :3
+    ]
+    model = live_model_factory.openai()
+    usages = await _replay_openai(
+        model, calls, "openai-chat-context-pool", live_model_factory=live_model_factory
+    )
+    _require_cache_usage(usages, "openai-chat")
     print(
         f"[cache-experiment] openai-chat-context-pool warm hit_rate="
         f"{_aggregate_hit_rate(usages):.0%}"

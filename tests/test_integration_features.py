@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -30,12 +29,9 @@ from ecs_agent.components import (
     SubagentWaitComponent,
     ToolRegistryComponent,
 )
-from ecs_agent.conversation_tree import add_message, linearize
 from ecs_agent.core import Runner, World
 from ecs_agent.logging import configure_logging, get_logger
 from ecs_agent.providers import FakeModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers.openai_model import OpenAIModel
 from ecs_agent.serialization import WorldSerializer
 from ecs_agent.skills.skill import Skill
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
@@ -56,53 +52,7 @@ from ecs_agent.types import (
 )
 
 
-@pytest.mark.skipif(not os.environ.get("LLM_API_KEY"), reason="LLM_API_KEY not set")
-async def test_responses_api_with_real_llm() -> None:
-    """Test Responses API with real LLM model.
 
-    Note: DashScope may not support Responses API, so this test handles both
-    Responses API and fallback to Chat Completions.
-    """
-    api_key = os.environ.get("LLM_API_KEY", "")
-    base_url = os.environ.get(
-        "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    )
-    model = os.environ.get("LLM_MODEL", "qwen3.5-plus")
-
-    world = World()
-
-    # Create model with Responses API enabled (will fallback to Chat Completions if not supported)
-    model = OpenAIModel(
-        config=ProviderConfig(
-            provider_id="openai",
-            base_url=base_url,
-            api_key=api_key,
-            api_format=ApiFormat.OPENAI_RESPONSES,
-        ),
-        model=model,
-    )
-
-    entity = world.create_entity()
-    world.add_component(entity, LLMComponent(model=model))
-    world.add_component(
-        entity,
-        ConversationComponent(
-            messages=[Message(role="user", content="Say 'hello' and nothing else")]
-        ),
-    )
-
-    world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
-
-    runner = Runner()
-    await runner.run(world, max_ticks=3)
-
-    # Verify response was generated
-    conv = world.get_component(entity, ConversationComponent)
-    assert conv is not None
-    assert len(conv.messages) >= 2  # user + assistant
-    assert conv.messages[-1].role == "assistant"
-    assert len(conv.messages[-1].content) > 0
 
 
 async def test_tree_conversation_with_reasoning_system() -> None:

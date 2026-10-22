@@ -1,32 +1,15 @@
-"""Env-gated real-LLM validation of Anthropic prompt caching (ISSUE-1 / ISSUE-6).
-
-These tests exercise the ``cache_control`` breakpoints emitted by
-``AnthropicMessagesAdapter`` against a live Anthropic-compatible endpoint.
-
-Gating
-------
-- With ``ANTHROPIC_API_KEY`` set: the test runs and asserts the second call to an
-  identical, large, cache-stable system prefix reports ``cache_read_tokens > 0``.
-- Without it: the test skips gracefully (deterministic local/CI default).
-
-Only an Anthropic-format endpoint honours ``cache_control``; the project's other
-real-LLM tests target an OpenAI-compatible DashScope endpoint and cannot validate
-this path. Keys are read from the environment / ``.env`` (never hard-coded).
-"""
+"""Live LLM scenarios selected explicitly with --live and a model profile."""
 
 from __future__ import annotations
 
-import os
 
 import pytest
 
 from ecs_agent.providers.claude_model import ClaudeModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
 from ecs_agent.types import CompletionResult, Message
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-20241022")
+from tests.support.models import LiveModelFactory
+
 
 # A stable system prefix must exceed the model's minimum cacheable size
 # (~2048 tokens for Haiku/Sonnet-class models) for a cache write to occur.
@@ -40,24 +23,20 @@ _LARGE_STABLE_SYSTEM_PROMPT = (
 )
 
 
-def _claude_model() -> ClaudeModel:
-    config = ProviderConfig(
-        provider_id="anthropic",
-        base_url=ANTHROPIC_BASE_URL,
-        api_key=ANTHROPIC_API_KEY,
-        api_format=ApiFormat.ANTHROPIC_MESSAGES,
-        enable_prompt_caching=True,
-    )
-    return ClaudeModel(config=config, model=ANTHROPIC_MODEL, max_tokens=64)
+def _claude_model(*, live_model_factory: LiveModelFactory) -> ClaudeModel:
+    return live_model_factory.claude(max_tokens=64)
 
 
-@pytest.mark.skipif(
-    not ANTHROPIC_API_KEY, reason="ANTHROPIC_API_KEY environment variable not set"
+@pytest.mark.live(
+    formats=["anthropic_messages"], capabilities=["text", "streaming", "cache"]
 )
+@pytest.mark.cache
 @pytest.mark.asyncio
-async def test_real_anthropic_prompt_cache_hits_on_second_call() -> None:
+async def test_real_anthropic_prompt_cache_hits_on_second_call(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """Two calls sharing a large stable system prefix -> 2nd call reads the cache."""
-    model = _claude_model()
+    model = _claude_model(live_model_factory=live_model_factory)
     messages = [
         Message(role="system", content=_LARGE_STABLE_SYSTEM_PROMPT, cache_control=True),
         Message(role="user", content="Reply with the single word: ok"),

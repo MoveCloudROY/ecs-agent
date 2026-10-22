@@ -1,23 +1,8 @@
-"""Env-gated real-LLM integration tests for runtime control features.
-
-Tests MUST skip gracefully when LLM_API_KEY is not set (CI/local default deterministic).
-Tests MUST pass when LLM_API_KEY is present (validates real model behavior).
-
-Environment Variables (required for runtime control tests):
-    LLM_API_KEY: DashScope API key (or any OpenAI-compatible model)
-    LLM_BASE_URL: Base URL for the LLM model (default: https://dashscope.aliyuncs.com/compatible-mode/v1)
-    LLM_MODEL: Model identifier (default: qwen3.5-flash)
-    LLM_MODEL_ALTERNATIVE: Alternative model for switching tests (default: qwen3.5-turbo)
-
-Test Contract:
-    - With LLM_API_KEY set: Runtime control tests execute with real model.
-    - Without LLM_API_KEY: Runtime control tests skip gracefully (no failures).
-"""
+"""Live LLM scenarios selected explicitly with --live and a model profile."""
 
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
 import pytest
@@ -41,10 +26,10 @@ from ecs_agent.conversation_tree import (
     revert_to_message,
     switch_branch,
 )
-from ecs_agent.core import Runner, World
+from ecs_agent.core import AgentHandle, Runner, World
 from ecs_agent.logging import FORBIDDEN_FIELDS, configure_logging
 from ecs_agent.providers import OpenAIModel
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
+from ecs_agent.providers.config import ProviderConfig
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import (
@@ -55,23 +40,24 @@ from ecs_agent.types import (
     StreamContentDeltaEvent,
 )
 
-# DashScope API configuration from environment variables
-API_KEY = os.getenv("LLM_API_KEY", "")
-BASE_URL = os.getenv(
-    "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-)
-MODEL = os.getenv("LLM_MODEL", "qwen-plus")
+from tests.support.models import LiveModelFactory
 
 
-def _openai_provider(*, api_key: str, base_url: str, model: str) -> OpenAIModel:
-    return OpenAIModel(
-        config=ProviderConfig(
-            provider_id="openai",
-            base_url=base_url,
-            api_key=api_key,
-            api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-        ),
-        model=model,
+def _openai_provider(
+    *, api_key: str, base_url: str, model: str, live_model_factory: LiveModelFactory
+) -> OpenAIModel:
+    return live_model_factory.track(
+        OpenAIModel(
+            config=ProviderConfig(
+                provider_id="test",
+                base_url=base_url,
+                api_key=api_key,
+                api_format=live_model_factory.profile.api_format,
+                timeout=live_model_factory.profile.timeouts.request_seconds,
+            ),
+            model=model,
+            stream_read_timeout=live_model_factory.profile.timeouts.stream_read_seconds,
+        )
     )
 
 
@@ -92,12 +78,18 @@ def _json_events(output: str) -> list[dict[str, object]]:
 # ============================================================================
 
 
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools", "streaming"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_openai_streaming_produces_deltas() -> None:
+async def test_real_openai_streaming_produces_deltas(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """Streaming ReasoningSystem with real OpenAIModel emits StreamDelta events."""
     world = World()
-    model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    model = live_model_factory.openai()
 
     entity = world.create_entity()
     world.add_component(entity, LLMComponent(model=model))
@@ -135,11 +127,17 @@ async def test_real_openai_streaming_produces_deltas() -> None:
     assert len(conv.messages[1].content) > 0
 
 
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools", "streaming"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_openai_provider_non_streaming() -> None:
-    """OpenAIModel via DashScope returns valid CompletionResult."""
-    model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+async def test_real_openai_provider_non_streaming(
+    *, live_model_factory: LiveModelFactory
+) -> None:
+    """The selected OpenAIModel returns a valid CompletionResult."""
+    model = live_model_factory.openai()
 
     messages = [
         Message(role="system", content="You are a helpful assistant."),
@@ -154,11 +152,17 @@ async def test_real_openai_provider_non_streaming() -> None:
     assert result.message.tool_calls is None, "No tools provided, should be None"
 
 
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools", "streaming"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_openai_provider_streaming() -> None:
+async def test_real_openai_provider_streaming(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """OpenAIModel streaming returns valid StreamDelta sequence."""
-    model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    model = live_model_factory.openai()
 
     messages = [
         Message(role="system", content="You are a helpful assistant."),
@@ -182,12 +186,18 @@ async def test_real_openai_provider_streaming() -> None:
     assert len(total_content) > 0, "Expected non-empty accumulated content"
 
 
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools", "streaming"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_full_agent_loop_streaming() -> None:
+async def test_real_full_agent_loop_streaming(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """Full World + ReasoningSystem + StreamingComponent runs to completion."""
     world = World()
-    model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    model = live_model_factory.openai()
 
     entity = world.create_entity()
     world.add_component(entity, LLMComponent(model=model))
@@ -223,54 +233,63 @@ async def test_real_full_agent_loop_streaming() -> None:
     assert len(deltas) > 0, "Expected StreamDelta events during streaming"
 
 
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_multi_turn_conversation() -> None:
+async def test_real_multi_turn_conversation(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """Test multi-turn conversation with real LLM maintaining context."""
     world = World()
-    model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    model = live_model_factory.openai()
 
     entity = world.create_entity()
     world.add_component(entity, LLMComponent(model=model))
     world.add_component(
         entity,
-        ConversationComponent(
-            messages=[Message(role="user", content="My name is Alice. Remember it.")]
-        ),
+        ConversationComponent(messages=[]),
     )
 
     world.register_system(ReasoningSystem(priority=0), priority=0)
     world.register_system(ErrorHandlingSystem(priority=99), priority=99)
 
-    runner = Runner()
-    await runner.run(world, max_ticks=1)
+    agent = AgentHandle(world, entity)
+    await agent.run_turn("My name is Alice. Remember it.", max_steps=1)
 
     conv = world.get_component(entity, ConversationComponent)
     assert conv is not None
     assert len(conv.messages) >= 2, "Expected user + assistant messages"
     assert conv.messages[-1].role == "assistant"
 
-    conv.messages.append(
-        Message(role="user", content="What is my name? Answer in 3 words or less.")
-    )
-
-    await runner.run(world, max_ticks=2, start_tick=1)
+    await agent.run_turn("What is my name? Answer in 3 words or less.", max_steps=1)
 
     assert len(conv.messages) >= 4, "Expected 2 turns of conversation"
     final_response = conv.messages[-1].content.lower()
     assert conv.messages[-1].role == "assistant"
     assert len(final_response) > 0, "Expected non-empty response"
+    assert "alice" in final_response, (
+        "The second turn must retain the first turn's context"
+    )
 
 
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_llm_reasoning_logging_contracts(capsys: object) -> None:
+async def test_real_llm_reasoning_logging_contracts(
+    capsys: object, *, live_model_factory: LiveModelFactory
+) -> None:
     """Verify structured logging contracts when ReasoningSystem uses real LLM model."""
     # Structured JSON logs are emitted to stderr; enable them explicitly (the
     # framework default is silent/non-JSON at ERROR level).
     configure_logging(json_output=True, level="DEBUG")
     world = World()
-    model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    model = live_model_factory.openai()
 
     entity = world.create_entity()
     world.add_component(entity, LLMComponent(model=model))
@@ -296,7 +315,7 @@ async def test_real_llm_reasoning_logging_contracts(capsys: object) -> None:
     start_event = reasoning_start_events[0]
     assert "entity_id" in start_event, "reasoning_start must include entity_id"
     assert "model" in start_event, "reasoning_start must include model"
-    assert start_event["model"] == MODEL
+    assert start_event["model"] == live_model_factory.profile.model
 
     reasoning_complete_events = [
         e for e in events if e.get("event") == "reasoning_complete"
@@ -320,13 +339,19 @@ async def test_real_llm_reasoning_logging_contracts(capsys: object) -> None:
             )
 
 
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools", "streaming"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_llm_streaming_logging_metadata(capsys: object) -> None:
+async def test_real_llm_streaming_logging_metadata(
+    capsys: object, *, live_model_factory: LiveModelFactory
+) -> None:
     """Verify streaming mode logs contain correct metadata fields."""
     configure_logging(json_output=True, level="DEBUG")
     world = World()
-    model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    model = live_model_factory.openai()
 
     entity = world.create_entity()
     world.add_component(entity, LLMComponent(model=model))
@@ -368,13 +393,24 @@ async def test_real_llm_streaming_logging_metadata(capsys: object) -> None:
         assert "arguments" not in event, "Raw tool arguments must not appear in logs"
 
 
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_llm_error_logging_contracts(capsys: object) -> None:
+async def test_real_llm_error_logging_contracts(
+    capsys: object, *, live_model_factory: LiveModelFactory
+) -> None:
     """Verify error logging when LLM model fails (bad API key)."""
     configure_logging(json_output=True, level="DEBUG")
     world = World()
-    model = _openai_provider(api_key="sk-invalid-key-for-testing", base_url=BASE_URL, model=MODEL)
+    model = _openai_provider(
+        api_key="sk-invalid-key-for-testing",
+        base_url=live_model_factory.profile.base_url,
+        model=live_model_factory.profile.model,
+        live_model_factory=live_model_factory,
+    )
 
     entity = world.create_entity()
     world.add_component(entity, LLMComponent(model=model))
@@ -413,18 +449,8 @@ async def test_real_llm_error_logging_contracts(capsys: object) -> None:
 # ============================================================================
 
 
-def get_real_provider() -> OpenAIModel:
-    """Construct OpenAI-compatible model from env vars."""
-    api_key = os.getenv("LLM_API_KEY")
-    if not api_key:
-        pytest.skip("LLM_API_KEY not set")
-
-    base_url = os.getenv(
-        "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    )
-    model = os.getenv("LLM_MODEL", "qwen3.5-flash")
-
-    return _openai_provider(api_key=api_key, base_url=base_url, model=model)
+def get_real_provider(*, live_model_factory: LiveModelFactory) -> OpenAIModel:
+    return live_model_factory.openai()
 
 
 class RecordingProvider:
@@ -452,14 +478,19 @@ class RecordingProvider:
         )
 
 
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_llm_prompt_keyword_injection_smoke() -> None:
+async def test_real_llm_prompt_keyword_injection_smoke(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     world = World()
     runner = Runner()
 
-    model = os.getenv("LLM_MODEL", "qwen3.5-flash")
-    model = RecordingProvider(get_real_provider())
+    model = RecordingProvider(get_real_provider(live_model_factory=live_model_factory))
 
     entity = world.create_entity()
     world.add_component(entity, LLMComponent(model=model))
@@ -529,7 +560,7 @@ async def test_real_llm_prompt_keyword_injection_smoke() -> None:
 
     assert len(model.last_messages) >= 1
     outbound_system = model.last_messages[0]
-    outbound_user = model.last_messages[-1]
+    outbound_user, outbound_context = model.last_messages[-2:]
     assert outbound_system.role == "system"
     assert outbound_system.content == (
         "# Markdown Linked Prompt\n\n"
@@ -544,13 +575,12 @@ async def test_real_llm_prompt_keyword_injection_smoke() -> None:
     assert outbound_user.content.startswith(
         "[PROMPT_INJECT:@code]\nKEYWORD_TEMPLATE_BLOCK\n\n"
     )
-    assert outbound_user.content.index(
-        "[PROMPT_INJECT:@code]"
-    ) < outbound_user.content.index("[PROMPT_CONTEXT_POOL]")
-    assert outbound_user.content.index(
+    assert outbound_context.role == "user"
+    assert outbound_context.content.startswith("[PROMPT_CONTEXT_POOL]\n")
+    assert "[PROMPT_CONTEXT_POOL]" not in outbound_user.content
+    assert outbound_context.content.index(
         "source: tool:search"
-    ) < outbound_user.content.index("source: subagent:researcher")
-    assert "[PROMPT_CONTEXT_POOL]" in outbound_user.content
+    ) < outbound_context.content.index("source: subagent:researcher")
     assert outbound_user.content.endswith("Need @code help in one short sentence")
 
     conv = world.get_component(entity, ConversationComponent)
@@ -559,14 +589,19 @@ async def test_real_llm_prompt_keyword_injection_smoke() -> None:
     assert len(conv.messages[-1].content) > 0
 
 
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_llm_prompt_event_injection_smoke() -> None:
+async def test_real_llm_prompt_event_injection_smoke(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     world = World()
     runner = Runner()
 
-    model = os.getenv("LLM_MODEL", "qwen3.5-flash")
-    model = RecordingProvider(get_real_provider())
+    model = RecordingProvider(get_real_provider(live_model_factory=live_model_factory))
 
     entity = world.create_entity()
     world.add_component(entity, LLMComponent(model=model))
@@ -619,17 +654,17 @@ async def test_real_llm_prompt_event_injection_smoke() -> None:
     await runner.run(world, max_ticks=1)
 
     assert len(model.last_messages) >= 1
-    outbound_user = model.last_messages[-1]
+    outbound_user, outbound_context = model.last_messages[-2:]
     assert outbound_user.role == "user"
     assert outbound_user.content.startswith(
         "[PROMPT_INJECT:summary]\nEVENT_TEMPLATE_BLOCK\n\n"
     )
-    assert outbound_user.content.index(
-        "[PROMPT_INJECT:summary]"
-    ) < outbound_user.content.index("[PROMPT_CONTEXT_POOL]")
-    assert outbound_user.content.index(
+    assert outbound_context.role == "user"
+    assert outbound_context.content.startswith("[PROMPT_CONTEXT_POOL]\n")
+    assert "[PROMPT_CONTEXT_POOL]" not in outbound_user.content
+    assert outbound_context.content.index(
         "source: tool:search"
-    ) < outbound_user.content.index("source: subagent:researcher")
+    ) < outbound_context.content.index("source: subagent:researcher")
     assert outbound_user.content.endswith("Need concise summary")
 
     conv = world.get_component(entity, ConversationComponent)
@@ -638,14 +673,21 @@ async def test_real_llm_prompt_event_injection_smoke() -> None:
     assert len(conv.messages[-1].content) > 0
 
 
-@pytest.mark.skipif(os.getenv("LLM_API_KEY") is None, reason="LLM_API_KEY not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools", "multi_model"],
+    roles=["secondary"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_llm_model_switching() -> None:
+async def test_real_llm_model_switching(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """Validate pending_model switch affects real model responses."""
     world = World()
     runner = Runner()
 
-    model = get_real_provider()
+    model = get_real_provider(live_model_factory=live_model_factory)
 
     entity = world.create_entity()
     llm = LLMComponent(model=model)
@@ -667,8 +709,7 @@ async def test_real_llm_model_switching() -> None:
     assert conv is not None
     first_response = conv.messages[-1].content
 
-    alternative_model_name = os.getenv("LLM_MODEL_ALTERNATIVE", "qwen3.5-turbo")
-    llm.pending_model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=alternative_model_name)
+    llm.pending_model = live_model_factory.openai(role="secondary")
 
     conv.messages.append(
         Message(role="user", content="Say 'model B' if you receive this.")
@@ -684,14 +725,20 @@ async def test_real_llm_model_switching() -> None:
     assert len(second_response) > 0
 
 
-@pytest.mark.skipif(os.getenv("LLM_API_KEY") is None, reason="LLM_API_KEY not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools", "streaming"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_llm_graceful_interruption() -> None:
+async def test_real_llm_graceful_interruption(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """Validate InterruptionComponent preserves partial content with real streaming."""
     world = World()
     runner = Runner()
 
-    model = get_real_provider()
+    model = get_real_provider(live_model_factory=live_model_factory)
 
     entity = world.create_entity()
     llm = LLMComponent(model=model)
@@ -722,14 +769,20 @@ async def test_real_llm_graceful_interruption() -> None:
     assert conv is not None
 
 
-@pytest.mark.skipif(os.getenv("LLM_API_KEY") is None, reason="LLM_API_KEY not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_llm_conversation_tree_revert() -> None:
+async def test_real_llm_conversation_tree_revert(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """Validate revert affects next generation context with real model."""
     world = World()
     runner = Runner()
 
-    model = get_real_provider()
+    model = get_real_provider(live_model_factory=live_model_factory)
 
     entity = world.create_entity()
     llm = LLMComponent(model=model)
@@ -769,14 +822,21 @@ async def test_real_llm_conversation_tree_revert() -> None:
     assert second_leaf is not None
 
 
-@pytest.mark.skipif(os.getenv("LLM_API_KEY") is None, reason="LLM_API_KEY not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools", "multi_model"],
+    roles=["secondary"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_llm_complete_runtime_workflow() -> None:
+async def test_real_llm_complete_runtime_workflow(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """Integration test: All runtime control features with real model."""
     world = World()
     runner = Runner()
 
-    model = get_real_provider()
+    model = get_real_provider(live_model_factory=live_model_factory)
 
     entity = world.create_entity()
     llm = LLMComponent(model=model)
@@ -804,8 +864,7 @@ async def test_real_llm_complete_runtime_workflow() -> None:
     create_branch(conv_tree, "second", msg2.id)
     switch_branch(conv_tree, "second")
 
-    alternative_model_name = os.getenv("LLM_MODEL_ALTERNATIVE", "qwen3.5-turbo")
-    llm.pending_model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=alternative_model_name)
+    llm.pending_model = live_model_factory.openai(role="secondary")
 
     world.remove_component(entity, TerminalComponent)
 
@@ -836,15 +895,21 @@ async def test_real_llm_complete_runtime_workflow() -> None:
     assert len(conv_tree.messages) > 0
 
 
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools", "streaming"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_provider_smoke_with_dashscope_defaults() -> None:
-    """Smoke test: OpenAIModel with DashScope-compatible endpoints returns non-empty response.
+async def test_real_provider_smoke_with_dashscope_defaults(
+    *, live_model_factory: LiveModelFactory
+) -> None:
+    """Smoke test: the configured OpenAI-compatible endpoint returns a response.
 
     This test validates that the model can successfully communicate with
-    DashScope (or any OpenAI-compatible API) using environment defaults.
+    the explicitly selected profile without environment defaults.
     """
-    model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    model = live_model_factory.openai()
 
     messages = [
         Message(role="user", content="Say hello"),
@@ -857,135 +922,15 @@ async def test_real_provider_smoke_with_dashscope_defaults() -> None:
     assert len(result.message.content) > 0, "Expected non-empty response content"
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_read_file_returns_clean_content(tmp_path: Any) -> None:
-    from ecs_agent.tools.builtins.file_tools import read_file
-
-    test_file = tmp_path / "test.txt"
-    raw_lines = ["Alpha", "Beta", "Gamma"]
-    test_file.write_text("\n".join(raw_lines) + "\n", encoding="utf-8")
-
-    result = await read_file(file_path="test.txt", workspace_root=str(tmp_path))
-
-    assert result == "\n".join(raw_lines)
-    assert "#" not in result
-    assert "|" not in result
-
-
-@pytest.mark.asyncio
-async def test_real_glob_finds_files_in_workspace(tmp_path: Any) -> None:
-    from ecs_agent.tools.builtins.glob_tool import glob
-
-    (tmp_path / "a.txt").write_text("a", encoding="utf-8")
-    (tmp_path / "b.py").write_text("print('x')", encoding="utf-8")
-    (tmp_path / "notes").mkdir()
-    (tmp_path / "notes" / "c.txt").write_text("c", encoding="utf-8")
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "d.txt").write_text("d", encoding="utf-8")
-    (tmp_path / "src" / "e.py").write_text("print('y')", encoding="utf-8")
-
-    result = await glob(pattern="**/*.txt", base_path=".", workspace_root=str(tmp_path))
-    matched = result.splitlines()
-
-    assert set(matched) == {"a.txt", "notes/c.txt", "src/d.txt"}
-    assert all(not path.endswith(".py") for path in matched)
-    assert all(not path.startswith("/") for path in matched)
-
-    empty_result = await glob(
-        pattern="**/*.xyz", base_path=".", workspace_root=str(tmp_path)
-    )
-    assert empty_result == ""
-
-
-@pytest.mark.asyncio
-async def test_real_llm_builtin_tools_read_file_smoke(tmp_path: Any) -> None:
-    from ecs_agent import BuiltinToolsSkill, SkillManager
-    from ecs_agent.providers import FakeModel
-    from ecs_agent.systems.tool_execution import ToolExecutionSystem
-    from ecs_agent.types import ToolCall
-
-    class RecordingFakeModel(FakeModel):
-        def __init__(self, responses: list[CompletionResult]) -> None:
-            super().__init__(responses)
-            self.recorded_messages: list[list[Message]] = []
-
-        async def complete(
-            self,
-            messages: list[Message],
-            tools: list[Any] | None = None,
-            stream: bool = False,
-            response_format: dict[str, Any] | None = None,
-        ) -> CompletionResult | Any:
-            self.recorded_messages.append(list(messages))
-            return await super().complete(
-                messages,
-                tools=tools,
-                stream=stream,
-                response_format=response_format,
-            )
-
-    note = tmp_path / "note.txt"
-    note.write_text("one\ntwo\nthree\n", encoding="utf-8")
-
-    model = RecordingFakeModel(
-        responses=[
-            CompletionResult(
-                message=Message(
-                    role="assistant",
-                    content="",
-                    tool_calls=[
-                        ToolCall(
-                            id="tc-read-1",
-                            name="read_file",
-                            arguments={"file_path": "note.txt"},
-                        )
-                    ],
-                )
-            ),
-            CompletionResult(
-                message=Message(
-                    role="assistant", content="Read complete from tool output"
-                )
-            ),
-        ]
-    )
-
-    world = World()
-    entity = world.create_entity()
-    world.add_component(entity, LLMComponent(model=model))
-    world.add_component(
-        entity,
-        ConversationComponent(messages=[Message(role="user", content="Read note.txt")]),
-    )
-
-    skill = BuiltinToolsSkill()
-    skill.bind_workspace(str(tmp_path))
-    SkillManager().install(world, entity, skill)
-
-    world.register_system(ReasoningSystem(priority=0), priority=0)
-    world.register_system(ToolExecutionSystem(priority=5), priority=5)
-    world.register_system(ErrorHandlingSystem(priority=99), priority=99)
-
-    await Runner().run(world, max_ticks=5)
-
-    conv = world.get_component(entity, ConversationComponent)
-    assert conv is not None
-    assert any(msg.role == "tool" for msg in conv.messages)
-    assert conv.messages[-1].role == "assistant"
-    assert len(conv.messages[-1].content) > 0
-
-    assert len(model.recorded_messages) >= 2
-    second_turn_messages = model.recorded_messages[1]
-    tool_messages = [msg for msg in second_turn_messages if msg.role == "tool"]
-    assert len(tool_messages) >= 1
-    assert tool_messages[-1].content == "one\ntwo\nthree"
-    assert "#" not in tool_messages[-1].content
-    assert "|" not in tool_messages[-1].content
-
-
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
-@pytest.mark.asyncio
-async def test_real_llm_agent_uses_glob_to_find_files(tmp_path: Any) -> None:
+async def test_real_llm_agent_uses_glob_to_find_files(
+    tmp_path: Any, *, live_model_factory: LiveModelFactory
+) -> None:
     from ecs_agent import BuiltinToolsSkill, SkillManager
     from ecs_agent.systems.tool_execution import ToolExecutionSystem
 
@@ -998,8 +943,9 @@ async def test_real_llm_agent_uses_glob_to_find_files(tmp_path: Any) -> None:
     entity = world.create_entity()
     world.add_component(
         entity,
-        LLMComponent(model=get_real_provider(),
-),
+        LLMComponent(
+            model=get_real_provider(live_model_factory=live_model_factory),
+        ),
     )
     world.add_component(
         entity,
@@ -1036,9 +982,15 @@ async def test_real_llm_agent_uses_glob_to_find_files(tmp_path: Any) -> None:
     assert len(conv.messages[-1].content) > 0
 
 
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_llm_agent_reads_and_reports_file_content(tmp_path: Any) -> None:
+async def test_real_llm_agent_reads_and_reports_file_content(
+    tmp_path: Any, *, live_model_factory: LiveModelFactory
+) -> None:
     from ecs_agent import BuiltinToolsSkill, SkillManager
     from ecs_agent.systems.tool_execution import ToolExecutionSystem
 
@@ -1050,8 +1002,9 @@ async def test_real_llm_agent_reads_and_reports_file_content(tmp_path: Any) -> N
     entity = world.create_entity()
     world.add_component(
         entity,
-        LLMComponent(model=get_real_provider(),
-),
+        LLMComponent(
+            model=get_real_provider(live_model_factory=live_model_factory),
+        ),
     )
     world.add_component(
         entity,
@@ -1117,9 +1070,15 @@ class _CapturingProvider:
         )
 
 
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_llm_rendered_system_prompt_reaches_provider() -> None:
+async def test_real_llm_rendered_system_prompt_reaches_provider(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """Verify RenderedSystemPromptComponent.text reaches the model as system message."""
     from ecs_agent.components import ToolRegistryComponent
     from ecs_agent.components.definitions import RenderedSystemPromptComponent
@@ -1127,7 +1086,7 @@ async def test_real_llm_rendered_system_prompt_reaches_provider() -> None:
     from ecs_agent.systems.system_prompt_render_system import SystemPromptRenderSystem
     from ecs_agent.types import ToolSchema as _ToolSchema
 
-    inner = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    inner = live_model_factory.openai()
     capturing: _CapturingProvider = _CapturingProvider(inner)
 
     world = World()
@@ -1177,9 +1136,15 @@ async def test_real_llm_rendered_system_prompt_reaches_provider() -> None:
     assert "bash" in sys_msg.content  # ${_installed_tools} was rendered
 
 
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_llm_rendered_user_prompt_trigger_injection() -> None:
+async def test_real_llm_rendered_user_prompt_trigger_injection(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """Verify RenderedUserPromptComponent.text contains injected trigger content."""
     from ecs_agent.components import UserPromptConfigComponent
     from ecs_agent.components.definitions import RenderedUserPromptComponent
@@ -1187,7 +1152,7 @@ async def test_real_llm_rendered_user_prompt_trigger_injection() -> None:
         UserPromptNormalizationSystem,
     )
 
-    inner = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    inner = live_model_factory.openai()
     capturing: _CapturingProvider = _CapturingProvider(inner)
 
     world = World()
@@ -1231,10 +1196,15 @@ async def test_real_llm_rendered_user_prompt_trigger_injection() -> None:
     assert "Please @test verify the output" in user_msg.content
 
 
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_slash_skill_context_injection_real_llm() -> None:
-    if not os.environ.get("LLM_API_KEY"):
-        pytest.skip("LLM_API_KEY not set")
+async def test_slash_skill_context_injection_real_llm(
+    *, live_model_factory: LiveModelFactory
+) -> None:
 
     from ecs_agent.components import SkillComponent
     from ecs_agent.prompts.message_assembly import prepare_outbound_messages
@@ -1258,7 +1228,7 @@ async def test_slash_skill_context_injection_real_llm() -> None:
         def uninstall(self, world: World, entity_id: Any) -> None:
             return None
 
-    inner = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    inner = live_model_factory.openai()
     world = World()
     entity = world.create_entity()
     world.add_component(entity, LLMComponent(model=inner))
@@ -1316,15 +1286,22 @@ async def test_slash_skill_context_injection_real_llm() -> None:
         "tool-search-0"
     ]
 
-    user_msg = messages[-1]
-    assert user_msg.role == "user"
-    assert "Skill: test-skill" in user_msg.content
+    user_msg, context_msg = messages[-2:]
+    assert user_msg.role == context_msg.role == "user"
+    assert user_msg.content == original_text
+    assert context_msg.content.startswith("[PROMPT_CONTEXT_POOL]\n")
+    assert "Skill: test-skill" in context_msg.content
     assert (
-        "Description: Test slash skill context for prompt assembly" in user_msg.content
+        "Description: Test slash skill context for prompt assembly"
+        in context_msg.content
     )
-    assert "## Skill Body\nUse the slash skill context when helping the user.\n\n## Tool Schemas\n- none" in user_msg.content
-    assert original_text in user_msg.content
-    assert user_msg.content.endswith(original_text)
+    assert (
+        "## Skill Body\nUse the slash skill context when helping the user.\n\n## Tool Schemas\n- none"
+        in context_msg.content
+    )
+    assert context_msg.content.index("Skill: test-skill") < context_msg.content.index(
+        "source: tool:search"
+    )
 
     entries_after = [
         (
@@ -1338,11 +1315,20 @@ async def test_slash_skill_context_injection_real_llm() -> None:
     ]
     assert entries_after == entries_before
 
+    result = await inner.complete(messages)
+    assert isinstance(result, CompletionResult)
+    assert result.message.role == "assistant"
+    assert result.message.content.strip()
 
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
 async def test_real_llm_load_skill_details_returns_context_in_tool_message(
-    tmp_path: Any,
+    tmp_path: Any, *, live_model_factory: LiveModelFactory
 ) -> None:
     from ecs_agent import BuiltinToolsSkill
     from ecs_agent.components import UserPromptConfigComponent
@@ -1354,7 +1340,7 @@ async def test_real_llm_load_skill_details_returns_context_in_tool_message(
         UserPromptNormalizationSystem,
     )
 
-    inner = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    inner = live_model_factory.openai()
     capturing: _CapturingProvider = _CapturingProvider(inner)
 
     world = World()
@@ -1424,9 +1410,13 @@ async def test_real_llm_load_skill_details_returns_context_in_tool_message(
 # ============================================================================
 
 
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.workflow
 async def test_real_subagent_child_world_name_in_logs(
-    capsys: pytest.CaptureFixture[str],
+    capsys: pytest.CaptureFixture[str], *, live_model_factory: LiveModelFactory
 ) -> None:
     """Child world spawned by SubagentSystem carries a structured name in log output."""
     import re
@@ -1443,7 +1433,7 @@ async def test_real_subagent_child_world_name_in_logs(
 
     configure_logging(json_output=True, level="DEBUG")
 
-    model = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    model = live_model_factory.openai()
 
     # Parent world — named
     world = World(name="test-parent")
@@ -1452,7 +1442,6 @@ async def test_real_subagent_child_world_name_in_logs(
         manager,
         LLMComponent(
             model=model,
-            
             system_prompt=(
                 "You are a helpful assistant. "
                 "When asked to delegate, use the subagent tool."
@@ -1478,7 +1467,6 @@ async def test_real_subagent_child_world_name_in_logs(
                 "echo": SubagentConfig(
                     name="echo",
                     model=model,
-                    
                     system_prompt="Echo back the user's message verbatim.",
                     max_ticks=3,
                 )
@@ -1537,9 +1525,15 @@ async def test_real_subagent_child_world_name_in_logs(
 # ============================================================================
 
 
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_subagent_rendered_prompt() -> None:
+async def test_real_subagent_rendered_prompt(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """Child world SystemPromptRenderSystem renders the configured system prompt.
 
     Directly assembles a child world via SubagentSystem._assemble_child_world,
@@ -1556,7 +1550,7 @@ async def test_real_subagent_rendered_prompt() -> None:
 
     _SYSTEM_PROMPT = "You are a specialized subagent for Task 11 verification."
 
-    inner = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+    inner = live_model_factory.openai()
     capturing: _CapturingProvider = _CapturingProvider(inner)
 
     # Build a minimal parent world so _assemble_child_world has something to inspect.
@@ -1567,8 +1561,9 @@ async def test_real_subagent_rendered_prompt() -> None:
         LLMComponent(model=inner, system_prompt="Parent prompt."),  # type: ignore[arg-type]
     )
 
-    config = SubagentConfig(model=capturing,
-name="rendered-prompt-test",
+    config = SubagentConfig(
+        model=capturing,
+        name="rendered-prompt-test",
         # type: ignore[arg-type]
         system_prompt=_SYSTEM_PROMPT,
         max_ticks=1,
@@ -1612,9 +1607,15 @@ name="rendered-prompt-test",
     )
 
 
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
+)
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_subagent_workspace_inherits() -> None:
+async def test_real_subagent_workspace_inherits(
+    *, live_model_factory: LiveModelFactory
+) -> None:
     """Subagent child entity inherits the parent workspace binding.
 
     Directly assembles a child world via SubagentSystem._assemble_child_world
@@ -1631,7 +1632,7 @@ async def test_real_subagent_workspace_inherits() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         workspace_root = _Path(tmp_dir)
 
-        inner = _openai_provider(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
+        inner = live_model_factory.openai()
 
         parent_world = World(name="test-parent-workspace-t11")
         parent_entity = parent_world.create_entity()
@@ -1644,8 +1645,9 @@ async def test_real_subagent_workspace_inherits() -> None:
             WorkspaceBindingComponent(workspace_root=workspace_root),
         )
 
-        config = SubagentConfig(model=inner,
-name="workspace-test",
+        config = SubagentConfig(
+            model=inner,
+            name="workspace-test",
             # type: ignore[arg-type]
             system_prompt="You are a subagent.",
             max_ticks=1,

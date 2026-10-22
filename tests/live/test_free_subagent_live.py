@@ -1,48 +1,19 @@
 """Live tests for opt-in free-form subagent delegation.
 
-These tests skip unless their provider-specific credentials are present.
+Select a profile with --live; see docs/testing.md.
 """
 
 from __future__ import annotations
 
-import os
 
 import pytest
 
 from ecs_agent.components import LLMComponent, ToolRegistryComponent
 from ecs_agent.core import World
-from ecs_agent.providers import ApiFormat, ClaudeModel, OpenAIModel, ProviderConfig
 from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.subagent import SubagentSystem
 
-
-def _make_openai_model(api_key: str, *, api_format: ApiFormat) -> OpenAIModel:
-    return OpenAIModel(
-        config=ProviderConfig(
-            provider_id="live-free-subagent-openai",
-            base_url=os.getenv(
-                "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-            ),
-            api_key=api_key,
-            api_format=api_format,
-            timeout=120.0,
-        ),
-        model=os.getenv("LLM_MODEL", "qwen3.5-flash"),
-    )
-
-
-def _make_anthropic_model(api_key: str) -> ClaudeModel:
-    return ClaudeModel(
-        config=ProviderConfig(
-            provider_id="live-free-subagent-anthropic",
-            base_url=os.environ["ANTHROPIC_LIVE_BASE_URL"],
-            api_key=api_key,
-            api_format=ApiFormat.ANTHROPIC_MESSAGES,
-            timeout=120.0,
-        ),
-        model=os.environ["ANTHROPIC_LIVE_MODEL"],
-        max_tokens=256,
-    )
+from tests.support.models import LiveModelFactory
 
 
 async def _run_free_subagent_live(model: LLMModel) -> str:
@@ -64,42 +35,37 @@ async def _run_free_subagent_live(model: LLMModel) -> str:
     return result
 
 
+@pytest.mark.live(formats=["openai_chat_completions"], capabilities=["text", "tools"])
+@pytest.mark.subagent
 @pytest.mark.asyncio
-async def test_live_openai_chat_free_subagent_allows_unregistered_category() -> None:
-    api_key = os.getenv("LLM_API_KEY")
-    if not api_key:
-        pytest.skip("LLM_API_KEY is not set")
+async def test_live_openai_chat_free_subagent_allows_unregistered_category(
+    *, live_model_factory: LiveModelFactory
+) -> None:
 
-    result = await _run_free_subagent_live(
-        _make_openai_model(api_key, api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS)
-    )
+    result = await _run_free_subagent_live(live_model_factory.openai())
 
     assert "FREE_SUBAGENT_OK" in result
 
 
+@pytest.mark.live(formats=["openai_responses"], capabilities=["text", "tools"])
+@pytest.mark.subagent
 @pytest.mark.asyncio
-async def test_live_openai_responses_free_subagent_allows_unregistered_category() -> None:
-    api_key = os.getenv("LLM_API_KEY")
-    if not api_key:
-        pytest.skip("LLM_API_KEY is not set")
+async def test_live_openai_responses_free_subagent_allows_unregistered_category(
+    *, live_model_factory: LiveModelFactory
+) -> None:
 
-    result = await _run_free_subagent_live(
-        _make_openai_model(api_key, api_format=ApiFormat.OPENAI_RESPONSES)
-    )
+    result = await _run_free_subagent_live(live_model_factory.openai())
 
     assert "FREE_SUBAGENT_OK" in result
 
 
+@pytest.mark.live(formats=["anthropic_messages"], capabilities=["text", "tools"])
+@pytest.mark.subagent
 @pytest.mark.asyncio
-async def test_live_anthropic_free_subagent_allows_unregistered_category() -> None:
-    api_key = os.getenv("ANTHROPIC_LIVE_API_KEY")
-    if not api_key:
-        pytest.skip("ANTHROPIC_LIVE_API_KEY is not set")
-    if not os.getenv("ANTHROPIC_LIVE_BASE_URL"):
-        pytest.skip("ANTHROPIC_LIVE_BASE_URL is not set")
-    if not os.getenv("ANTHROPIC_LIVE_MODEL"):
-        pytest.skip("ANTHROPIC_LIVE_MODEL is not set")
+async def test_live_anthropic_free_subagent_allows_unregistered_category(
+    *, live_model_factory: LiveModelFactory
+) -> None:
 
-    result = await _run_free_subagent_live(_make_anthropic_model(api_key))
+    result = await _run_free_subagent_live(live_model_factory.claude())
 
     assert "FREE_SUBAGENT_OK" in result

@@ -1,31 +1,28 @@
+"""Explicit live integration coverage migrated from mixed/offline directories."""
+
 from __future__ import annotations
-
-import os
 from pathlib import Path
-
 import pytest
-
 from ecs_agent import BuiltinToolsSkill, SkillManager
 from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.core import Runner, World
-from ecs_agent.providers.config import ApiFormat, ProviderConfig
-from ecs_agent.providers import OpenAIModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.systems.tool_execution import ToolExecutionSystem
 from ecs_agent.types import Message
 
+from tests.support.models import LiveModelFactory
 
-API_KEY = os.getenv("LLM_API_KEY", "")
-BASE_URL = os.getenv(
-    "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses"],
+    capabilities=["text", "tools"],
 )
-MODEL = os.getenv("LLM_MODEL", "qwen3.5-flash")
-
-
-@pytest.mark.skipif(not API_KEY, reason="LLM_API_KEY environment variable not set")
+@pytest.mark.workflow
 @pytest.mark.asyncio
-async def test_real_llm_clean_read_snapshot_edit_workflow(tmp_path: Path) -> None:
+async def test_real_llm_clean_read_snapshot_edit_workflow(
+    tmp_path: Path, *, live_model_factory: LiveModelFactory
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     target = workspace / "config.txt"
@@ -38,16 +35,9 @@ async def test_real_llm_clean_read_snapshot_edit_workflow(tmp_path: Path) -> Non
     entity = world.create_entity()
     world.add_component(
         entity,
-        LLMComponent(model=OpenAIModel(
-                config=ProviderConfig(
-                    provider_id="openai",
-                    base_url=BASE_URL,
-                    api_key=API_KEY,
-                    api_format=ApiFormat.OPENAI_CHAT_COMPLETIONS,
-                ),
-                model=MODEL,
-            ),
-),
+        LLMComponent(
+            model=live_model_factory.openai(),
+        ),
     )
     world.add_component(
         entity,

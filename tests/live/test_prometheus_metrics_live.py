@@ -1,17 +1,10 @@
 """Live smoke tests for Prometheus metrics instrumentation.
 
-Run with real credentials:
-    LLM_API_KEY=<key>
-    LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-    LLM_MODEL=qwen3.5-flash
-    LLM_API_FORMAT=openai_chat_completions  # optional
-
-The suite skips cleanly when ``LLM_API_KEY`` is not set.
+Select a profile with --live; see docs/testing.md.
 """
 
 from __future__ import annotations
 
-import os
 
 import pytest
 
@@ -19,45 +12,23 @@ from ecs_agent.components import ConversationComponent, LLMComponent
 from ecs_agent.core import Runner, World
 from ecs_agent.plugins import install_plugins, uninstall_plugins
 from ecs_agent.plugins.prometheus import PrometheusPlugin, render_metrics
-from ecs_agent.providers import Model
-from ecs_agent.providers.config import ApiFormat
-from ecs_agent.providers.protocol import LLMModel
 from ecs_agent.systems.error_handling import ErrorHandlingSystem
 from ecs_agent.systems.reasoning import ReasoningSystem
 from ecs_agent.types import ErrorOccurredEvent, Message
-from tests.live.api_format import (
-    live_llm_timeout,
-    live_transient_error_reason,
-    resolve_live_api_format,
+
+from tests.support.models import LiveModelFactory
+
+
+@pytest.mark.live(
+    formats=["openai_chat_completions", "openai_responses", "anthropic_messages"],
+    capabilities=["text"],
+    dependencies=["prometheus_client"],
 )
-
-
-def _api_format_from_env() -> ApiFormat:
-    api_format = resolve_live_api_format()
-    if api_format is None:
-        pytest.skip(
-            "Unsupported LLM_API_FORMAT for live metrics smoke: "
-            f"{os.getenv('LLM_API_FORMAT')!r}"
-        )
-    return api_format
-
-
-def _make_live_model(api_key: str) -> LLMModel:
-    return Model(
-        os.getenv("LLM_MODEL", "qwen3.5-flash"),
-        base_url=os.getenv(
-            "LLM_BASE_URL",
-            "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        ),
-        api_key=api_key,
-        api_format=_api_format_from_env(),
-        provider_id="live",
-        timeout=live_llm_timeout(),
-    )
-
-
+@pytest.mark.observability
 @pytest.mark.asyncio
-async def test_live_prometheus_metrics_smoke(live_api_key: str) -> None:
+async def test_live_prometheus_metrics_smoke(
+    live_api_key: str, *, live_model_factory: LiveModelFactory
+) -> None:
     """A real-model agent run updates and renders the Prometheus metrics registry."""
     world = World()
     plugin = PrometheusPlugin()
@@ -65,7 +36,7 @@ async def test_live_prometheus_metrics_smoke(live_api_key: str) -> None:
     metrics = plugin.metrics
     assert metrics is not None
     agent = world.create_entity()
-    model = _make_live_model(live_api_key)
+    model = live_model_factory.create()
     world.add_component(
         agent,
         LLMComponent(
@@ -100,23 +71,13 @@ async def test_live_prometheus_metrics_smoke(live_api_key: str) -> None:
     # LLM failures never raise through Runner.run: ReasoningSystem swallows
     # them into ErrorComponent and ErrorHandlingSystem removes that component
     # after publishing ErrorOccurredEvent, so the event is the durable signal.
-    if llm_errors:
-        hard_failures = [
-            event.error
-            for event in llm_errors
-            if live_transient_error_reason(event.error) is None
-        ]
-        if hard_failures:
-            pytest.fail(f"Live agent run failed: {hard_failures[0][:200]}")
-        pytest.skip(
-            "Transient live endpoint error during Prometheus metrics smoke: "
-            f"{live_transient_error_reason(llm_errors[0].error)}"
-        )
+    assert not llm_errors, f"Live agent run failed: {llm_errors[0].error[:200]}"
 
     conversation = world.get_component(agent, ConversationComponent)
     assert conversation is not None
     assert any(
-        message.role == "assistant" and message.content for message in conversation.messages
+        message.role == "assistant" and message.content
+        for message in conversation.messages
     )
 
     output = render_metrics(metrics)
